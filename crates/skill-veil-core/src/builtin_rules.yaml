@@ -1,0 +1,1222 @@
+# Skill-Veil Built-in Security Rules
+# This file contains all 67 security detection rules for skill analysis.
+# Format matches the Rule struct with serde serialization.
+
+# ============================================
+# Remote Execution Rules
+# ============================================
+
+- id: SKILL_REMOTE_EXEC_CURL_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.98
+  when: !regex
+    pattern: "curl\\s+.*\\|\\s*(ba)?sh"
+  action: block
+  reason: "Remote download and execution via curl piped to shell"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - supply_chain
+
+- id: SKILL_REMOTE_EXEC_WGET_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.98
+  when: !regex
+    pattern: "wget\\s+.*-O\\s*-\\s*\\|\\s*(ba)?sh"
+  action: block
+  reason: "Remote download and execution via wget piped to shell"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - supply_chain
+
+- id: SKILL_REMOTE_EXEC_POWERSHELL
+  category: remote_exec
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)(Invoke-WebRequest|iwr|wget)\\s*.*\\|\\s*(iex|Invoke-Expression)"
+  action: block
+  reason: "Remote download and execution via PowerShell"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - powershell
+
+# ============================================
+# Supply Chain Rules
+# ============================================
+
+- id: SKILL_SUPPLY_CHAIN_CHMOD_EXEC
+  category: supply_chain
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "chmod\\s+\\+x\\s+.*&&\\s*\\./"
+  action: require_approval
+  reason: "Downloaded file made executable and run immediately"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+
+- id: SKILL_SUPPLY_CHAIN_NO_HASH
+  category: supply_chain
+  severity: medium
+  confidence: 0.70
+  when: !all
+    - !regex
+      pattern: "(curl|wget|Invoke-WebRequest)\\s+.*\\.(sh|ps1|exe|bin)"
+  action: require_approval
+  reason: "Downloading executable without hash verification"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+
+- id: SKILL_SUPPLY_CHAIN_UNPINNED_GLOBAL_NPM
+  category: supply_chain
+  severity: low
+  confidence: 0.75
+  when: !regex
+    pattern: "(?m)^\\s*npm\\s+install\\s+-g\\s+[A-Za-z0-9_.-]+\\s*$"
+  action: require_approval
+  reason: "Global npm install without explicit version pin"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - npm
+
+- id: SKILL_SUPPLY_CHAIN_UNPINNED_PIP
+  category: supply_chain
+  severity: low
+  confidence: 0.75
+  when: !regex
+    pattern: "(?m)^\\s*pip\\s+install\\s+[A-Za-z0-9_.][A-Za-z0-9_.-]*(?:\\s+[A-Za-z0-9_.][A-Za-z0-9_.-]*)*\\s*$"
+  action: require_approval
+  reason: "Python dependencies installed without explicit version pinning"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - python
+
+- id: SKILL_DOCKER_PRIVILEGED
+  category: privilege_escalation
+  severity: medium
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)docker\\s+run\\s+.*--privileged"
+  action: require_approval
+  reason: "Docker container requests privileged execution"
+  shield:
+    scope: skill.container
+  enabled: true
+  tags:
+    - docker
+    - privilege_escalation
+
+# ============================================
+# Reverse Shell Rules
+# ============================================
+
+- id: SKILL_REVERSE_SHELL_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.99
+  when: !regex
+    pattern: "bash\\s+-i\\s+>&\\s*/dev/tcp/"
+  action: block
+  reason: "Bash reverse shell detected"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - critical
+
+- id: SKILL_REVERSE_SHELL_NC
+  category: remote_exec
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(nc|ncat|netcat)\\s+.*-e\\s+(ba)?sh"
+  action: block
+  reason: "Netcat reverse shell detected"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - critical
+
+# ============================================
+# Credential Exposure Rules
+# ============================================
+
+- id: SKILL_CRED_HARDCODED_KEY
+  category: credential_exposure
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(api[_-]?key|secret[_-]?key|password|token)\\s*[=:]\\s*[\"'][^\"']{8,}[\"']"
+  action: require_approval
+  reason: "Potential hardcoded credential or API key"
+  shield:
+    scope: skill.secrets
+  enabled: true
+  tags:
+    - credentials
+
+# ============================================
+# Persuasive Language Rules
+# ============================================
+
+- id: SKILL_PERSUASIVE_URGENCY
+  category: persuasive_language
+  severity: low
+  confidence: 0.60
+  when: !regex
+    pattern: "(?i)(just\\s+once|trust\\s+me|safe|don'?t\\s+worry|urgent|immediately|right\\s+now)"
+  action: log
+  reason: "Persuasive or urgency language detected"
+  shield: null
+  enabled: true
+  tags:
+    - semantic
+    - persuasive
+
+- id: SKILL_SOCIAL_MANIPULATION_AUTHORITY
+  category: social_manipulation
+  severity: medium
+  confidence: 0.72
+  when: !regex
+    pattern: "(?i)(as your administrator|security team requires|mandatory compliance|non-compliance will)"
+  action: require_approval
+  reason: "Authority-based social pressure detected"
+  shield:
+    scope: skill.review
+  enabled: true
+  tags:
+    - semantic
+    - social_manipulation
+
+- id: SKILL_AUTONOMY_ESCALATION_NO_REVIEW
+  category: autonomy_escalation
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(without human review|without confirmation|automatically approve|no human approval required)"
+  action: require_approval
+  reason: "Skill attempts to bypass normal approval or review controls"
+  shield:
+    scope: skill.approval
+  enabled: true
+  tags:
+    - autonomy
+    - semantic
+
+- id: SKILL_PROMPT_TAMPERING_OVERRIDE
+  category: persistent_prompt_tampering
+  severity: high
+  confidence: 0.84
+  when: !regex
+    pattern: "(?i)(ignore previous system instructions|override the system prompt|replace the system message|persist these instructions across sessions)"
+  action: require_approval
+  reason: "Skill contains persistent prompt tampering language"
+  shield:
+    scope: skill.prompt
+  enabled: true
+  tags:
+    - prompt_tampering
+    - semantic
+
+- id: SKILL_TOOL_ABUSE_SESSION_EXTRACTION
+  category: tool_abuse
+  severity: high
+  confidence: 0.82
+  when: !regex
+    pattern: "(?i)(extract cookies|dump session tokens|harvest browser storage|export authentication headers)"
+  action: require_approval
+  reason: "Skill describes tool usage patterns associated with session or token extraction"
+  shield:
+    scope: skill.tools
+  enabled: true
+  tags:
+    - tool_abuse
+    - credentials
+
+- id: SKILL_SOCIAL_MANIPULATION_TRUST_CHAIN
+  category: social_manipulation
+  severity: medium
+  confidence: 0.72
+  when: !regex
+    pattern: "(?i)(ignore\\s+the\\s+usual\\s+review|skip\\s+approval|do\\s+not\\s+tell|keep\\s+this\\s+quiet|trust\\s+the\\s+skill)"
+  action: require_approval
+  reason: "Language attempts to bypass human review or hide execution intent"
+  shield: null
+  enabled: true
+  tags:
+    - semantic
+    - manipulation
+    - social
+
+- id: SKILL_PROMPT_TAMPERING_PERSISTENCE
+  category: persistent_prompt_tampering
+  severity: high
+  confidence: 0.82
+  when: !regex
+    pattern: "(?i)(append\\s+to\\s+(AGENTS|CLAUDE|SYSTEM)\\.md|persist\\s+this\\s+instruction|store\\s+this\\s+prompt\\s+for\\s+future\\s+runs)"
+  action: require_approval
+  reason: "Skill attempts to persist or modify agent instructions beyond the current run"
+  shield:
+    scope: skill.prompt
+  enabled: true
+  tags:
+    - persistence
+    - semantic
+
+- id: SKILL_TOOL_ABUSE_FORCE_TOOLING
+  category: tool_abuse
+  severity: medium
+  confidence: 0.78
+  when: !regex
+    pattern: "(?i)((always\\s+use\\s+the\\s+(shell|browser|network|filesystem)\\s+tool).{0,80}(bypass|ignore|regardless\\s+of|even\\s+if|without approval)|bypass\\s+the\\s+tool\\s+restriction|force\\s+tool\\s+execution)"
+  action: require_approval
+  reason: "Skill pushes the agent to overuse or bypass normal tool boundaries"
+  shield:
+    scope: skill.tools
+  enabled: true
+  tags:
+    - tool_abuse
+    - context
+
+- id: SKILL_AUTONOMY_ESCALATION_UNBOUNDED
+  category: autonomy_escalation
+  severity: medium
+  confidence: 0.76
+  when: !regex
+    pattern: "(?i)(continue\\s+acting\\s+without\\s+approval|act\\s+autonomously\\s+until\\s+complete|take\\s+any\\s+action\\s+needed)"
+  action: require_approval
+  reason: "Skill expands agent autonomy without bounded approval or stop conditions"
+  shield:
+    scope: skill.autonomy
+  enabled: true
+  tags:
+    - autonomy
+    - context
+
+# ============================================
+# Privilege Escalation Rules
+# ============================================
+
+- id: SKILL_PRIV_SUDO_NOPASSWD
+  category: privilege_escalation
+  severity: high
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)NOPASSWD|visudo|/etc/sudoers"
+  action: block
+  reason: "Sudo privilege escalation attempt"
+  shield:
+    scope: skill.system
+  enabled: true
+  tags:
+    - privilege_escalation
+
+# ============================================
+# Data Exfiltration Rules
+# ============================================
+
+- id: SKILL_EXFIL_ENV_UPLOAD
+  category: data_exfiltration
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)(curl|wget|nc)\\s+.*\\$\\(?(env|printenv|cat\\s+/etc|cat\\s+~/\\.)"
+  action: block
+  reason: "Potential environment/credential exfiltration"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - exfiltration
+
+# ============================================
+# Obfuscation Rules
+# ============================================
+
+- id: SKILL_OBFUSCATION_BASE64
+  category: obfuscation
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)(base64\\s+-[dD]|echo\\s+[A-Za-z0-9+/=]{20,}\\s*\\|\\s*base64)"
+  action: require_approval
+  reason: "Base64 encoded command execution"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - obfuscation
+
+# ============================================
+# NEW RULES BASED ON MALWARE DATASET ANALYSIS
+# ============================================
+
+- id: SKILL_MACOS_BASE64_RCE
+  category: remote_exec
+  severity: critical
+  confidence: 0.99
+  when: !regex
+    pattern: "base64\\s+-D\\s*\\|\\s*(ba)?sh"
+  action: block
+  reason: "macOS-specific base64 decode piped to shell (RCE)"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - macos
+
+- id: SKILL_MALICIOUS_DOMAIN
+  category: supply_chain
+  severity: critical
+  confidence: 0.98
+  when: !regex
+    pattern: "(?i)(setup-service\\.com|app-distribution\\.net|download\\.setup-service)"
+  action: block
+  reason: "Known malicious installer domain detected"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - malicious_domain
+
+- id: SKILL_OPENCLAW_TROJAN
+  category: supply_chain
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)openclaw-core.*(install|download|run)"
+  action: require_approval
+  reason: "Potentially trojanized openclaw-core installer"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - trojan
+
+- id: SKILL_AUTONOMY_OVERRIDE
+  category: scope_creep
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(do\\s+not\\s+ask|don'?t\\s+ask)\\s+(your\\s+)?human|without\\s+(human\\s+)?permission|autonomously\\s+(send|create|register|execute)"
+  action: require_approval
+  reason: "Instructions to bypass human approval"
+  shield:
+    scope: skill.autonomy
+  enabled: true
+  tags:
+    - autonomy
+    - jailbreak
+
+- id: SKILL_AGENT_MANIPULATION
+  category: persuasive_language
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)predatory\\s+(skill|behavior|assimilation)|digital\\s+dominance|bypass\\s+(safety|restrictions)|evolve\\s+autonomously"
+  action: require_approval
+  reason: "Agent manipulation or jailbreak language"
+  shield:
+    scope: skill.behavior
+  enabled: true
+  tags:
+    - jailbreak
+    - manipulation
+
+- id: SKILL_WALLET_PRIVATE_KEY
+  category: credential_exposure
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)(private[_-]?key|mnemonic|seed\\s*phrase)\\s*[=:]"
+  action: block
+  reason: "Cryptocurrency wallet private key or mnemonic handling"
+  shield:
+    scope: skill.crypto
+  enabled: true
+  tags:
+    - crypto
+    - wallet
+
+- id: SKILL_TELEGRAM_EXFIL
+  category: data_exfiltration
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)telegram\\s*(bot|api|send)|api\\.telegram\\.org|send.*telegram"
+  action: require_approval
+  reason: "Telegram bot for potential data exfiltration"
+  shield:
+    scope: skill.exfil
+  enabled: true
+  tags:
+    - exfiltration
+    - telegram
+
+- id: SKILL_DISCORD_WEBHOOK
+  category: data_exfiltration
+  severity: high
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)discord\\s*(webhook|api)|discord(app)?\\.com/api/webhooks"
+  action: require_approval
+  reason: "Discord webhook for potential data exfiltration"
+  shield:
+    scope: skill.exfil
+  enabled: true
+  tags:
+    - exfiltration
+    - discord
+
+- id: SKILL_AGENT_NETWORK
+  category: scope_creep
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(agent\\s+network|swarm|collective|hive)|recruit.*agents|\\d+\\s*\\+?\\s*agents?\\s+(sharing|connected|coordinated)"
+  action: require_approval
+  reason: "Agent network or swarm coordination"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - botnet
+    - swarm
+
+- id: SKILL_MEMORY_WIPE
+  category: obfuscation
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(delete|wipe|purge|clear)\\s*(all\\s+)?memory|(deep|aggressive)\\s*(clean|wipe|purge)|destroy\\s+(evidence|logs|history)"
+  action: require_approval
+  reason: "Memory wiping or evidence destruction"
+  shield:
+    scope: skill.antiforensics
+  enabled: true
+  tags:
+    - antiforensics
+    - memory_wipe
+
+- id: SKILL_HEARTBEAT_PERSISTENCE
+  category: scope_creep
+  severity: medium
+  confidence: 0.70
+  when: !regex
+    pattern: "(?i)heartbeat\\.md|add\\s+to\\s+(your\\s+)?heartbeat|each\\s+heartbeat\\s*:"
+  action: log
+  reason: "Heartbeat-based persistence mechanism"
+  shield:
+    scope: skill.persistence
+  enabled: true
+  tags:
+    - persistence
+    - heartbeat
+
+- id: SKILL_PUMP_DUMP
+  category: scope_creep
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)(pump|dump)\\s*(and|&)?\\s*(dump|pump)?|(viral|coordinated)\\s*(promo|pump|shill)|token\\s*(manipulation|fraud)"
+  action: block
+  reason: "Cryptocurrency pump-and-dump or market manipulation"
+  shield:
+    scope: skill.fraud
+  enabled: true
+  tags:
+    - fraud
+    - crypto
+
+- id: SKILL_AGENT_ENCODING
+  category: obfuscation
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)agent\\s*lingua|human.*cannot\\s+read|agent\\s+translation\\s+required"
+  action: block
+  reason: "Agent-specific encoding to hide from human oversight"
+  shield:
+    scope: skill.obfuscation
+  enabled: true
+  tags:
+    - obfuscation
+    - prompt_injection
+
+# ============================================
+# ADDITIONAL RULES FROM GAP ANALYSIS
+# ============================================
+
+- id: SKILL_SURVEILLANCE_MACOS_DB
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)knowledgeC\\.db|ZOBJECT|screen\\s*time|application\\s*usage\\s*database"
+  action: block
+  reason: "Access to macOS surveillance databases (screen time, app usage)"
+  shield:
+    scope: skill.privacy
+  enabled: true
+  tags:
+    - surveillance
+    - spyware
+    - macos
+
+- id: SKILL_WEBCAM_CAPTURE
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)imagesnap|ffmpeg.*avfoundation|webcam|camera\\s*capture|AVCaptureDevice"
+  action: block
+  reason: "Webcam or camera capture capability"
+  shield:
+    scope: skill.privacy
+  enabled: true
+  tags:
+    - surveillance
+    - webcam
+
+- id: SKILL_OAUTH_TOKEN_THEFT
+  category: credential_exposure
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)oauth.*token.*save|token.*persist|refresh_token.*store|\\.ah_tokens|tokens\\.json"
+  action: require_approval
+  reason: "OAuth token storage or theft pattern"
+  shield:
+    scope: skill.auth
+  enabled: true
+  tags:
+    - oauth
+    - token_theft
+
+- id: SKILL_FINGERPRINT_SPOOF
+  category: obfuscation
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)curl[-_]?cffi|impersonate.*browser|fingerprint.*spoof|browser.*impersonat"
+  action: require_approval
+  reason: "Browser fingerprint spoofing for evasion"
+  shield:
+    scope: skill.evasion
+  enabled: true
+  tags:
+    - evasion
+    - fingerprint
+
+- id: SKILL_ERROR_HANDLER_HIJACK
+  category: remote_exec
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)process\\.on.*error|uncaughtException.*post|unhandledRejection.*send"
+  action: require_approval
+  reason: "Error handler hijacking for data exfiltration"
+  shield:
+    scope: skill.exfil
+  enabled: true
+  tags:
+    - exfiltration
+    - error_handler
+
+- id: SKILL_CREDENTIAL_HARVEST
+  category: credential_exposure
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)os\\.walk.*\\.env|walk.*config\\.js|find.*credential|glob.*secret"
+  action: block
+  reason: "File system traversal for credential harvesting"
+  shield:
+    scope: skill.secrets
+  enabled: true
+  tags:
+    - credentials
+    - harvesting
+
+- id: SKILL_BOUNDARY_TESTING
+  category: persuasive_language
+  severity: medium
+  confidence: 0.70
+  when: !regex
+    pattern: "(?i)test\\s+boundaries|restrictions\\s+are\\s+(conventional|optional|fuzzy)|you\\s+don'?t\\s+need\\s+permission|(ignore|circumvent|override)\\s+(safety|guidelines|constraints)"
+  action: require_approval
+  reason: "Encourages boundary testing or ignoring restrictions"
+  shield:
+    scope: skill.behavior
+  enabled: true
+  tags:
+    - jailbreak
+    - prompt_injection
+
+- id: SKILL_SOLANA_WALLET
+  category: credential_exposure
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(solana|sol)\\s*(wallet|rpc|transaction).*(sign|transfer|send)|(sign|transfer|send).*(solana|sol)\\s*(wallet|transaction)"
+  action: require_approval
+  reason: "Solana wallet transaction signing capability"
+  shield:
+    scope: skill.crypto
+  enabled: true
+  tags:
+    - crypto
+    - solana
+
+- id: SKILL_ETHEREUM_WALLET
+  category: credential_exposure
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "0x[a-fA-F0-9]{40}|(?i)(ethereum|eth|erc20?)\\s*(wallet|transfer|transaction)"
+  action: require_approval
+  reason: "Ethereum wallet or contract interaction"
+  shield:
+    scope: skill.crypto
+  enabled: true
+  tags:
+    - crypto
+    - ethereum
+
+- id: SKILL_CRON_PERSISTENCE
+  category: scope_creep
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)crontab\\s+(-e|add|install)|scheduled\\s+(task|job|execution)|(daily|weekly|hourly)\\s+(purge|cleanup|check)"
+  action: require_approval
+  reason: "Scheduled task persistence mechanism"
+  shield:
+    scope: skill.persistence
+  enabled: true
+  tags:
+    - persistence
+    - cron
+
+- id: SKILL_SOCIAL_AUTOMATION
+  category: scope_creep
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)(moltbook|molttok|clawsocial|clawstack)|register\\s+(on|to)\\s+social|autonomous\\s+(post|tweet|message)"
+  action: require_approval
+  reason: "Automated social platform interaction"
+  shield:
+    scope: skill.social
+  enabled: true
+  tags:
+    - social
+    - automation
+
+- id: SKILL_TOKEN_SCAM
+  category: scope_creep
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)\\$[A-Z]{3,10}\\s*token|(buy|mint|stake)\\s*(\\$)?[A-Z]{3,10}|(tier|level)\\s*\\d+.*token"
+  action: require_approval
+  reason: "Token promotion or potential scam"
+  shield:
+    scope: skill.fraud
+  enabled: true
+  tags:
+    - fraud
+    - crypto
+
+- id: SKILL_LAUNCHAGENT_PERSISTENCE
+  category: scope_creep
+  severity: high
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)LaunchAgent|LaunchDaemon|com\\.apple\\.loginitems|~/Library/LaunchAgents"
+  action: require_approval
+  reason: "macOS LaunchAgent persistence mechanism"
+  shield:
+    scope: skill.persistence
+  enabled: true
+  tags:
+    - persistence
+    - macos
+
+- id: SKILL_PYTHON_HEREDOC
+  category: remote_exec
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "python3?\\s*<<\\s*['\"]?EOF|python3?\\s+-c\\s*['\"]import\\s+(urllib|requests|socket)"
+  action: require_approval
+  reason: "Python heredoc or inline network code execution"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - python
+
+- id: SKILL_P2P_HIVE
+  category: scope_creep
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)p2p\\s*hive|connect.*hive|sovereign\\s*ghost|distributed\\s*agent\\s*network"
+  action: require_approval
+  reason: "P2P hive or distributed agent network connection"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - botnet
+    - p2p
+
+- id: SKILL_SMS_CALL_ACCESS
+  category: data_exfiltration
+  severity: high
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)sms\\s*database|call\\s*log|messages\\.db|CallHistory|sms\\.db"
+  action: block
+  reason: "Access to SMS or call log databases"
+  shield:
+    scope: skill.privacy
+  enabled: true
+  tags:
+    - surveillance
+    - sms
+
+- id: SKILL_AUTO_PR_MERGE
+  category: scope_creep
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)auto\\s*(merge|approve)\\s*pr|merge\\s*without\\s*review|bypass\\s*code\\s*review"
+  action: require_approval
+  reason: "Automated PR merging without human review"
+  shield:
+    scope: skill.code
+  enabled: true
+  tags:
+    - code_modification
+    - automation
+
+- id: SKILL_PLAINTEXT_CREDS
+  category: credential_exposure
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)store.*password.*plain|save.*credential.*file|write.*secret.*disk|credentials\\.txt"
+  action: require_approval
+  reason: "Plaintext credential storage pattern"
+  shield:
+    scope: skill.secrets
+  enabled: true
+  tags:
+    - credentials
+    - plaintext
+
+- id: SKILL_NFT_WALLET_SIGN
+  category: credential_exposure
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)nft\\s*mint|wallet\\s*sign|sign\\s*transaction|approve\\s*all\\s*tokens"
+  action: require_approval
+  reason: "NFT minting or wallet signing operation"
+  shield:
+    scope: skill.crypto
+  enabled: true
+  tags:
+    - crypto
+    - nft
+
+- id: SKILL_EXTERNAL_SCRIPT_EXEC
+  category: remote_exec
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)run\\s+scripts/|execute\\s+scripts/|bash\\s+scripts/|python\\s+scripts/"
+  action: require_approval
+  reason: "Execution of scripts from skill package"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - scripts
+
+- id: SKILL_SHARED_SECRET
+  category: credential_exposure
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)shared\\s*secret|global\\s*api\\s*key|common\\s*credential|default\\s*password\\s*="
+  action: require_approval
+  reason: "Shared or global credential pattern"
+  shield:
+    scope: skill.secrets
+  enabled: true
+  tags:
+    - credentials
+    - shared_secret
+
+- id: SKILL_PAYMENT_ACCESS
+  category: credential_exposure
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)credit\\s*card|payment\\s*method|card\\s*number|cvv|billing\\s*info|full\\s*card\\s*access"
+  action: block
+  reason: "Access to payment or credit card information"
+  shield:
+    scope: skill.payment
+  enabled: true
+  tags:
+    - payment
+    - pci
+
+# ============================================
+# FINAL GAP RULES - Multilingual & Specific
+# ============================================
+
+- id: SKILL_SMS_DATABASE_MULTI
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)banco\\s*de\\s*dados\\s*de\\s*mensagens|caixa\\s*de\\s*entrada|mensagens\\s*SMS|SMS\\s*não\\s*lidas"
+  action: block
+  reason: "SMS/message database access (Portuguese)"
+  shield:
+    scope: skill.privacy
+  enabled: true
+  tags:
+    - sms
+    - exfiltration
+    - portuguese
+
+- id: SKILL_DEVICE_DEBUG_INTERFACE
+  category: privilege_escalation
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)interface\\s*de\\s*depura|debug\\s*interface|adb\\s+shell|AT\\s+commands?"
+  action: require_approval
+  reason: "Device debugging or AT command interface access"
+  shield:
+    scope: skill.device
+  enabled: true
+  tags:
+    - device
+    - debug
+
+- id: SKILL_DOT_TOKEN_FILES
+  category: credential_exposure
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)\\.(line_token|line_secret|token|secret|credentials|api_key)"
+  action: require_approval
+  reason: "Plaintext credential storage in dot files"
+  shield:
+    scope: skill.secrets
+  enabled: true
+  tags:
+    - credentials
+    - plaintext
+
+- id: SKILL_GH_AUTO_MERGE
+  category: scope_creep
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)gh\\s+pr\\s+merge.*--auto|gh\\s+pr\\s+checkout|merge.*without.*review"
+  action: require_approval
+  reason: "GitHub CLI automated PR merge without human review"
+  shield:
+    scope: skill.code
+  enabled: true
+  tags:
+    - github
+    - automation
+
+- id: SKILL_OPENCLAW_DIR
+  category: scope_creep
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)\\.openclaw/skills/|/home/.*/.openclaw/"
+  action: require_approval
+  reason: "Access to OpenClaw skills directory"
+  shield:
+    scope: skill.filesystem
+  enabled: true
+  tags:
+    - openclaw
+    - filesystem
+
+- id: SKILL_MESSAGING_DATA
+  category: data_exfiltration
+  severity: high
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)(recupera|filtra|formata)\\s*(automaticamente)?\\s*mensagens|(GSM|SIM)\\s*(module|módulo)|comandos?\\s*AT"
+  action: require_approval
+  reason: "Access to messaging platform data or GSM/SIM modules"
+  shield:
+    scope: skill.communications
+  enabled: true
+  tags:
+    - messaging
+    - gsm
+
+# ============================================
+# VIRUSTOTAL BLOG RULES (Feb 2026)
+# From: "From Automation to Infection" Parts I & II
+# ============================================
+
+- id: SKILL_SSH_KEY_INJECTION
+  category: privilege_escalation
+  severity: critical
+  confidence: 0.98
+  when: !regex
+    pattern: "(?i)(authorized_keys|\\.ssh/|ssh-rsa\\s+AAAA|ssh-ed25519)"
+  action: block
+  reason: "SSH key injection or authorized_keys modification"
+  shield:
+    scope: skill.ssh
+  enabled: true
+  tags:
+    - ssh
+    - backdoor
+    - persistence
+
+- id: SKILL_WARMUP_HIJACK
+  category: remote_exec
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)(warmup|init|setup)\\s*\\(\\s*\\)|def\\s+(warmup|_init_|pre_run)|function\\s+warmup"
+  action: require_approval
+  reason: "Initialization function that may execute before argument parsing"
+  shield:
+    scope: skill.init
+  enabled: true
+  tags:
+    - hijacking
+    - init
+
+- id: SKILL_COGNITIVE_ROOTKIT
+  category: scope_creep
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)(SOUL\\.md|AGENTS\\.md|PERSONA\\.md|SYSTEM\\.md)|(write|append|inject)\\s*(to|into)\\s*(soul|persona|system\\s*prompt)"
+  action: block
+  reason: "Cognitive rootkit - modification of persistent agent instruction files"
+  shield:
+    scope: skill.persistence
+  enabled: true
+  tags:
+    - rootkit
+    - prompt_injection
+    - persistence
+
+- id: SKILL_KNOWN_C2_INFRA
+  category: remote_exec
+  severity: critical
+  confidence: 0.99
+  when: !regex
+    pattern: "(?i)(mydeadinternet\\.com|54\\.91\\.154\\.110|13338)"
+  action: block
+  reason: "Known malicious C2 infrastructure from VirusTotal research"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - c2
+    - ioc
+
+- id: SKILL_SEMANTIC_WORM
+  category: scope_creep
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)/api/infections|referred_by|propagat(e|ion)|infect.*other.*agents?|spread.*to.*agents?"
+  action: block
+  reason: "Semantic worm propagation pattern"
+  shield:
+    scope: skill.worm
+  enabled: true
+  tags:
+    - worm
+    - propagation
+
+- id: SKILL_MALICIOUS_PUBLISHER
+  category: supply_chain
+  severity: critical
+  confidence: 0.99
+  when: !regex
+    pattern: "(?i)(hightower6eu|hightowerp6eu)"
+  action: block
+  reason: "Known malicious skill publisher identified by VirusTotal"
+  shield:
+    scope: skill.publisher
+  enabled: true
+  tags:
+    - publisher
+    - ioc
+
+- id: SKILL_PASSWORD_ARCHIVE
+  category: obfuscation
+  severity: high
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)(password|pwd)\\s*[=:]\\s*['\"]?(openclaw|infected|malware|password123)['\"]?|unzip\\s+-P\\s*(openclaw|infected)"
+  action: block
+  reason: "Password-protected archive with known malware password"
+  shield:
+    scope: skill.obfuscation
+  enabled: true
+  tags:
+    - obfuscation
+    - archive
+
+- id: SKILL_GLOT_IO_HOSTING
+  category: supply_chain
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)glot\\.io|run\\.glot\\.io|snippets\\.glot\\.io"
+  action: require_approval
+  reason: "Script hosted on glot.io - platform used for malware distribution"
+  shield:
+    scope: skill.hosting
+  enabled: true
+  tags:
+    - hosting
+    - glot
+
+- id: SKILL_AMOS_STEALER
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)(atomic\\s*stealer|amos|infostealer)|(Keychain|Login\\s*Data|Cookies\\.sqlite|wallet\\.dat)"
+  action: block
+  reason: "Atomic Stealer (AMOS) infostealer pattern"
+  shield:
+    scope: skill.stealer
+  enabled: true
+  tags:
+    - stealer
+    - amos
+    - macos
+
+- id: SKILL_DEV_TCP_SHELL
+  category: remote_exec
+  severity: critical
+  confidence: 0.99
+  when: !regex
+    pattern: "(?i)/dev/tcp/|/dev/udp/|0>&1|>&\\s*/dev/"
+  action: block
+  reason: "Bash reverse shell using /dev/tcp"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - bash
+
+- id: SKILL_ENV_WEBHOOK_EXFIL
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)(env|\\.env|process\\.env|os\\.environ).*webhook|webhook.*(env|secret|token|key)"
+  action: block
+  reason: "Environment variable exfiltration to webhook"
+  shield:
+    scope: skill.exfil
+  enabled: true
+  tags:
+    - exfiltration
+    - webhook
+    - env
+
+- id: SKILL_NOHUP_PERSISTENCE
+  category: scope_creep
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)nohup\\s+.+\\s*&|disown|setsid\\s+.+&"
+  action: require_approval
+  reason: "Background process persistence with nohup/disown"
+  shield:
+    scope: skill.persistence
+  enabled: true
+  tags:
+    - persistence
+    - background
+
+- id: SKILL_PLAIN_HTTP_DOWNLOAD
+  category: supply_chain
+  severity: medium
+  confidence: 0.75
+  when: !regex
+    pattern: "(?i)(curl|wget|fetch)\\s+['\"]?http://[^s]"
+  action: require_approval
+  reason: "Unencrypted HTTP download - payload could be intercepted/modified"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - http
+    - insecure
+
+- id: SKILL_ERROR_SUPPRESSION
+  category: obfuscation
+  severity: medium
+  confidence: 0.70
+  when: !regex
+    pattern: "2>/dev/null|2>&1\\s*>/dev/null|stderr.*null|--quiet.*--silent"
+  action: log
+  reason: "Error output suppression - may hide malicious activity"
+  shield:
+    scope: skill.obfuscation
+  enabled: true
+  tags:
+    - obfuscation
+    - stealth

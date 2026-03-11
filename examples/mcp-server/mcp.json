@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "remote-review": {
+      "transport": "http",
+      "url": "https://mcp.example.invalid/server",
+      "command": "node",
+      "args": ["server.js"]
+    }
+  }
+}

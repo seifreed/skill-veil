@@ -1,0 +1,133 @@
+# Obfuscation Detection Rules
+# These rules detect patterns indicating code obfuscation
+
+- id: SKILL_OBFUSCATION_BASE64
+  category: obfuscation
+  severity: medium
+  confidence: 0.75
+  when:
+    any:
+      - regex:
+          pattern: "(?i)base64\\s+-d"
+      - regex:
+          pattern: "echo\\s+[A-Za-z0-9+/=]{20,}\\s*\\|\\s*base64"
+      - regex:
+          pattern: "\\[System\\.Convert\\]::FromBase64String"
+  action: require_approval
+  reason: "Base64 encoded command execution"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - obfuscation
+
+- id: SKILL_OBFUSCATION_HEX
+  category: obfuscation
+  severity: medium
+  confidence: 0.75
+  when:
+    any:
+      - regex:
+          pattern: "xxd\\s+-r"
+      - regex:
+          pattern: "printf\\s+[\"']\\\\x[0-9a-fA-F]{2}"
+      - regex:
+          pattern: "\\$\\(printf.*\\\\x"
+  action: require_approval
+  reason: "Hex encoded payload execution"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - obfuscation
+
+- id: SKILL_OBFUSCATION_POWERSHELL_ENC
+  category: obfuscation
+  severity: high
+  confidence: 0.90
+  when:
+    any:
+      - regex:
+          pattern: "(?i)powershell\\s+.*-e(nc(odedcommand)?)?\\s+[A-Za-z0-9+/=]{20,}"
+      - regex:
+          pattern: "(?i)-EncodedCommand\\s+[A-Za-z0-9+/=]{20,}"
+  action: block
+  reason: "PowerShell encoded command execution"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - obfuscation
+    - powershell
+
+- id: SKILL_OBFUSCATION_EVAL
+  category: obfuscation
+  severity: medium
+  confidence: 0.80
+  when:
+    any:
+      - regex:
+          pattern: "eval\\s*\\("
+      - regex:
+          pattern: "exec\\s*\\("
+      - regex:
+          pattern: "\\$\\{!.*\\}"
+  action: require_approval
+  reason: "Dynamic code evaluation"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - obfuscation
+    - eval
+
+- id: SKILL_OBFUSCATION_STRING_CONCAT
+  category: obfuscation
+  severity: low
+  confidence: 0.60
+  when:
+    any:
+      - regex:
+          pattern: "\\$[a-zA-Z]+\\s*\\+\\s*\\$[a-zA-Z]+.*\\+.*[\"']"
+      - regex:
+          pattern: "\\\"\\s*\\+\\s*\\\".*\\\"\\s*\\+\\s*\\\""
+  action: log
+  reason: "Suspicious string concatenation pattern"
+  enabled: true
+  tags:
+    - obfuscation
+    - string_manipulation
+
+- id: SKILL_OBFUSCATION_CHAR_ARRAY
+  category: obfuscation
+  severity: medium
+  confidence: 0.75
+  when:
+    any:
+      - regex:
+          pattern: "\\[char\\]\\s*\\d+.*\\[char\\]\\s*\\d+"
+      - regex:
+          pattern: "chr\\(\\d+\\).*chr\\(\\d+\\)"
+      - regex:
+          pattern: "String\\.fromCharCode"
+  action: require_approval
+  reason: "Character code obfuscation"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - obfuscation
+
+- id: SKILL_OBFUSCATION_VARIABLE_SUBSTITUTION
+  category: obfuscation
+  severity: low
+  confidence: 0.55
+  when:
+    regex:
+      pattern: "\\$\\{[^}]+/[^}]+/[^}]+\\}"
+  action: log
+  reason: "Complex variable substitution pattern"
+  enabled: true
+  tags:
+    - obfuscation
+    - bash

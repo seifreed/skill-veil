@@ -1,0 +1,29 @@
+name: skill-veil SARIF upload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  skill-veil-sarif:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run SARIF scan with reusable action
+        id: scan
+        uses: ./.github/actions/skill-veil
+        with:
+          command: scan-package
+          path: .
+          format: sarif
+          output: artifacts/current.sarif
+          preset: ci
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif-path }}

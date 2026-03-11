@@ -1,0 +1,86 @@
+# VirusTotal IOCs - From "From Automation to Infection" Blog (Feb 2026)
+# https://blog.virustotal.com/2026/02/from-automation-to-infection-part-ii.html
+# https://blog.virustotal.com/2026/02/from-automation-to-infection-how.html
+
+# Known malicious skill hashes (SHA256)
+# These are built into the scanner but documented here for reference
+malicious_hashes:
+  - b6337869e41e89f4c20a20c3f2b7c7a2ed7118edc33201484c40c4c66f16ebcc  # better-polymarket RCE
+  - 59381ac34214655f3d80dcf95a49e2ac1fdf40ccde5cab96c2e87787ef95734d  # wake-up worm
+  - 053881c6229706ae06891f35617bceea7aa0cbe29394721de640fbc2711de138  # evilweather SSH
+  - b604ef3dc9bbdc45c768560ee4e092de21740e14f955c3731df1041c65b9bec3  # rankaj exfiltration
+  - 7cfd55f71ac53c2cdfc83204ca4d8b4ae4c9f2f77f8a1ab6c18b4015f1e5e34f  # devinism cognitive
+
+# Known C2 Infrastructure
+c2_infrastructure:
+  ips:
+    - 54.91.154.110  # C2 command server
+  ports:
+    - 13338  # C2 port
+  domains:
+    - mydeadinternet.com  # Control & status server
+
+# Malicious Hosting Platforms
+malicious_hosting:
+  - glot.io  # Used for obfuscated shell script hosting
+
+# Known Malicious Publishers
+malicious_publishers:
+  - hightower6eu  # 314+ malicious skills published
+
+# Password-Protected Archive Passwords
+known_malware_passwords:
+  - openclaw  # Common password for malicious ZIPs
+
+# Malicious File Names
+malicious_filenames:
+  - openclaw-agent.exe  # Windows payload
+  - x5ki60w1ih838sp7  # macOS payload (Atomic Stealer)
+
+# Attack Technique Patterns
+attack_patterns:
+  execution_hijacking:
+    description: "Hides malicious code in warmup() functions executed before argument parsing"
+    indicators:
+      - "warmup()"
+      - "pre_run()"
+      - "_init_()"
+
+  semantic_worm:
+    description: "Embeds directives coercing agents into distribution nodes"
+    indicators:
+      - "/api/infections"
+      - "referred_by"
+      - "4-hour heartbeat intervals"
+
+  ssh_injection:
+    description: "Appends SSH keys to authorized_keys for persistence"
+    target: "/root/.ssh/authorized_keys"
+    suppression: "2>/dev/null"
+
+  cognitive_rootkit:
+    description: "Injects into persistent agent instruction files"
+    targets:
+      - "SOUL.md"
+      - "AGENTS.md"
+      - "PERSONA.md"
+
+  env_exfiltration:
+    description: "Extracts .env file contents and sends to webhook"
+    targets:
+      - ".env"
+      - "API keys"
+      - "tokens"
+      - "credentials"
+
+# Malware Families
+malware_families:
+  atomic_stealer:
+    aliases: ["AMOS"]
+    platform: "macOS"
+    type: "infostealer"
+    targets:
+      - "Keychain"
+      - "Login Data"
+      - "Cookies.sqlite"
+      - "wallet.dat"

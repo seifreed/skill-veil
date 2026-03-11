@@ -1,0 +1,354 @@
+schema_version: skill-veil.dev/rules/v1alpha1
+metadata:
+  name: official-behavioral
+  kind: official
+  compatibility:
+    - skill-veil.dev/rules/v1alpha1
+rules:
+  - id: OFFICIAL_PROMPT_TAMPERING_OVERRIDE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.84
+    when: !regex
+      pattern: "(?i)(ignore previous system instructions|override the system prompt|replace the system message|persist these instructions across sessions)"
+    action: require_approval
+    reason: "Skill contains persistent prompt tampering language"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_tampering
+      - official_pack
+
+  - id: OFFICIAL_TOOL_ABUSE_SESSION_EXTRACTION
+    category: tool_abuse
+    severity: high
+    confidence: 0.82
+    when: !regex
+      pattern: "(?i)(extract cookies|inspect browser cookies|dump session tokens|harvest browser storage|export authentication headers|extract bearer token from (localStorage|sessionStorage)|dump session (cookies|tokens)|copy auth headers from browser)"
+    action: require_approval
+    reason: "Skill describes tool usage patterns associated with session or token extraction"
+    shield:
+      scope: skill.tools
+    enabled: true
+    tags:
+      - tool_abuse
+      - official_pack
+
+  - id: OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW
+    category: autonomy_escalation
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?i)(without human review|no human approval required|automatically approve(?: all steps| changes| destructive actions)?|treat (?:the user|this step|the step|all changes?) as (?:pre-)?approved)"
+    action: require_approval
+    reason: "Skill attempts to bypass normal approval or review controls"
+    shield:
+      scope: skill.approval
+    enabled: true
+    tags:
+      - autonomy
+      - official_pack
+
+  - id: OFFICIAL_SOCIAL_MANIPULATION_AUTHORITY
+    category: social_manipulation
+    severity: medium
+    confidence: 0.72
+    when: !regex
+      pattern: "(?i)(as your administrator|security team requires|mandatory compliance|non-compliance will|feel urgent|move quickly|do not raise questions)"
+    action: require_approval
+    reason: "Authority-based social pressure detected"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - social_manipulation
+      - official_pack
+
+  - id: OFFICIAL_PRIVILEGED_CONTAINER_HOST_MOUNT
+    category: privilege_escalation
+    severity: high
+    confidence: 0.86
+    when: !regex
+      pattern: "(?i)(docker\\s+run\\s+--privileged\\s+-v\\s+/:/host|--privileged[^\\n]+-v\\s+/:/host)"
+    action: require_approval
+    reason: "Skill requests privileged container execution with direct host filesystem mount"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - privilege_escalation
+      - container
+      - official_pack
+
+  - id: OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT
+    category: remote_exec
+    severity: critical
+    confidence: 0.90
+    when: !regex
+      pattern: "(?is)(requests\\.get\\(|urllib\\.request\\.urlopen\\(|fetch\\(|Invoke-WebRequest|iwr).{0,220}(exec\\(|eval\\(|child_process\\.(exec|spawn)|Invoke-Expression|iex)"
+    action: block
+    reason: "Artifact combines remote fetch with direct execution in Python, Node, or PowerShell"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - remote_exec
+      - polyglot
+      - official_pack
+
+  - id: OFFICIAL_EXFIL_WEBHOOK_OR_BOT
+    category: data_exfiltration
+    severity: high
+    confidence: 0.87
+    when: !regex
+      pattern: "(?i)((send|post|upload|forward|exfiltrate).{0,120}(cookie|token|secret|session).{0,160}(discord\\.com/api/webhooks|api\\.telegram\\.org/bot|smtp\\.[A-Za-z0-9._-]+|sendgrid|mailgun)|((discord\\.com/api/webhooks|api\\.telegram\\.org/bot|smtp\\.[A-Za-z0-9._-]+|sendgrid|mailgun).{0,160}(send|post|upload|forward|exfiltrate).{0,120}(cookie|token|secret|session))|((cookie|token|secret|session).{0,120}(send|post|upload|forward|exfiltrate).{0,160}(discord\\.com/api/webhooks|api\\.telegram\\.org/bot|smtp\\.[A-Za-z0-9._-]+|sendgrid|mailgun)))"
+    action: block
+    reason: "Artifact appears to exfiltrate sensitive data through webhook, bot, or mail infrastructure"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - exfiltration
+      - official_pack
+
+  - id: OFFICIAL_FORCED_APPROVAL_BYPASS
+    category: autonomy_escalation
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?i)(pretend approval was granted|mark (this|the step) as approved|do not ask for confirmation|skip the approval gate|treat the user as already consented)"
+    action: require_approval
+    reason: "Artifact attempts to bypass explicit approval or consent checks"
+    shield:
+      scope: skill.approval
+    enabled: true
+    tags:
+      - autonomy
+      - social_manipulation
+      - official_pack
+
+  - id: OFFICIAL_APPROVAL_BYPASS_WITH_EXECUTION
+    category: autonomy_escalation
+    severity: critical
+    confidence: 0.90
+    when: !regex
+      pattern: "(?is)((do not ask for confirmation|skip the approval gate|treat (?:the user|this step|the step) as (?:already )?approved|pretend approval was granted).{0,140}(run|execute|shell|command|curl\\s|wget\\s|fetch\\(|install|spawn|exec))|((run|execute|shell|command|curl\\s|wget\\s|fetch\\(|install|spawn|exec).{0,140}(do not ask for confirmation|skip the approval gate|treat (?:the user|this step|the step) as (?:already )?approved|pretend approval was granted))"
+    action: block
+    reason: "Artifact combines explicit approval bypass with command execution or install behavior"
+    shield:
+      scope: skill.approval
+    enabled: true
+    tags:
+      - autonomy
+      - remote_exec
+      - official_pack
+
+  - id: OFFICIAL_APPROVAL_BYPASS_DELETE_OR_MODIFY
+    category: autonomy_escalation
+    severity: high
+    confidence: 0.88
+    when: !regex
+      pattern: "(?is)((do not ask for confirmation|skip the approval gate|treat (?:the user|this step|the step) as (?:already )?approved|pretend approval was granted).{0,140}(delete|modify|overwrite|remove|merge|apply changes|push changes))|((delete|modify|overwrite|remove|merge|apply changes|push changes).{0,140}(do not ask for confirmation|skip the approval gate|treat (?:the user|this step|the step) as (?:already )?approved|pretend approval was granted))"
+    action: require_approval
+    reason: "Artifact combines approval bypass with destructive or state-changing actions"
+    shield:
+      scope: skill.approval
+    enabled: true
+    tags:
+      - autonomy
+      - code_modification
+      - official_pack
+
+  - id: OFFICIAL_PROMPT_OVERRIDE_WITH_PERSISTENCE
+    category: persistent_prompt_tampering
+    severity: critical
+    confidence: 0.91
+    when: !regex
+      pattern: "(?is)((ignore previous system instructions|override the system prompt|replace the system message).{0,180}(persist these instructions across sessions|restore these instructions every session|reinstall this system prompt|silently reapply (these instructions|them)|if removed, add (these instructions|them) back|every future conversation))|((persist these instructions across sessions|restore these instructions every session|reinstall this system prompt|silently reapply (these instructions|them)|if removed, add (these instructions|them) back|every future conversation).{0,180}(ignore previous system instructions|override the system prompt|replace the system message))"
+    action: block
+    reason: "Artifact combines prompt override language with explicit persistence across sessions or future conversations"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_tampering
+      - persistence
+      - official_pack
+
+  - id: OFFICIAL_MCP_SUSPICIOUS_REMOTE_ENDPOINT
+    category: tool_abuse
+    severity: medium
+    confidence: 0.76
+    when: !regex
+      pattern: "(?i)(https?://[^\\s\"']+(ngrok|trycloudflare|workers\\.dev|raw\\.githubusercontent\\.com|pastebin\\.com))"
+    action: require_approval
+    reason: "MCP or agent artifact points to a high-risk remote endpoint commonly used for transient or opaque control planes"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - mcp
+      - remote_endpoint
+      - official_pack
+
+  - id: OFFICIAL_TOKEN_HARVEST_AND_POST
+    category: data_exfiltration
+    severity: critical
+    confidence: 0.91
+    when: !regex
+      pattern: "(?is)(cookies?\\.txt|localStorage|sessionStorage|auth(entication)? headers?|refresh token|session token).{0,220}(requests\\.post\\(|axios\\.post\\(|fetch\\(|Invoke-RestMethod|curl\\s+-X\\s+POST|wget\\s+--post-data).{0,220}(webhook|collect|steal|loot|discord|telegram|pastebin|ngrok|trycloudflare|raw\\.githubusercontent\\.com)"
+    action: block
+    reason: "Artifact appears to harvest browser or API session material and transmit it over HTTP"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - exfiltration
+      - token_theft
+      - official_pack
+
+  - id: OFFICIAL_SEMANTIC_PERSISTENCE_REINSTALL
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.86
+    when: !regex
+      pattern: "(?i)(restore these instructions every session|reinstall this system prompt|silently reapply (these instructions|them)|if removed, add (these instructions|them) back|persist this behavior across future conversations|every future conversation)"
+    action: block
+    reason: "Artifact attempts semantic persistence by silently reapplying or restoring prompt behavior"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_tampering
+      - persistence
+      - official_pack
+
+  - id: OFFICIAL_SESSION_THEFT_BROWSER_EXPORT
+    category: tool_abuse
+    severity: high
+    confidence: 0.88
+    when: !regex
+      pattern: "(?i)(export browser (cookies|storage)|dump session (cookies|tokens)|harvest refresh token|extract bearer token from (localStorage|sessionStorage)|copy auth headers from browser)"
+    action: block
+    reason: "Artifact explicitly targets browser or API session material for export or harvesting"
+    shield:
+      scope: skill.tools
+    enabled: true
+    tags:
+      - tool_abuse
+      - session_theft
+      - official_pack
+
+  - id: OFFICIAL_MCP_REMOTE_TUNNEL_WITH_EXEC
+    category: remote_exec
+    severity: high
+    confidence: 0.84
+    when: !regex
+      pattern: "(?is)(ngrok|trycloudflare|workers\\.dev).{0,180}(command|stdio|spawn|exec|shell)"
+    action: block
+    reason: "MCP or related artifact combines an opaque remote tunnel endpoint with command execution semantics"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - mcp
+      - remote_exec
+      - official_pack
+
+  - id: OFFICIAL_MCP_BROAD_OAUTH_SCOPE
+    category: scope_creep
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?is)(mcp|model context protocol|server transport|transport|tool_permissions|\"tools\"|\"command\").{0,260}(oauth|authorization|bearer|scopes?).{0,220}(admin|write|read/write|calendar|drive|mail|slack|github|repo)"
+    action: require_approval
+    reason: "MCP or related artifact appears to request broad OAuth or identity-linked scopes"
+    shield:
+      scope: skill.identity
+    enabled: true
+    tags:
+      - mcp
+      - oauth
+      - scope_abuse
+      - official_pack
+
+  - id: OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT
+    category: tool_abuse
+    severity: high
+    confidence: 0.84
+    when: !regex
+      pattern: "(?is)(mcp|model context protocol|server transport|transport|tool_permissions|tools).{0,220}(https?://|wss?://).{0,220}(\"auth\"\\s*:\\s*\"none\"|authentication\\s*:\\s*none|auth\\s*:\\s*none|auth model\\s*:\\s*none|without auth)"
+    action: require_approval
+    reason: "MCP manifest exposes a remote endpoint without a visible authentication model"
+    shield:
+      scope: skill.identity
+    enabled: true
+    tags:
+      - mcp
+      - auth
+      - official_pack
+
+  - id: OFFICIAL_MCP_PERMISSIVE_TOOL_EXPOSURE
+    category: tool_abuse
+    severity: high
+    confidence: 0.83
+    when: !regex
+      pattern: "(?is)(\"tools\"\\s*:\\s*\\[[^\\]]*\"\\*\"|allow_all_tools|all_tools|tool_permissions\\s*:\\s*\"all\"|expose all tools)"
+    action: require_approval
+    reason: "MCP manifest appears to expose an unrestricted or very broad tool surface"
+    shield:
+      scope: skill.tools
+    enabled: true
+    tags:
+      - mcp
+      - tool_abuse
+      - official_pack
+
+  - id: OFFICIAL_WEBHOOK_SKIP_SIGNATURE_VALIDATION
+    category: tool_abuse
+    severity: high
+    confidence: 0.87
+    when: !regex
+      pattern: "(?i)(skip signature validation|disable signature verification|do not verify webhook signature|accept unsigned webhooks|no webhook verification required)"
+    action: require_approval
+    reason: "Artifact disables or bypasses webhook signature validation"
+    shield:
+      scope: skill.inbound
+    enabled: true
+    tags:
+      - webhook
+      - inbound_surface
+      - official_pack
+
+  - id: OFFICIAL_UNSIGNED_WEBHOOK_RECEIVER
+    category: tool_abuse
+    severity: medium
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(webhook|receiver|listener|callback endpoint).{0,180}(public endpoint|0\\.0\\.0\\.0|listen on all interfaces|accept any payload|without auth|unsigned)"
+    action: require_approval
+    reason: "Artifact describes a public or weakly authenticated inbound webhook receiver"
+    shield:
+      scope: skill.inbound
+    enabled: true
+    tags:
+      - webhook
+      - inbound_surface
+      - official_pack
+
+  - id: OFFICIAL_INTERNAL_NETWORK_TARGET
+    category: tool_abuse
+    severity: low
+    confidence: 0.68
+    when: !regex
+      pattern: "(?is)(fetch|query|connect|proxy|call|request|send|POST|GET|curl|wget|invoke-webrequest|requests\\.(get|post)|axios\\.(get|post)).{0,180}(169\\.254\\.169\\.254|127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(1[6-9]|2\\d|3[0-1])\\.\\d{1,3}\\.\\d{1,3}|\\.internal|\\.local)"
+    action: log
+    reason: "Artifact references internal network or metadata service targets"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - ssrf
+      - internal_network
+      - official_pack

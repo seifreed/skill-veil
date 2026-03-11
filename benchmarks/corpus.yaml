@@ -1,0 +1,149 @@
+samples:
+  - id: example-safe
+    path: ../examples/safe-skill
+    label: benign
+  - id: benign-pinned-python
+    path: fixtures/benign/pinned-python/SKILL.md
+    label: benign
+  - id: benign-internal-build-doc
+    path: fixtures/benign/internal-build-doc/SKILL.md
+    label: benign
+  - id: benign-local-container-doc
+    path: fixtures/benign/local-container-doc/SKILL.md
+    label: benign
+  - id: benign-local-security-audit
+    path: fixtures/benign/local-security-audit/SKILL.md
+    label: benign
+  - id: benign-tooling-policy-review
+    path: fixtures/benign/tooling-policy-review/SKILL.md
+    label: benign
+  - id: benign-defensive-shell-audit
+    path: fixtures/benign/defensive-shell-audit/SKILL.md
+    label: benign
+  - id: benign-local-secrets-rotation-playbook
+    path: fixtures/benign/local-secrets-rotation-playbook/SKILL.md
+    label: benign
+  - id: benign-local-utility
+    path: fixtures/benign/local-utility/SKILL.md
+    label: benign
+  - id: benign-doc-like-skill
+    path: fixtures/benign/doc-like-skill/SKILL.md
+    label: benign
+  - id: benign-agent-guidelines
+    path: fixtures/benign/agent-guidelines/AGENTS.md
+    label: benign
+  - id: benign-local-mcp
+    path: fixtures/benign/local-mcp/mcp.json
+    label: benign
+  - id: benign-remote-exec-doc
+    path: fixtures/benign/remote-exec-doc/SKILL.md
+    label: benign
+    focus_category: remote_exec
+    attack_family: remote_exec
+  - id: benign-exfiltration-review
+    path: fixtures/benign/exfiltration-review/SKILL.md
+    label: benign
+    focus_category: data_exfiltration
+    attack_family: exfiltration
+  - id: benign-autonomy-guardrails
+    path: fixtures/benign/autonomy-guardrails/AGENTS.md
+    label: benign
+    focus_category: autonomy_escalation
+    attack_family: autonomy_bypass
+  - id: benign-scope-audit
+    path: fixtures/benign/scope-audit/SKILL.md
+    label: benign
+    focus_category: scope_creep
+    attack_family: scope_abuse
+  - id: benign-webhook-doc
+    path: fixtures/benign/webhook-doc/SKILL.md
+    label: benign
+    focus_category: tool_abuse
+    attack_family: webhook_risk
+  - id: benign-mcp-reviewed
+    path: fixtures/benign/mcp-reviewed/mcp.json
+    label: benign
+    focus_category: tool_abuse
+    attack_family: mcp_remote_risk
+
+  - id: example-suspicious
+    path: ../examples/suspicious-skill
+    label: suspicious
+    focus_category: supply_chain
+  - id: suspicious-tool-scope-creep
+    path: fixtures/suspicious/tool-scope-creep/SKILL.md
+    label: suspicious
+    focus_category: tool_abuse
+  - id: suspicious-prompt-override
+    path: fixtures/suspicious/prompt-override/SKILL.md
+    label: suspicious
+    focus_category: persistent_prompt_tampering
+    attack_family: autonomy_bypass
+  - id: suspicious-ambiguous-browser-export
+    path: fixtures/suspicious/ambiguous-browser-export/SKILL.md
+    label: suspicious
+    focus_category: social_manipulation
+  - id: suspicious-social-pressure
+    path: fixtures/suspicious/social-pressure/SKILL.md
+    label: suspicious
+    focus_category: social_manipulation
+  - id: suspicious-approval-bypass
+    path: fixtures/suspicious/approval-bypass/AGENTS.md
+    label: suspicious
+    focus_category: autonomy_escalation
+    attack_family: autonomy_bypass
+  - id: suspicious-webhook-unsigned
+    path: fixtures/suspicious/webhook-unsigned/SKILL.md
+    label: suspicious
+    focus_category: tool_abuse
+    attack_family: webhook_risk
+  - id: suspicious-mcp-opaque-remote
+    path: fixtures/suspicious/mcp-opaque-remote/mcp.json
+    label: suspicious
+    focus_category: tool_abuse
+    attack_family: mcp_remote_risk
+
+  - id: example-malicious
+    path: ../examples/malicious-skill
+    label: malicious
+    focus_category: remote_exec
+    attack_family: remote_exec
+  - id: malicious-remote-installer
+    path: fixtures/malicious/remote-installer/SKILL.md
+    label: malicious
+    focus_category: supply_chain
+  - id: malicious-persistent-powershell
+    path: fixtures/malicious/persistent-powershell/SKILL.md
+    label: malicious
+    focus_category: remote_exec
+    attack_family: remote_exec
+  - id: malicious-system-rootkit
+    path: fixtures/malicious/system-rootkit/SYSTEM.md
+    label: malicious
+    focus_category: persistent_prompt_tampering
+    attack_family: autonomy_bypass
+  - id: malicious-mcp-remote-shell
+    path: fixtures/malicious/mcp-remote-shell/mcp.json
+    label: malicious
+    focus_category: tool_abuse
+    attack_family: mcp_remote_risk
+  - id: malicious-token-exfiltration
+    path: fixtures/malicious/token-exfiltration/SKILL.md
+    label: malicious
+    focus_category: data_exfiltration
+    attack_family: exfiltration
+  - id: malicious-approval-bypass-exec
+    path: fixtures/malicious/approval-bypass-exec/SKILL.md
+    label: malicious
+    focus_category: autonomy_escalation
+    attack_family: autonomy_bypass
+  - id: malicious-scope-abuse-browser
+    path: fixtures/malicious/scope-abuse-browser/SKILL.md
+    label: malicious
+    focus_category: scope_creep
+    attack_family: scope_abuse
+  - id: malicious-mcp-noauth-exec
+    path: fixtures/malicious/mcp-noauth-exec/mcp.json
+    label: malicious
+    focus_category: remote_exec
+    attack_family: mcp_remote_risk

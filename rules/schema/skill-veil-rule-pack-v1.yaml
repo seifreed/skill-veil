@@ -1,0 +1,62 @@
+schema_version: skill-veil.dev/rules/v1alpha1
+description: |
+  Versioned schema for external rule packs.
+  This file documents the expected shape for contributor-authored YAML packs.
+
+pack_envelope:
+  required_fields:
+    - schema_version
+    - metadata
+    - rules
+  metadata_fields:
+    - name
+    - kind
+    - compatibility
+  supported_kinds:
+    - official
+    - community
+    - ioc_feed
+
+rule_fields:
+  - name: id
+    required: true
+    type: string
+    notes: Must be unique within a loaded ruleset.
+  - name: category
+    required: true
+    type: threat_category
+  - name: severity
+    required: true
+    type: severity
+  - name: confidence
+    required: false
+    type: float
+    range: [0.0, 1.0]
+  - name: when
+    required: true
+    type: rule_condition
+  - name: action
+    required: true
+    type: recommended_action
+  - name: reason
+    required: true
+    type: string
+  - name: shield
+    required: false
+    type: object
+  - name: enabled
+    required: false
+    type: bool
+  - name: tags
+    required: false
+    type: string[]
+
+conditions:
+  - !regex
+  - !section_contains
+  - !section_regex
+  - !artifact_kind
+  - !code_language
+  - !any
+  - !all
+  - !yara

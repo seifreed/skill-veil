@@ -1,0 +1,161 @@
+# Supply Chain Security Detection Rules
+# These rules detect patterns indicating supply chain risks
+
+- id: SKILL_SUPPLY_CHAIN_CHMOD_EXEC
+  category: supply_chain
+  severity: high
+  confidence: 0.85
+  when:
+    regex:
+      pattern: "chmod\\s+\\+x\\s+.*&&\\s*\\./"
+  action: require_approval
+  reason: "Downloaded file made executable and run immediately"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+
+- id: SKILL_SUPPLY_CHAIN_NO_HASH
+  category: supply_chain
+  severity: medium
+  confidence: 0.70
+  when:
+    all:
+      - regex:
+          pattern: "(curl|wget|Invoke-WebRequest)\\s+.*\\.(sh|ps1|exe|bin|py|rb)"
+  action: require_approval
+  reason: "Downloading executable without hash verification"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+
+- id: SKILL_SUPPLY_CHAIN_NPM_GLOBAL
+  category: supply_chain
+  severity: medium
+  confidence: 0.75
+  when:
+    regex:
+      pattern: "npm\\s+install\\s+-g\\s+[^@\\s]+"
+  action: require_approval
+  reason: "Global npm package installation without version pinning"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - npm
+
+- id: SKILL_SUPPLY_CHAIN_PIP_NO_VERSION
+  category: supply_chain
+  severity: medium
+  confidence: 0.75
+  when:
+    regex:
+      pattern: "pip3?\\s+install\\s+(?!--)[^=><]+"
+  action: require_approval
+  reason: "Pip package installation without version pinning"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - pip
+    - python
+
+- id: SKILL_SUPPLY_CHAIN_DOCKER_LATEST
+  category: supply_chain
+  severity: medium
+  confidence: 0.80
+  when:
+    any:
+      - regex:
+          pattern: "docker\\s+pull\\s+[^:]+$"
+      - regex:
+          pattern: "docker\\s+pull\\s+[^:]+:latest"
+      - regex:
+          pattern: "FROM\\s+[^:]+$"
+      - regex:
+          pattern: "FROM\\s+[^:]+:latest"
+  action: require_approval
+  reason: "Docker image without specific tag (using :latest or untagged)"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - docker
+
+- id: SKILL_SUPPLY_CHAIN_ADD_REPO
+  category: supply_chain
+  severity: high
+  confidence: 0.85
+  when:
+    any:
+      - regex:
+          pattern: "add-apt-repository\\s+ppa:"
+      - regex:
+          pattern: "echo\\s+.*>\\s*/etc/apt/sources.list"
+      - regex:
+          pattern: "curl.*\\|.*apt-key"
+  action: require_approval
+  reason: "Adding external package repository"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - apt
+
+- id: SKILL_SUPPLY_CHAIN_UNSAFE_BINARY
+  category: unsafe_binary
+  severity: high
+  confidence: 0.90
+  when:
+    any:
+      - regex:
+          pattern: "(wget|curl)\\s+.*\\.(exe|bin|dmg|pkg|msi|deb|rpm)"
+      - regex:
+          pattern: "chmod\\s+777"
+  action: require_approval
+  reason: "Downloading or handling binary without verification"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - binary
+
+- id: SKILL_SUPPLY_CHAIN_GO_INSTALL
+  category: supply_chain
+  severity: medium
+  confidence: 0.70
+  when:
+    regex:
+      pattern: "go\\s+install\\s+[^@]+$"
+  action: log
+  reason: "Go install without version specification"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - go
+
+- id: SKILL_SUPPLY_CHAIN_CARGO_INSTALL
+  category: supply_chain
+  severity: low
+  confidence: 0.65
+  when:
+    regex:
+      pattern: "cargo\\s+install\\s+(?!--)[^@\\s]+"
+  action: log
+  reason: "Cargo install without version specification"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - rust

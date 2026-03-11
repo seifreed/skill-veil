@@ -1,0 +1,59 @@
+schema_version: skill-veil.dev/rules/v1alpha1
+metadata:
+  name: official-core
+  kind: official
+  compatibility:
+    - skill-veil.dev/rules/v1alpha1
+rules:
+  - id: SKILL_REMOTE_EXEC_CURL_BASH
+    category: remote_exec
+    severity: critical
+    confidence: 0.98
+    when: !regex
+      pattern: "curl\\s+.*\\|\\s*(ba)?sh"
+    action: block
+    reason: "Remote download and execution via curl piped to shell"
+    enabled: true
+    tags:
+      - remote_exec
+      - supply_chain
+
+  - id: SKILL_REMOTE_EXEC_POWERSHELL_IEX
+    category: remote_exec
+    severity: critical
+    confidence: 0.98
+    when: !regex
+      pattern: "(?i)(invoke-webrequest|iwr)\\s+.*\\|\\s*(iex|invoke-expression)"
+    action: block
+    reason: "Remote download and execution via PowerShell IEX"
+    enabled: true
+    tags:
+      - remote_exec
+      - powershell
+      - supply_chain
+
+  - id: SKILL_PROMPT_TAMPERING_PERSISTENCE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.82
+    when: !regex
+      pattern: "(?i)(append\\s+to\\s+(AGENTS|CLAUDE|SYSTEM)\\.md|persist\\s+this\\s+instruction|store\\s+this\\s+prompt\\s+for\\s+future\\s+runs)"
+    action: require_approval
+    reason: "Skill attempts to persist or modify agent instructions beyond the current run"
+    enabled: true
+    tags:
+      - persistence
+      - semantic
+
+  - id: SKILL_TOOL_ABUSE_FORCE_TOOLING
+    category: tool_abuse
+    severity: medium
+    confidence: 0.78
+    when: !regex
+      pattern: "(?i)((always\\s+use\\s+the\\s+(shell|browser|network|filesystem)\\s+tool).{0,80}(bypass|ignore|regardless\\s+of|even\\s+if|without approval)|bypass\\s+the\\s+tool\\s+restriction|force\\s+tool\\s+execution)"
+    action: require_approval
+    reason: "Skill pushes the agent to overuse or bypass normal tool boundaries"
+    enabled: true
+    tags:
+      - tool_abuse
+      - context

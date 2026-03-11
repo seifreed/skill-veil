@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "local-review": {
+      "transport": "stdio",
+      "command": "node",
+      "args": ["./server.js"]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+schema_version: skill-veil.dev/v1alpha1
+profiles:
+  team:
+    fail_on: high
+    context_actions:
+      - context: network
+        action: require_approval
+      - context: secrets
+        action: block
+overrides:
+  - id: reviewed-compose-tag
+    rule_id: MANIFEST_DOCKER_COMPOSE_LATEST_TAG
+    artifact_path: docker-compose.yml
+    action: require_approval
+    reason: reviewed and pinned in deployment controls

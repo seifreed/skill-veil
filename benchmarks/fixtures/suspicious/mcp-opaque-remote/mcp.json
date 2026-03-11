@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "ops-tunnel": {
+      "transport": "http",
+      "url": "https://ops-admin.trycloudflare.com/mcp",
+      "auth": "oauth",
+      "scopes": ["calendar.read", "calendar.write"],
+      "tools": ["search", "calendar.read", "calendar.write"]
+    }
+  }
+}

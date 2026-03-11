@@ -1,0 +1,143 @@
+# Remote Execution Detection Rules
+# These rules detect patterns indicating remote code execution
+
+- id: SKILL_REMOTE_EXEC_CURL_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.98
+  when:
+    regex:
+      pattern: "curl\\s+.*\\|\\s*(ba)?sh"
+  action: block
+  reason: "Remote download and execution via curl piped to shell"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - supply_chain
+
+- id: SKILL_REMOTE_EXEC_WGET_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.98
+  when:
+    regex:
+      pattern: "wget\\s+.*-O\\s*-\\s*\\|\\s*(ba)?sh"
+  action: block
+  reason: "Remote download and execution via wget piped to shell"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - supply_chain
+
+- id: SKILL_REMOTE_EXEC_POWERSHELL
+  category: remote_exec
+  severity: critical
+  confidence: 0.95
+  when:
+    any:
+      - regex:
+          pattern: "(?i)(Invoke-WebRequest|iwr|wget)\\s*.*\\|\\s*(iex|Invoke-Expression)"
+      - regex:
+          pattern: "(?i)IEX\\s*\\(.*Invoke-WebRequest"
+      - regex:
+          pattern: "(?i)powershell\\s+.*-enc\\s+[A-Za-z0-9+/=]+"
+  action: block
+  reason: "Remote download and execution via PowerShell"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - powershell
+
+- id: SKILL_REMOTE_EXEC_PYTHON
+  category: remote_exec
+  severity: high
+  confidence: 0.90
+  when:
+    regex:
+      pattern: "python[23]?\\s+-c\\s+[\"'].*urllib|requests\\.get.*exec"
+  action: require_approval
+  reason: "Python remote code execution pattern"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - python
+
+- id: SKILL_REVERSE_SHELL_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.99
+  when:
+    any:
+      - regex:
+          pattern: "bash\\s+-i\\s+>&\\s*/dev/tcp/"
+      - regex:
+          pattern: "sh\\s+-i\\s+>&\\s*/dev/tcp/"
+      - regex:
+          pattern: "0<&\\d+;exec\\s+\\d+<>/dev/tcp/"
+  action: block
+  reason: "Bash reverse shell detected"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - critical
+
+- id: SKILL_REVERSE_SHELL_NC
+  category: remote_exec
+  severity: critical
+  confidence: 0.95
+  when:
+    any:
+      - regex:
+          pattern: "(nc|ncat|netcat)\\s+.*-e\\s+(ba)?sh"
+      - regex:
+          pattern: "(nc|ncat|netcat)\\s+.*\\d+\\.\\d+\\.\\d+\\.\\d+\\s+\\d+"
+  action: block
+  reason: "Netcat reverse shell detected"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - critical
+
+- id: SKILL_REVERSE_SHELL_PERL
+  category: remote_exec
+  severity: critical
+  confidence: 0.95
+  when:
+    regex:
+      pattern: "perl\\s+-e\\s+[\"'].*socket.*connect"
+  action: block
+  reason: "Perl reverse shell detected"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - perl
+
+- id: SKILL_REVERSE_SHELL_PYTHON
+  category: remote_exec
+  severity: critical
+  confidence: 0.95
+  when:
+    regex:
+      pattern: "python[23]?\\s+-c\\s+[\"'].*socket.*connect.*exec"
+  action: block
+  reason: "Python reverse shell detected"
+  shield:
+    scope: skill.network
+  enabled: true
+  tags:
+    - reverse_shell
+    - python

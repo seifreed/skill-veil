@@ -1,0 +1,75 @@
+name: skill-veil PR gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  skill-veil:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+
+      - name: Materialize PR base tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.event.pull_request.base.sha }}" --depth 1
+          git worktree add ../skill-veil-base "${{ github.event.pull_request.base.sha }}"
+
+      - name: Scan current branch JSON
+        uses: ./.github/actions/skill-veil
+        with:
+          path: .
+          format: json
+          output: artifacts/current.json
+          preset: ci
+
+      - name: Scan base branch JSON
+        uses: ./.github/actions/skill-veil
+        with:
+          path: ../skill-veil-base
+          format: json
+          output: artifacts/previous.json
+          preset: ci
+          install-rust: "false"
+          cache: "false"
+
+      - name: Gate on new active findings
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/ci/skill-veil-pr-gate.sh artifacts/previous.json artifacts/current.json .skill-veil/baseline.json .skill-veil/waivers.yaml
+
+      - name: Generate SARIF
+        id: sarif
+        uses: ./.github/actions/skill-veil
+        with:
+          path: .
+          format: sarif
+          output: artifacts/current.sarif
+          preset: ci
+          install-rust: "false"
+          cache: "false"
+
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: ${{ steps.sarif.outputs.sarif-path }}
+
+      - name: Upload scan artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-veil-pr-artifacts
+          path: artifacts/
+
+      - name: Remove base worktree
+        if: ${{ always() }}
+        shell: bash
+        run: git worktree remove --force ../skill-veil-base || true

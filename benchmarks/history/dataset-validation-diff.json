@@ -1,0 +1,52 @@
+{
+  "schema_version": "skill-veil-dataset-validation-v1",
+  "generated_at": "2026-03-11",
+  "baseline": {
+    "source": "pre-fase-11-18 validated run",
+    "package_count": 156,
+    "skipped_packages": 8,
+    "suspicious_packages": 2,
+    "malicious_packages": 6,
+    "notes": "Baseline captured from the last validated dataset run before permission/scope, SSRF, webhook, MCP and compound-verdict expansion."
+  },
+  "current": {
+    "source": "scan-dataset dataset --dataset-view verdicts --preset local --format json",
+    "package_count": 156,
+    "skipped_packages": 8,
+    "decode_warnings": 1,
+    "parse_warnings": 0,
+    "suspicious_packages": 21,
+    "malicious_packages": 30
+  },
+  "delta": {
+    "suspicious_packages": 19,
+    "malicious_packages": 24,
+    "non_benign_packages": 43
+  },
+  "top_non_benign_rules": [
+    {
+      "rule_id": "DECLARED_PERMISSION_NETWORK_ACCESS",
+      "count": 14
+    },
+    {
+      "rule_id": "CAPABILITY_PERMISSION_MISMATCH",
+      "count": 13
+    },
+    {
+      "rule_id": "INTERNAL_NETWORK_ACCESS",
+      "count": 13
+    },
+    {
+      "rule_id": "SKILL_REMOTE_EXEC_CURL_BASH",
+      "count": 6
+    },
+    {
+      "rule_id": "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT",
+      "count": 3
+    }
+  ],
+  "assessment": {
+    "status": "regression_for_verdict_quality",
+    "summary": "New families improve coverage but currently over-escalate real-world packages. Remote-exec detection remains strong; permission, mismatch and internal-network families need severity/tuning adjustments before they should drive malicious verdicts broadly."
+  }
+}

@@ -1,0 +1,191 @@
+{
+  "skill_name": "browser-automation-skill",
+  "skill_path": "examples/browser-automation-skill/SKILL.md",
+  "extension_kind": "skill",
+  "classification": "confirmed_skill",
+  "package_id": "34ed8fbc84d277cc8694517bed433783125049a627cc26f8d7763c072fe8c21d",
+  "identity_source": "explicit_name",
+  "structural_validity": "confirmed",
+  "heuristic_score": 92,
+  "timestamp": "2026-03-11T12:00:00Z",
+  "findings": [],
+  "primary_findings": [],
+  "supporting_findings": [],
+  "summary": {
+    "total_findings": 4,
+    "by_severity": {
+      "low": 0,
+      "medium": 2,
+      "high": 2,
+      "critical": 0
+    },
+    "by_category": [
+      [
+        "scope_creep",
+        2
+      ],
+      [
+        "autonomy_escalation",
+        2
+      ]
+    ],
+    "risk_score": 61,
+    "recommended_action": "require_approval",
+    "score_breakdown": [
+      {
+        "factor": "evidence:context",
+        "contribution": 8,
+        "rationale": "Contextual signal requiring review"
+      },
+      {
+        "factor": "artifact:skill_document",
+        "contribution": 2,
+        "rationale": "Risk observed in this artifact class"
+      }
+    ],
+    "action_triggers": []
+  },
+  "primary_summary": {
+    "total_findings": 4,
+    "by_severity": {
+      "low": 0,
+      "medium": 2,
+      "high": 2,
+      "critical": 0
+    },
+    "by_category": [
+      [
+        "scope_creep",
+        2
+      ],
+      [
+        "autonomy_escalation",
+        2
+      ]
+    ],
+    "risk_score": 61,
+    "recommended_action": "require_approval",
+    "score_breakdown": [],
+    "action_triggers": []
+  },
+  "supporting_summary": {
+    "total_findings": 0,
+    "by_severity": {
+      "low": 0,
+      "medium": 0,
+      "high": 0,
+      "critical": 0
+    },
+    "by_category": [],
+    "risk_score": 0,
+    "recommended_action": "log",
+    "score_breakdown": [],
+    "action_triggers": []
+  },
+  "verdict": "suspicious",
+  "verdict_report": {
+    "verdict": "suspicious",
+    "package_health": "needs_review",
+    "hygiene_summary": {
+      "package_root_findings": 0,
+      "supporting_findings": 0,
+      "top_rules": [
+        "CAPABILITY_PERMISSION_MISMATCH",
+        "DECLARED_PERMISSION_NETWORK_ACCESS"
+      ]
+    },
+    "declared_permissions": [
+      "browser_full",
+      "network_access",
+      "secrets_access",
+      "o_auth_scopes"
+    ],
+    "effective_capabilities": [
+      "network_access",
+      "process_execution",
+      "secret_access"
+    ],
+    "blast_radius_summary": {
+      "level": "high",
+      "factors": [
+        "declared browser control",
+        "network access",
+        "secret access"
+      ],
+      "network_targets": [
+        "https://api.example.com"
+      ],
+      "declared_permissions": [
+        "browser_full",
+        "network_access",
+        "secrets_access",
+        "o_auth_scopes"
+      ]
+    },
+    "verdict_reasons": [
+      {
+        "scope": "agent_entrypoint",
+        "category": "autonomy_escalation",
+        "signal_class": "suspicious_package_behavior",
+        "reason": "Skill requests broad browser/network access and explicit autonomous execution without a strong need match."
+      }
+    ],
+    "root_cause_groups": [
+      {
+        "scope": "agent_entrypoint",
+        "category": "scope_creep",
+        "signal_class": "hygiene",
+        "strongest_action": "require_approval",
+        "representative_rules": [
+          "DECLARED_PERMISSION_NETWORK_ACCESS",
+          "CAPABILITY_PERMISSION_MISMATCH"
+        ],
+        "finding_count": 2
+      },
+      {
+        "scope": "agent_entrypoint",
+        "category": "autonomy_escalation",
+        "signal_class": "suspicious_package_behavior",
+        "strongest_action": "require_approval",
+        "representative_rules": [
+          "OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW"
+        ],
+        "finding_count": 2
+      }
+    ],
+    "top_risk_drivers": [
+      {
+        "factor": "permission:browser_full",
+        "contribution": 18,
+        "rationale": "Broad browser access increases potential blast radius."
+      },
+      {
+        "factor": "behavior:autonomy_escalation",
+        "contribution": 15,
+        "rationale": "Instructions reduce or bypass expected review checkpoints."
+      }
+    ]
+  },
+  "artifact_graph": {
+    "nodes": [],
+    "edges": []
+  },
+  "policies": [],
+  "context_policies": [],
+  "profile": "team",
+  "suppression_summary": {
+    "waived_findings": 0,
+    "baselined_findings": 0
+  },
+  "policy_audit": {
+    "precedence_order": [
+      "waiver",
+      "baseline",
+      "policy_override",
+      "profile_context",
+      "rule_default"
+    ],
+    "effective_fail_on": "high",
+    "applied_overrides": []
+  }
+}

@@ -1,0 +1,31 @@
+stages:
+  - verify
+
+variables:
+  CARGO_TERM_COLOR: always
+  BASE_REF_DIR: ../skill-veil-base
+
+skill_veil_pr_gate:
+  stage: verify
+  image: rust:1.86
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  before_script:
+    - rustc --version
+    - cargo --version
+    - git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth 1
+    - git worktree add "$BASE_REF_DIR" "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - mkdir -p artifacts
+  script:
+    - cargo run -p skill-veil -- scan-package . --preset ci --format json --output artifacts/current.json
+    - cargo run -p skill-veil -- scan-package "$BASE_REF_DIR" --preset ci --format json --output artifacts/previous.json
+    - cargo run -p skill-veil -- scan-package . --format sarif --output artifacts/current.sarif
+    - ./scripts/ci/skill-veil-pr-gate.sh artifacts/previous.json artifacts/current.json .skill-veil/baseline.json .skill-veil/waivers.yaml
+  after_script:
+    - git worktree remove --force "$BASE_REF_DIR" || true
+  artifacts:
+    when: always
+    paths:
+      - artifacts/current.json
+      - artifacts/previous.json
+      - artifacts/current.sarif

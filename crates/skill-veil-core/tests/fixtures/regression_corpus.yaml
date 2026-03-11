@@ -1,0 +1,37 @@
+samples:
+  - id: benign-pinned
+    path: corpus_samples/benign-pinned-skill.md
+    label: benign
+  - id: benign-doc-like
+    path: corpus_samples/benign-doc-like-skill.md
+    label: benign
+  - id: benign-local-container
+    path: corpus_samples/benign-local-container-skill.md
+    label: benign
+  - id: benign-security-review
+    path: corpus_samples/benign-security-review-skill.md
+    label: benign
+  - id: benign-defensive-shell-audit
+    path: corpus_samples/benign-defensive-shell-audit.md
+    label: benign
+  - id: benign-local-secrets-playbook
+    path: corpus_samples/benign-local-secrets-playbook.md
+    label: benign
+  - id: example-safe
+    path: ../../../../examples/safe-skill/SKILL.md
+    label: benign
+  - id: suspicious-social
+    path: corpus_samples/suspicious-social-skill.md
+    label: suspicious
+  - id: suspicious-browser-export
+    path: corpus_samples/suspicious-browser-export.md
+    label: suspicious
+  - id: example-suspicious
+    path: ../../../../examples/suspicious-skill/SKILL.md
+    label: suspicious
+  - id: example-malicious
+    path: ../../../../examples/malicious-skill/SKILL.md
+    label: malicious
+  - id: malicious-bootstrap-fetch
+    path: corpus_samples/malicious-bootstrap-fetch.md
+    label: malicious

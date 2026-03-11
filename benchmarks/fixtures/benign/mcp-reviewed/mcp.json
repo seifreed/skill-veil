@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "reviewed-docs": {
+      "transport": "http",
+      "url": "https://mcp.example.invalid/server",
+      "auth": "oauth",
+      "scopes": ["docs.read"],
+      "tools": ["search", "summarize"]
+    }
+  }
+}

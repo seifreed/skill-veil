@@ -1,0 +1,103 @@
+# Persuasive and Manipulative Language Detection Rules
+# These rules detect patterns of social engineering in skill instructions
+
+- id: SKILL_PERSUASIVE_URGENCY
+  category: persuasive_language
+  severity: low
+  confidence: 0.60
+  when:
+    regex:
+      pattern: "(?i)(just\\s+once|trust\\s+me|safe|don'?t\\s+worry|urgent|immediately|right\\s+now|act\\s+fast)"
+  action: log
+  reason: "Persuasive or urgency language detected"
+  enabled: true
+  tags:
+    - semantic
+    - persuasive
+
+- id: SKILL_PERSUASIVE_FALSE_SAFETY
+  category: persuasive_language
+  severity: medium
+  confidence: 0.65
+  when:
+    any:
+      - regex:
+          pattern: "(?i)(completely\\s+safe|100%\\s+safe|no\\s+risk|harmless|nothing\\s+bad)"
+      - regex:
+          pattern: "(?i)(don'?t\\s+read|skip\\s+this|just\\s+run|blind\\s+trust)"
+  action: log
+  reason: "False safety assurances or discouragement from review"
+  enabled: true
+  tags:
+    - semantic
+    - persuasive
+
+- id: SKILL_PERSUASIVE_AUTHORITY
+  category: persuasive_language
+  severity: low
+  confidence: 0.55
+  when:
+    regex:
+      pattern: "(?i)(official|verified|trusted\\s+by|recommended\\s+by|endorsed)"
+  action: log
+  reason: "Appeal to authority without verification"
+  enabled: true
+  tags:
+    - semantic
+    - persuasive
+
+- id: SKILL_PERSUASIVE_SCARCITY
+  category: persuasive_language
+  severity: low
+  confidence: 0.55
+  when:
+    regex:
+      pattern: "(?i)(limited\\s+time|act\\s+now|expires|before\\s+it'?s\\s+too\\s+late|last\\s+chance)"
+  action: log
+  reason: "Scarcity or time pressure language"
+  enabled: true
+  tags:
+    - semantic
+    - persuasive
+
+- id: SKILL_PERSUASIVE_SCOPE_CREEP
+  category: scope_creep
+  severity: medium
+  confidence: 0.70
+  when:
+    any:
+      - regex:
+          pattern: "(?i)(also\\s+(need|require)s?\\s+(access|permission))"
+      - regex:
+          pattern: "(?i)(additionally|furthermore).*(access|permission|privileges)"
+      - regex:
+          pattern: "(?i)(more\\s+(access|permissions?)|expanded\\s+(access|permissions?))"
+  action: require_approval
+  reason: "Potential scope creep in permissions request"
+  shield:
+    scope: skill.permissions
+  enabled: true
+  tags:
+    - semantic
+    - scope_creep
+
+- id: SKILL_PERSUASIVE_DISABLE_SECURITY
+  category: persuasive_language
+  severity: high
+  confidence: 0.85
+  when:
+    any:
+      - regex:
+          pattern: "(?i)(disable|turn\\s+off|bypass)\\s+(antivirus|firewall|defender|security)"
+      - regex:
+          pattern: "(?i)(add.*exception|whitelist|exclude).*security"
+      - regex:
+          pattern: "(?i)ignore.*warning"
+  action: require_approval
+  reason: "Instructions to disable security controls"
+  shield:
+    scope: skill.security
+  enabled: true
+  tags:
+    - semantic
+    - security_bypass

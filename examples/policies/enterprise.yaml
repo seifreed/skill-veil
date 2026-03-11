@@ -1,0 +1,20 @@
+schema_version: skill-veil.dev/v1alpha1
+profiles:
+  enterprise:
+    fail_on: medium
+    context_actions:
+      - context: install
+        action: block
+      - context: secrets
+        action: block
+      - context: external_comms
+        action: block
+      - context: network
+        action: require_approval
+overrides:
+  - id: internal-build-hook
+    rule_id: MANIFEST_PACKAGE_JSON_INSTALL_HOOK
+    artifact_path: package.json
+    context: install
+    action: require_approval
+    reason: internal build hook accepted after review

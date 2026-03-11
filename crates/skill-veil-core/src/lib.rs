@@ -1,0 +1,115 @@
+//! skill-veil-core: Behavioral & Supply-Chain Security Analysis for Agent Skills
+//!
+//! This crate provides the core analysis engine for detecting security risks
+//! in agent skills based on Markdown and associated code.
+//!
+//! # Overview
+//!
+//! skill-veil-core analyzes agent skill files (typically Markdown) for security
+//! risks such as:
+//!
+//! - Remote code execution patterns (`curl | bash`, PowerShell IEX, etc.)
+//! - Supply chain risks (untrusted sources, suspicious packages)
+//! - Credential exposure
+//! - Privilege escalation attempts
+//! - Data exfiltration indicators
+//!
+//! # Quick Start
+//!
+//! ```
+//! use skill_veil_core::scanner::Scanner;
+//! use skill_veil_core::findings::Severity;
+//!
+//! // Create a scanner with default rules
+//! let scanner = Scanner::new().unwrap();
+//!
+//! // Scan content directly (for demo purposes)
+//! # use std::io::Write;
+//! # let mut file = tempfile::NamedTempFile::new().unwrap();
+//! # writeln!(file, "# Test Skill\n## Setup\n```bash\necho hello\n```").unwrap();
+//! let result = scanner.scan_file(file.path()).unwrap();
+//!
+//! // Check results
+//! println!("Found {} findings", result.findings.len());
+//! if result.has_severity(Severity::Critical) {
+//!     println!("Critical issues detected!");
+//! }
+//! ```
+//!
+//! # Architecture
+//!
+//! The crate follows a hexagonal (ports and adapters) architecture:
+//!
+//! - **Core Domain**: [`scanner`], [`rules`], [`findings`], [`analyzer`]
+//! - **Port Traits**: [`ports`] - Interfaces for dependency injection
+//! - **Adapters**: [`adapters`] - Default implementations of port traits
+//! - **Services**: [`services`] - Business logic services
+//!
+//! # Modules
+//!
+//! - [`scanner`] - High-level scanning orchestration
+//! - [`rules`] - Rule engine and rule definitions
+//! - [`findings`] - Finding and severity types
+//! - [`analyzer`] - Document parsing and analysis
+//! - [`policy`] - Policy generation (SHIELD.md, SARIF, JSON)
+//! - [`ports`] - Trait definitions for dependency injection
+//! - [`adapters`] - Default implementations
+//! - [`services`] - File discovery and filtering services
+
+pub mod artifact_graph;
+pub mod adapters;
+pub mod analyzer;
+pub mod benchmark;
+pub mod findings;
+pub mod policy;
+pub mod ports;
+pub mod rules;
+pub mod scanner;
+pub mod services;
+
+#[cfg(feature = "yara")]
+pub mod yara_engine;
+
+// Domain types
+pub use analyzer::{
+    AgentExtensionKind, ArtifactAssessment, ArtifactClassification, ArtifactIdentitySource,
+    CodeBlock, Section, SkillDocument, StructuralSignals, StructuralValidity,
+};
+pub use benchmark::{
+    AttackFamilyMetrics, BenchmarkError, BenchmarkHistory, BenchmarkHistoryEntry, CalibrationBucket,
+    CalibrationSummary, CorpusCoverage, CorpusEvaluation, CorpusManifest, CoverageBucket,
+    DeduplicationMetrics, LabeledSample, RegressionMetrics, SampleEvaluation, SampleLabel,
+    ThresholdRecommendation,
+};
+pub use findings::{
+    artifact_scope_for_kind, deduplicate_findings, derive_package_verdict, signal_class_for,
+    ArtifactKind, ArtifactScope, BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission,
+    DeduplicationSummary, EvidenceKind, Finding, HygieneSummary, MatchTarget,
+    OperationalContext, PackageHealth, PackageVerdictReport, RecommendedAction, RootCauseGroup,
+    Severity, SignalClass, ThreatCategory, Verdict, VerdictReason,
+};
+pub use policy::{
+    apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
+    baseline_from_reports, diff_reports, diff_reports_with_policy_state, load_baseline,
+    load_policy, load_waivers, validate_policy, validate_waivers, AppliedPolicyOverride,
+    BaselineEntry, BaselineFile, ConfiguredProfile, ContextActionOverride, ContextPolicy,
+    DiffEntry, DiffReport, JsonReport, PolicyAudit, PolicyFile, PolicyGenerator,
+    PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy, SuppressionSummary,
+    WaiverEntry, WaiverFile, POLICY_PRECEDENCE_ORDER, POLICY_SCHEMA_VERSION,
+};
+pub use rules::{
+    default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file, IocFeedFile,
+    Rule, RuleCondition, RuleEngine, RulePackFile, RulePackKind, RulePackMetadata,
+    RULE_PACK_SCHEMA_VERSION,
+};
+pub use scanner::{ScanOptions, ScanResult, ScanTargetMode, Scanner};
+
+// Port traits (interfaces for dependency injection)
+pub use ports::{FileSystemProvider, MarkdownParser, PatternMatcher};
+
+// Default adapters (implementations of port traits)
+pub use adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
+pub use artifact_graph::{
+    ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactEdge,
+    ArtifactGraph, ArtifactNode, ArtifactRelation,
+};
