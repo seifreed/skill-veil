@@ -150,7 +150,7 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--waivers` | Waiver file |
 | `--policy` | Policy file |
 | `--ci-summary` | Compact diff summary for CI |
-| `--fail-on <new-active|new-blocking>` | CI diff failure mode |
+| `--fail-on <mode>` | CI diff failure mode (`new-active` or `new-blocking`) |
 | `--dashboard-output` | Write benchmark history dashboard |
 
 ---
