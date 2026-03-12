@@ -245,6 +245,14 @@ jobs:
         with:
           path: dist
 
+      - name: Consolidate checksums
+        shell: bash
+        run: |
+          find dist -type f -name checksums.txt -print0 \
+            | xargs -0 cat \
+            | sort -u > dist/checksums.txt
+          find dist -mindepth 2 -type f -name checksums.txt -delete
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -254,5 +262,5 @@ jobs:
             dist/**/benchmark-report.json
             dist/**/benchmark-history.json
             dist/**/benchmark-dashboard.md
-            dist/**/checksums.txt
+            dist/checksums.txt
           generate_release_notes: true
