@@ -57,7 +57,23 @@ jobs:
 
       - name: Wait for crates.io index
         if: steps.core_version.outputs.published != steps.core_version.outputs.current
-        run: sleep 30
+        run: |
+          expected="${{ steps.core_version.outputs.current }}"
+          for attempt in $(seq 1 30); do
+            published="$(
+              curl -fsSL \
+                -H 'User-Agent: skill-veil-release' \
+                https://crates.io/api/v1/crates/skill-veil-core 2>/dev/null \
+              | python3 -c 'import json, sys; payload = json.load(sys.stdin); print(payload["crate"]["newest_version"])' \
+              || true
+            )"
+            if [ "${published}" = "${expected}" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "skill-veil-core ${expected} not visible on crates.io after waiting" >&2
+          exit 1
 
       - name: Package CLI crate
         run: cargo package -p skill-veil
