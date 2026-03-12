@@ -30,10 +30,27 @@ jobs:
       - name: Check published core version
         id: core_version
         run: |
-          published="$(cargo search skill-veil-core --limit 1 | sed -n 's/^skill-veil-core = \"\\([^\"]*\\)\".*/\\1/p')"
-          current="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(pkg[\"version\"] for pkg in data[\"packages\"] if pkg[\"name\"]==\"skill-veil-core\"))')"
-          echo "published=${published}" >> "$GITHUB_OUTPUT"
-          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import tomllib
+          import urllib.request
+          from pathlib import Path
+
+          published = ""
+          try:
+              with urllib.request.urlopen("https://crates.io/api/v1/crates/skill-veil-core", timeout=10) as response:
+                  payload = json.load(response)
+              published = payload["crate"]["newest_version"]
+          except Exception:
+              published = ""
+
+          workspace = tomllib.loads(Path("Cargo.toml").read_text())
+          manifest = tomllib.loads(Path("crates/skill-veil-core/Cargo.toml").read_text())
+          current = manifest["package"].get("version", workspace["workspace"]["package"]["version"])
+
+          print(f"published={published}")
+          print(f"current={current}")
+          PY
 
       - name: Publish core crate
         if: steps.core_version.outputs.published != steps.core_version.outputs.current
@@ -45,18 +62,33 @@ jobs:
         if: steps.core_version.outputs.published != steps.core_version.outputs.current
         run: sleep 30
 
-      - name: Dry-run publish CLI crate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish --dry-run -p skill-veil
+      - name: Package CLI crate
+        run: cargo package -p skill-veil
 
       - name: Check published CLI version
         id: cli_version
         run: |
-          published="$(cargo search skill-veil --limit 1 | sed -n 's/^skill-veil = \"\\([^\"]*\\)\".*/\\1/p')"
-          current="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(pkg[\"version\"] for pkg in data[\"packages\"] if pkg[\"name\"]==\"skill-veil\"))')"
-          echo "published=${published}" >> "$GITHUB_OUTPUT"
-          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import tomllib
+          import urllib.request
+          from pathlib import Path
+
+          published = ""
+          try:
+              with urllib.request.urlopen("https://crates.io/api/v1/crates/skill-veil", timeout=10) as response:
+                  payload = json.load(response)
+              published = payload["crate"]["newest_version"]
+          except Exception:
+              published = ""
+
+          workspace = tomllib.loads(Path("Cargo.toml").read_text())
+          manifest = tomllib.loads(Path("crates/skill-veil-cli/Cargo.toml").read_text())
+          current = manifest["package"].get("version", workspace["workspace"]["package"]["version"])
+
+          print(f"published={published}")
+          print(f"current={current}")
+          PY
 
       - name: Publish CLI crate
         if: steps.cli_version.outputs.published != steps.cli_version.outputs.current
@@ -170,11 +202,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            shasum -a 256 ${{ matrix.archive_name }}.zip >> checksums.txt
-          else
-            shasum -a 256 ${{ matrix.archive_name }}.tar.gz >> checksums.txt
-          fi
+          python3 -c 'import hashlib, pathlib; archive = pathlib.Path("${{ matrix.archive_name }}.${{ matrix.archive_ext }}"); digest = hashlib.sha256(archive.read_bytes()).hexdigest(); print(f"{digest}  {archive.name}")' >> checksums.txt
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v6
