@@ -43,7 +43,12 @@ jobs:
 
           workspace = tomllib.loads(Path("Cargo.toml").read_text())
           manifest = tomllib.loads(Path("crates/skill-veil-core/Cargo.toml").read_text())
-          print(manifest["package"].get("version", workspace["workspace"]["package"]["version"]))
+          version = manifest["package"].get("version")
+          if isinstance(version, dict) and version.get("workspace"):
+              version = workspace["workspace"]["package"]["version"]
+          elif version is None:
+              version = workspace["workspace"]["package"]["version"]
+          print(version)
           PY
           )"
           echo "published=${published}" >> "$GITHUB_OUTPUT"
@@ -94,7 +99,12 @@ jobs:
 
           workspace = tomllib.loads(Path("Cargo.toml").read_text())
           manifest = tomllib.loads(Path("crates/skill-veil-cli/Cargo.toml").read_text())
-          print(manifest["package"].get("version", workspace["workspace"]["package"]["version"]))
+          version = manifest["package"].get("version")
+          if isinstance(version, dict) and version.get("workspace"):
+              version = workspace["workspace"]["package"]["version"]
+          elif version is None:
+              version = workspace["workspace"]["package"]["version"]
+          print(version)
           PY
           )"
           echo "published=${published}" >> "$GITHUB_OUTPUT"
