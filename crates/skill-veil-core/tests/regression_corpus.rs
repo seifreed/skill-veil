@@ -32,7 +32,10 @@ fn labeled_corpus_meets_phase1_baseline() {
         .iter()
         .filter(|sample| sample.expected == skill_veil_core::SampleLabel::Malicious)
         .count();
-    assert!(benign_count >= 7, "benign coverage too small: {benign_count}");
+    assert!(
+        benign_count >= 7,
+        "benign coverage too small: {benign_count}"
+    );
     assert!(
         suspicious_count >= 3,
         "suspicious coverage too small: {suspicious_count}"
@@ -41,7 +44,11 @@ fn labeled_corpus_meets_phase1_baseline() {
         malicious_count >= 2,
         "malicious coverage too small: {malicious_count}"
     );
-    assert!(metrics.precision >= 0.66, "precision too low: {}", metrics.precision);
+    assert!(
+        metrics.precision >= 0.66,
+        "precision too low: {}",
+        metrics.precision
+    );
     assert!(metrics.recall >= 0.6, "recall too low: {}", metrics.recall);
     assert!(
         metrics.false_positive_rate <= 0.15,
@@ -49,8 +56,14 @@ fn labeled_corpus_meets_phase1_baseline() {
         metrics.false_positive_rate
     );
     assert!(
-        evaluation.threshold_recommendation.recommended_metrics.false_positive_rate
-            <= evaluation.threshold_recommendation.current_metrics.false_positive_rate,
+        evaluation
+            .threshold_recommendation
+            .recommended_metrics
+            .false_positive_rate
+            <= evaluation
+                .threshold_recommendation
+                .current_metrics
+                .false_positive_rate,
         "threshold tuning regressed false positives"
     );
 }

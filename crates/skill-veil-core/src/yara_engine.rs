@@ -1,8 +1,6 @@
 //! YARA integration backed by the pure-Rust `yara-x` engine.
 
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, Severity, ThreatCategory,
-};
+use crate::findings::{ArtifactKind, EvidenceKind, Finding, MatchTarget, Severity, ThreatCategory};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 

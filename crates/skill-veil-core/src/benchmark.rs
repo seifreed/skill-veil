@@ -1,7 +1,7 @@
 //! Benchmark and corpus evaluation helpers.
 
-use chrono::{DateTime, Utc};
 use crate::{EvidenceKind, Finding, RecommendedAction, Scanner, ThreatCategory, Verdict};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -186,9 +186,11 @@ pub fn evaluate_corpus(
             message: error.to_string(),
         })?;
 
-        let recommended_action = results.iter().fold(RecommendedAction::Log, |current, result| {
-            RecommendedAction::max(current, result.summary.recommended_action)
-        });
+        let recommended_action = results
+            .iter()
+            .fold(RecommendedAction::Log, |current, result| {
+                RecommendedAction::max(current, result.summary.recommended_action)
+            });
         let package_verdict = results.iter().fold(Verdict::Benign, |current, result| {
             match (current, result.verdict) {
                 (Verdict::Malicious, _) | (_, Verdict::Malicious) => Verdict::Malicious,
@@ -202,7 +204,10 @@ pub fn evaluate_corpus(
             .max()
             .unwrap_or(0);
         let finding_count = results.iter().map(|result| result.findings.len()).sum();
-        let primary_finding_count = results.iter().map(|result| result.primary_findings.len()).sum();
+        let primary_finding_count = results
+            .iter()
+            .map(|result| result.primary_findings.len())
+            .sum();
         let supporting_finding_count = results
             .iter()
             .map(|result| result.supporting_findings.len())
@@ -215,9 +220,11 @@ pub fn evaluate_corpus(
         expected.push(sample.label);
         actual.push(actual_label);
         for result in &results {
-            deduplication.original_findings += result.deduplication_summary.original_findings as u32;
+            deduplication.original_findings +=
+                result.deduplication_summary.original_findings as u32;
             deduplication.unique_findings += result.deduplication_summary.unique_findings as u32;
-            deduplication.duplicates_removed += result.deduplication_summary.duplicates_removed as u32;
+            deduplication.duplicates_removed +=
+                result.deduplication_summary.duplicates_removed as u32;
             all_findings.extend(
                 result
                     .findings
@@ -226,12 +233,14 @@ pub fn evaluate_corpus(
                     .map(|finding| (sample.label, finding)),
             );
         }
-        *coverage_by_label.entry(sample.label.to_string()).or_insert(0) += 1;
-        if let Some(family) = sample
-            .attack_family
-            .clone()
-            .or_else(|| sample.focus_category.map(|category| attack_family_for_category(category).to_string()))
-        {
+        *coverage_by_label
+            .entry(sample.label.to_string())
+            .or_insert(0) += 1;
+        if let Some(family) = sample.attack_family.clone().or_else(|| {
+            sample
+                .focus_category
+                .map(|category| attack_family_for_category(category).to_string())
+        }) {
             *coverage_by_attack_family.entry(family).or_insert(0) += 1;
         }
         if let Some(category) = sample.focus_category {
@@ -293,7 +302,10 @@ fn build_family_metrics(samples: &[SampleEvaluation]) -> Vec<AttackFamilyMetrics
     by_family
         .into_iter()
         .map(|(family, family_samples)| {
-            let expected: Vec<_> = family_samples.iter().map(|sample| sample.expected).collect();
+            let expected: Vec<_> = family_samples
+                .iter()
+                .map(|sample| sample.expected)
+                .collect();
             let actual: Vec<_> = family_samples.iter().map(|sample| sample.actual).collect();
             let metrics = compute_metrics(&expected, &actual);
             let threshold_recommendation = recommend_thresholds(&family_samples);
@@ -432,9 +444,7 @@ fn calibration_buckets_by_signal_pair(
     finalize_calibration_buckets(buckets)
 }
 
-fn finalize_calibration_buckets(
-    buckets: BTreeMap<String, Vec<bool>>,
-) -> Vec<CalibrationBucket> {
+fn finalize_calibration_buckets(buckets: BTreeMap<String, Vec<bool>>) -> Vec<CalibrationBucket> {
     buckets
         .into_iter()
         .map(|(key, labels)| {
@@ -550,9 +560,7 @@ fn threshold_objective(
         .map(|(sample, predicted)| label_distance(sample.expected, *predicted) as f32)
         .sum::<f32>();
 
-    (metrics.precision * 0.35)
-        + (metrics.recall * 0.35)
-        + (metrics.accuracy * 0.20)
+    (metrics.precision * 0.35) + (metrics.recall * 0.35) + (metrics.accuracy * 0.20)
         - (metrics.false_positive_rate * 0.55)
         - (label_error_penalty * 0.01)
 }
@@ -657,8 +665,10 @@ mod tests {
         ];
 
         let recommendation = recommend_thresholds(&samples);
-        assert!(recommendation.recommended_metrics.false_positive_rate
-            <= recommendation.current_metrics.false_positive_rate);
+        assert!(
+            recommendation.recommended_metrics.false_positive_rate
+                <= recommendation.current_metrics.false_positive_rate
+        );
         assert!(!recommendation.rationale.is_empty());
     }
 

@@ -204,9 +204,11 @@ mod tests {
         assert!(service.is_skill_file(Path::new("/some/path/mcp.json")));
         assert!(service.is_skill_file(Path::new("/some/path/mcp.yaml")));
         assert!(service.is_skill_file(Path::new("/some/path/mcp.yml")));
-        assert!(FileDiscoveryService::<StdFileSystemProvider>::is_explicit_skill_file(
-            Path::new("/some/path/My-Tool.SKILL.MD")
-        ));
+        assert!(
+            FileDiscoveryService::<StdFileSystemProvider>::is_explicit_skill_file(Path::new(
+                "/some/path/My-Tool.SKILL.MD"
+            ))
+        );
     }
 
     #[test]

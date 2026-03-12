@@ -38,18 +38,20 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
             );
             add_inferred_relations(&mut graph, artifact_analysis, &manifest, &manifest_path);
 
-            for lockfile in sibling_expected_lockfiles_for_manifest(
-                artifact_analysis,
-                &manifest,
-                parent_dir,
-            ) {
+            for lockfile in
+                sibling_expected_lockfiles_for_manifest(artifact_analysis, &manifest, parent_dir)
+            {
                 let lockfile_path = lockfile.display().to_string();
                 graph.add_node_with_capabilities(
                     lockfile_path.clone(),
                     ArtifactKind::Lockfile,
                     artifact_capabilities(artifact_analysis, &lockfile),
                 );
-                graph.add_edge(manifest_path.clone(), lockfile_path, ArtifactRelation::Locks);
+                graph.add_edge(
+                    manifest_path.clone(),
+                    lockfile_path,
+                    ArtifactRelation::Locks,
+                );
                 add_inferred_relations(
                     &mut graph,
                     artifact_analysis,
@@ -92,13 +94,26 @@ pub(crate) fn artifact_kind_for_path<F: FileSystemProvider>(path: &Path) -> Arti
     match file_name.as_deref() {
         Some("mcp.json" | "mcp.yaml" | "mcp.yml") => ArtifactKind::McpServerManifest,
         Some(
-            "cargo.lock" | "poetry.lock" | "uv.lock" | "pipfile.lock" | "yarn.lock"
-            | "pnpm-lock.yaml" | "npm-shrinkwrap.json" | "package-lock.json",
+            "cargo.lock"
+            | "poetry.lock"
+            | "uv.lock"
+            | "pipfile.lock"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "npm-shrinkwrap.json"
+            | "package-lock.json",
         ) => ArtifactKind::Lockfile,
         Some(
-            "package.json" | "requirements.txt" | "pyproject.toml" | "cargo.toml"
-            | "dockerfile" | "docker-compose.yml" | "docker-compose.yaml" | "makefile"
-            | ".npmrc" | "pip.conf",
+            "package.json"
+            | "requirements.txt"
+            | "pyproject.toml"
+            | "cargo.toml"
+            | "dockerfile"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "makefile"
+            | ".npmrc"
+            | "pip.conf",
         ) => ArtifactKind::PackageManifest,
         Some("agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md") => {
             ArtifactKind::AgentInstruction

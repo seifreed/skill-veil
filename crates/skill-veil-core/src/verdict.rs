@@ -14,7 +14,8 @@ pub fn derive_package_verdict(
     package_summary: &FindingSummary,
 ) -> PackageVerdictReport {
     let root_cause_groups = build_root_cause_groups(findings);
-    let has_conclusive_supporting_malicious = findings.iter().any(is_conclusive_supporting_malicious);
+    let has_conclusive_supporting_malicious =
+        findings.iter().any(is_conclusive_supporting_malicious);
     let compound_reasons = detect_compound_verdict_reasons(findings, &root_cause_groups);
     let mut verdict_reasons = root_cause_groups
         .iter()
@@ -57,8 +58,7 @@ pub fn derive_package_verdict(
         && supporting_summary.recommended_action == RecommendedAction::Log
         && root_cause_groups.iter().any(|group| {
             group.signal_class == SignalClass::Hygiene
-                && (group.strongest_action == RecommendedAction::Block
-                    || group.finding_count >= 4)
+                && (group.strongest_action == RecommendedAction::Block || group.finding_count >= 4)
         });
     let hygiene_summary = build_hygiene_summary(findings);
     let declared_permissions =
@@ -73,7 +73,8 @@ pub fn derive_package_verdict(
         } else {
             PackageHealth::NeedsReview
         };
-    let isolated_weak_package_root_signal = is_isolated_weak_package_root_signal(&root_cause_groups);
+    let isolated_weak_package_root_signal =
+        is_isolated_weak_package_root_signal(&root_cause_groups);
     let verdict = if has_malicious_behavior
         || has_compound_malicious
         || (has_supporting_block && has_conclusive_supporting_malicious)
@@ -110,9 +111,9 @@ fn detect_compound_verdict_reasons(
     let mut reasons = Vec::new();
 
     let has_category = |category: ThreatCategory| {
-        root_cause_groups
-            .iter()
-            .any(|group| group.category == category && group.strongest_action != RecommendedAction::Log)
+        root_cause_groups.iter().any(|group| {
+            group.category == category && group.strongest_action != RecommendedAction::Log
+        })
     };
     let has_rule = |rule_id: &str| findings.iter().any(|finding| finding.rule_id == rule_id);
     let has_declared_permission_rule = |rule_id: &str| {
@@ -139,7 +140,8 @@ fn detect_compound_verdict_reasons(
             scope: ArtifactScope::AgentEntrypoint,
             category: ThreatCategory::RemoteExec,
             signal_class: SignalClass::MaliciousBehavior,
-            rationale: "Compound verdict: prompt override is paired with execution behavior".to_string(),
+            rationale: "Compound verdict: prompt override is paired with execution behavior"
+                .to_string(),
         });
     }
 
@@ -150,18 +152,22 @@ fn detect_compound_verdict_reasons(
             scope: ArtifactScope::SupportingArtifact,
             category: ThreatCategory::DataExfiltration,
             signal_class: SignalClass::MaliciousBehavior,
-            rationale: "Compound verdict: token or session access is paired with outbound transmission".to_string(),
+            rationale:
+                "Compound verdict: token or session access is paired with outbound transmission"
+                    .to_string(),
         });
     }
 
     if has_rule("MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
-        && (has_category(ThreatCategory::RemoteExec) || has_rule("OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"))
+        && (has_category(ThreatCategory::RemoteExec)
+            || has_rule("OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"))
     {
         reasons.push(VerdictReason {
             scope: ArtifactScope::PackageRootArtifact,
             category: ThreatCategory::SupplyChain,
             signal_class: SignalClass::MaliciousBehavior,
-            rationale: "Compound verdict: install hook is paired with remote fetch or execution".to_string(),
+            rationale: "Compound verdict: install hook is paired with remote fetch or execution"
+                .to_string(),
         });
     }
 
@@ -335,7 +341,9 @@ fn derive_effective_capabilities(findings: &[Finding]) -> Vec<String> {
             ThreatCategory::AutonomyEscalation => "autonomous_actions",
             ThreatCategory::PrivilegeEscalation => "filesystem_or_runtime_escalation",
             ThreatCategory::ScopeCreep => "scope_creep",
-            ThreatCategory::SocialManipulation | ThreatCategory::PersuasiveLanguage => "trust_bypass",
+            ThreatCategory::SocialManipulation | ThreatCategory::PersuasiveLanguage => {
+                "trust_bypass"
+            }
             ThreatCategory::Obfuscation => "obfuscation",
             ThreatCategory::UnsafeBinary => "unsafe_binary",
             ThreatCategory::Generic => "generic_review",
@@ -466,7 +474,11 @@ fn build_root_cause_groups(findings: &[Finding]) -> Vec<RootCauseGroup> {
         BTreeMap::<(ArtifactScope, ThreatCategory, SignalClass), RootCauseGroup>::new();
 
     for finding in findings {
-        let key = (finding.artifact_scope, finding.category, finding.signal_class);
+        let key = (
+            finding.artifact_scope,
+            finding.category,
+            finding.signal_class,
+        );
         groups
             .entry(key)
             .and_modify(|group| {
@@ -524,6 +536,10 @@ fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
     HygieneSummary {
         package_root_findings,
         supporting_findings,
-        top_rules: top_rules.into_iter().map(|(rule, _)| rule).take(5).collect(),
+        top_rules: top_rules
+            .into_iter()
+            .map(|(rule, _)| rule)
+            .take(5)
+            .collect(),
     }
 }

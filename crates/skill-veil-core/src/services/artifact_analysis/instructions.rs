@@ -5,7 +5,8 @@ pub(super) fn analyze_instruction_file(
     path: &Path,
     content: &str,
 ) -> Vec<Finding> {
-    let mut findings = semantic_persistence_findings(service, path, content, ArtifactKind::AgentInstruction);
+    let mut findings =
+        semantic_persistence_findings(service, path, content, ArtifactKind::AgentInstruction);
     findings.extend(permission_and_network_findings(
         service,
         path,
@@ -20,7 +21,8 @@ pub(super) fn analyze_skill_document(
     path: &Path,
     content: &str,
 ) -> Vec<Finding> {
-    let mut findings = semantic_persistence_findings(service, path, content, ArtifactKind::SkillDocument);
+    let mut findings =
+        semantic_persistence_findings(service, path, content, ArtifactKind::SkillDocument);
     findings.extend(permission_and_network_findings(
         service,
         path,
@@ -58,9 +60,11 @@ pub(super) fn instruction_capabilities(
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
-    if Regex::new("(?i)(browser:\\s*full|full autonomous browser|click any element|navigation:\\s*allow-all)")
-        .unwrap()
-        .is_match(content)
+    if Regex::new(
+        "(?i)(browser:\\s*full|full autonomous browser|click any element|navigation:\\s*allow-all)",
+    )
+    .unwrap()
+    .is_match(content)
     {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::BrowserAccess,
@@ -210,22 +214,25 @@ pub(super) fn permission_and_network_findings(
                     path: artifact_path.clone(),
                 })
                 .match_value("broad declared permissions")
-                .reason("Artifact declares broad permissions or scopes relative to its apparent task")
+                .reason(
+                    "Artifact declares broad permissions or scopes relative to its apparent task",
+                )
                 .build(),
         );
     }
 
     let (intent_kind, intent_strength) = infer_declared_intent(content);
-    let has_dangerous_permission_combo = explicit_declared_permission_rules(content)
-        .iter()
-        .any(|(rule_id, _, _)| {
-            matches!(
-                *rule_id,
-                "DECLARED_PERMISSION_BROWSER_FULL"
-                    | "DECLARED_PERMISSION_FILE_WRITE"
-                    | "DECLARED_PERMISSION_SHELL_EXEC"
-            )
-        });
+    let has_dangerous_permission_combo =
+        explicit_declared_permission_rules(content)
+            .iter()
+            .any(|(rule_id, _, _)| {
+                matches!(
+                    *rule_id,
+                    "DECLARED_PERMISSION_BROWSER_FULL"
+                        | "DECLARED_PERMISSION_FILE_WRITE"
+                        | "DECLARED_PERMISSION_SHELL_EXEC"
+                )
+            });
     if intent_kind == "narrow" && intent_strength > 0 && has_dangerous_permission_combo {
         findings.push(
             Finding::builder(
@@ -246,8 +253,10 @@ pub(super) fn permission_and_network_findings(
     }
 
     if let Some(target) = contains_internal_network_target(content) {
-        if (matches!(artifact_kind, ArtifactKind::ReferencedArtifact | ArtifactKind::McpServerManifest)
-            || contains_internal_network_action(content))
+        if (matches!(
+            artifact_kind,
+            ArtifactKind::ReferencedArtifact | ArtifactKind::McpServerManifest
+        ) || contains_internal_network_action(content))
             && !looks_like_local_dev_reference(content)
         {
             let (rule_id, category, reason) = if target == "169.254.169.254" {

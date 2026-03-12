@@ -5,11 +5,31 @@ pub fn render_benchmark_dashboard(
     evaluation: &CorpusEvaluation,
 ) -> String {
     let mut output = String::new();
-    let benign = evaluation.samples.iter().filter(|sample| sample.verdict == Verdict::Benign).count();
-    let suspicious = evaluation.samples.iter().filter(|sample| sample.verdict == Verdict::Suspicious).count();
-    let malicious = evaluation.samples.iter().filter(|sample| sample.verdict == Verdict::Malicious).count();
-    let primary_findings: usize = evaluation.samples.iter().map(|sample| sample.primary_finding_count).sum();
-    let supporting_findings: usize = evaluation.samples.iter().map(|sample| sample.supporting_finding_count).sum();
+    let benign = evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == Verdict::Benign)
+        .count();
+    let suspicious = evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == Verdict::Suspicious)
+        .count();
+    let malicious = evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == Verdict::Malicious)
+        .count();
+    let primary_findings: usize = evaluation
+        .samples
+        .iter()
+        .map(|sample| sample.primary_finding_count)
+        .sum();
+    let supporting_findings: usize = evaluation
+        .samples
+        .iter()
+        .map(|sample| sample.supporting_finding_count)
+        .sum();
     output.push_str("# Benchmark Dashboard\n\n");
     output.push_str("## Current Corpus\n\n");
     output.push_str(&format!(
@@ -28,8 +48,14 @@ pub fn render_benchmark_dashboard(
     ));
     for (title, buckets) in [
         ("Coverage by Label", &evaluation.coverage.by_label),
-        ("Coverage by Focus Category", &evaluation.coverage.by_focus_category),
-        ("Coverage by Attack Family", &evaluation.coverage.by_attack_family),
+        (
+            "Coverage by Focus Category",
+            &evaluation.coverage.by_focus_category,
+        ),
+        (
+            "Coverage by Attack Family",
+            &evaluation.coverage.by_attack_family,
+        ),
     ] {
         if !buckets.is_empty() {
             output.push_str(&format!("### {title}\n\n"));
@@ -41,7 +67,9 @@ pub fn render_benchmark_dashboard(
     }
     if !evaluation.family_metrics.is_empty() {
         output.push_str("### Family Metrics\n\n");
-        output.push_str("| Family | Samples | Precision | Recall | FPR | Exact Label | Approval | Block |\n");
+        output.push_str(
+            "| Family | Samples | Precision | Recall | FPR | Exact Label | Approval | Block |\n",
+        );
         output.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
         for family in &evaluation.family_metrics {
             output.push_str(&format!(
@@ -52,7 +80,9 @@ pub fn render_benchmark_dashboard(
                 family.metrics.recall,
                 family.metrics.false_positive_rate,
                 family.metrics.exact_label_accuracy,
-                family.threshold_recommendation.recommended_approval_threshold,
+                family
+                    .threshold_recommendation
+                    .recommended_approval_threshold,
                 family.threshold_recommendation.recommended_block_threshold,
             ));
         }
@@ -64,7 +94,8 @@ pub fn render_benchmark_dashboard(
                 .partial_cmp(&right.metrics.exact_label_accuracy)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
-                    right.metrics
+                    right
+                        .metrics
                         .false_positive_rate
                         .partial_cmp(&left.metrics.false_positive_rate)
                         .unwrap_or(std::cmp::Ordering::Equal)
@@ -77,7 +108,9 @@ pub fn render_benchmark_dashboard(
                 family.family,
                 family.metrics.exact_label_accuracy,
                 family.metrics.false_positive_rate,
-                family.threshold_recommendation.recommended_approval_threshold,
+                family
+                    .threshold_recommendation
+                    .recommended_approval_threshold,
                 family.threshold_recommendation.recommended_block_threshold,
             ));
         }
@@ -86,18 +119,32 @@ pub fn render_benchmark_dashboard(
     output.push_str("### Threshold Recommendation\n\n");
     output.push_str(&format!(
         "- Approval: {} -> {}\n- Block: {} -> {}\n- Rationale: {}\n\n",
-        evaluation.threshold_recommendation.current_approval_threshold,
-        evaluation.threshold_recommendation.recommended_approval_threshold,
+        evaluation
+            .threshold_recommendation
+            .current_approval_threshold,
+        evaluation
+            .threshold_recommendation
+            .recommended_approval_threshold,
         evaluation.threshold_recommendation.current_block_threshold,
-        evaluation.threshold_recommendation.recommended_block_threshold,
+        evaluation
+            .threshold_recommendation
+            .recommended_block_threshold,
         evaluation.threshold_recommendation.rationale
     ));
     if !evaluation.confidence_calibration.by_signal_pair.is_empty() {
         output.push_str("### Strongest Signal Pairs\n\n");
-        for bucket in evaluation.confidence_calibration.by_signal_pair.iter().take(8) {
+        for bucket in evaluation
+            .confidence_calibration
+            .by_signal_pair
+            .iter()
+            .take(8)
+        {
             output.push_str(&format!(
                 "- `{}`: findings={} observed_precision={:.2} recommended_confidence={:.2}\n",
-                bucket.key, bucket.findings, bucket.observed_precision, bucket.recommended_confidence
+                bucket.key,
+                bucket.findings,
+                bucket.observed_precision,
+                bucket.recommended_confidence
             ));
         }
         output.push('\n');
@@ -142,15 +189,23 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
     output.push_str("## Global Recommendation\n\n");
     output.push_str(&format!(
         "- Approval threshold: {} -> {}\n- Block threshold: {} -> {}\n- Rationale: {}\n\n",
-        evaluation.threshold_recommendation.current_approval_threshold,
-        evaluation.threshold_recommendation.recommended_approval_threshold,
+        evaluation
+            .threshold_recommendation
+            .current_approval_threshold,
+        evaluation
+            .threshold_recommendation
+            .recommended_approval_threshold,
         evaluation.threshold_recommendation.current_block_threshold,
-        evaluation.threshold_recommendation.recommended_block_threshold,
+        evaluation
+            .threshold_recommendation
+            .recommended_block_threshold,
         evaluation.threshold_recommendation.rationale
     ));
     if !evaluation.family_metrics.is_empty() {
         output.push_str("## Family Recommendations\n\n");
-        output.push_str("| Family | Samples | Precision | Recall | FPR | Exact Label | Approval | Block |\n");
+        output.push_str(
+            "| Family | Samples | Precision | Recall | FPR | Exact Label | Approval | Block |\n",
+        );
         output.push_str("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
         for family in &evaluation.family_metrics {
             output.push_str(&format!(
@@ -161,7 +216,9 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
                 family.metrics.recall,
                 family.metrics.false_positive_rate,
                 family.metrics.exact_label_accuracy,
-                family.threshold_recommendation.recommended_approval_threshold,
+                family
+                    .threshold_recommendation
+                    .recommended_approval_threshold,
                 family.threshold_recommendation.recommended_block_threshold,
             ));
         }
@@ -186,11 +243,31 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
 
 pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
     let mut output = String::new();
-    let benign = evaluation.samples.iter().filter(|sample| sample.verdict == Verdict::Benign).count();
-    let suspicious = evaluation.samples.iter().filter(|sample| sample.verdict == Verdict::Suspicious).count();
-    let malicious = evaluation.samples.iter().filter(|sample| sample.verdict == Verdict::Malicious).count();
-    let primary_findings: usize = evaluation.samples.iter().map(|sample| sample.primary_finding_count).sum();
-    let supporting_findings: usize = evaluation.samples.iter().map(|sample| sample.supporting_finding_count).sum();
+    let benign = evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == Verdict::Benign)
+        .count();
+    let suspicious = evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == Verdict::Suspicious)
+        .count();
+    let malicious = evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == Verdict::Malicious)
+        .count();
+    let primary_findings: usize = evaluation
+        .samples
+        .iter()
+        .map(|sample| sample.primary_finding_count)
+        .sum();
+    let supporting_findings: usize = evaluation
+        .samples
+        .iter()
+        .map(|sample| sample.supporting_finding_count)
+        .sum();
     output.push_str("--- Benchmark ---\n");
     output.push_str(&format!(
         "Precision: {:.2}\nRecall: {:.2}\nFalse positive rate: {:.2}\nAccuracy: {:.2}\nExact label accuracy: {:.2}\nVerdicts: benign={} suspicious={} malicious={}\nScope findings: primary={} supporting={}\nTP: {} FP: {} TN: {} FN: {}\n",
@@ -212,8 +289,14 @@ pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
     output.push_str(&format!("Samples: {}\n", evaluation.coverage.total_samples));
     for (title, buckets) in [
         ("Coverage by label", &evaluation.coverage.by_label),
-        ("Coverage by focus category", &evaluation.coverage.by_focus_category),
-        ("Coverage by attack family", &evaluation.coverage.by_attack_family),
+        (
+            "Coverage by focus category",
+            &evaluation.coverage.by_focus_category,
+        ),
+        (
+            "Coverage by attack family",
+            &evaluation.coverage.by_attack_family,
+        ),
     ] {
         if !buckets.is_empty() {
             output.push_str(&format!("{title}:\n"));
@@ -244,7 +327,8 @@ pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
                 .partial_cmp(&right.metrics.exact_label_accuracy)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
-                    right.metrics
+                    right
+                        .metrics
                         .false_positive_rate
                         .partial_cmp(&left.metrics.false_positive_rate)
                         .unwrap_or(std::cmp::Ordering::Equal)

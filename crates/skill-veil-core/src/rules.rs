@@ -31,8 +31,7 @@
 use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher};
 use crate::analyzer::SkillDocument;
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity,
-    ThreatCategory,
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::ports::PatternMatcher;
 use serde::{Deserialize, Serialize};
@@ -288,24 +287,23 @@ impl CompiledRule {
     }
 
     fn evidence_kind(&self) -> EvidenceKind {
-        if self
-            .rule
-            .tags
-            .iter()
-            .any(|tag| matches!(tag.as_str(), "ioc" | "publisher" | "malicious_domain" | "c2"))
-        {
+        if self.rule.tags.iter().any(|tag| {
+            matches!(
+                tag.as_str(),
+                "ioc" | "publisher" | "malicious_domain" | "c2"
+            )
+        }) {
             return EvidenceKind::Ioc;
         }
 
         if matches!(
             self.rule.category,
             ThreatCategory::PersuasiveLanguage | ThreatCategory::SocialManipulation
-        )
-            || self
-                .rule
-                .tags
-                .iter()
-                .any(|tag| matches!(tag.as_str(), "jailbreak" | "manipulation" | "semantic"))
+        ) || self
+            .rule
+            .tags
+            .iter()
+            .any(|tag| matches!(tag.as_str(), "jailbreak" | "manipulation" | "semantic"))
         {
             return EvidenceKind::Intent;
         }
@@ -316,19 +314,12 @@ impl CompiledRule {
                 | ThreatCategory::PersistentPromptTampering
                 | ThreatCategory::ToolAbuse
                 | ThreatCategory::AutonomyEscalation
-        )
-            || self
-                .rule
-                .tags
-                .iter()
-                .any(|tag| {
-                    matches!(
-                        tag.as_str(),
-                        "persistence" | "filesystem" | "context" | "tool_abuse"
-                            | "autonomy"
-                    )
-                })
-        {
+        ) || self.rule.tags.iter().any(|tag| {
+            matches!(
+                tag.as_str(),
+                "persistence" | "filesystem" | "context" | "tool_abuse" | "autonomy"
+            )
+        }) {
             return EvidenceKind::Context;
         }
 
@@ -794,11 +785,27 @@ fn artifact_kind_for_document(doc: &SkillDocument) -> ArtifactKind {
         .map(str::to_ascii_lowercase);
     match file_name.as_deref() {
         Some("mcp.json" | "mcp.yaml" | "mcp.yml") => ArtifactKind::McpServerManifest,
-        Some("package.json" | "requirements.txt" | "pyproject.toml" | "cargo.toml"
-        | "dockerfile" | "docker-compose.yml" | "docker-compose.yaml" | "makefile"
-        | ".npmrc" | "pip.conf") => ArtifactKind::PackageManifest,
-        Some("package-lock.json" | "cargo.lock" | "poetry.lock" | "uv.lock" | "yarn.lock"
-        | "pnpm-lock.yaml" | "npm-shrinkwrap.json") => ArtifactKind::Lockfile,
+        Some(
+            "package.json"
+            | "requirements.txt"
+            | "pyproject.toml"
+            | "cargo.toml"
+            | "dockerfile"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "makefile"
+            | ".npmrc"
+            | "pip.conf",
+        ) => ArtifactKind::PackageManifest,
+        Some(
+            "package-lock.json"
+            | "cargo.lock"
+            | "poetry.lock"
+            | "uv.lock"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "npm-shrinkwrap.json",
+        ) => ArtifactKind::Lockfile,
         Some("agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md") => {
             ArtifactKind::AgentInstruction
         }
@@ -813,7 +820,10 @@ fn ioc_feed_to_rules(feed: &IocFeedFile) -> Vec<Rule> {
 
     if !feed.domains.is_empty() {
         rules.push(Rule {
-            id: format!("IOC_FEED_{}_DOMAINS", normalized_pack_name(&feed.metadata.name)),
+            id: format!(
+                "IOC_FEED_{}_DOMAINS",
+                normalized_pack_name(&feed.metadata.name)
+            ),
             category: ThreatCategory::SupplyChain,
             severity: Severity::Critical,
             confidence: 0.99,
@@ -861,7 +871,10 @@ fn ioc_feed_to_rules(feed: &IocFeedFile) -> Vec<Rule> {
 
     if !feed.filenames.is_empty() {
         rules.push(Rule {
-            id: format!("IOC_FEED_{}_FILENAMES", normalized_pack_name(&feed.metadata.name)),
+            id: format!(
+                "IOC_FEED_{}_FILENAMES",
+                normalized_pack_name(&feed.metadata.name)
+            ),
             category: ThreatCategory::SupplyChain,
             severity: Severity::High,
             confidence: 0.95,
@@ -1090,7 +1103,9 @@ ips:
 
         let rules = parse_rules_file(content).unwrap();
         assert_eq!(rules.len(), 2);
-        assert!(rules.iter().any(|rule| rule.id == "IOC_FEED_VT_FEED_DOMAINS"));
+        assert!(rules
+            .iter()
+            .any(|rule| rule.id == "IOC_FEED_VT_FEED_DOMAINS"));
         assert!(rules.iter().any(|rule| rule.id == "IOC_FEED_VT_FEED_IPS"));
     }
 }

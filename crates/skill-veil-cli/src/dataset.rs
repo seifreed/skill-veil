@@ -104,9 +104,8 @@ pub(crate) fn run_scan_dataset(args: ScanArgs, quiet: bool) -> Result<()> {
         ..Default::default()
     };
 
-    let scanner = Arc::new(
-        Scanner::with_std_adapters(options).context("Failed to initialize scanner")?,
-    );
+    let scanner =
+        Arc::new(Scanner::with_std_adapters(options).context("Failed to initialize scanner")?);
     let prepared_dataset = prepare_dataset_packages(&args.path)?;
     let package_roots = prepared_dataset.package_roots.clone();
     if package_roots.is_empty() {
@@ -180,7 +179,9 @@ pub(crate) fn run_scan_dataset(args: ScanArgs, quiet: bool) -> Result<()> {
     let parse_warnings = count_warning_rule(&dataset_reports, "ARTIFACT_PARSE_WARNING");
     let non_agent_packages = dataset_reports
         .iter()
-        .filter(|report| report.classification == skill_veil_core::ArtifactClassification::GenericMarkdown)
+        .filter(|report| {
+            report.classification == skill_veil_core::ArtifactClassification::GenericMarkdown
+        })
         .count();
     let top_malicious_reasons = top_malicious_reasons(&dataset_reports);
 
@@ -434,7 +435,13 @@ fn prepare_dataset_packages(root: &Path) -> Result<DatasetPreparation> {
         let extracted_roots: Vec<_> = fs::read_dir(&cache_root)
             .with_context(|| format!("Failed to read {}", cache_root.display()))?
             .filter_map(Result::ok)
-            .filter_map(|entry| entry.file_type().ok().filter(|ft| ft.is_dir()).map(|_| entry.path()))
+            .filter_map(|entry| {
+                entry
+                    .file_type()
+                    .ok()
+                    .filter(|ft| ft.is_dir())
+                    .map(|_| entry.path())
+            })
             .collect();
         return Ok(DatasetPreparation {
             package_roots: extracted_roots,
@@ -475,8 +482,8 @@ fn is_zip_archive(path: &Path) -> bool {
 fn extract_zip_package(zip_path: &Path, output_dir: &Path) -> Result<()> {
     let file = fs::File::open(zip_path)
         .with_context(|| format!("Failed to open {}", zip_path.display()))?;
-    let mut archive =
-        zip::ZipArchive::new(file).with_context(|| format!("Invalid zip {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .with_context(|| format!("Invalid zip {}", zip_path.display()))?;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -554,15 +561,20 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
 }
 
 fn zip_source_signature(zip_path: &Path) -> Result<String> {
-    let metadata = fs::metadata(zip_path)
-        .with_context(|| format!("Failed to stat {}", zip_path.display()))?;
+    let metadata =
+        fs::metadata(zip_path).with_context(|| format!("Failed to stat {}", zip_path.display()))?;
     let modified = metadata
         .modified()
         .ok()
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
-    Ok(format!("{}:{}:{}", zip_path.display(), metadata.len(), modified))
+    Ok(format!(
+        "{}:{}:{}",
+        zip_path.display(),
+        metadata.len(),
+        modified
+    ))
 }
 
 pub(crate) fn format_dataset_verdicts_text(
@@ -714,7 +726,9 @@ fn strongest_finding_rule(group: &[&DatasetJsonEntry]) -> Option<String> {
                     signal_class_priority(&left.signal_class)
                         .cmp(&signal_class_priority(&right.signal_class))
                 })
-                .then_with(|| severity_priority(&left.severity).cmp(&severity_priority(&right.severity)))
+                .then_with(|| {
+                    severity_priority(&left.severity).cmp(&severity_priority(&right.severity))
+                })
         })
         .map(|finding| finding.rule_id.clone())
 }
@@ -751,7 +765,11 @@ fn aggregate_package_verdicts(entries: &[DatasetJsonEntry]) -> Vec<DatasetPackag
                             .risk_score
                             .cmp(&right.report.summary.risk_score)
                     })
-                    .then_with(|| left.report.heuristic_score.cmp(&right.report.heuristic_score))
+                    .then_with(|| {
+                        left.report
+                            .heuristic_score
+                            .cmp(&right.report.heuristic_score)
+                    })
             })
             .expect("group is not empty");
 
@@ -769,7 +787,11 @@ fn aggregate_package_verdicts(entries: &[DatasetJsonEntry]) -> Vec<DatasetPackag
             package_id: Some(key),
             final_verdict,
             package_health,
-            blast_radius: representative.report.verdict_report.blast_radius_summary.level,
+            blast_radius: representative
+                .report
+                .verdict_report
+                .blast_radius_summary
+                .level,
             declared_permissions: representative
                 .report
                 .verdict_report
@@ -777,8 +799,11 @@ fn aggregate_package_verdicts(entries: &[DatasetJsonEntry]) -> Vec<DatasetPackag
                 .clone(),
             strongest_reason: strongest_root_cause
                 .map(|group| format!("{}/{}/{}", group.scope, group.category, group.signal_class)),
-            top_rule: strongest_finding_rule(&group)
-                .or_else(|| strongest_root_cause.and_then(|group| group.representative_rules.first()).cloned()),
+            top_rule: strongest_finding_rule(&group).or_else(|| {
+                strongest_root_cause
+                    .and_then(|group| group.representative_rules.first())
+                    .cloned()
+            }),
             representative_path: representative.report.skill_path.clone(),
             main_summary: summarize_scope(&group, ArtifactScope::AgentEntrypoint),
             supporting_summary: summarize_scope(&group, ArtifactScope::SupportingArtifact),
@@ -790,12 +815,10 @@ fn aggregate_package_verdicts(entries: &[DatasetJsonEntry]) -> Vec<DatasetPackag
         verdict_priority(&right.final_verdict)
             .cmp(&verdict_priority(&left.final_verdict))
             .then_with(|| {
-                package_health_priority(
-                    &right.package_health.unwrap_or(PackageHealth::Healthy),
-                )
-                .cmp(&package_health_priority(
-                    &left.package_health.unwrap_or(PackageHealth::Healthy),
-                ))
+                package_health_priority(&right.package_health.unwrap_or(PackageHealth::Healthy))
+                    .cmp(&package_health_priority(
+                        &left.package_health.unwrap_or(PackageHealth::Healthy),
+                    ))
             })
             .then_with(|| left.package_id.cmp(&right.package_id))
     });

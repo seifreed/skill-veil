@@ -1,6 +1,4 @@
-use crate::findings::{
-    default_operational_contexts, Finding, OperationalContext,
-};
+use crate::findings::{default_operational_contexts, Finding, OperationalContext};
 use crate::policy::{
     AppliedPolicyOverride, BaselineEntry, BaselineFile, DiffEntry, DiffReport, JsonReport,
     PolicyFile, PolicyOverride, WaiverEntry, WaiverFile, POLICY_SCHEMA_VERSION,
@@ -205,7 +203,10 @@ pub fn validate_waivers(waivers: &WaiverFile) -> Result<(), String> {
     let mut seen = std::collections::HashSet::new();
     for waiver in &waivers.waivers {
         if waiver.rule_id.is_none() && waiver.artifact_path.is_none() && waiver.context.is_none() {
-            return Err("Each waiver must define at least one selector: rule_id, artifact_path, or context".to_string());
+            return Err(
+                "Each waiver must define at least one selector: rule_id, artifact_path, or context"
+                    .to_string(),
+            );
         }
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}",
@@ -320,9 +321,9 @@ pub(crate) fn waiver_matches_finding(
             .as_ref()
             .is_some_and(|artifact_path| artifact_path.ends_with(path))
     });
-    let context_matches = waiver.context.is_none_or(|context| {
-        finding_contexts(finding).contains(&context)
-    });
+    let context_matches = waiver
+        .context
+        .is_none_or(|context| finding_contexts(finding).contains(&context));
 
     rule_matches && path_matches && context_matches
 }
@@ -345,7 +346,10 @@ pub(crate) fn policy_override_matches(
     finding: &Finding,
     now: DateTime<Utc>,
 ) -> bool {
-    if policy_override.expires_at.is_some_and(|expires_at| expires_at < now) {
+    if policy_override
+        .expires_at
+        .is_some_and(|expires_at| expires_at < now)
+    {
         return false;
     }
 
@@ -359,9 +363,9 @@ pub(crate) fn policy_override_matches(
             .as_ref()
             .is_some_and(|artifact_path| artifact_path.ends_with(path))
     });
-    let context_matches = policy_override.context.is_none_or(|context| {
-        finding_contexts(finding).contains(&context)
-    });
+    let context_matches = policy_override
+        .context
+        .is_none_or(|context| finding_contexts(finding).contains(&context));
 
     rule_matches && path_matches && context_matches
 }

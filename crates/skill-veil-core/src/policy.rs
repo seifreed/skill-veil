@@ -4,9 +4,7 @@ use crate::analyzer::{
     AgentExtensionKind, ArtifactClassification, ArtifactIdentitySource, StructuralValidity,
 };
 use crate::artifact_graph::ArtifactGraph;
-use crate::findings::{
-    Finding, OperationalContext as PolicyContext, RecommendedAction, Severity,
-};
+use crate::findings::{Finding, OperationalContext as PolicyContext, RecommendedAction, Severity};
 
 pub use crate::policy_state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,

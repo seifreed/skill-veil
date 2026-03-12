@@ -1,7 +1,6 @@
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity,
-    ThreatCategory,
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::services::ArtifactAnalysisService;
 use regex::Regex;
@@ -102,7 +101,9 @@ pub(crate) fn analyze_mcp_manifest(
                     path: artifact_path.clone(),
                 })
                 .match_value("auth: none")
-                .reason("MCP manifest exposes a remote endpoint without a visible authentication model")
+                .reason(
+                    "MCP manifest exposes a remote endpoint without a visible authentication model",
+                )
                 .build(),
         );
     }
@@ -178,7 +179,10 @@ pub(crate) fn mcp_manifest_relations(
 ) -> Vec<crate::services::artifact_analysis::ArtifactLink> {
     let mut links = artifact_analysis.generic_url_relations(content);
 
-    if Regex::new("(?i)(command|stdio|args)").unwrap().is_match(content) {
+    if Regex::new("(?i)(command|stdio|args)")
+        .unwrap()
+        .is_match(content)
+    {
         links.push(crate::services::artifact_analysis::ArtifactLink {
             target: "mcp-process-transport".to_string(),
             relation: ArtifactRelation::Executes,
@@ -209,12 +213,18 @@ pub(crate) fn mcp_manifest_capabilities(
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
-    if Regex::new("(?i)(command|stdio|args)").unwrap().is_match(content) {
+    if Regex::new("(?i)(command|stdio|args)")
+        .unwrap()
+        .is_match(content)
+    {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }
-    if Regex::new("(?i)(https?://|wss?://)").unwrap().is_match(content) {
+    if Regex::new("(?i)(https?://|wss?://)")
+        .unwrap()
+        .is_match(content)
+    {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));

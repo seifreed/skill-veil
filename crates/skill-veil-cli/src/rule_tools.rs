@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use skill_veil_core::{
-    parse_rules_file, IocFeedFile, RecommendedAction, Rule, RulePackFile, RulePackMetadata,
-    RulePackKind, Severity,
+    parse_rules_file, IocFeedFile, RecommendedAction, Rule, RulePackFile, RulePackKind,
+    RulePackMetadata, Severity,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -93,7 +93,12 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
     for entry in walkdir::WalkDir::new(rules_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "yaml" || ext == "yml")
+                .unwrap_or(false)
+        })
     {
         pack_files += 1;
         let path = entry.path();
@@ -106,12 +111,24 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
         let rules = match parsed {
             ParsedRuleSource::RulePack(pack) => {
                 schema_versions.insert(pack.schema_version);
-                collect_pack_metadata(&pack.metadata, &mut pack_names, &mut pack_kinds, &mut metadata_issues, path);
+                collect_pack_metadata(
+                    &pack.metadata,
+                    &mut pack_names,
+                    &mut pack_kinds,
+                    &mut metadata_issues,
+                    path,
+                );
                 pack.rules
             }
             ParsedRuleSource::IocFeed(feed) => {
                 schema_versions.insert(feed.schema_version);
-                collect_pack_metadata(&feed.metadata, &mut pack_names, &mut pack_kinds, &mut metadata_issues, path);
+                collect_pack_metadata(
+                    &feed.metadata,
+                    &mut pack_names,
+                    &mut pack_kinds,
+                    &mut metadata_issues,
+                    path,
+                );
                 parse_rules_file(&content)?
             }
             ParsedRuleSource::PlainRules(rules) => rules,
@@ -123,7 +140,10 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
         for rule in &rules {
             *seen.entry(rule.id.clone()).or_insert(0) += 1;
             if !(0.0..=1.0).contains(&rule.confidence) {
-                issues.push(format!("Rule {} has invalid confidence {}", rule.id, rule.confidence));
+                issues.push(format!(
+                    "Rule {} has invalid confidence {}",
+                    rule.id, rule.confidence
+                ));
             }
             if rule.reason.trim().is_empty() {
                 issues.push(format!("Rule {} has an empty reason", rule.id));
@@ -173,7 +193,12 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
     for entry in walkdir::WalkDir::new(rules_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "yaml" || ext == "yml")
+                .unwrap_or(false)
+        })
     {
         pack_files += 1;
         let path = entry.path();
@@ -186,12 +211,24 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
         let rules = match parsed {
             ParsedRuleSource::RulePack(pack) => {
                 schema_versions.insert(pack.schema_version);
-                collect_pack_metadata(&pack.metadata, &mut pack_names, &mut pack_kinds, &mut metadata_issues, path);
+                collect_pack_metadata(
+                    &pack.metadata,
+                    &mut pack_names,
+                    &mut pack_kinds,
+                    &mut metadata_issues,
+                    path,
+                );
                 pack.rules
             }
             ParsedRuleSource::IocFeed(feed) => {
                 schema_versions.insert(feed.schema_version);
-                collect_pack_metadata(&feed.metadata, &mut pack_names, &mut pack_kinds, &mut metadata_issues, path);
+                collect_pack_metadata(
+                    &feed.metadata,
+                    &mut pack_names,
+                    &mut pack_kinds,
+                    &mut metadata_issues,
+                    path,
+                );
                 parse_rules_file(&content)?
             }
             ParsedRuleSource::PlainRules(rules) => rules,
@@ -199,7 +236,11 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
 
         total_rules += rules.len();
         for rule in &rules {
-            if rule.enabled { enabled_rules += 1; } else { disabled_rules += 1; }
+            if rule.enabled {
+                enabled_rules += 1;
+            } else {
+                disabled_rules += 1;
+            }
             *by_severity.entry(rule.severity.to_string()).or_insert(0) += 1;
             *by_category.entry(rule.category.to_string()).or_insert(0) += 1;
             for tag in &rule.tags {
@@ -223,31 +264,61 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
     })
 }
 
-pub fn validate_fixture_case(case: &RuleFixtureCase, findings: &[skill_veil_core::Finding]) -> Result<()> {
+pub fn validate_fixture_case(
+    case: &RuleFixtureCase,
+    findings: &[skill_veil_core::Finding],
+) -> Result<()> {
     if let Some(expect_match) = case.expect_match {
         let matched = !findings.is_empty();
         if matched != expect_match {
-            anyhow::bail!("Rule {} expected match={} but got {}", case.rule_id, expect_match, matched);
+            anyhow::bail!(
+                "Rule {} expected match={} but got {}",
+                case.rule_id,
+                expect_match,
+                matched
+            );
         }
     }
     if let Some(expected_count) = case.expected_count {
         if findings.len() != expected_count {
-            anyhow::bail!("Rule {} expected {} findings but got {}", case.rule_id, expected_count, findings.len());
+            anyhow::bail!(
+                "Rule {} expected {} findings but got {}",
+                case.rule_id,
+                expected_count,
+                findings.len()
+            );
         }
     }
     if let Some(expected_severity) = case.expected_severity {
-        if findings.iter().any(|finding| finding.severity != expected_severity) {
-            anyhow::bail!("Rule {} expected severity {}", case.rule_id, expected_severity);
+        if findings
+            .iter()
+            .any(|finding| finding.severity != expected_severity)
+        {
+            anyhow::bail!(
+                "Rule {} expected severity {}",
+                case.rule_id,
+                expected_severity
+            );
         }
     }
     if let Some(expected_action) = case.expected_action {
-        if findings.iter().any(|finding| finding.recommended_action != expected_action) {
+        if findings
+            .iter()
+            .any(|finding| finding.recommended_action != expected_action)
+        {
             anyhow::bail!("Rule {} expected action {}", case.rule_id, expected_action);
         }
     }
     if let Some(expected_category) = &case.expected_category {
-        if findings.iter().any(|finding| finding.category.to_string() != *expected_category) {
-            anyhow::bail!("Rule {} expected category {}", case.rule_id, expected_category);
+        if findings
+            .iter()
+            .any(|finding| finding.category.to_string() != *expected_category)
+        {
+            anyhow::bail!(
+                "Rule {} expected category {}",
+                case.rule_id,
+                expected_category
+            );
         }
     }
     Ok(())

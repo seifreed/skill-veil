@@ -116,7 +116,12 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
     }
     if let Some(level) = result.verdict_report.blast_radius_summary.level {
         output.push_str(&format!("  Blast radius: {}\n", level));
-        if !result.verdict_report.blast_radius_summary.factors.is_empty() {
+        if !result
+            .verdict_report
+            .blast_radius_summary
+            .factors
+            .is_empty()
+        {
             output.push_str(&format!(
                 "  Blast factors: {}\n",
                 result.verdict_report.blast_radius_summary.factors.join(",")
@@ -158,7 +163,11 @@ fn append_scope_counts(output: &mut String, result: &ScanResult) {
     output.push_str(&format!("  Total findings: {}\n", result.findings.len()));
 }
 
-fn append_findings_by_scope(output: &mut String, result: &ScanResult, finding_limit: Option<usize>) {
+fn append_findings_by_scope(
+    output: &mut String,
+    result: &ScanResult,
+    finding_limit: Option<usize>,
+) {
     append_scope_counts(output, result);
     output.push('\n');
 
@@ -331,9 +340,11 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     }
 
     if options.explain_policy {
-        let final_action = results.iter().fold(RecommendedAction::Log, |current, result| {
-            skill_veil_core::RecommendedAction::max(current, result.summary.recommended_action)
-        });
+        let final_action = results
+            .iter()
+            .fold(RecommendedAction::Log, |current, result| {
+                skill_veil_core::RecommendedAction::max(current, result.summary.recommended_action)
+            });
         output.push_str(&format!("Final recommended action: {}\n", final_action));
     }
 
@@ -356,7 +367,9 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     let mut trigger_counts = std::collections::BTreeMap::new();
     for result in results {
         for trigger in &result.summary.action_triggers {
-            *trigger_counts.entry(trigger.factor.clone()).or_insert(0_usize) += 1;
+            *trigger_counts
+                .entry(trigger.factor.clone())
+                .or_insert(0_usize) += 1;
         }
     }
 

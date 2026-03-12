@@ -24,7 +24,8 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
             continue;
         }
 
-        let Ok(artifact_doc) = SkillDocument::from_file_with_parser(referenced_file, &scanner.parser)
+        let Ok(artifact_doc) =
+            SkillDocument::from_file_with_parser(referenced_file, &scanner.parser)
         else {
             continue;
         };
@@ -33,13 +34,19 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
         let artifact_kind = Scanner::<F, P>::artifact_kind_for_path(referenced_file);
         let artifact_content = read_text_file_lossy(referenced_file).ok();
 
-        findings.extend(scanner.engine.evaluate(&artifact_doc).into_iter().map(|finding| {
-            finding
-                .with_match_target(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .with_artifact(artifact_kind, artifact_path.clone())
-        }));
+        findings.extend(
+            scanner
+                .engine
+                .evaluate(&artifact_doc)
+                .into_iter()
+                .map(|finding| {
+                    finding
+                        .with_match_target(MatchTarget::ReferencedFile {
+                            path: artifact_path.clone(),
+                        })
+                        .with_artifact(artifact_kind, artifact_path.clone())
+                }),
+        );
 
         if let Some((content, decode_warning)) = artifact_content {
             if decode_warning {
@@ -51,11 +58,11 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                 findings.push(parse_warning);
             }
             let sibling_files = Scanner::<F, P>::sibling_files(referenced_file);
-            findings.extend(
-                scanner
-                    .artifact_analysis
-                    .analyze(referenced_file, &content, &sibling_files),
-            );
+            findings.extend(scanner.artifact_analysis.analyze(
+                referenced_file,
+                &content,
+                &sibling_files,
+            ));
         }
     }
 
@@ -91,7 +98,11 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
             findings.push(parse_warning);
         }
         let sibling_files = Scanner::<F, P>::sibling_files(path);
-        findings.extend(scanner.artifact_analysis.analyze(path, &content, &sibling_files));
+        findings.extend(
+            scanner
+                .artifact_analysis
+                .analyze(path, &content, &sibling_files),
+        );
     }
     let artifact_kind = Scanner::<F, P>::artifact_kind_for_path(path);
     let artifact_path = path.display().to_string();

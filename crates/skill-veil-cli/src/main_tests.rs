@@ -1,7 +1,7 @@
 use super::*;
 use crate::benchmark_output::render_benchmark_dashboard;
-use crate::dataset::DatasetPackageVerdictEntry;
 use crate::dataset::format_dataset_verdicts_text;
+use crate::dataset::DatasetPackageVerdictEntry;
 use crate::text_output::{format_diff_ci_summary, format_text_output, TextOutputOptions};
 use skill_veil_core::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactGraph,
@@ -24,12 +24,14 @@ fn make_temp_rules_dir() -> PathBuf {
 
 #[test]
 fn test_format_text_output_includes_policy_escalation_reasons() {
-    let findings = vec![skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
-        .matched_on(MatchTarget::Document)
-        .match_value("note")
-        .reason("note")
-        .action(RecommendedAction::Log)
-        .build()];
+    let findings = vec![
+        skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
+            .matched_on(MatchTarget::Document)
+            .match_value("note")
+            .reason("note")
+            .action(RecommendedAction::Log)
+            .build(),
+    ];
 
     let mut graph = ArtifactGraph::new();
     graph.add_node_with_capabilities(
@@ -47,10 +49,8 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
         ],
     );
 
-    let summary = skill_veil_core::findings::FindingSummary::from_findings_and_graph(
-        &findings,
-        &graph,
-    );
+    let summary =
+        skill_veil_core::findings::FindingSummary::from_findings_and_graph(&findings, &graph);
     let result = ScanResult {
         path: PathBuf::from("SKILL.md"),
         name: "skill".to_string(),
@@ -96,12 +96,14 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
 
 #[test]
 fn test_format_text_output_quiet_summary_hides_detailed_findings() {
-    let findings = vec![skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
-        .matched_on(MatchTarget::Document)
-        .match_value("note")
-        .reason("note")
-        .action(RecommendedAction::Log)
-        .build()];
+    let findings = vec![
+        skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
+            .matched_on(MatchTarget::Document)
+            .match_value("note")
+            .reason("note")
+            .action(RecommendedAction::Log)
+            .build(),
+    ];
 
     let summary = skill_veil_core::findings::FindingSummary::from_findings(&findings);
     let result = ScanResult {
@@ -157,12 +159,14 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
 
 #[test]
 fn test_format_text_output_explain_policy_focuses_on_policy_section() {
-    let findings = vec![skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
-        .matched_on(MatchTarget::Document)
-        .match_value("note")
-        .reason("note")
-        .action(RecommendedAction::Log)
-        .build()];
+    let findings = vec![
+        skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
+            .matched_on(MatchTarget::Document)
+            .match_value("note")
+            .reason("note")
+            .action(RecommendedAction::Log)
+            .build(),
+    ];
 
     let mut graph = ArtifactGraph::new();
     graph.add_node_with_capabilities(
@@ -180,10 +184,8 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
         ],
     );
 
-    let summary = skill_veil_core::findings::FindingSummary::from_findings_and_graph(
-        &findings,
-        &graph,
-    );
+    let summary =
+        skill_veil_core::findings::FindingSummary::from_findings_and_graph(&findings, &graph);
     let result = ScanResult {
         path: PathBuf::from("SKILL.md"),
         name: "skill".to_string(),
@@ -348,16 +350,15 @@ rules:
 
 #[test]
 fn test_validate_fixture_case_checks_full_expectations() {
-    let findings = vec![skill_veil_core::Finding::builder(
-        "TEST_RULE",
-        ThreatCategory::ToolAbuse,
-    )
-    .severity(Severity::High)
-    .action(RecommendedAction::RequireApproval)
-    .matched_on(MatchTarget::Document)
-    .match_value("extract cookies")
-    .reason("tool abuse")
-    .build()];
+    let findings = vec![
+        skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::ToolAbuse)
+            .severity(Severity::High)
+            .action(RecommendedAction::RequireApproval)
+            .matched_on(MatchTarget::Document)
+            .match_value("extract cookies")
+            .reason("tool abuse")
+            .build(),
+    ];
     let case = RuleFixtureCase {
         name: Some("case".to_string()),
         rule_id: "TEST_RULE".to_string(),
@@ -519,9 +520,7 @@ fn test_format_dataset_verdicts_text_analyst_summary_is_compact() {
             skill_veil_core::DeclaredPermission::NetworkAccess,
             skill_veil_core::DeclaredPermission::SecretsAccess,
         ],
-        strongest_reason: Some(
-            "supporting_artifact/remote_exec/malicious_behavior".to_string(),
-        ),
+        strongest_reason: Some("supporting_artifact/remote_exec/malicious_behavior".to_string()),
         top_rule: Some("UNSAFE_USER_CONTROLLED_EXEC_SHELL".to_string()),
         representative_path: "dataset/pkg/SKILL.md".to_string(),
         main_summary: Vec::new(),

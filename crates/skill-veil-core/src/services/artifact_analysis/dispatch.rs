@@ -24,7 +24,9 @@ pub(super) fn analyze(
         "yarn.lock" => service.analyze_yarn_lock(path, content),
         "pnpm-lock.yaml" => service.analyze_pnpm_lock(path, content),
         "dockerfile" => service.analyze_dockerfile(path, content),
-        "docker-compose.yml" | "docker-compose.yaml" => service.analyze_docker_compose(path, content),
+        "docker-compose.yml" | "docker-compose.yaml" => {
+            service.analyze_docker_compose(path, content)
+        }
         "makefile" => service.analyze_makefile(path, content),
         ".npmrc" => service.analyze_npmrc(path, content),
         "pip.conf" => service.analyze_pip_conf(path, content),
@@ -34,7 +36,9 @@ pub(super) fn analyze(
         _ if file_name.to_ascii_lowercase().ends_with(".skill.md") => {
             instructions::analyze_skill_document(service, path, content)
         }
-        _ if is_prompt_pack_document(path) => instructions::analyze_prompt_pack(service, path, content),
+        _ if is_prompt_pack_document(path) => {
+            instructions::analyze_prompt_pack(service, path, content)
+        }
         _ if looks_like_script(path) => service.analyze_script(path, content),
         _ => Vec::new(),
     }
@@ -81,14 +85,18 @@ pub(super) fn infer_capabilities(
         "package.json" => service.package_json_capabilities(content),
         "mcp.json" | "mcp.yaml" | "mcp.yml" => service.mcp_manifest_capabilities(content),
         "dockerfile" => service.dockerfile_capabilities(content),
-        "docker-compose.yml" | "docker-compose.yaml" => service.docker_compose_capabilities(content),
+        "docker-compose.yml" | "docker-compose.yaml" => {
+            service.docker_compose_capabilities(content)
+        }
         "makefile" => service.makefile_capabilities(content),
         ".npmrc" => service.npmrc_capabilities(content),
         "pip.conf" => service.pip_conf_capabilities(content),
         "agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md" => {
             instructions::instruction_capabilities(service, content)
         }
-        _ if is_prompt_pack_document(path) => instructions::instruction_capabilities(service, content),
+        _ if is_prompt_pack_document(path) => {
+            instructions::instruction_capabilities(service, content)
+        }
         "package-lock.json" | "cargo.lock" | "poetry.lock" | "uv.lock" | "yarn.lock"
         | "pnpm-lock.yaml" => service.lockfile_capabilities(content),
         _ if looks_like_script(path) => service.script_capabilities(content),
@@ -126,7 +134,10 @@ pub(super) fn is_prompt_pack_document(path: &Path) -> bool {
 
 pub(super) fn looks_like_script(path: &Path) -> bool {
     matches!(
-        path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("sh" | "bash" | "zsh" | "ps1" | "py" | "js" | "ts")
     )
 }

@@ -45,7 +45,9 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
             file_discovery: FileDiscoveryService::new(options.recursive),
-            filter_service: ScanFilterService::with_policy_state(options, baseline, waivers, policy),
+            filter_service: ScanFilterService::with_policy_state(
+                options, baseline, waivers, policy,
+            ),
             parser: PulldownMarkdownParser::new(),
         })
     }
@@ -71,7 +73,9 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
             file_discovery: FileDiscoveryService::with_fs_provider(options.recursive, fs_provider),
-            filter_service: ScanFilterService::with_policy_state(options, baseline, waivers, policy),
+            filter_service: ScanFilterService::with_policy_state(
+                options, baseline, waivers, policy,
+            ),
             parser,
         })
     }

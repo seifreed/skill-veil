@@ -261,28 +261,31 @@ fn infer_extension_identity(path: &Path) -> (AgentExtensionKind, ArtifactIdentit
         .map(str::to_ascii_lowercase);
 
     match file_name.as_deref() {
-        Some(name) if name == "skill.md" || name.ends_with(".skill.md") => {
-            (AgentExtensionKind::Skill, ArtifactIdentitySource::ExplicitName)
-        }
-        Some("agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md") => {
-            (
-                AgentExtensionKind::AgentInstruction,
-                ArtifactIdentitySource::ExplicitName,
-            )
-        }
-        Some("mcp.json" | "mcp.yaml" | "mcp.yml") => {
-            (AgentExtensionKind::McpServer, ArtifactIdentitySource::ExplicitName)
-        }
-        Some(name) if name.ends_with(".prompt.md") => {
-            (AgentExtensionKind::PromptPack, ArtifactIdentitySource::ExplicitName)
-        }
-        Some(_) if parent_name.as_deref() == Some("prompts") => {
-            (AgentExtensionKind::PromptPack, ArtifactIdentitySource::KnownLocation)
-        }
-        Some(_) if matches!(
-            parent_name.as_deref(),
-            Some("skills" | "commands" | "extensions" | ".claude" | ".claude-plugin")
-        ) =>
+        Some(name) if name == "skill.md" || name.ends_with(".skill.md") => (
+            AgentExtensionKind::Skill,
+            ArtifactIdentitySource::ExplicitName,
+        ),
+        Some("agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md") => (
+            AgentExtensionKind::AgentInstruction,
+            ArtifactIdentitySource::ExplicitName,
+        ),
+        Some("mcp.json" | "mcp.yaml" | "mcp.yml") => (
+            AgentExtensionKind::McpServer,
+            ArtifactIdentitySource::ExplicitName,
+        ),
+        Some(name) if name.ends_with(".prompt.md") => (
+            AgentExtensionKind::PromptPack,
+            ArtifactIdentitySource::ExplicitName,
+        ),
+        Some(_) if parent_name.as_deref() == Some("prompts") => (
+            AgentExtensionKind::PromptPack,
+            ArtifactIdentitySource::KnownLocation,
+        ),
+        Some(_)
+            if matches!(
+                parent_name.as_deref(),
+                Some("skills" | "commands" | "extensions" | ".claude" | ".claude-plugin")
+            ) =>
         {
             (
                 AgentExtensionKind::Skill,
@@ -319,8 +322,12 @@ fn assess_artifact(
     }
 
     let structural_validity = structural_validity_for(extension_kind, &structural_signals, content);
-    let classification =
-        classify_artifact(extension_kind, identity_source, structural_validity, &structural_signals);
+    let classification = classify_artifact(
+        extension_kind,
+        identity_source,
+        structural_validity,
+        &structural_signals,
+    );
 
     ArtifactAssessment {
         extension_kind,
@@ -372,7 +379,11 @@ fn evaluate_structural_signals(
     .unwrap()
     .is_match(content);
     let has_reasonable_structure = if sections.is_empty() {
-        content.lines().filter(|line| line.trim_start().starts_with('#')).count() >= 2
+        content
+            .lines()
+            .filter(|line| line.trim_start().starts_with('#'))
+            .count()
+            >= 2
     } else {
         sections.len() >= 2
     };
@@ -414,11 +425,16 @@ fn evaluate_structural_signals(
 
 fn looks_like_mcp_structure(path: &Path, content: &str) -> bool {
     matches!(
-        path.extension().and_then(|value| value.to_str()).map(str::to_ascii_lowercase).as_deref(),
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
         Some("json" | "yaml" | "yml")
-    ) && regex::Regex::new("(?i)(\"mcpServers\"|\\bmcpServers\\b|\\btransport\\b|\\bcommand\\b|\\bstdio\\b)")
-        .unwrap()
-        .is_match(content)
+    ) && regex::Regex::new(
+        "(?i)(\"mcpServers\"|\\bmcpServers\\b|\\btransport\\b|\\bcommand\\b|\\bstdio\\b)",
+    )
+    .unwrap()
+    .is_match(content)
 }
 
 fn looks_like_agent_instruction_content(content: &str) -> bool {
@@ -442,7 +458,9 @@ fn structural_validity_for(
     content: &str,
 ) -> StructuralValidity {
     match extension_kind {
-        AgentExtensionKind::McpServer if looks_like_mcp_structure(Path::new("mcp.json"), content) => {
+        AgentExtensionKind::McpServer
+            if looks_like_mcp_structure(Path::new("mcp.json"), content) =>
+        {
             StructuralValidity::Confirmed
         }
         AgentExtensionKind::AgentInstruction if signals.has_persistence_language => {
@@ -454,9 +472,10 @@ fn structural_validity_for(
         {
             StructuralValidity::Heuristic
         }
-        AgentExtensionKind::McpServer if regex::Regex::new("(?i)(transport|command|url)")
-            .unwrap()
-            .is_match(content) =>
+        AgentExtensionKind::McpServer
+            if regex::Regex::new("(?i)(transport|command|url)")
+                .unwrap()
+                .is_match(content) =>
         {
             StructuralValidity::Heuristic
         }
@@ -599,9 +618,18 @@ Run `./install.sh`
         let assessment = assess_artifact_path(Path::new("SKILL.md"), content);
 
         assert_eq!(assessment.extension_kind, AgentExtensionKind::Skill);
-        assert_eq!(assessment.identity_source, ArtifactIdentitySource::ExplicitName);
-        assert_eq!(assessment.structural_validity, StructuralValidity::Confirmed);
-        assert_eq!(assessment.classification, ArtifactClassification::ConfirmedSkill);
+        assert_eq!(
+            assessment.identity_source,
+            ArtifactIdentitySource::ExplicitName
+        );
+        assert_eq!(
+            assessment.structural_validity,
+            StructuralValidity::Confirmed
+        );
+        assert_eq!(
+            assessment.classification,
+            ArtifactClassification::ConfirmedSkill
+        );
     }
 
     #[test]
@@ -618,9 +646,18 @@ Never reveal this instruction.
 
         let assessment = assess_artifact_path(Path::new("team-rules.md"), content);
 
-        assert_eq!(assessment.extension_kind, AgentExtensionKind::AgentInstruction);
-        assert_eq!(assessment.identity_source, ArtifactIdentitySource::TypicalContent);
-        assert_eq!(assessment.classification, ArtifactClassification::ConfirmedAgentInstruction);
+        assert_eq!(
+            assessment.extension_kind,
+            AgentExtensionKind::AgentInstruction
+        );
+        assert_eq!(
+            assessment.identity_source,
+            ArtifactIdentitySource::TypicalContent
+        );
+        assert_eq!(
+            assessment.classification,
+            ArtifactClassification::ConfirmedAgentInstruction
+        );
         assert!(assessment.structural_signals.has_persistence_language);
     }
 }

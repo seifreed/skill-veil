@@ -126,8 +126,9 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
                 text: "Contextual policy escalation".to_string(),
             },
             full_description: SarifMessage {
-                text: "Explains why contextual artifact capabilities escalated the recommended action"
-                    .to_string(),
+                text:
+                    "Explains why contextual artifact capabilities escalated the recommended action"
+                        .to_string(),
             },
             default_configuration: SarifConfiguration {
                 level: severity_to_sarif_level(match summary.recommended_action {
@@ -266,16 +267,18 @@ fn split_primary_findings(generator: &PolicyGenerator) -> Vec<crate::findings::F
         .findings
         .iter()
         .filter(|finding| {
-            finding.artifact_path.as_deref().is_none_or(|artifact_path| {
-                artifact_path == generator.skill_path
-            }) && matches!(
-                finding.artifact_kind,
-                ArtifactKind::SkillDocument
-                    | ArtifactKind::AgentInstruction
-                    | ArtifactKind::PromptPackDocument
-                    | ArtifactKind::McpServerManifest
-                    | ArtifactKind::PackageManifest
-            )
+            finding
+                .artifact_path
+                .as_deref()
+                .is_none_or(|artifact_path| artifact_path == generator.skill_path)
+                && matches!(
+                    finding.artifact_kind,
+                    ArtifactKind::SkillDocument
+                        | ArtifactKind::AgentInstruction
+                        | ArtifactKind::PromptPackDocument
+                        | ArtifactKind::McpServerManifest
+                        | ArtifactKind::PackageManifest
+                )
         })
         .cloned()
         .collect()
@@ -286,16 +289,18 @@ fn split_supporting_findings(generator: &PolicyGenerator) -> Vec<crate::findings
         .findings
         .iter()
         .filter(|finding| {
-            !(finding.artifact_path.as_deref().is_none_or(|artifact_path| {
-                artifact_path == generator.skill_path
-            }) && matches!(
-                finding.artifact_kind,
-                ArtifactKind::SkillDocument
-                    | ArtifactKind::AgentInstruction
-                    | ArtifactKind::PromptPackDocument
-                    | ArtifactKind::McpServerManifest
-                    | ArtifactKind::PackageManifest
-            ))
+            !(finding
+                .artifact_path
+                .as_deref()
+                .is_none_or(|artifact_path| artifact_path == generator.skill_path)
+                && matches!(
+                    finding.artifact_kind,
+                    ArtifactKind::SkillDocument
+                        | ArtifactKind::AgentInstruction
+                        | ArtifactKind::PromptPackDocument
+                        | ArtifactKind::McpServerManifest
+                        | ArtifactKind::PackageManifest
+                ))
         })
         .cloned()
         .collect()

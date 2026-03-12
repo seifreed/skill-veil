@@ -2,27 +2,25 @@
 //!
 //! Behavioral & Supply-Chain Security Analysis for Agent Skills
 
+mod benchmark_output;
 mod cli_args;
 mod commands;
-mod benchmark_output;
 mod dataset;
 mod rule_tools;
 mod text_output;
 
-use anyhow::{Context, Result};
-use clap::Parser;
 use crate::cli_args::{
     BaselineAction, Cli, Commands, OutputFormat, PolicyAction, PolicyProfileArg,
     RecommendedActionArg, RulesAction, SeverityArg, WaiversAction,
 };
+use anyhow::{Context, Result};
+use clap::Parser;
 use dataset::run_scan_dataset;
 use rule_tools::{
     build_rule_pack_info, format_rule_pack_info_text, format_rules_validation_text,
     validate_fixture_case, validate_rules_directory, RuleFixtureCase, RuleFixtureFile,
 };
-use skill_veil_core::{
-    PolicyProfile, RecommendedAction, ScanTargetMode, Scanner, Severity,
-};
+use skill_veil_core::{PolicyProfile, RecommendedAction, ScanTargetMode, Scanner, Severity};
 #[cfg(test)]
 mod main_tests;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -48,7 +46,6 @@ impl From<SeverityArg> for Severity {
         }
     }
 }
-
 
 impl From<RecommendedActionArg> for RecommendedAction {
     fn from(value: RecommendedActionArg) -> Self {
@@ -80,7 +77,9 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Scan(args) => commands::run_scan(args, ScanTargetMode::Auto, cli.quiet)?,
         Commands::ScanFile(args) => commands::run_scan(args, ScanTargetMode::File, cli.quiet)?,
-        Commands::ScanPackage(args) => commands::run_scan(args, ScanTargetMode::Package, cli.quiet)?,
+        Commands::ScanPackage(args) => {
+            commands::run_scan(args, ScanTargetMode::Package, cli.quiet)?
+        }
         Commands::ScanDataset(args) => run_scan_dataset(args, cli.quiet)?,
         Commands::Benchmark(args) => commands::run_benchmark(args)?,
         Commands::Baseline { action } => match action {
@@ -197,11 +196,16 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-                RulesAction::TestPack { rules_dir, fixtures } => {
+                RulesAction::TestPack {
+                    rules_dir,
+                    fixtures,
+                } => {
                     let engine = commands::load_rule_engine_from_dir(&rules_dir)?;
 
-                    let fixture_content = std::fs::read_to_string(&fixtures)
-                        .with_context(|| format!("Failed to read fixtures {}", fixtures.display()))?;
+                    let fixture_content =
+                        std::fs::read_to_string(&fixtures).with_context(|| {
+                            format!("Failed to read fixtures {}", fixtures.display())
+                        })?;
                     let fixture_pack: RuleFixtureFile = serde_yaml::from_str(&fixture_content)
                         .context("Failed to parse rule fixtures")?;
 

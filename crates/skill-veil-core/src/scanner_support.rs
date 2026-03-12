@@ -1,5 +1,7 @@
 use crate::findings::{ArtifactKind, Finding, RecommendedAction, Severity};
-use crate::policy::{load_baseline, load_policy, load_waivers, BaselineFile, PolicyFile, WaiverFile};
+use crate::policy::{
+    load_baseline, load_policy, load_waivers, BaselineFile, PolicyFile, WaiverFile,
+};
 use crate::scanner::ScanError;
 use std::path::Path;
 
@@ -22,7 +24,11 @@ pub(crate) fn decode_warning_finding(path: &Path, artifact_kind: ArtifactKind) -
         .build()
 }
 
-pub(crate) fn parse_warning_finding(path: &Path, artifact_kind: ArtifactKind, reason: &str) -> Finding {
+pub(crate) fn parse_warning_finding(
+    path: &Path,
+    artifact_kind: ArtifactKind,
+    reason: &str,
+) -> Finding {
     Finding::builder("ARTIFACT_PARSE_WARNING", crate::findings::ThreatCategory::Generic)
         .severity(Severity::Low)
         .action(RecommendedAction::Log)
@@ -37,14 +43,22 @@ pub(crate) fn parse_warning_finding(path: &Path, artifact_kind: ArtifactKind, re
         .build()
 }
 
-pub(crate) fn structured_parse_warning(path: &Path, content: &str, artifact_kind: ArtifactKind) -> Option<Finding> {
+pub(crate) fn structured_parse_warning(
+    path: &Path,
+    content: &str,
+    artifact_kind: ArtifactKind,
+) -> Option<Finding> {
     let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
     let parse_failed = match file_name.as_str() {
         "package.json" | "package-lock.json" | "mcp.json" => {
             serde_json::from_str::<serde_json::Value>(content).is_err()
         }
-        "docker-compose.yml" | "docker-compose.yaml" | "mcp.yaml" | "mcp.yml"
-        | "pnpm-lock.yaml" | "yarn.lock" => serde_yaml::from_str::<serde_yaml::Value>(content).is_err(),
+        "docker-compose.yml"
+        | "docker-compose.yaml"
+        | "mcp.yaml"
+        | "mcp.yml"
+        | "pnpm-lock.yaml"
+        | "yarn.lock" => serde_yaml::from_str::<serde_yaml::Value>(content).is_err(),
         "cargo.toml" | "pyproject.toml" => toml::from_str::<toml::Value>(content).is_err(),
         _ => false,
     };
@@ -58,7 +72,9 @@ pub(crate) fn structured_parse_warning(path: &Path, content: &str, artifact_kind
     })
 }
 
-pub(crate) fn load_optional_baseline(path: Option<&Path>) -> Result<Option<BaselineFile>, ScanError> {
+pub(crate) fn load_optional_baseline(
+    path: Option<&Path>,
+) -> Result<Option<BaselineFile>, ScanError> {
     path.map(load_baseline).transpose().map_err(ScanError::Io)
 }
 

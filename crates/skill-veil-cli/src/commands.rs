@@ -1,3 +1,5 @@
+use crate::text_output::format_results;
+use crate::text_output::{format_diff_ci_summary, format_diff_text, TextOutputOptions};
 use crate::{
     benchmark_output::{
         format_benchmark_text, render_benchmark_dashboard, render_benchmark_tuning_report,
@@ -9,16 +11,15 @@ use crate::{
     },
 };
 use anyhow::{Context, Result};
-use crate::text_output::{format_diff_ci_summary, format_diff_text, TextOutputOptions};
 use skill_veil_core::{
+    baseline_from_reports,
     benchmark::{evaluate_corpus, BenchmarkHistory, BenchmarkHistoryEntry, CorpusEvaluation},
-    baseline_from_reports, diff_reports_with_policy_state, finding_fingerprint, load_baseline, load_waivers,
+    diff_reports_with_policy_state, finding_fingerprint, load_baseline, load_waivers,
     validate_policy, validate_waivers, BaselineEntry, BaselineFile, JsonReport, PolicyFile,
-    POLICY_SCHEMA_VERSION, RecommendedAction, ScanOptions, ScanTargetMode, Scanner,
+    RecommendedAction, ScanOptions, ScanTargetMode, Scanner, POLICY_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use crate::text_output::format_results;
 
 pub(crate) fn load_rule_engine_from_dir(rules_dir: &Path) -> Result<skill_veil_core::RuleEngine> {
     let mut engine = skill_veil_core::RuleEngine::new();
@@ -104,7 +105,11 @@ pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
             .release_id
             .clone()
             .context("`--release-id` is required when `--history-file` is set")?;
-        dashboard_history = Some(update_benchmark_history(history_path, &release_id, &evaluation)?);
+        dashboard_history = Some(update_benchmark_history(
+            history_path,
+            &release_id,
+            &evaluation,
+        )?);
     }
 
     if let Some(dashboard_path) = args.dashboard_output.as_ref() {
@@ -181,7 +186,9 @@ pub(crate) fn update_benchmark_history(
         family_metrics: evaluation.family_metrics.clone(),
     };
 
-    history.releases.retain(|existing| existing.release_id != release_id);
+    history
+        .releases
+        .retain(|existing| existing.release_id != release_id);
     history.releases.push(entry);
     history
         .releases
@@ -208,8 +215,11 @@ pub(crate) fn write_benchmark_dashboard(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create {}", parent.display()))?;
     }
-    std::fs::write(dashboard_path, render_benchmark_dashboard(history, evaluation))
-        .with_context(|| format!("Failed to write {}", dashboard_path.display()))?;
+    std::fs::write(
+        dashboard_path,
+        render_benchmark_dashboard(history, evaluation),
+    )
+    .with_context(|| format!("Failed to write {}", dashboard_path.display()))?;
     Ok(())
 }
 
@@ -308,12 +318,8 @@ pub(crate) fn run_diff(args: DiffArgs) -> Result<()> {
         .map(|path| load_waivers(path))
         .transpose()
         .context("Failed to load waivers file")?;
-    let diff = diff_reports_with_policy_state(
-        &previous,
-        &current,
-        baseline.as_ref(),
-        waivers.as_ref(),
-    );
+    let diff =
+        diff_reports_with_policy_state(&previous, &current, baseline.as_ref(), waivers.as_ref());
 
     let output = match args.format {
         OutputFormat::Text => {
@@ -345,9 +351,10 @@ pub(crate) fn run_diff(args: DiffArgs) -> Result<()> {
                     .iter()
                     .flat_map(|report| report.findings.iter())
                     .any(|finding| {
-                        diff.new_findings.iter().any(|entry| {
-                            entry.fingerprint == finding_fingerprint(finding)
-                        }) && finding.recommended_action == RecommendedAction::Block
+                        diff.new_findings
+                            .iter()
+                            .any(|entry| entry.fingerprint == finding_fingerprint(finding))
+                            && finding.recommended_action == RecommendedAction::Block
                     });
                 if has_new_blocking {
                     anyhow::bail!("Detected new blocking findings in diff");
@@ -360,8 +367,8 @@ pub(crate) fn run_diff(args: DiffArgs) -> Result<()> {
 }
 
 pub(crate) fn load_json_reports(path: &PathBuf) -> Result<Vec<JsonReport>> {
-    let content =
-        std::fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
     serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse JSON report {}", path.display()))
 }

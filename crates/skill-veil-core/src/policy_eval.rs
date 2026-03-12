@@ -80,7 +80,10 @@ impl PolicyGenerator {
 
         for node in &self.artifact_graph.nodes {
             for capability in &node.capabilities {
-                for context in contexts_for_capability(capability.capability).iter().copied() {
+                for context in contexts_for_capability(capability.capability)
+                    .iter()
+                    .copied()
+                {
                     let action = self
                         .profile
                         .map(|profile| resolve_context_action(self, profile, context))
@@ -152,14 +155,31 @@ fn contexts_for_finding(finding: &Finding) -> Vec<PolicyContext> {
 
 fn contexts_for_capability(capability: ArtifactCapability) -> &'static [PolicyContext] {
     match capability {
-        ArtifactCapability::InstallExecution | ArtifactCapability::ExposesBinary => &[PolicyContext::Install],
-        ArtifactCapability::NetworkAccess => &[PolicyContext::Network, PolicyContext::ExternalComms],
-        ArtifactCapability::BrowserAccess => &[PolicyContext::Network, PolicyContext::CodeModification],
-        ArtifactCapability::IdentityAccess => &[PolicyContext::Secrets, PolicyContext::ExternalComms],
-        ArtifactCapability::InboundNetworkSurface => &[PolicyContext::Network, PolicyContext::ExternalComms],
-        ArtifactCapability::PrivilegedRuntime | ArtifactCapability::HostFilesystemAccess => &[PolicyContext::CodeModification],
-        ArtifactCapability::ProcessExecution | ArtifactCapability::FilesystemWrite => &[PolicyContext::CodeModification],
+        ArtifactCapability::InstallExecution | ArtifactCapability::ExposesBinary => {
+            &[PolicyContext::Install]
+        }
+        ArtifactCapability::NetworkAccess => {
+            &[PolicyContext::Network, PolicyContext::ExternalComms]
+        }
+        ArtifactCapability::BrowserAccess => {
+            &[PolicyContext::Network, PolicyContext::CodeModification]
+        }
+        ArtifactCapability::IdentityAccess => {
+            &[PolicyContext::Secrets, PolicyContext::ExternalComms]
+        }
+        ArtifactCapability::InboundNetworkSurface => {
+            &[PolicyContext::Network, PolicyContext::ExternalComms]
+        }
+        ArtifactCapability::PrivilegedRuntime | ArtifactCapability::HostFilesystemAccess => {
+            &[PolicyContext::CodeModification]
+        }
+        ArtifactCapability::ProcessExecution | ArtifactCapability::FilesystemWrite => {
+            &[PolicyContext::CodeModification]
+        }
         ArtifactCapability::SecretAccess => &[PolicyContext::Secrets],
-        ArtifactCapability::PersistenceSurface => &[PolicyContext::CodeModification, PolicyContext::ExternalComms],
+        ArtifactCapability::PersistenceSurface => &[
+            PolicyContext::CodeModification,
+            PolicyContext::ExternalComms,
+        ],
     }
 }

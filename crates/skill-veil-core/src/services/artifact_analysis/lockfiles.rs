@@ -1,8 +1,7 @@
 use super::{extract_http_urls, is_common_lockfile_source, ArtifactAnalysisService, ArtifactLink};
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity,
-    ThreatCategory,
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use regex::Regex;
 use std::path::Path;
@@ -71,7 +70,9 @@ pub(super) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     let lower = content.to_ascii_lowercase();
     let mut capabilities = Vec::new();
     if lower.contains("http://") || lower.contains("https://") || lower.contains("tarball:") {
-        capabilities.push(ArtifactAnalysisService::declared_capability(ArtifactCapability::NetworkAccess));
+        capabilities.push(ArtifactAnalysisService::declared_capability(
+            ArtifactCapability::NetworkAccess,
+        ));
     }
     capabilities
 }

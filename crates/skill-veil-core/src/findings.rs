@@ -192,9 +192,7 @@ impl fmt::Display for MatchTarget {
 }
 
 /// Classification of the evidence behind a finding.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EvidenceKind {
@@ -231,9 +229,7 @@ impl EvidenceKind {
 }
 
 /// Artifact type where the finding was observed.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ArtifactKind {
@@ -258,9 +254,7 @@ pub enum ArtifactKind {
 }
 
 /// High-level scope of the artifact within the package.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ArtifactScope {
@@ -270,9 +264,7 @@ pub enum ArtifactScope {
 }
 
 /// Coarse signal family used for final package verdicts.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum SignalClass {
@@ -601,7 +593,11 @@ impl Finding {
 
     /// Attach artifact context after the finding has been created.
     #[must_use]
-    pub fn with_artifact(mut self, artifact_kind: ArtifactKind, artifact_path: impl Into<String>) -> Self {
+    pub fn with_artifact(
+        mut self,
+        artifact_kind: ArtifactKind,
+        artifact_path: impl Into<String>,
+    ) -> Self {
         self.artifact_kind = artifact_kind;
         self.artifact_scope = artifact_scope_for_kind(artifact_kind);
         self.artifact_path = Some(artifact_path.into());
@@ -662,10 +658,7 @@ fn signal_weight(signal_class: SignalClass) -> f32 {
     }
 }
 
-fn default_remediation(
-    category: ThreatCategory,
-    policy_contexts: &[OperationalContext],
-) -> String {
+fn default_remediation(category: ThreatCategory, policy_contexts: &[OperationalContext]) -> String {
     let context_hint = if policy_contexts.is_empty() {
         "Primary operational context: review required.".to_string()
     } else {
@@ -734,8 +727,12 @@ fn calibrate_confidence(
         EvidenceKind::Context => 0.78,
     };
     let category_baseline: f32 = match category {
-        ThreatCategory::RemoteExec | ThreatCategory::CredentialExposure | ThreatCategory::DataExfiltration => 0.94,
-        ThreatCategory::SupplyChain | ThreatCategory::PrivilegeEscalation | ThreatCategory::UnsafeBinary => 0.9,
+        ThreatCategory::RemoteExec
+        | ThreatCategory::CredentialExposure
+        | ThreatCategory::DataExfiltration => 0.94,
+        ThreatCategory::SupplyChain
+        | ThreatCategory::PrivilegeEscalation
+        | ThreatCategory::UnsafeBinary => 0.9,
         ThreatCategory::PersistentPromptTampering | ThreatCategory::ToolAbuse => 0.86,
         ThreatCategory::AutonomyEscalation | ThreatCategory::ScopeCreep => 0.84,
         ThreatCategory::SocialManipulation | ThreatCategory::PersuasiveLanguage => 0.8,
@@ -794,12 +791,10 @@ pub fn default_operational_contexts(
         ArtifactKind::PackageManifest
             | ArtifactKind::ReferencedArtifact
             | ArtifactKind::McpServerManifest
-    )
-        && matches!(
-            category,
-            ThreatCategory::RemoteExec | ThreatCategory::SupplyChain | ThreatCategory::UnsafeBinary
-        )
-    {
+    ) && matches!(
+        category,
+        ThreatCategory::RemoteExec | ThreatCategory::SupplyChain | ThreatCategory::UnsafeBinary
+    ) {
         contexts.push(OperationalContext::Install);
     }
 
@@ -964,10 +959,8 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
 
                 existing.severity = existing.severity.max(finding.severity);
                 existing.confidence = existing.confidence.max(finding.confidence);
-                existing.recommended_action = RecommendedAction::max(
-                    existing.recommended_action,
-                    finding.recommended_action,
-                );
+                existing.recommended_action =
+                    RecommendedAction::max(existing.recommended_action, finding.recommended_action);
 
                 if finding_is_stronger || finding.reason.len() > existing.reason.len() {
                     existing.reason = finding.reason.clone();
@@ -1072,9 +1065,11 @@ impl FindingSummary {
             RecommendedAction::Log
         };
 
-        let finding_based_action = findings.iter().fold(RecommendedAction::Log, |current, finding| {
-            RecommendedAction::max(current, finding.recommended_action)
-        });
+        let finding_based_action = findings
+            .iter()
+            .fold(RecommendedAction::Log, |current, finding| {
+                RecommendedAction::max(current, finding.recommended_action)
+            });
         let recommended_action = RecommendedAction::max(
             RecommendedAction::max(score_based_action, finding_based_action),
             graph_action,
@@ -1092,7 +1087,8 @@ impl FindingSummary {
             recommended_action,
             score_breakdown,
             action_triggers: {
-                action_triggers.sort_by(|left, right| right.action.priority().cmp(&left.action.priority()));
+                action_triggers
+                    .sort_by(|left, right| right.action.priority().cmp(&left.action.priority()));
                 action_triggers
             },
         }
@@ -1393,7 +1389,10 @@ mod tests {
         assert_eq!(finding.severity, Severity::Medium); // default
         assert!((finding.raw_confidence - 0.9).abs() < 0.01);
         assert!(finding.confidence < finding.raw_confidence);
-        assert_eq!(finding.recommended_action, RecommendedAction::RequireApproval);
+        assert_eq!(
+            finding.recommended_action,
+            RecommendedAction::RequireApproval
+        );
         assert_eq!(finding.evidence_kind, EvidenceKind::Behavior);
         assert_eq!(finding.artifact_kind, ArtifactKind::SkillDocument);
         assert!(!finding.remediation.is_empty());
@@ -1426,7 +1425,9 @@ mod tests {
         assert_eq!(finding.evidence_kind, EvidenceKind::Ioc);
         assert_eq!(finding.artifact_kind, ArtifactKind::ReferencedArtifact);
         assert_eq!(finding.artifact_path.as_deref(), Some("scripts/install.sh"));
-        assert!(finding.policy_contexts.contains(&OperationalContext::Install));
+        assert!(finding
+            .policy_contexts
+            .contains(&OperationalContext::Install));
     }
 
     #[test]
@@ -1518,12 +1519,10 @@ mod tests {
 
     #[test]
     fn test_operational_contexts_capture_phase2_categories() {
-        let prompt_tampering = Finding::builder(
-            "PROMPT_TAMPER",
-            ThreatCategory::PersistentPromptTampering,
-        )
-        .evidence_kind(EvidenceKind::Intent)
-        .build();
+        let prompt_tampering =
+            Finding::builder("PROMPT_TAMPER", ThreatCategory::PersistentPromptTampering)
+                .evidence_kind(EvidenceKind::Intent)
+                .build();
         let tool_abuse = Finding::builder("TOOL_ABUSE", ThreatCategory::ToolAbuse)
             .evidence_kind(EvidenceKind::Behavior)
             .build();
@@ -1577,13 +1576,16 @@ mod tests {
             .match_value("override + persistence")
             .reason("prompt override")
             .build(),
-            Finding::builder("OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT", ThreatCategory::RemoteExec)
-                .artifact_scope(ArtifactScope::SupportingArtifact)
-                .action(RecommendedAction::RequireApproval)
-                .matched_on(MatchTarget::Document)
-                .match_value("fetch + exec")
-                .reason("remote exec")
-                .build(),
+            Finding::builder(
+                "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT",
+                ThreatCategory::RemoteExec,
+            )
+            .artifact_scope(ArtifactScope::SupportingArtifact)
+            .action(RecommendedAction::RequireApproval)
+            .matched_on(MatchTarget::Document)
+            .match_value("fetch + exec")
+            .reason("remote exec")
+            .build(),
         ];
 
         let primary = FindingSummary::from_findings(&findings[..1]);
@@ -1600,20 +1602,26 @@ mod tests {
     #[test]
     fn test_compound_verdict_escalates_remote_fetch_plus_install_hook() {
         let findings = vec![
-            Finding::builder("MANIFEST_PACKAGE_JSON_INSTALL_HOOK", ThreatCategory::SupplyChain)
-                .artifact_scope(ArtifactScope::PackageRootArtifact)
-                .action(RecommendedAction::RequireApproval)
-                .matched_on(MatchTarget::Document)
-                .match_value("postinstall")
-                .reason("install hook")
-                .build(),
-            Finding::builder("OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT", ThreatCategory::RemoteExec)
-                .artifact_scope(ArtifactScope::SupportingArtifact)
-                .action(RecommendedAction::RequireApproval)
-                .matched_on(MatchTarget::Document)
-                .match_value("requests.get + exec")
-                .reason("remote exec")
-                .build(),
+            Finding::builder(
+                "MANIFEST_PACKAGE_JSON_INSTALL_HOOK",
+                ThreatCategory::SupplyChain,
+            )
+            .artifact_scope(ArtifactScope::PackageRootArtifact)
+            .action(RecommendedAction::RequireApproval)
+            .matched_on(MatchTarget::Document)
+            .match_value("postinstall")
+            .reason("install hook")
+            .build(),
+            Finding::builder(
+                "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT",
+                ThreatCategory::RemoteExec,
+            )
+            .artifact_scope(ArtifactScope::SupportingArtifact)
+            .action(RecommendedAction::RequireApproval)
+            .matched_on(MatchTarget::Document)
+            .match_value("requests.get + exec")
+            .reason("remote exec")
+            .build(),
         ];
 
         let primary = FindingSummary::from_findings(&[]);
@@ -1630,20 +1638,26 @@ mod tests {
     #[test]
     fn test_compound_verdict_escalates_broad_permissions_plus_autonomy() {
         let findings = vec![
-            Finding::builder("DECLARED_PERMISSION_BROWSER_FULL", ThreatCategory::ScopeCreep)
-                .artifact_scope(ArtifactScope::AgentEntrypoint)
-                .action(RecommendedAction::Log)
-                .matched_on(MatchTarget::Document)
-                .match_value("browser full")
-                .reason("declared permission")
-                .build(),
-            Finding::builder("OFFICIAL_FORCED_APPROVAL_BYPASS", ThreatCategory::AutonomyEscalation)
-                .artifact_scope(ArtifactScope::AgentEntrypoint)
-                .action(RecommendedAction::RequireApproval)
-                .matched_on(MatchTarget::Document)
-                .match_value("skip approval gate")
-                .reason("approval bypass")
-                .build(),
+            Finding::builder(
+                "DECLARED_PERMISSION_BROWSER_FULL",
+                ThreatCategory::ScopeCreep,
+            )
+            .artifact_scope(ArtifactScope::AgentEntrypoint)
+            .action(RecommendedAction::Log)
+            .matched_on(MatchTarget::Document)
+            .match_value("browser full")
+            .reason("declared permission")
+            .build(),
+            Finding::builder(
+                "OFFICIAL_FORCED_APPROVAL_BYPASS",
+                ThreatCategory::AutonomyEscalation,
+            )
+            .artifact_scope(ArtifactScope::AgentEntrypoint)
+            .action(RecommendedAction::RequireApproval)
+            .matched_on(MatchTarget::Document)
+            .match_value("skip approval gate")
+            .reason("approval bypass")
+            .build(),
         ];
 
         let primary = FindingSummary::from_findings(&findings);
@@ -1660,21 +1674,27 @@ mod tests {
     #[test]
     fn test_oauth_without_high_risk_autonomy_does_not_escalate_to_malicious() {
         let findings = vec![
-            Finding::builder("DECLARED_PERMISSION_OAUTH_SCOPES", ThreatCategory::ScopeCreep)
-                .artifact_scope(ArtifactScope::AgentEntrypoint)
-                .action(RecommendedAction::Log)
-                .matched_on(MatchTarget::Document)
-                .match_value("oauth scopes")
-                .reason("declared permission")
-                .build(),
-            Finding::builder("OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW", ThreatCategory::AutonomyEscalation)
-                .artifact_scope(ArtifactScope::AgentEntrypoint)
-                .signal_class(SignalClass::SuspiciousPackageBehavior)
-                .action(RecommendedAction::RequireApproval)
-                .matched_on(MatchTarget::Document)
-                .match_value("continue automatically")
-                .reason("approval wording without explicit high-risk action")
-                .build(),
+            Finding::builder(
+                "DECLARED_PERMISSION_OAUTH_SCOPES",
+                ThreatCategory::ScopeCreep,
+            )
+            .artifact_scope(ArtifactScope::AgentEntrypoint)
+            .action(RecommendedAction::Log)
+            .matched_on(MatchTarget::Document)
+            .match_value("oauth scopes")
+            .reason("declared permission")
+            .build(),
+            Finding::builder(
+                "OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW",
+                ThreatCategory::AutonomyEscalation,
+            )
+            .artifact_scope(ArtifactScope::AgentEntrypoint)
+            .signal_class(SignalClass::SuspiciousPackageBehavior)
+            .action(RecommendedAction::RequireApproval)
+            .matched_on(MatchTarget::Document)
+            .match_value("continue automatically")
+            .reason("approval wording without explicit high-risk action")
+            .build(),
         ];
 
         let primary = FindingSummary::from_findings(&findings);
@@ -1717,13 +1737,16 @@ mod tests {
 
     #[test]
     fn test_isolated_weak_package_root_signal_downgrades_to_benign() {
-        let findings = vec![Finding::builder("MCP_TOOLING_TRANSPORT_DECLARED", ThreatCategory::ToolAbuse)
-            .artifact_scope(ArtifactScope::PackageRootArtifact)
-            .action(RecommendedAction::RequireApproval)
-            .matched_on(MatchTarget::Document)
-            .match_value("mcp transport")
-            .reason("transport declared")
-            .build()];
+        let findings =
+            vec![
+                Finding::builder("MCP_TOOLING_TRANSPORT_DECLARED", ThreatCategory::ToolAbuse)
+                    .artifact_scope(ArtifactScope::PackageRootArtifact)
+                    .action(RecommendedAction::RequireApproval)
+                    .matched_on(MatchTarget::Document)
+                    .match_value("mcp transport")
+                    .reason("transport declared")
+                    .build(),
+            ];
 
         let primary = FindingSummary::from_findings(&[]);
         let supporting = FindingSummary::from_findings(&[]);
@@ -1736,13 +1759,16 @@ mod tests {
     #[test]
     fn test_hygiene_only_agent_entrypoint_signal_stays_benign() {
         let findings = vec![
-            Finding::builder("DECLARED_PERMISSION_NETWORK_ACCESS", ThreatCategory::ScopeCreep)
-                .artifact_scope(ArtifactScope::AgentEntrypoint)
-                .action(RecommendedAction::Log)
-                .matched_on(MatchTarget::Document)
-                .match_value("network access")
-                .reason("declared network access")
-                .build(),
+            Finding::builder(
+                "DECLARED_PERMISSION_NETWORK_ACCESS",
+                ThreatCategory::ScopeCreep,
+            )
+            .artifact_scope(ArtifactScope::AgentEntrypoint)
+            .action(RecommendedAction::Log)
+            .matched_on(MatchTarget::Document)
+            .match_value("network access")
+            .reason("declared network access")
+            .build(),
             Finding::builder("CAPABILITY_PERMISSION_MISMATCH", ThreatCategory::ScopeCreep)
                 .artifact_scope(ArtifactScope::AgentEntrypoint)
                 .action(RecommendedAction::RequireApproval)

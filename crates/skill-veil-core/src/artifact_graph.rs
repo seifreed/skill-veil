@@ -127,16 +127,12 @@ impl ArtifactGraph {
             relation,
         };
 
-        if self
-            .edges
-            .iter()
-            .any(|existing| {
-                existing.from == edge.from
-                    && existing.to == edge.to
-                    && std::mem::discriminant(&existing.relation)
-                        == std::mem::discriminant(&edge.relation)
-            })
-        {
+        if self.edges.iter().any(|existing| {
+            existing.from == edge.from
+                && existing.to == edge.to
+                && std::mem::discriminant(&existing.relation)
+                    == std::mem::discriminant(&edge.relation)
+        }) {
             return;
         }
 

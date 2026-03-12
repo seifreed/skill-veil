@@ -91,9 +91,7 @@ pub(super) fn looks_like_optional_webhook_docs(content: &str) -> bool {
     .is_match(content)
 }
 
-pub(super) fn looks_like_webhook_receiver_without_auth(
-    content: &str,
-) -> Option<&'static str> {
+pub(super) fn looks_like_webhook_receiver_without_auth(content: &str) -> Option<&'static str> {
     let lower = content.to_ascii_lowercase();
     if lower.contains("skip signature validation")
         || lower.contains("no verification required")
@@ -122,9 +120,11 @@ pub(super) fn looks_like_webhook_receiver_without_auth(
             || lower.contains("webhook secret")
             || lower.contains("validate signature"))
         && !looks_like_optional_webhook_docs(content)
-        && !Regex::new(r#"(?i)(example webhook|sample webhook|documentation only|for testing only)"#)
-            .expect("valid regex")
-            .is_match(content)
+        && !Regex::new(
+            r#"(?i)(example webhook|sample webhook|documentation only|for testing only)"#,
+        )
+        .expect("valid regex")
+        .is_match(content)
     {
         Some("public_inbound_endpoint")
     } else {

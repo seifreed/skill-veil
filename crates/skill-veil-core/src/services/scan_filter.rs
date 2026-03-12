@@ -138,15 +138,14 @@ impl ScanFilterService {
 
     /// Get the fail-on severity threshold
     pub fn fail_on(&self) -> Option<Severity> {
-        self.options
-            .fail_on
-            .or_else(|| {
-                self.options.profile.and_then(|profile| {
-                    self.policy
-                        .as_ref()
-                        .map_or_else(|| profile.default_fail_on(), |policy| policy.resolve_fail_on(profile))
-                })
+        self.options.fail_on.or_else(|| {
+            self.options.profile.and_then(|profile| {
+                self.policy.as_ref().map_or_else(
+                    || profile.default_fail_on(),
+                    |policy| policy.resolve_fail_on(profile),
+                )
             })
+        })
     }
 
     /// Get the target mode used for scanning.
@@ -304,8 +303,10 @@ mod tests {
 
     #[test]
     fn test_filter_with_summary_counts_waivers_and_baseline() {
-        let finding = create_finding("R1", Severity::High)
-            .with_artifact(crate::findings::ArtifactKind::ReferencedArtifact, "scripts/install.sh");
+        let finding = create_finding("R1", Severity::High).with_artifact(
+            crate::findings::ArtifactKind::ReferencedArtifact,
+            "scripts/install.sh",
+        );
         let baseline = BaselineFile {
             schema_version: crate::policy::POLICY_SCHEMA_VERSION.to_string(),
             entries: vec![BaselineEntry {

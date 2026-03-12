@@ -56,25 +56,25 @@
 //! - [`adapters`] - Default implementations
 //! - [`services`] - File discovery and filtering services
 
-pub mod artifact_graph;
 pub mod adapters;
 pub mod analyzer;
+pub mod artifact_graph;
 pub mod benchmark;
 pub mod findings;
 pub mod policy;
-pub mod ports;
-pub mod rules;
-pub mod scanner;
-pub mod services;
 mod policy_eval;
 mod policy_serializers;
 mod policy_state;
 mod policy_types;
-mod verdict;
-mod scanner_graph;
+pub mod ports;
+pub mod rules;
+pub mod scanner;
 mod scanner_execution;
+mod scanner_graph;
 mod scanner_support;
 mod scanner_types;
+pub mod services;
+mod verdict;
 
 #[cfg(feature = "yara")]
 pub mod yara_engine;
@@ -85,33 +85,32 @@ pub use analyzer::{
     CodeBlock, Section, SkillDocument, StructuralSignals, StructuralValidity,
 };
 pub use benchmark::{
-    AttackFamilyMetrics, BenchmarkError, BenchmarkHistory, BenchmarkHistoryEntry, CalibrationBucket,
-    CalibrationSummary, CorpusCoverage, CorpusEvaluation, CorpusManifest, CoverageBucket,
-    DeduplicationMetrics, LabeledSample, RegressionMetrics, SampleEvaluation, SampleLabel,
-    ThresholdRecommendation,
+    AttackFamilyMetrics, BenchmarkError, BenchmarkHistory, BenchmarkHistoryEntry,
+    CalibrationBucket, CalibrationSummary, CorpusCoverage, CorpusEvaluation, CorpusManifest,
+    CoverageBucket, DeduplicationMetrics, LabeledSample, RegressionMetrics, SampleEvaluation,
+    SampleLabel, ThresholdRecommendation,
 };
 pub use findings::{
     artifact_scope_for_kind, deduplicate_findings, derive_package_verdict, signal_class_for,
     ArtifactKind, ArtifactScope, BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission,
-    DeduplicationSummary, EvidenceKind, Finding, HygieneSummary, MatchTarget,
-    OperationalContext, PackageHealth, PackageVerdictReport, RecommendedAction, RootCauseGroup,
-    Severity, SignalClass, ThreatCategory, Verdict, VerdictReason,
+    DeduplicationSummary, EvidenceKind, Finding, HygieneSummary, MatchTarget, OperationalContext,
+    PackageHealth, PackageVerdictReport, RecommendedAction, RootCauseGroup, Severity, SignalClass,
+    ThreatCategory, Verdict, VerdictReason,
 };
 pub use policy::{
-    AppliedPolicyOverride, BaselineEntry, BaselineFile, ConfiguredProfile,
-    ContextActionOverride, ContextPolicy, DiffEntry, DiffReport, JsonReport, PolicyAudit,
-    PolicyFile, PolicyGenerator, PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy,
-    SuppressionSummary, WaiverEntry, WaiverFile, POLICY_PRECEDENCE_ORDER,
-    POLICY_SCHEMA_VERSION,
+    AppliedPolicyOverride, BaselineEntry, BaselineFile, ConfiguredProfile, ContextActionOverride,
+    ContextPolicy, DiffEntry, DiffReport, JsonReport, PolicyAudit, PolicyFile, PolicyGenerator,
+    PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy, SuppressionSummary, WaiverEntry,
+    WaiverFile, POLICY_PRECEDENCE_ORDER, POLICY_SCHEMA_VERSION,
 };
 pub use policy_state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
-    baseline_from_reports, diff_reports, diff_reports_with_policy_state, load_baseline,
-    load_policy, load_waivers, validate_policy, validate_waivers, finding_fingerprint,
+    baseline_from_reports, diff_reports, diff_reports_with_policy_state, finding_fingerprint,
+    load_baseline, load_policy, load_waivers, validate_policy, validate_waivers,
 };
 pub use rules::{
-    default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file, IocFeedFile,
-    Rule, RuleCondition, RuleEngine, RulePackFile, RulePackKind, RulePackMetadata,
+    default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file, IocFeedFile, Rule,
+    RuleCondition, RuleEngine, RulePackFile, RulePackKind, RulePackMetadata,
     RULE_PACK_SCHEMA_VERSION,
 };
 pub use scanner::{ScanOptions, ScanResult, ScanTargetMode, Scanner};

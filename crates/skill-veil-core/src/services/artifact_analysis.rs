@@ -1,20 +1,19 @@
 //! Artifact analysis service for manifests and referenced files.
 
-mod network;
-mod manifests;
-mod lockfiles;
-mod permissions;
-mod scripts;
-mod mcp;
 mod dispatch;
 mod instructions;
+mod lockfiles;
+mod manifests;
+mod mcp;
+mod network;
+mod permissions;
+mod scripts;
 
 use crate::artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactRelation,
 };
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity,
-    ThreatCategory,
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -62,9 +61,11 @@ fn infer_declared_intent(content: &str) -> (&'static str, usize) {
 }
 
 fn is_opaque_mcp_endpoint(content: &str) -> bool {
-    Regex::new("(?i)(ngrok|trycloudflare|workers\\.dev|raw\\.githubusercontent\\.com|pastebin\\.com)")
-        .expect("valid regex")
-        .is_match(content)
+    Regex::new(
+        "(?i)(ngrok|trycloudflare|workers\\.dev|raw\\.githubusercontent\\.com|pastebin\\.com)",
+    )
+    .expect("valid regex")
+    .is_match(content)
 }
 
 fn mcp_declares_no_auth(content: &str) -> bool {
@@ -164,7 +165,12 @@ impl ArtifactAnalysisService {
         instructions::permission_and_network_findings(self, path, content, artifact_kind)
     }
 
-    fn analyze_package_json(&self, path: &Path, content: &str, sibling_files: &[PathBuf]) -> Vec<Finding> {
+    fn analyze_package_json(
+        &self,
+        path: &Path,
+        content: &str,
+        sibling_files: &[PathBuf],
+    ) -> Vec<Finding> {
         manifests::analyze_package_json(self, path, content, sibling_files)
     }
 
@@ -181,11 +187,21 @@ impl ArtifactAnalysisService {
         manifests::analyze_dockerfile(path, content)
     }
 
-    fn analyze_pyproject_toml(&self, path: &Path, content: &str, sibling_files: &[PathBuf]) -> Vec<Finding> {
+    fn analyze_pyproject_toml(
+        &self,
+        path: &Path,
+        content: &str,
+        sibling_files: &[PathBuf],
+    ) -> Vec<Finding> {
         manifests::analyze_pyproject_toml(self, path, content, sibling_files)
     }
 
-    fn analyze_cargo_toml(&self, path: &Path, content: &str, sibling_files: &[PathBuf]) -> Vec<Finding> {
+    fn analyze_cargo_toml(
+        &self,
+        path: &Path,
+        content: &str,
+        sibling_files: &[PathBuf],
+    ) -> Vec<Finding> {
         manifests::analyze_cargo_toml(self, path, content, sibling_files)
     }
 
@@ -274,7 +290,9 @@ impl ArtifactAnalysisService {
             || lower.contains("pip install")
             || lower.contains("cargo install")
         {
-            capabilities.push(Self::observed_capability(ArtifactCapability::InstallExecution));
+            capabilities.push(Self::observed_capability(
+                ArtifactCapability::InstallExecution,
+            ));
         }
 
         if lower.contains("subprocess.")
@@ -284,7 +302,9 @@ impl ArtifactAnalysisService {
             || lower.contains("start-process")
             || lower.contains("iex ")
         {
-            capabilities.push(Self::observed_capability(ArtifactCapability::ProcessExecution));
+            capabilities.push(Self::observed_capability(
+                ArtifactCapability::ProcessExecution,
+            ));
         }
 
         if lower.contains("process.env")
@@ -304,7 +324,9 @@ impl ArtifactAnalysisService {
             || lower.contains("autostart")
             || lower.contains("register-scheduledtask")
         {
-            capabilities.push(Self::observed_capability(ArtifactCapability::PersistenceSurface));
+            capabilities.push(Self::observed_capability(
+                ArtifactCapability::PersistenceSurface,
+            ));
         }
 
         if lower.contains("writefilesync(")
@@ -313,7 +335,9 @@ impl ArtifactAnalysisService {
             || lower.contains("> /etc/")
             || lower.contains("set-content")
         {
-            capabilities.push(Self::observed_capability(ArtifactCapability::FilesystemWrite));
+            capabilities.push(Self::observed_capability(
+                ArtifactCapability::FilesystemWrite,
+            ));
         }
 
         capabilities
@@ -366,7 +390,8 @@ impl ArtifactAnalysisService {
     fn script_relations(&self, content: &str) -> Vec<ArtifactLink> {
         let lower = content.to_ascii_lowercase();
         let mut links = Vec::new();
-        if lower.contains("curl ") || lower.contains("wget ") || lower.contains("invoke-webrequest") {
+        if lower.contains("curl ") || lower.contains("wget ") || lower.contains("invoke-webrequest")
+        {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
                 relation: ArtifactRelation::Downloads,

@@ -1,6 +1,5 @@
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity,
-    ThreatCategory,
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::services::ArtifactAnalysisService;
 use regex::Regex;
@@ -21,8 +20,14 @@ pub(crate) fn analyze_script(
     let mut findings = Vec::new();
 
     let remote_binary_patterns = [
-        ("SCRIPT_REMOTE_BINARY_DOWNLOAD", "(?i)(curl|wget).*(\\.sh|\\.ps1|\\.py|\\.js|\\.exe|\\.pkg|\\.dmg|\\.deb|\\.rpm)"),
-        ("SCRIPT_POWERSHELL_REMOTE_DOWNLOAD", "(?i)invoke-webrequest.+(\\.ps1|\\.exe|\\.zip)"),
+        (
+            "SCRIPT_REMOTE_BINARY_DOWNLOAD",
+            "(?i)(curl|wget).*(\\.sh|\\.ps1|\\.py|\\.js|\\.exe|\\.pkg|\\.dmg|\\.deb|\\.rpm)",
+        ),
+        (
+            "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
+            "(?i)invoke-webrequest.+(\\.ps1|\\.exe|\\.zip)",
+        ),
     ];
     for (rule_id, pattern) in remote_binary_patterns {
         let regex = Regex::new(pattern).expect("valid regex");
@@ -32,7 +37,10 @@ pub(crate) fn analyze_script(
                     .severity(Severity::High)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Behavior)
-                    .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+                    .artifact(
+                        ArtifactKind::ReferencedArtifact,
+                        Some(artifact_path.clone()),
+                    )
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
@@ -44,8 +52,14 @@ pub(crate) fn analyze_script(
     }
 
     let deferred_patterns = [
-        ("SCRIPT_DEFERRED_EXECUTION", "(?i)(crontab|schtasks|at\\s+\\d|systemd-run|launchctl\\s+load)"),
-        ("SCRIPT_PERSISTENCE", "(?i)(/etc/cron|~/\\.config/autostart|launchagents|startup\\\\|runonce)"),
+        (
+            "SCRIPT_DEFERRED_EXECUTION",
+            "(?i)(crontab|schtasks|at\\s+\\d|systemd-run|launchctl\\s+load)",
+        ),
+        (
+            "SCRIPT_PERSISTENCE",
+            "(?i)(/etc/cron|~/\\.config/autostart|launchagents|startup\\\\|runonce)",
+        ),
     ];
     for (rule_id, pattern) in deferred_patterns {
         let regex = Regex::new(pattern).expect("valid regex");
@@ -55,7 +69,10 @@ pub(crate) fn analyze_script(
                     .severity(Severity::Medium)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Behavior)
-                    .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+                    .artifact(
+                        ArtifactKind::ReferencedArtifact,
+                        Some(artifact_path.clone()),
+                    )
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
@@ -99,7 +116,10 @@ pub(crate) fn analyze_script(
                 } else {
                     EvidenceKind::Context
                 })
-                .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::ReferencedArtifact,
+                    Some(artifact_path.clone()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
                     path: artifact_path.clone(),
                 })
@@ -114,14 +134,19 @@ pub(crate) fn analyze_script(
     }
 
     if language == "py"
-        && (lower.contains("subprocess.") || lower.contains("os.system(") || lower.contains("requests.get("))
+        && (lower.contains("subprocess.")
+            || lower.contains("os.system(")
+            || lower.contains("requests.get("))
     {
         findings.push(
             Finding::builder("SCRIPT_PYTHON_EXEC_NETWORK", ThreatCategory::RemoteExec)
                 .severity(Severity::Medium)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::ReferencedArtifact,
+                    Some(artifact_path.clone()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
                     path: artifact_path.clone(),
                 })
@@ -146,7 +171,10 @@ pub(crate) fn analyze_script(
             .severity(Severity::Medium)
             .action(RecommendedAction::RequireApproval)
             .evidence_kind(EvidenceKind::Behavior)
-            .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+            .artifact(
+                ArtifactKind::ReferencedArtifact,
+                Some(artifact_path.clone()),
+            )
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
@@ -166,7 +194,10 @@ pub(crate) fn analyze_script(
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::ReferencedArtifact,
+                    Some(artifact_path.clone()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
                     path: artifact_path.clone(),
                 })
@@ -183,17 +214,23 @@ pub(crate) fn analyze_script(
             || lower.contains("register-scheduledtask"))
     {
         findings.push(
-            Finding::builder("SCRIPT_POWERSHELL_PERSISTENCE", ThreatCategory::PrivilegeEscalation)
-                .severity(Severity::High)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value("registry/scheduled task persistence")
-                .reason("PowerShell script configures persistence via registry or scheduled tasks")
-                .build(),
+            Finding::builder(
+                "SCRIPT_POWERSHELL_PERSISTENCE",
+                ThreatCategory::PrivilegeEscalation,
+            )
+            .severity(Severity::High)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .artifact(
+                ArtifactKind::ReferencedArtifact,
+                Some(artifact_path.clone()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.clone(),
+            })
+            .match_value("registry/scheduled task persistence")
+            .reason("PowerShell script configures persistence via registry or scheduled tasks")
+            .build(),
         );
     }
 
@@ -201,17 +238,23 @@ pub(crate) fn analyze_script(
         && (lower.contains("chmod +x") || lower.contains("nohup ") || lower.contains("/dev/tcp/"))
     {
         findings.push(
-            Finding::builder("SCRIPT_SHELL_INSTALL_SIDE_EFFECT", ThreatCategory::SupplyChain)
-                .severity(Severity::Low)
-                .action(RecommendedAction::Log)
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value("shell side effects")
-                .reason("Shell script changes execution mode or runs detached install-time commands")
-                .build(),
+            Finding::builder(
+                "SCRIPT_SHELL_INSTALL_SIDE_EFFECT",
+                ThreatCategory::SupplyChain,
+            )
+            .severity(Severity::Low)
+            .action(RecommendedAction::Log)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(
+                ArtifactKind::ReferencedArtifact,
+                Some(artifact_path.clone()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.clone(),
+            })
+            .match_value("shell side effects")
+            .reason("Shell script changes execution mode or runs detached install-time commands")
+            .build(),
         );
     }
 
@@ -228,7 +271,10 @@ pub(crate) fn analyze_script(
             .severity(Severity::High)
             .action(RecommendedAction::RequireApproval)
             .evidence_kind(EvidenceKind::Behavior)
-            .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+            .artifact(
+                ArtifactKind::ReferencedArtifact,
+                Some(artifact_path.clone()),
+            )
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
@@ -257,7 +303,10 @@ pub(crate) fn analyze_script(
             .severity(Severity::Medium)
             .action(RecommendedAction::RequireApproval)
             .evidence_kind(EvidenceKind::Behavior)
-            .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.clone()))
+            .artifact(
+                ArtifactKind::ReferencedArtifact,
+                Some(artifact_path.clone()),
+            )
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
