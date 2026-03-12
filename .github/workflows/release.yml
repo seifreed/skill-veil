@@ -27,12 +27,22 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --dry-run -p skill-veil-core
 
+      - name: Check published core version
+        id: core_version
+        run: |
+          published="$(cargo search skill-veil-core --limit 1 | sed -n 's/^skill-veil-core = \"\\([^\"]*\\)\".*/\\1/p')"
+          current="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(pkg[\"version\"] for pkg in data[\"packages\"] if pkg[\"name\"]==\"skill-veil-core\"))')"
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+
       - name: Publish core crate
+        if: steps.core_version.outputs.published != steps.core_version.outputs.current
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p skill-veil-core
 
       - name: Wait for crates.io index
+        if: steps.core_version.outputs.published != steps.core_version.outputs.current
         run: sleep 30
 
       - name: Dry-run publish CLI crate
@@ -40,7 +50,16 @@ jobs:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --dry-run -p skill-veil
 
+      - name: Check published CLI version
+        id: cli_version
+        run: |
+          published="$(cargo search skill-veil --limit 1 | sed -n 's/^skill-veil = \"\\([^\"]*\\)\".*/\\1/p')"
+          current="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(pkg[\"version\"] for pkg in data[\"packages\"] if pkg[\"name\"]==\"skill-veil\"))')"
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+
       - name: Publish CLI crate
+        if: steps.cli_version.outputs.published != steps.cli_version.outputs.current
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p skill-veil
@@ -142,18 +161,7 @@ jobs:
           cp README.md dist/${{ matrix.archive_name }}/README.md
           cp LICENSE dist/${{ matrix.archive_name }}/LICENSE
           if [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            python3 - <<'PY'
-            import pathlib
-            import zipfile
-
-            root = pathlib.Path("dist")
-            archive_name = "${{ matrix.archive_name }}"
-            source_dir = root / archive_name
-            with zipfile.ZipFile(root / f"{archive_name}.zip", "w", zipfile.ZIP_DEFLATED) as zf:
-                for path in source_dir.rglob("*"):
-                    if path.is_file():
-                        zf.write(path, path.relative_to(root))
-            PY
+            python3 -c 'import pathlib, zipfile; root = pathlib.Path("dist"); archive_name = "${{ matrix.archive_name }}"; source_dir = root / archive_name; zf = zipfile.ZipFile(root / f"{archive_name}.zip", "w", zipfile.ZIP_DEFLATED); [zf.write(path, path.relative_to(root)) for path in source_dir.rglob("*") if path.is_file()]; zf.close()'
           else
             tar -C dist -czf dist/${{ matrix.archive_name }}.tar.gz ${{ matrix.archive_name }}
           fi
