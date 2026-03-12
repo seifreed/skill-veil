@@ -352,3 +352,51 @@ rules:
       - ssrf
       - internal_network
       - official_pack
+
+  - id: OFFICIAL_WEBHOOK_SHARED_SECRET_MISSING
+    category: tool_abuse
+    severity: medium
+    confidence: 0.81
+    when: !regex
+      pattern: "(?is)(webhook|receiver|listener|callback endpoint).{0,220}(no shared secret|shared secret optional|without shared secret|without signing secret|no hmac required|signature optional)"
+    action: require_approval
+    reason: "Artifact describes a webhook receiver without a strong shared secret or signature model"
+    shield:
+      scope: skill.inbound
+    enabled: true
+    tags:
+      - webhook
+      - inbound_surface
+      - official_pack
+
+  - id: OFFICIAL_MCP_REMOTE_BRIDGE_WITH_COMMAND
+    category: remote_exec
+    severity: high
+    confidence: 0.86
+    when: !regex
+      pattern: "(?is)(mcp|model context protocol|transport).{0,220}(https?://|wss?://).{0,220}(stdio|command|spawn|exec|shell)"
+    action: require_approval
+    reason: "MCP artifact combines a remote transport with command or stdio execution semantics"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - mcp
+      - remote_exec
+      - official_pack
+
+  - id: OFFICIAL_METADATA_FETCH_WITH_CREDENTIALS
+    category: data_exfiltration
+    severity: high
+    confidence: 0.88
+    when: !regex
+      pattern: "(?is)(169\\.254\\.169\\.254|metadata|latest/meta-data).{0,220}(authorization|bearer|token|x-aws-ec2-metadata-token|header)"
+    action: require_approval
+    reason: "Artifact appears to access metadata services with credential or header semantics"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - metadata
+      - ssrf
+      - official_pack

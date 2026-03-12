@@ -1,6 +1,6 @@
 //! File system provider implementation using std::fs
 
-use crate::ports::{FileSystemError, FileSystemProvider};
+use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -35,11 +35,13 @@ impl StdFileSystemProvider {
 }
 
 impl FileSystemProvider for StdFileSystemProvider {
-    fn read_file(&self, path: &Path) -> Result<String, FileSystemError> {
+    fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
         if !path.exists() {
             return Err(FileSystemError::PathNotFound(path.to_path_buf()));
         }
-        std::fs::read_to_string(path).map_err(FileSystemError::IoError)
+        std::fs::read(path)
+            .map(FileContent::new)
+            .map_err(FileSystemError::IoError)
     }
 
     fn list_files(
@@ -97,14 +99,14 @@ mod tests {
         std::fs::write(&file_path, "hello world").unwrap();
 
         let fs = StdFileSystemProvider::new();
-        let content = fs.read_file(&file_path).unwrap();
-        assert_eq!(content, "hello world");
+        let content = fs.read_file_bytes(&file_path).unwrap();
+        assert_eq!(content.as_bytes(), b"hello world");
     }
 
     #[test]
     fn test_read_nonexistent_file() {
         let fs = StdFileSystemProvider::new();
-        let result = fs.read_file(Path::new("/nonexistent/path/file.txt"));
+        let result = fs.read_file_bytes(Path::new("/nonexistent/path/file.txt"));
         assert!(matches!(result, Err(FileSystemError::PathNotFound(_))));
     }
 

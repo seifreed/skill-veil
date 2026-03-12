@@ -12,7 +12,7 @@
   <a href="https://github.com/seifreed/skill-veil/releases"><img src="https://img.shields.io/github/v/release/seifreed/skill-veil?style=flat-square&logo=github" alt="GitHub Release"></a>
   <a href="https://github.com/seifreed/skill-veil/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"></a>
   <a href="https://github.com/seifreed/skill-veil/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/seifreed/skill-veil/ci.yml?style=flat-square&logo=github&label=CI" alt="CI Status"></a>
-  <a href="https://github.com/seifreed/skill-veil/releases"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS-informational?style=flat-square" alt="Platforms"></a>
+  <a href="https://github.com/seifreed/skill-veil/releases"><img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-informational?style=flat-square" alt="Platforms"></a>
 </p>
 
 <p align="center">
@@ -195,6 +195,23 @@ skill-veil rules test-pack --rules-dir rules/official --fixtures rules/fixtures/
 skill-veil rules pack-info --rules-dir rules/official
 ```
 
+### Optional YARA support
+
+```bash
+cargo run -p skill-veil --features yara -- rules validate --rules-dir rules/official
+```
+
+YARA usage notes and an example rule live in:
+
+- [docs/yara.md](docs/yara.md)
+- [docs/examples/example-rule.yar](docs/examples/example-rule.yar)
+
+### External dataset validation
+
+For marketplace mirrors or local corpora that are intentionally kept out of Git:
+
+- [docs/dataset-validation.md](docs/dataset-validation.md)
+
 ### Curated example packages
 
 - safe skill: `examples/safe-skill/`
@@ -205,6 +222,25 @@ skill-veil rules pack-info --rules-dir rules/official
 - agent instructions: `examples/agent-instructions/`
 - prompt pack: `examples/prompt-pack/`
 - MCP manifest: `examples/mcp-server/`
+
+### Daily analyst triage
+
+```bash
+skill-veil scan-dataset ./mirror \
+  --dataset-view verdicts \
+  --analyst-summary \
+  --preset local \
+  --format text
+```
+
+That view is intentionally short and stable for daily review:
+
+- package id
+- verdict
+- package health
+- blast radius
+- top rule
+- strongest scope/reason
 
 ---
 

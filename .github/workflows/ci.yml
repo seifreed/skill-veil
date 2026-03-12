@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  test-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-x64
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: windows-latest
+            label: windows-x64
+          - os: windows-11-arm
+            label: windows-arm64
+          - os: macos-13
+            label: macos-x64
+          - os: macos-14
+            label: macos-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run test suite
+        run: cargo test --all-features
+
+  lint-and-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Generate JSON report
+        run: cargo run -p skill-veil -- scan-package . --format json --output skill-veil-report.json
+
+      - name: Generate SARIF report
+        run: cargo run -p skill-veil -- scan-package . --format sarif --output skill-veil-report.sarif
+
+      - name: Upload JSON report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-veil-report-json
+          path: skill-veil-report.json
+
+      - name: Upload SARIF report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-veil-report-sarif
+          path: skill-veil-report.sarif
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: skill-veil-report.sarif
+
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Seed benchmark history
+        run: |
+          mkdir -p dist
+          cp benchmarks/history/releases.json dist/benchmark-history.json
+
+      - name: Run benchmark corpus
+        run: |
+          cargo run -p skill-veil -- benchmark benchmarks/corpus.yaml \
+            --format json \
+            --output dist/benchmark-latest.json \
+            --history-file dist/benchmark-history.json \
+            --release-id "${GITHUB_REF_NAME}-${GITHUB_SHA}" \
+            --dashboard-output dist/benchmark-dashboard.md
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-veil-benchmark-report
+          path: |
+            dist/benchmark-latest.json
+            dist/benchmark-history.json
+            dist/benchmark-dashboard.md

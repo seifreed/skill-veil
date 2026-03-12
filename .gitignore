@@ -1,0 +1,44 @@
+# Rust
+/target/
+**/*.rs.bk
+venv/
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local agent/editor state
+.claude/
+**/.claude/
+CLAUDE.md
+**/CLAUDE.md
+
+# Local datasets and caches
+/dataset/
+/dataset_extracted/
+/dataset_vt_new/
+/.skill-veil-cache/
+**/.skill-veil-cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Test output
+*.log
+coverage/
+
+# Misc local files
+.env
+.env.*
+
+# Presentation and demo (local only)
+/presentation/
+/demo/

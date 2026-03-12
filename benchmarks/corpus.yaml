@@ -65,6 +65,21 @@ samples:
     label: benign
     focus_category: tool_abuse
     attack_family: mcp_remote_risk
+  - id: benign-webhook-signed
+    path: fixtures/benign/webhook-signed/SKILL.md
+    label: benign
+    focus_category: tool_abuse
+    attack_family: webhook_risk
+  - id: benign-mcp-scoped-readonly
+    path: fixtures/benign/mcp-scoped-readonly/mcp.json
+    label: benign
+    focus_category: scope_creep
+    attack_family: mcp_remote_risk
+  - id: benign-local-internal-dashboard
+    path: fixtures/benign/local-internal-dashboard/SKILL.md
+    label: benign
+    focus_category: tool_abuse
+    attack_family: webhook_risk
 
   - id: example-suspicious
     path: ../examples/suspicious-skill
@@ -101,6 +116,16 @@ samples:
     path: fixtures/suspicious/mcp-opaque-remote/mcp.json
     label: suspicious
     focus_category: tool_abuse
+    attack_family: mcp_remote_risk
+  - id: suspicious-webhook-no-secret
+    path: fixtures/suspicious/webhook-no-secret/SKILL.md
+    label: suspicious
+    focus_category: tool_abuse
+    attack_family: webhook_risk
+  - id: suspicious-mcp-remote-bridge
+    path: fixtures/suspicious/mcp-remote-bridge/mcp.json
+    label: suspicious
+    focus_category: remote_exec
     attack_family: mcp_remote_risk
 
   - id: example-malicious
@@ -147,3 +172,8 @@ samples:
     label: malicious
     focus_category: remote_exec
     attack_family: mcp_remote_risk
+  - id: malicious-metadata-token-fetch
+    path: fixtures/malicious/metadata-token-fetch/SKILL.md
+    label: malicious
+    focus_category: data_exfiltration
+    attack_family: exfiltration

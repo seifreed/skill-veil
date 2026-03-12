@@ -132,6 +132,42 @@ pub enum PatternError {
     InvalidPattern(String),
 }
 
+/// Raw file content returned by the filesystem port.
+///
+/// The core can decide how to decode these bytes depending on context.
+#[derive(Debug, Clone)]
+pub struct FileContent {
+    bytes: Vec<u8>,
+}
+
+impl FileContent {
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    #[must_use]
+    pub fn decode_utf8_lossy(&self) -> DecodedText {
+        let decode_warning = std::str::from_utf8(&self.bytes).is_err();
+        DecodedText {
+            text: String::from_utf8_lossy(&self.bytes).into_owned(),
+            decode_warning,
+        }
+    }
+}
+
+/// Decoded text plus whether lossy decoding was required.
+#[derive(Debug, Clone)]
+pub struct DecodedText {
+    pub text: String,
+    pub decode_warning: bool,
+}
+
 /// Trait for file system operations - allows mocking in tests
 ///
 /// Implement this trait to provide custom file system access.
@@ -139,12 +175,12 @@ pub enum PatternError {
 ///
 /// [`StdFileSystemProvider`]: crate::adapters::StdFileSystemProvider
 pub trait FileSystemProvider: Send + Sync {
-    /// Read file contents as a UTF-8 string
+    /// Read raw file contents
     ///
     /// # Errors
     /// Returns [`FileSystemError::PathNotFound`] if the file does not exist,
     /// or [`FileSystemError::IoError`] for other I/O errors.
-    fn read_file(&self, path: &Path) -> Result<String, FileSystemError>;
+    fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError>;
 
     /// List files in a directory matching a glob pattern
     ///

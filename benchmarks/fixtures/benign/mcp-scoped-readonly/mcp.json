@@ -1,0 +1,9 @@
+{
+  "transport": "mcp",
+  "endpoint": "https://mcp.example.com/v1",
+  "auth": {
+    "type": "oauth",
+    "scopes": ["calendar.read"]
+  },
+  "tools": ["list_events", "read_event"]
+}

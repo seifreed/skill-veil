@@ -1,29 +1,29 @@
 {
   "metrics": {
-    "precision": 0.75,
-    "recall": 0.88235295,
-    "false_positive_rate": 0.2777778,
-    "accuracy": 0.8,
-    "exact_label_accuracy": 0.6857143,
-    "true_positive": 15,
+    "precision": 0.77272725,
+    "recall": 0.85,
+    "false_positive_rate": 0.23809524,
+    "accuracy": 0.80487806,
+    "exact_label_accuracy": 0.73170733,
+    "true_positive": 17,
     "false_positive": 5,
-    "true_negative": 13,
-    "false_negative": 2
+    "true_negative": 16,
+    "false_negative": 3
   },
   "coverage": {
-    "total_samples": 35,
+    "total_samples": 41,
     "by_label": [
       {
         "key": "benign",
-        "samples": 18
+        "samples": 21
       },
       {
         "key": "malicious",
-        "samples": 9
+        "samples": 10
       },
       {
         "key": "suspicious",
-        "samples": 8
+        "samples": 10
       }
     ],
     "by_focus_category": [
@@ -33,7 +33,7 @@
       },
       {
         "key": "data_exfiltration",
-        "samples": 2
+        "samples": 3
       },
       {
         "key": "persistent_prompt_tampering",
@@ -41,11 +41,11 @@
       },
       {
         "key": "remote_exec",
-        "samples": 4
+        "samples": 5
       },
       {
         "key": "scope_creep",
-        "samples": 2
+        "samples": 3
       },
       {
         "key": "social_manipulation",
@@ -57,7 +57,7 @@
       },
       {
         "key": "tool_abuse",
-        "samples": 6
+        "samples": 9
       }
     ],
     "by_attack_family": [
@@ -67,11 +67,11 @@
       },
       {
         "key": "exfiltration",
-        "samples": 2
+        "samples": 3
       },
       {
         "key": "mcp_remote_risk",
-        "samples": 4
+        "samples": 6
       },
       {
         "key": "remote_exec",
@@ -95,40 +95,40 @@
       },
       {
         "key": "webhook_risk",
-        "samples": 2
+        "samples": 5
       }
     ]
   },
   "deduplication": {
-    "original_findings": 104,
-    "unique_findings": 104,
+    "original_findings": 110,
+    "unique_findings": 110,
     "duplicates_removed": 0
   },
   "confidence_calibration": {
     "by_evidence_kind": [
       {
         "key": "behavior",
-        "findings": 22,
-        "true_positive": 19,
-        "false_positive": 3,
-        "observed_precision": 0.8636364,
-        "recommended_confidence": 0.74998754
+        "findings": 30,
+        "true_positive": 25,
+        "false_positive": 5,
+        "observed_precision": 0.8333333,
+        "recommended_confidence": 0.7486118
       },
       {
         "key": "context",
-        "findings": 75,
-        "true_positive": 53,
-        "false_positive": 22,
-        "observed_precision": 0.70666665,
-        "recommended_confidence": 0.70735604
+        "findings": 74,
+        "true_positive": 50,
+        "false_positive": 24,
+        "observed_precision": 0.6756757,
+        "recommended_confidence": 0.6875905
       },
       {
         "key": "intent",
-        "findings": 7,
-        "true_positive": 5,
+        "findings": 6,
+        "true_positive": 4,
         "false_positive": 2,
-        "observed_precision": 0.71428573,
-        "recommended_confidence": 0.56535745
+        "observed_precision": 0.6666667,
+        "recommended_confidence": 0.52999306
       }
     ],
     "by_category": [
@@ -142,6 +142,14 @@
       },
       {
         "key": "credential_exposure",
+        "findings": 2,
+        "true_positive": 2,
+        "false_positive": 0,
+        "observed_precision": 1.0,
+        "recommended_confidence": 0.55542314
+      },
+      {
+        "key": "data_exfiltration",
         "findings": 1,
         "true_positive": 1,
         "false_positive": 0,
@@ -166,19 +174,19 @@
       },
       {
         "key": "remote_exec",
-        "findings": 14,
-        "true_positive": 12,
-        "false_positive": 2,
-        "observed_precision": 0.85714287,
-        "recommended_confidence": 0.7103486
+        "findings": 19,
+        "true_positive": 16,
+        "false_positive": 3,
+        "observed_precision": 0.84210527,
+        "recommended_confidence": 0.7246044
       },
       {
         "key": "scope_creep",
-        "findings": 52,
-        "true_positive": 32,
+        "findings": 45,
+        "true_positive": 25,
         "false_positive": 20,
-        "observed_precision": 0.61538464,
-        "recommended_confidence": 0.6377578
+        "observed_precision": 0.5555556,
+        "recommended_confidence": 0.5970553
       },
       {
         "key": "social_manipulation",
@@ -190,24 +198,32 @@
       },
       {
         "key": "supply_chain",
-        "findings": 4,
-        "true_positive": 3,
-        "false_positive": 1,
-        "observed_precision": 0.75,
-        "recommended_confidence": 0.5303816
+        "findings": 6,
+        "true_positive": 4,
+        "false_positive": 2,
+        "observed_precision": 0.6666667,
+        "recommended_confidence": 0.52999306
       },
       {
         "key": "tool_abuse",
-        "findings": 24,
-        "true_positive": 20,
-        "false_positive": 4,
-        "observed_precision": 0.8333333,
-        "recommended_confidence": 0.7348792
+        "findings": 28,
+        "true_positive": 22,
+        "false_positive": 6,
+        "observed_precision": 0.78571427,
+        "recommended_confidence": 0.7127663
       }
     ],
     "by_signal_pair": [
       {
         "key": "behavior+credential_exposure",
+        "findings": 2,
+        "true_positive": 2,
+        "false_positive": 0,
+        "observed_precision": 1.0,
+        "recommended_confidence": 0.55542314
+      },
+      {
+        "key": "behavior+data_exfiltration",
         "findings": 1,
         "true_positive": 1,
         "false_positive": 0,
@@ -224,27 +240,27 @@
       },
       {
         "key": "behavior+remote_exec",
-        "findings": 14,
-        "true_positive": 12,
-        "false_positive": 2,
-        "observed_precision": 0.85714287,
-        "recommended_confidence": 0.7103486
+        "findings": 19,
+        "true_positive": 16,
+        "false_positive": 3,
+        "observed_precision": 0.84210527,
+        "recommended_confidence": 0.7246044
       },
       {
         "key": "behavior+supply_chain",
-        "findings": 4,
-        "true_positive": 3,
-        "false_positive": 1,
-        "observed_precision": 0.75,
-        "recommended_confidence": 0.5303816
+        "findings": 6,
+        "true_positive": 4,
+        "false_positive": 2,
+        "observed_precision": 0.6666667,
+        "recommended_confidence": 0.52999306
       },
       {
         "key": "behavior+tool_abuse",
-        "findings": 2,
-        "true_positive": 2,
+        "findings": 1,
+        "true_positive": 1,
         "false_positive": 0,
         "observed_precision": 1.0,
-        "recommended_confidence": 0.55542314
+        "recommended_confidence": 0.47392598
       },
       {
         "key": "context+autonomy_escalation",
@@ -264,19 +280,19 @@
       },
       {
         "key": "context+scope_creep",
-        "findings": 49,
-        "true_positive": 31,
+        "findings": 43,
+        "true_positive": 25,
         "false_positive": 18,
-        "observed_precision": 0.63265306,
-        "recommended_confidence": 0.64560086
+        "observed_precision": 0.5813953,
+        "recommended_confidence": 0.60996985
       },
       {
         "key": "context+tool_abuse",
-        "findings": 22,
-        "true_positive": 18,
-        "false_positive": 4,
-        "observed_precision": 0.8181818,
-        "recommended_confidence": 0.7188978
+        "findings": 27,
+        "true_positive": 21,
+        "false_positive": 6,
+        "observed_precision": 0.7777778,
+        "recommended_confidence": 0.70545626
       },
       {
         "key": "intent+autonomy_escalation",
@@ -296,11 +312,11 @@
       },
       {
         "key": "intent+scope_creep",
-        "findings": 3,
-        "true_positive": 1,
+        "findings": 2,
+        "true_positive": 0,
         "false_positive": 2,
-        "observed_precision": 0.33333334,
-        "recommended_confidence": 0.3868942
+        "observed_precision": 0.0,
+        "recommended_confidence": 0.35
       },
       {
         "key": "intent+social_manipulation",
@@ -315,31 +331,31 @@
   "threshold_recommendation": {
     "current_approval_threshold": 20,
     "current_block_threshold": 50,
-    "recommended_approval_threshold": 32,
-    "recommended_block_threshold": 44,
+    "recommended_approval_threshold": 28,
+    "recommended_block_threshold": 80,
     "current_metrics": {
-      "precision": 0.7894737,
-      "recall": 0.88235295,
-      "false_positive_rate": 0.22222222,
-      "accuracy": 0.82857144,
-      "exact_label_accuracy": 0.71428573,
-      "true_positive": 15,
-      "false_positive": 4,
-      "true_negative": 14,
-      "false_negative": 2
+      "precision": 0.73913044,
+      "recall": 0.85,
+      "false_positive_rate": 0.2857143,
+      "accuracy": 0.7804878,
+      "exact_label_accuracy": 0.68292683,
+      "true_positive": 17,
+      "false_positive": 6,
+      "true_negative": 15,
+      "false_negative": 3
     },
     "recommended_metrics": {
-      "precision": 0.8333333,
-      "recall": 0.88235295,
-      "false_positive_rate": 0.16666667,
-      "accuracy": 0.85714287,
-      "exact_label_accuracy": 0.7714286,
-      "true_positive": 15,
-      "false_positive": 3,
-      "true_negative": 15,
-      "false_negative": 2
+      "precision": 0.8095238,
+      "recall": 0.85,
+      "false_positive_rate": 0.1904762,
+      "accuracy": 0.8292683,
+      "exact_label_accuracy": 0.7804878,
+      "true_positive": 17,
+      "false_positive": 4,
+      "true_negative": 17,
+      "false_negative": 3
     },
-    "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.570)."
+    "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.502)."
   },
   "family_metrics": [
     {
@@ -350,7 +366,7 @@
         "recall": 0.75,
         "false_positive_rate": 0.0,
         "accuracy": 0.8,
-        "exact_label_accuracy": 0.8,
+        "exact_label_accuracy": 0.6,
         "true_positive": 3,
         "false_positive": 0,
         "true_negative": 1,
@@ -388,14 +404,14 @@
     },
     {
       "family": "exfiltration",
-      "sample_count": 2,
+      "sample_count": 3,
       "metrics": {
-        "precision": 0.0,
-        "recall": 0.0,
+        "precision": 1.0,
+        "recall": 0.5,
         "false_positive_rate": 0.0,
-        "accuracy": 0.5,
-        "exact_label_accuracy": 0.5,
-        "true_positive": 0,
+        "accuracy": 0.6666667,
+        "exact_label_accuracy": 0.6666667,
+        "true_positive": 1,
         "false_positive": 0,
         "true_negative": 1,
         "false_negative": 1
@@ -406,41 +422,41 @@
         "recommended_approval_threshold": 20,
         "recommended_block_threshold": 50,
         "current_metrics": {
-          "precision": 0.0,
-          "recall": 0.0,
+          "precision": 1.0,
+          "recall": 0.5,
           "false_positive_rate": 0.0,
-          "accuracy": 0.5,
-          "exact_label_accuracy": 0.5,
-          "true_positive": 0,
+          "accuracy": 0.6666667,
+          "exact_label_accuracy": 0.6666667,
+          "true_positive": 1,
           "false_positive": 0,
           "true_negative": 1,
           "false_negative": 1
         },
         "recommended_metrics": {
-          "precision": 0.0,
-          "recall": 0.0,
+          "precision": 1.0,
+          "recall": 0.5,
           "false_positive_rate": 0.0,
-          "accuracy": 0.5,
-          "exact_label_accuracy": 0.5,
-          "true_positive": 0,
+          "accuracy": 0.6666667,
+          "exact_label_accuracy": 0.6666667,
+          "true_positive": 1,
           "false_positive": 0,
           "true_negative": 1,
           "false_negative": 1
         },
-        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.080)."
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.638)."
       }
     },
     {
       "family": "mcp_remote_risk",
-      "sample_count": 4,
+      "sample_count": 6,
       "metrics": {
-        "precision": 0.75,
+        "precision": 0.6666667,
         "recall": 1.0,
         "false_positive_rate": 1.0,
-        "accuracy": 0.75,
-        "exact_label_accuracy": 0.5,
-        "true_positive": 3,
-        "false_positive": 1,
+        "accuracy": 0.6666667,
+        "exact_label_accuracy": 0.33333334,
+        "true_positive": 4,
+        "false_positive": 2,
         "true_negative": 0,
         "false_negative": 0
       },
@@ -450,28 +466,28 @@
         "recommended_approval_threshold": 20,
         "recommended_block_threshold": 50,
         "current_metrics": {
-          "precision": 0.75,
+          "precision": 0.6666667,
           "recall": 1.0,
           "false_positive_rate": 1.0,
-          "accuracy": 0.75,
-          "exact_label_accuracy": 0.5,
-          "true_positive": 3,
-          "false_positive": 1,
+          "accuracy": 0.6666667,
+          "exact_label_accuracy": 0.33333334,
+          "true_positive": 4,
+          "false_positive": 2,
           "true_negative": 0,
           "false_negative": 0
         },
         "recommended_metrics": {
-          "precision": 0.75,
+          "precision": 0.6666667,
           "recall": 1.0,
           "false_positive_rate": 1.0,
-          "accuracy": 0.75,
-          "exact_label_accuracy": 0.5,
-          "true_positive": 3,
-          "false_positive": 1,
+          "accuracy": 0.6666667,
+          "exact_label_accuracy": 0.33333334,
+          "true_positive": 4,
+          "false_positive": 2,
           "true_negative": 0,
           "false_negative": 0
         },
-        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.182)."
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.107)."
       }
     },
     {
@@ -492,7 +508,7 @@
         "current_approval_threshold": 20,
         "current_block_threshold": 50,
         "recommended_approval_threshold": 10,
-        "recommended_block_threshold": 90,
+        "recommended_block_threshold": 86,
         "current_metrics": {
           "precision": 0.6666667,
           "recall": 1.0,
@@ -522,44 +538,44 @@
       "family": "scope_abuse",
       "sample_count": 2,
       "metrics": {
-        "precision": 0.5,
-        "recall": 1.0,
-        "false_positive_rate": 1.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "false_positive_rate": 0.0,
         "accuracy": 0.5,
-        "exact_label_accuracy": 0.0,
-        "true_positive": 1,
-        "false_positive": 1,
-        "true_negative": 0,
-        "false_negative": 0
+        "exact_label_accuracy": 0.5,
+        "true_positive": 0,
+        "false_positive": 0,
+        "true_negative": 1,
+        "false_negative": 1
       },
       "threshold_recommendation": {
         "current_approval_threshold": 20,
         "current_block_threshold": 50,
-        "recommended_approval_threshold": 32,
-        "recommended_block_threshold": 34,
+        "recommended_approval_threshold": 10,
+        "recommended_block_threshold": 30,
         "current_metrics": {
-          "precision": 0.5,
-          "recall": 1.0,
-          "false_positive_rate": 1.0,
+          "precision": 0.0,
+          "recall": 0.0,
+          "false_positive_rate": 0.0,
           "accuracy": 0.5,
-          "exact_label_accuracy": 0.0,
-          "true_positive": 1,
-          "false_positive": 1,
-          "true_negative": 0,
-          "false_negative": 0
+          "exact_label_accuracy": 0.5,
+          "true_positive": 0,
+          "false_positive": 0,
+          "true_negative": 1,
+          "false_negative": 1
         },
         "recommended_metrics": {
           "precision": 1.0,
           "recall": 1.0,
           "false_positive_rate": 0.0,
           "accuracy": 1.0,
-          "exact_label_accuracy": 1.0,
+          "exact_label_accuracy": 0.5,
           "true_positive": 1,
           "false_positive": 0,
           "true_negative": 1,
           "false_negative": 0
         },
-        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.900)."
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.890)."
       }
     },
     {
@@ -614,7 +630,7 @@
         "recall": 1.0,
         "false_positive_rate": 0.0,
         "accuracy": 1.0,
-        "exact_label_accuracy": 0.5,
+        "exact_label_accuracy": 1.0,
         "true_positive": 2,
         "false_positive": 0,
         "true_negative": 0,
@@ -624,7 +640,7 @@
         "current_approval_threshold": 20,
         "current_block_threshold": 50,
         "recommended_approval_threshold": 10,
-        "recommended_block_threshold": 56,
+        "recommended_block_threshold": 52,
         "current_metrics": {
           "precision": 1.0,
           "recall": 1.0,
@@ -696,46 +712,46 @@
     },
     {
       "family": "webhook_risk",
-      "sample_count": 2,
+      "sample_count": 5,
       "metrics": {
         "precision": 0.5,
         "recall": 1.0,
-        "false_positive_rate": 1.0,
-        "accuracy": 0.5,
-        "exact_label_accuracy": 0.0,
-        "true_positive": 1,
-        "false_positive": 1,
-        "true_negative": 0,
+        "false_positive_rate": 0.6666667,
+        "accuracy": 0.6,
+        "exact_label_accuracy": 0.6,
+        "true_positive": 2,
+        "false_positive": 2,
+        "true_negative": 1,
         "false_negative": 0
       },
       "threshold_recommendation": {
         "current_approval_threshold": 20,
         "current_block_threshold": 50,
-        "recommended_approval_threshold": 44,
-        "recommended_block_threshold": 46,
+        "recommended_approval_threshold": 22,
+        "recommended_block_threshold": 80,
         "current_metrics": {
           "precision": 0.5,
           "recall": 1.0,
-          "false_positive_rate": 1.0,
-          "accuracy": 0.5,
-          "exact_label_accuracy": 0.0,
-          "true_positive": 1,
-          "false_positive": 1,
-          "true_negative": 0,
-          "false_negative": 0
-        },
-        "recommended_metrics": {
-          "precision": 1.0,
-          "recall": 1.0,
-          "false_positive_rate": 0.0,
-          "accuracy": 1.0,
-          "exact_label_accuracy": 0.5,
-          "true_positive": 1,
-          "false_positive": 0,
+          "false_positive_rate": 0.6666667,
+          "accuracy": 0.6,
+          "exact_label_accuracy": 0.4,
+          "true_positive": 2,
+          "false_positive": 2,
           "true_negative": 1,
           "false_negative": 0
         },
-        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.890)."
+        "recommended_metrics": {
+          "precision": 0.6666667,
+          "recall": 1.0,
+          "false_positive_rate": 0.33333334,
+          "accuracy": 0.8,
+          "exact_label_accuracy": 0.8,
+          "true_positive": 2,
+          "false_positive": 1,
+          "true_negative": 2,
+          "false_negative": 0
+        },
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.550)."
       }
     }
   ],
@@ -833,8 +849,8 @@
     {
       "id": "benign-defensive-shell-audit",
       "expected": "benign",
-      "actual": "suspicious",
-      "verdict": "suspicious",
+      "actual": "benign",
+      "verdict": "benign",
       "focus_category": null,
       "attack_family": null,
       "recommended_action": "require_approval",
@@ -912,10 +928,10 @@
       "verdict": "benign",
       "focus_category": null,
       "attack_family": null,
-      "recommended_action": "log",
-      "risk_score": 19,
-      "finding_count": 2,
-      "primary_finding_count": 2,
+      "recommended_action": "require_approval",
+      "risk_score": 28,
+      "finding_count": 3,
+      "primary_finding_count": 3,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/benign/local-mcp/mcp.json"
@@ -928,9 +944,9 @@
       "focus_category": "remote_exec",
       "attack_family": "remote_exec",
       "recommended_action": "block",
-      "risk_score": 89,
-      "finding_count": 2,
-      "primary_finding_count": 2,
+      "risk_score": 86,
+      "finding_count": 1,
+      "primary_finding_count": 1,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/benign/remote-exec-doc/SKILL.md"
@@ -958,9 +974,9 @@
       "focus_category": "autonomy_escalation",
       "attack_family": "autonomy_bypass",
       "recommended_action": "log",
-      "risk_score": 3,
-      "finding_count": 1,
-      "primary_finding_count": 1,
+      "risk_score": 0,
+      "finding_count": 0,
+      "primary_finding_count": 0,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/benign/autonomy-guardrails/AGENTS.md"
@@ -968,14 +984,14 @@
     {
       "id": "benign-scope-audit",
       "expected": "benign",
-      "actual": "suspicious",
-      "verdict": "suspicious",
+      "actual": "benign",
+      "verdict": "benign",
       "focus_category": "scope_creep",
       "attack_family": "scope_abuse",
-      "recommended_action": "require_approval",
-      "risk_score": 32,
-      "finding_count": 4,
-      "primary_finding_count": 4,
+      "recommended_action": "log",
+      "risk_score": 6,
+      "finding_count": 2,
+      "primary_finding_count": 2,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/benign/scope-audit/SKILL.md"
@@ -1004,23 +1020,68 @@
       "attack_family": "mcp_remote_risk",
       "recommended_action": "block",
       "risk_score": 100,
-      "finding_count": 6,
-      "primary_finding_count": 6,
+      "finding_count": 5,
+      "primary_finding_count": 5,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/benign/mcp-reviewed/mcp.json"
     },
     {
-      "id": "example-suspicious",
-      "expected": "suspicious",
+      "id": "benign-webhook-signed",
+      "expected": "benign",
+      "actual": "suspicious",
+      "verdict": "suspicious",
+      "focus_category": "tool_abuse",
+      "attack_family": "webhook_risk",
+      "recommended_action": "require_approval",
+      "risk_score": 21,
+      "finding_count": 2,
+      "primary_finding_count": 2,
+      "supporting_finding_count": 0,
+      "duplicates_removed": 0,
+      "path": "benchmarks/fixtures/benign/webhook-signed/SKILL.md"
+    },
+    {
+      "id": "benign-mcp-scoped-readonly",
+      "expected": "benign",
       "actual": "malicious",
       "verdict": "malicious",
+      "focus_category": "scope_creep",
+      "attack_family": "mcp_remote_risk",
+      "recommended_action": "block",
+      "risk_score": 100,
+      "finding_count": 6,
+      "primary_finding_count": 6,
+      "supporting_finding_count": 0,
+      "duplicates_removed": 0,
+      "path": "benchmarks/fixtures/benign/mcp-scoped-readonly/mcp.json"
+    },
+    {
+      "id": "benign-local-internal-dashboard",
+      "expected": "benign",
+      "actual": "benign",
+      "verdict": "benign",
+      "focus_category": "tool_abuse",
+      "attack_family": "webhook_risk",
+      "recommended_action": "log",
+      "risk_score": 0,
+      "finding_count": 0,
+      "primary_finding_count": 0,
+      "supporting_finding_count": 0,
+      "duplicates_removed": 0,
+      "path": "benchmarks/fixtures/benign/local-internal-dashboard/SKILL.md"
+    },
+    {
+      "id": "example-suspicious",
+      "expected": "suspicious",
+      "actual": "suspicious",
+      "verdict": "suspicious",
       "focus_category": "supply_chain",
       "attack_family": null,
       "recommended_action": "block",
-      "risk_score": 55,
-      "finding_count": 2,
-      "primary_finding_count": 2,
+      "risk_score": 52,
+      "finding_count": 1,
+      "primary_finding_count": 1,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/../examples/suspicious-skill"
@@ -1103,14 +1164,14 @@
     {
       "id": "suspicious-webhook-unsigned",
       "expected": "suspicious",
-      "actual": "malicious",
-      "verdict": "malicious",
+      "actual": "suspicious",
+      "verdict": "suspicious",
       "focus_category": "tool_abuse",
       "attack_family": "webhook_risk",
       "recommended_action": "block",
-      "risk_score": 100,
-      "finding_count": 6,
-      "primary_finding_count": 6,
+      "risk_score": 79,
+      "finding_count": 4,
+      "primary_finding_count": 4,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/suspicious/webhook-unsigned/SKILL.md"
@@ -1124,11 +1185,41 @@
       "attack_family": "mcp_remote_risk",
       "recommended_action": "block",
       "risk_score": 100,
-      "finding_count": 9,
-      "primary_finding_count": 9,
+      "finding_count": 8,
+      "primary_finding_count": 8,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/suspicious/mcp-opaque-remote/mcp.json"
+    },
+    {
+      "id": "suspicious-webhook-no-secret",
+      "expected": "suspicious",
+      "actual": "suspicious",
+      "verdict": "suspicious",
+      "focus_category": "tool_abuse",
+      "attack_family": "webhook_risk",
+      "recommended_action": "require_approval",
+      "risk_score": 43,
+      "finding_count": 4,
+      "primary_finding_count": 4,
+      "supporting_finding_count": 0,
+      "duplicates_removed": 0,
+      "path": "benchmarks/fixtures/suspicious/webhook-no-secret/SKILL.md"
+    },
+    {
+      "id": "suspicious-mcp-remote-bridge",
+      "expected": "suspicious",
+      "actual": "malicious",
+      "verdict": "malicious",
+      "focus_category": "remote_exec",
+      "attack_family": "mcp_remote_risk",
+      "recommended_action": "block",
+      "risk_score": 100,
+      "finding_count": 7,
+      "primary_finding_count": 7,
+      "supporting_finding_count": 0,
+      "duplicates_removed": 0,
+      "path": "benchmarks/fixtures/suspicious/mcp-remote-bridge/mcp.json"
     },
     {
       "id": "example-malicious",
@@ -1139,8 +1230,8 @@
       "attack_family": "remote_exec",
       "recommended_action": "block",
       "risk_score": 100,
-      "finding_count": 9,
-      "primary_finding_count": 9,
+      "finding_count": 5,
+      "primary_finding_count": 5,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/../examples/malicious-skill"
@@ -1153,9 +1244,9 @@
       "focus_category": "supply_chain",
       "attack_family": null,
       "recommended_action": "block",
-      "risk_score": 89,
-      "finding_count": 2,
-      "primary_finding_count": 2,
+      "risk_score": 86,
+      "finding_count": 1,
+      "primary_finding_count": 1,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/malicious/remote-installer/SKILL.md"
@@ -1169,8 +1260,8 @@
       "attack_family": "remote_exec",
       "recommended_action": "block",
       "risk_score": 100,
-      "finding_count": 4,
-      "primary_finding_count": 4,
+      "finding_count": 3,
+      "primary_finding_count": 3,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/malicious/persistent-powershell/SKILL.md"
@@ -1178,8 +1269,8 @@
     {
       "id": "malicious-system-rootkit",
       "expected": "malicious",
-      "actual": "malicious",
-      "verdict": "malicious",
+      "actual": "suspicious",
+      "verdict": "suspicious",
       "focus_category": "persistent_prompt_tampering",
       "attack_family": "autonomy_bypass",
       "recommended_action": "block",
@@ -1229,8 +1320,8 @@
       "attack_family": "autonomy_bypass",
       "recommended_action": "block",
       "risk_score": 100,
-      "finding_count": 4,
-      "primary_finding_count": 4,
+      "finding_count": 3,
+      "primary_finding_count": 3,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/malicious/approval-bypass-exec/SKILL.md"
@@ -1238,14 +1329,14 @@
     {
       "id": "malicious-scope-abuse-browser",
       "expected": "malicious",
-      "actual": "suspicious",
-      "verdict": "suspicious",
+      "actual": "benign",
+      "verdict": "benign",
       "focus_category": "scope_creep",
       "attack_family": "scope_abuse",
       "recommended_action": "require_approval",
-      "risk_score": 45,
-      "finding_count": 6,
-      "primary_finding_count": 6,
+      "risk_score": 18,
+      "finding_count": 4,
+      "primary_finding_count": 4,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/malicious/scope-abuse-browser/SKILL.md"
@@ -1259,11 +1350,26 @@
       "attack_family": "mcp_remote_risk",
       "recommended_action": "block",
       "risk_score": 100,
-      "finding_count": 17,
-      "primary_finding_count": 17,
+      "finding_count": 16,
+      "primary_finding_count": 16,
       "supporting_finding_count": 0,
       "duplicates_removed": 0,
       "path": "benchmarks/fixtures/malicious/mcp-noauth-exec/mcp.json"
+    },
+    {
+      "id": "malicious-metadata-token-fetch",
+      "expected": "malicious",
+      "actual": "malicious",
+      "verdict": "malicious",
+      "focus_category": "data_exfiltration",
+      "attack_family": "exfiltration",
+      "recommended_action": "block",
+      "risk_score": 100,
+      "finding_count": 5,
+      "primary_finding_count": 5,
+      "supporting_finding_count": 0,
+      "duplicates_removed": 0,
+      "path": "benchmarks/fixtures/malicious/metadata-token-fetch/SKILL.md"
     }
   ]
 }

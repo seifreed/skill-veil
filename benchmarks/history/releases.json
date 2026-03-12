@@ -998,6 +998,766 @@
           }
         }
       ]
+    },
+    {
+      "release_id": "local-dev",
+      "generated_at": "2026-03-12T10:36:32.186637Z",
+      "metrics": {
+        "precision": 0.77272725,
+        "recall": 0.85,
+        "false_positive_rate": 0.23809524,
+        "accuracy": 0.80487806,
+        "exact_label_accuracy": 0.73170733,
+        "true_positive": 17,
+        "false_positive": 5,
+        "true_negative": 16,
+        "false_negative": 3
+      },
+      "coverage": {
+        "total_samples": 41,
+        "by_label": [
+          {
+            "key": "benign",
+            "samples": 21
+          },
+          {
+            "key": "malicious",
+            "samples": 10
+          },
+          {
+            "key": "suspicious",
+            "samples": 10
+          }
+        ],
+        "by_focus_category": [
+          {
+            "key": "autonomy_escalation",
+            "samples": 3
+          },
+          {
+            "key": "data_exfiltration",
+            "samples": 3
+          },
+          {
+            "key": "persistent_prompt_tampering",
+            "samples": 2
+          },
+          {
+            "key": "remote_exec",
+            "samples": 5
+          },
+          {
+            "key": "scope_creep",
+            "samples": 3
+          },
+          {
+            "key": "social_manipulation",
+            "samples": 2
+          },
+          {
+            "key": "supply_chain",
+            "samples": 2
+          },
+          {
+            "key": "tool_abuse",
+            "samples": 9
+          }
+        ],
+        "by_attack_family": [
+          {
+            "key": "autonomy_bypass",
+            "samples": 5
+          },
+          {
+            "key": "exfiltration",
+            "samples": 3
+          },
+          {
+            "key": "mcp_remote_risk",
+            "samples": 6
+          },
+          {
+            "key": "remote_exec",
+            "samples": 3
+          },
+          {
+            "key": "scope_abuse",
+            "samples": 2
+          },
+          {
+            "key": "social_manipulation",
+            "samples": 2
+          },
+          {
+            "key": "supply_chain",
+            "samples": 2
+          },
+          {
+            "key": "tool_abuse",
+            "samples": 1
+          },
+          {
+            "key": "webhook_risk",
+            "samples": 5
+          }
+        ]
+      },
+      "deduplication": {
+        "original_findings": 110,
+        "unique_findings": 110,
+        "duplicates_removed": 0
+      },
+      "confidence_calibration": {
+        "by_evidence_kind": [
+          {
+            "key": "behavior",
+            "findings": 30,
+            "true_positive": 25,
+            "false_positive": 5,
+            "observed_precision": 0.8333333,
+            "recommended_confidence": 0.7486118
+          },
+          {
+            "key": "context",
+            "findings": 74,
+            "true_positive": 50,
+            "false_positive": 24,
+            "observed_precision": 0.6756757,
+            "recommended_confidence": 0.6875905
+          },
+          {
+            "key": "intent",
+            "findings": 6,
+            "true_positive": 4,
+            "false_positive": 2,
+            "observed_precision": 0.6666667,
+            "recommended_confidence": 0.52999306
+          }
+        ],
+        "by_category": [
+          {
+            "key": "autonomy_escalation",
+            "findings": 4,
+            "true_positive": 4,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.65606
+          },
+          {
+            "key": "credential_exposure",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          },
+          {
+            "key": "data_exfiltration",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "persistent_prompt_tampering",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          },
+          {
+            "key": "privilege_escalation",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "remote_exec",
+            "findings": 19,
+            "true_positive": 16,
+            "false_positive": 3,
+            "observed_precision": 0.84210527,
+            "recommended_confidence": 0.7246044
+          },
+          {
+            "key": "scope_creep",
+            "findings": 45,
+            "true_positive": 25,
+            "false_positive": 20,
+            "observed_precision": 0.5555556,
+            "recommended_confidence": 0.5970553
+          },
+          {
+            "key": "social_manipulation",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          },
+          {
+            "key": "supply_chain",
+            "findings": 6,
+            "true_positive": 4,
+            "false_positive": 2,
+            "observed_precision": 0.6666667,
+            "recommended_confidence": 0.52999306
+          },
+          {
+            "key": "tool_abuse",
+            "findings": 28,
+            "true_positive": 22,
+            "false_positive": 6,
+            "observed_precision": 0.78571427,
+            "recommended_confidence": 0.7127663
+          }
+        ],
+        "by_signal_pair": [
+          {
+            "key": "behavior+credential_exposure",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          },
+          {
+            "key": "behavior+data_exfiltration",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "behavior+privilege_escalation",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "behavior+remote_exec",
+            "findings": 19,
+            "true_positive": 16,
+            "false_positive": 3,
+            "observed_precision": 0.84210527,
+            "recommended_confidence": 0.7246044
+          },
+          {
+            "key": "behavior+supply_chain",
+            "findings": 6,
+            "true_positive": 4,
+            "false_positive": 2,
+            "observed_precision": 0.6666667,
+            "recommended_confidence": 0.52999306
+          },
+          {
+            "key": "behavior+tool_abuse",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "context+autonomy_escalation",
+            "findings": 3,
+            "true_positive": 3,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.61309636
+          },
+          {
+            "key": "context+persistent_prompt_tampering",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "context+scope_creep",
+            "findings": 43,
+            "true_positive": 25,
+            "false_positive": 18,
+            "observed_precision": 0.5813953,
+            "recommended_confidence": 0.60996985
+          },
+          {
+            "key": "context+tool_abuse",
+            "findings": 27,
+            "true_positive": 21,
+            "false_positive": 6,
+            "observed_precision": 0.7777778,
+            "recommended_confidence": 0.70545626
+          },
+          {
+            "key": "intent+autonomy_escalation",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "intent+persistent_prompt_tampering",
+            "findings": 1,
+            "true_positive": 1,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.47392598
+          },
+          {
+            "key": "intent+scope_creep",
+            "findings": 2,
+            "true_positive": 0,
+            "false_positive": 2,
+            "observed_precision": 0.0,
+            "recommended_confidence": 0.35
+          },
+          {
+            "key": "intent+social_manipulation",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          }
+        ]
+      },
+      "threshold_recommendation": {
+        "current_approval_threshold": 20,
+        "current_block_threshold": 50,
+        "recommended_approval_threshold": 28,
+        "recommended_block_threshold": 80,
+        "current_metrics": {
+          "precision": 0.73913044,
+          "recall": 0.85,
+          "false_positive_rate": 0.2857143,
+          "accuracy": 0.7804878,
+          "exact_label_accuracy": 0.68292683,
+          "true_positive": 17,
+          "false_positive": 6,
+          "true_negative": 15,
+          "false_negative": 3
+        },
+        "recommended_metrics": {
+          "precision": 0.8095238,
+          "recall": 0.85,
+          "false_positive_rate": 0.1904762,
+          "accuracy": 0.8292683,
+          "exact_label_accuracy": 0.7804878,
+          "true_positive": 17,
+          "false_positive": 4,
+          "true_negative": 17,
+          "false_negative": 3
+        },
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.502)."
+      },
+      "family_metrics": [
+        {
+          "family": "autonomy_bypass",
+          "sample_count": 5,
+          "metrics": {
+            "precision": 1.0,
+            "recall": 0.75,
+            "false_positive_rate": 0.0,
+            "accuracy": 0.8,
+            "exact_label_accuracy": 0.6,
+            "true_positive": 3,
+            "false_positive": 0,
+            "true_negative": 1,
+            "false_negative": 1
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 20,
+            "recommended_block_threshold": 50,
+            "current_metrics": {
+              "precision": 1.0,
+              "recall": 0.75,
+              "false_positive_rate": 0.0,
+              "accuracy": 0.8,
+              "exact_label_accuracy": 0.8,
+              "true_positive": 3,
+              "false_positive": 0,
+              "true_negative": 1,
+              "false_negative": 1
+            },
+            "recommended_metrics": {
+              "precision": 1.0,
+              "recall": 0.75,
+              "false_positive_rate": 0.0,
+              "accuracy": 0.8,
+              "exact_label_accuracy": 0.8,
+              "true_positive": 3,
+              "false_positive": 0,
+              "true_negative": 1,
+              "false_negative": 1
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.762)."
+          }
+        },
+        {
+          "family": "exfiltration",
+          "sample_count": 3,
+          "metrics": {
+            "precision": 1.0,
+            "recall": 0.5,
+            "false_positive_rate": 0.0,
+            "accuracy": 0.6666667,
+            "exact_label_accuracy": 0.6666667,
+            "true_positive": 1,
+            "false_positive": 0,
+            "true_negative": 1,
+            "false_negative": 1
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 20,
+            "recommended_block_threshold": 50,
+            "current_metrics": {
+              "precision": 1.0,
+              "recall": 0.5,
+              "false_positive_rate": 0.0,
+              "accuracy": 0.6666667,
+              "exact_label_accuracy": 0.6666667,
+              "true_positive": 1,
+              "false_positive": 0,
+              "true_negative": 1,
+              "false_negative": 1
+            },
+            "recommended_metrics": {
+              "precision": 1.0,
+              "recall": 0.5,
+              "false_positive_rate": 0.0,
+              "accuracy": 0.6666667,
+              "exact_label_accuracy": 0.6666667,
+              "true_positive": 1,
+              "false_positive": 0,
+              "true_negative": 1,
+              "false_negative": 1
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.638)."
+          }
+        },
+        {
+          "family": "mcp_remote_risk",
+          "sample_count": 6,
+          "metrics": {
+            "precision": 0.6666667,
+            "recall": 1.0,
+            "false_positive_rate": 1.0,
+            "accuracy": 0.6666667,
+            "exact_label_accuracy": 0.33333334,
+            "true_positive": 4,
+            "false_positive": 2,
+            "true_negative": 0,
+            "false_negative": 0
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 20,
+            "recommended_block_threshold": 50,
+            "current_metrics": {
+              "precision": 0.6666667,
+              "recall": 1.0,
+              "false_positive_rate": 1.0,
+              "accuracy": 0.6666667,
+              "exact_label_accuracy": 0.33333334,
+              "true_positive": 4,
+              "false_positive": 2,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "recommended_metrics": {
+              "precision": 0.6666667,
+              "recall": 1.0,
+              "false_positive_rate": 1.0,
+              "accuracy": 0.6666667,
+              "exact_label_accuracy": 0.33333334,
+              "true_positive": 4,
+              "false_positive": 2,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.107)."
+          }
+        },
+        {
+          "family": "remote_exec",
+          "sample_count": 3,
+          "metrics": {
+            "precision": 0.6666667,
+            "recall": 1.0,
+            "false_positive_rate": 1.0,
+            "accuracy": 0.6666667,
+            "exact_label_accuracy": 0.6666667,
+            "true_positive": 2,
+            "false_positive": 1,
+            "true_negative": 0,
+            "false_negative": 0
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 10,
+            "recommended_block_threshold": 86,
+            "current_metrics": {
+              "precision": 0.6666667,
+              "recall": 1.0,
+              "false_positive_rate": 1.0,
+              "accuracy": 0.6666667,
+              "exact_label_accuracy": 0.6666667,
+              "true_positive": 2,
+              "false_positive": 1,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "recommended_metrics": {
+              "precision": 0.6666667,
+              "recall": 1.0,
+              "false_positive_rate": 1.0,
+              "accuracy": 0.6666667,
+              "exact_label_accuracy": 0.6666667,
+              "true_positive": 2,
+              "false_positive": 1,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.157)."
+          }
+        },
+        {
+          "family": "scope_abuse",
+          "sample_count": 2,
+          "metrics": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "false_positive_rate": 0.0,
+            "accuracy": 0.5,
+            "exact_label_accuracy": 0.5,
+            "true_positive": 0,
+            "false_positive": 0,
+            "true_negative": 1,
+            "false_negative": 1
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 10,
+            "recommended_block_threshold": 30,
+            "current_metrics": {
+              "precision": 0.0,
+              "recall": 0.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 0.5,
+              "exact_label_accuracy": 0.5,
+              "true_positive": 0,
+              "false_positive": 0,
+              "true_negative": 1,
+              "false_negative": 1
+            },
+            "recommended_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 0.5,
+              "true_positive": 1,
+              "false_positive": 0,
+              "true_negative": 1,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.890)."
+          }
+        },
+        {
+          "family": "social_manipulation",
+          "sample_count": 2,
+          "metrics": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "false_positive_rate": 0.0,
+            "accuracy": 1.0,
+            "exact_label_accuracy": 1.0,
+            "true_positive": 2,
+            "false_positive": 0,
+            "true_negative": 0,
+            "false_negative": 0
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 20,
+            "recommended_block_threshold": 50,
+            "current_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 1.0,
+              "true_positive": 2,
+              "false_positive": 0,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "recommended_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 1.0,
+              "true_positive": 2,
+              "false_positive": 0,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.900)."
+          }
+        },
+        {
+          "family": "supply_chain",
+          "sample_count": 2,
+          "metrics": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "false_positive_rate": 0.0,
+            "accuracy": 1.0,
+            "exact_label_accuracy": 1.0,
+            "true_positive": 2,
+            "false_positive": 0,
+            "true_negative": 0,
+            "false_negative": 0
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 10,
+            "recommended_block_threshold": 52,
+            "current_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 0.5,
+              "true_positive": 2,
+              "false_positive": 0,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "recommended_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 1.0,
+              "true_positive": 2,
+              "false_positive": 0,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.900)."
+          }
+        },
+        {
+          "family": "tool_abuse",
+          "sample_count": 1,
+          "metrics": {
+            "precision": 1.0,
+            "recall": 1.0,
+            "false_positive_rate": 0.0,
+            "accuracy": 1.0,
+            "exact_label_accuracy": 1.0,
+            "true_positive": 1,
+            "false_positive": 0,
+            "true_negative": 0,
+            "false_negative": 0
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 20,
+            "recommended_block_threshold": 50,
+            "current_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 1.0,
+              "true_positive": 1,
+              "false_positive": 0,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "recommended_metrics": {
+              "precision": 1.0,
+              "recall": 1.0,
+              "false_positive_rate": 0.0,
+              "accuracy": 1.0,
+              "exact_label_accuracy": 1.0,
+              "true_positive": 1,
+              "false_positive": 0,
+              "true_negative": 0,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.900)."
+          }
+        },
+        {
+          "family": "webhook_risk",
+          "sample_count": 5,
+          "metrics": {
+            "precision": 0.5,
+            "recall": 1.0,
+            "false_positive_rate": 0.6666667,
+            "accuracy": 0.6,
+            "exact_label_accuracy": 0.6,
+            "true_positive": 2,
+            "false_positive": 2,
+            "true_negative": 1,
+            "false_negative": 0
+          },
+          "threshold_recommendation": {
+            "current_approval_threshold": 20,
+            "current_block_threshold": 50,
+            "recommended_approval_threshold": 22,
+            "recommended_block_threshold": 80,
+            "current_metrics": {
+              "precision": 0.5,
+              "recall": 1.0,
+              "false_positive_rate": 0.6666667,
+              "accuracy": 0.6,
+              "exact_label_accuracy": 0.4,
+              "true_positive": 2,
+              "false_positive": 2,
+              "true_negative": 1,
+              "false_negative": 0
+            },
+            "recommended_metrics": {
+              "precision": 0.6666667,
+              "recall": 1.0,
+              "false_positive_rate": 0.33333334,
+              "accuracy": 0.8,
+              "exact_label_accuracy": 0.8,
+              "true_positive": 2,
+              "false_positive": 1,
+              "true_negative": 2,
+              "false_negative": 0
+            },
+            "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score 0.550)."
+          }
+        }
+      ]
     }
   ]
 }

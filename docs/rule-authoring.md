@@ -81,6 +81,11 @@ at runtime without requiring Rust changes.
 YARA remains optional and isolated behind the `yara` feature. Rule packs may use
 `!yara` only when the binary is built with that feature enabled.
 
+See also:
+
+- `docs/yara.md`
+- `docs/examples/example-rule.yar`
+
 ## Guidance
 
 - Prefer narrow patterns over vague semantic matching.

@@ -22,14 +22,11 @@ hex.workspace = true
 chrono.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
+yara-x = { version = "1.14.0", optional = true }
 
 [features]
 default = []
-yara = ["dep:yara"]
-
-[dependencies.yara]
-workspace = true
-optional = true
+yara = ["dep:yara-x"]
 
 [dev-dependencies]
 tempfile = "3.10"

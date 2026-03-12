@@ -85,7 +85,14 @@ The repository already contains:
 
 `ci.yml`:
 
-- runs tests
+- runs tests on:
+  - Linux x86_64
+  - Linux arm64
+  - Windows x86_64
+  - Windows arm64
+  - macOS x86_64
+  - macOS arm64
+- runs clippy on Linux
 - generates JSON and SARIF
 - uploads SARIF to GitHub Code Scanning
 

@@ -66,6 +66,15 @@ pub mod ports;
 pub mod rules;
 pub mod scanner;
 pub mod services;
+mod policy_eval;
+mod policy_serializers;
+mod policy_state;
+mod policy_types;
+mod verdict;
+mod scanner_graph;
+mod scanner_execution;
+mod scanner_support;
+mod scanner_types;
 
 #[cfg(feature = "yara")]
 pub mod yara_engine;
@@ -89,13 +98,16 @@ pub use findings::{
     Severity, SignalClass, ThreatCategory, Verdict, VerdictReason,
 };
 pub use policy::{
+    AppliedPolicyOverride, BaselineEntry, BaselineFile, ConfiguredProfile,
+    ContextActionOverride, ContextPolicy, DiffEntry, DiffReport, JsonReport, PolicyAudit,
+    PolicyFile, PolicyGenerator, PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy,
+    SuppressionSummary, WaiverEntry, WaiverFile, POLICY_PRECEDENCE_ORDER,
+    POLICY_SCHEMA_VERSION,
+};
+pub use policy_state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
     baseline_from_reports, diff_reports, diff_reports_with_policy_state, load_baseline,
-    load_policy, load_waivers, validate_policy, validate_waivers, AppliedPolicyOverride,
-    BaselineEntry, BaselineFile, ConfiguredProfile, ContextActionOverride, ContextPolicy,
-    DiffEntry, DiffReport, JsonReport, PolicyAudit, PolicyFile, PolicyGenerator,
-    PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy, SuppressionSummary,
-    WaiverEntry, WaiverFile, POLICY_PRECEDENCE_ORDER, POLICY_SCHEMA_VERSION,
+    load_policy, load_waivers, validate_policy, validate_waivers, finding_fingerprint,
 };
 pub use rules::{
     default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file, IocFeedFile,
@@ -105,7 +117,7 @@ pub use rules::{
 pub use scanner::{ScanOptions, ScanResult, ScanTargetMode, Scanner};
 
 // Port traits (interfaces for dependency injection)
-pub use ports::{FileSystemProvider, MarkdownParser, PatternMatcher};
+pub use ports::{DecodedText, FileContent, FileSystemProvider, MarkdownParser, PatternMatcher};
 
 // Default adapters (implementations of port traits)
 pub use adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};

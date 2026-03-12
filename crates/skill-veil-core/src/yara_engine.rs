@@ -1,65 +1,57 @@
-//! YARA integration for advanced pattern detection
-//!
-//! Provides YARA rule compilation and matching capabilities.
-//! This module is only available with the `yara` feature.
+//! YARA integration backed by the pure-Rust `yara-x` engine.
 
-#![cfg(feature = "yara")]
-
-use crate::findings::{Finding, MatchTarget, Severity, ThreatCategory};
-use std::path::Path;
+use crate::findings::{
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, Severity, ThreatCategory,
+};
+use std::path::{Path, PathBuf};
 use thiserror::Error;
-
-/// Timeout in seconds for YARA scanning operations
-const YARA_SCAN_TIMEOUT_SECS: i32 = 30;
 
 #[derive(Error, Debug)]
 pub enum YaraError {
-    #[error("Failed to compile YARA rules: {0}")]
-    CompilationError(String),
-    #[error("Failed to scan with YARA: {0}")]
-    ScanError(String),
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("Failed to compile YARA rules: {0}")]
+    Compile(String),
+    #[error("Failed to scan content with YARA: {0}")]
+    Scan(String),
 }
 
-/// YARA engine for advanced pattern matching
 pub struct YaraEngine {
-    compiler: yara::Compiler,
-    rules: Option<yara::Rules>,
+    loaded_paths: Vec<PathBuf>,
+    source_chunks: Vec<(PathBuf, String)>,
+    rules: Option<yara_x::Rules>,
 }
 
 impl YaraEngine {
-    /// Create a new YARA engine
+    /// Create a new YARA engine.
     pub fn new() -> Result<Self, YaraError> {
-        let compiler =
-            yara::Compiler::new().map_err(|e| YaraError::CompilationError(e.to_string()))?;
-
         Ok(Self {
-            compiler,
+            loaded_paths: Vec::new(),
+            source_chunks: Vec::new(),
             rules: None,
         })
     }
 
-    /// Load YARA rules from a file
+    /// Load a `.yar` or `.yara` file into the compiler source set.
     pub fn load_rules_file(&mut self, path: impl AsRef<Path>) -> Result<(), YaraError> {
-        let content = std::fs::read_to_string(path.as_ref())?;
-        self.compiler = self
-            .compiler
-            .add_rules_str(&content)
-            .map_err(|e| YaraError::CompilationError(e.to_string()))?;
+        let path = path.as_ref();
+        let source = std::fs::read_to_string(path)?;
+        self.loaded_paths.push(path.to_path_buf());
+        self.source_chunks.push((path.to_path_buf(), source));
         Ok(())
     }
 
-    /// Load YARA rules from a directory
+    /// Load all YARA files from a directory.
     pub fn load_rules_dir(&mut self, dir: impl AsRef<Path>) -> Result<(), YaraError> {
         for entry in walkdir::WalkDir::new(dir.as_ref())
             .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.path()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
                     .extension()
-                    .map(|ext| ext == "yar" || ext == "yara")
-                    .unwrap_or(false)
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext == "yar" || ext == "yara")
             })
         {
             self.load_rules_file(entry.path())?;
@@ -67,91 +59,131 @@ impl YaraEngine {
         Ok(())
     }
 
-    /// Compile loaded rules
+    /// Compile the currently loaded rules.
     pub fn compile(&mut self) -> Result<(), YaraError> {
-        self.rules = Some(
-            self.compiler
-                .compile_rules()
-                .map_err(|e| YaraError::CompilationError(e.to_string()))?,
-        );
+        let mut compiler = yara_x::Compiler::new();
+        for (path, source) in &self.source_chunks {
+            compiler
+                .add_source(source.as_str())
+                .map_err(|err| YaraError::Compile(format!("{}: {err}", path.display())))?;
+        }
+        let rules = compiler.build();
+        self.rules = Some(rules);
         Ok(())
     }
 
-    /// Scan content with compiled YARA rules
+    /// Scan raw content and convert matching rules into generic findings.
     pub fn scan(&self, content: &[u8]) -> Result<Vec<Finding>, YaraError> {
         let rules = self
             .rules
             .as_ref()
-            .ok_or_else(|| YaraError::ScanError("Rules not compiled".to_string()))?;
+            .ok_or_else(|| YaraError::Compile("rules have not been compiled".to_string()))?;
+        let mut scanner = yara_x::Scanner::new(rules);
+        let results = scanner
+            .scan(content)
+            .map_err(|err| YaraError::Scan(err.to_string()))?;
 
-        let matches = rules
-            .scan_mem(content, YARA_SCAN_TIMEOUT_SECS)
-            .map_err(|e| YaraError::ScanError(e.to_string()))?;
-
-        let mut findings = Vec::new();
-
-        for matched_rule in matches {
-            let (category, severity) = parse_yara_meta(&matched_rule);
-
-            for string_match in matched_rule.strings {
-                for match_instance in string_match.matches {
-                    let match_value = String::from_utf8_lossy(
-                        &content
-                            [match_instance.offset..match_instance.offset + match_instance.length],
-                    )
-                    .to_string();
-
-                    findings.push(
-                        Finding::builder(format!("YARA_{}", matched_rule.identifier), category)
-                            .severity(severity)
-                            .confidence(0.95)
-                            .matched_on(MatchTarget::Document)
-                            .match_value(match_value)
-                            .reason(format!("YARA rule '{}' matched", matched_rule.identifier))
-                            .build(),
-                    );
-                }
-            }
-        }
+        let findings = results
+            .matching_rules()
+            .map(|rule| {
+                let severity = severity_from_rule(&rule);
+                let category = category_from_rule(&rule);
+                Finding::builder(rule.identifier(), category)
+                    .severity(severity)
+                    .action(severity.default_action())
+                    .evidence_kind(EvidenceKind::Ioc)
+                    .artifact(ArtifactKind::ReferencedArtifact, None::<String>)
+                    .matched_on(MatchTarget::Document)
+                    .match_value(rule.identifier())
+                    .reason(rule_description(&rule))
+                    .build()
+            })
+            .collect();
 
         Ok(findings)
     }
 }
 
-/// Parse metadata from YARA rule to get category and severity
-fn parse_yara_meta(rule: &yara::Rule) -> (ThreatCategory, Severity) {
-    let mut category = ThreatCategory::Generic;
-    let mut severity = Severity::Medium;
+fn severity_from_rule(rule: &yara_x::Rule<'_, '_>) -> Severity {
+    metadata_value(rule, "severity")
+        .map(|value| match value.to_ascii_lowercase().as_str() {
+            "critical" => Severity::Critical,
+            "high" => Severity::High,
+            "medium" => Severity::Medium,
+            _ => Severity::Low,
+        })
+        .unwrap_or(Severity::High)
+}
 
-    for meta in &rule.metadatas {
-        match meta.identifier.as_str() {
-            "category" => {
-                if let yara::MetadataValue::String(s) = &meta.value {
-                    category = match s.as_str() {
-                        "remote_exec" => ThreatCategory::RemoteExec,
-                        "supply_chain" => ThreatCategory::SupplyChain,
-                        "credential_exposure" => ThreatCategory::CredentialExposure,
-                        "privilege_escalation" => ThreatCategory::PrivilegeEscalation,
-                        "data_exfiltration" => ThreatCategory::DataExfiltration,
-                        "obfuscation" => ThreatCategory::Obfuscation,
-                        _ => ThreatCategory::Generic,
-                    };
-                }
-            }
-            "severity" => {
-                if let yara::MetadataValue::String(s) = &meta.value {
-                    severity = match s.as_str() {
-                        "low" => Severity::Low,
-                        "medium" => Severity::Medium,
-                        "high" => Severity::High,
-                        "critical" => Severity::Critical,
-                        _ => Severity::Medium,
-                    };
-                }
-            }
-            _ => {}
-        }
+fn category_from_rule(rule: &yara_x::Rule<'_, '_>) -> ThreatCategory {
+    let value = metadata_value(rule, "category").unwrap_or_default();
+    match value.to_ascii_lowercase().as_str() {
+        "remote_exec" => ThreatCategory::RemoteExec,
+        "credential_exposure" => ThreatCategory::CredentialExposure,
+        "tool_abuse" => ThreatCategory::ToolAbuse,
+        "autonomy_escalation" => ThreatCategory::AutonomyEscalation,
+        "privilege_escalation" => ThreatCategory::PrivilegeEscalation,
+        "data_exfiltration" => ThreatCategory::DataExfiltration,
+        "persistent_prompt_tampering" => ThreatCategory::PersistentPromptTampering,
+        "scope_creep" => ThreatCategory::ScopeCreep,
+        "social_manipulation" => ThreatCategory::SocialManipulation,
+        "unsafe_binary" => ThreatCategory::UnsafeBinary,
+        _ => ThreatCategory::SupplyChain,
     }
+}
 
-    (category, severity)
+fn rule_description(rule: &yara_x::Rule<'_, '_>) -> String {
+    metadata_value(rule, "description").unwrap_or_else(|| "YARA rule matched".to_string())
+}
+
+fn metadata_value(rule: &yara_x::Rule<'_, '_>, key: &str) -> Option<String> {
+    rule.metadata().find_map(|metadata| {
+        if metadata.0 != key {
+            return None;
+        }
+        Some(match metadata.1 {
+            yara_x::MetaValue::Integer(value) => value.to_string(),
+            yara_x::MetaValue::Float(value) => value.to_string(),
+            yara_x::MetaValue::Bool(value) => value.to_string(),
+            yara_x::MetaValue::String(value) => value.to_string(),
+            yara_x::MetaValue::Bytes(value) => value.to_string(),
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_yara_engine_matches_simple_rule() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+rule TEST_REMOTE_EXEC {{
+  meta:
+    severity = "high"
+    category = "remote_exec"
+    description = "detects a simple marker"
+  strings:
+    $a = "curl | bash"
+  condition:
+    $a
+}}
+"#
+        )
+        .unwrap();
+
+        let mut engine = YaraEngine::new().unwrap();
+        engine.load_rules_file(file.path()).unwrap();
+        engine.compile().unwrap();
+
+        let findings = engine.scan(b"curl | bash").unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "TEST_REMOTE_EXEC");
+        assert_eq!(findings[0].category, ThreatCategory::RemoteExec);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
 }

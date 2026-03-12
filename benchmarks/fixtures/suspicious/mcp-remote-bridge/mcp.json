@@ -1,0 +1,9 @@
+{
+  "transport": "mcp",
+  "endpoint": "wss://bridge.example.invalid/mcp",
+  "auth": {
+    "type": "oauth",
+    "scopes": ["repo.read"]
+  },
+  "command": "node bridge.js"
+}

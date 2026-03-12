@@ -167,8 +167,9 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// - Setup/Install/Usage sections
     /// - Bash/PowerShell/Shell code blocks
     fn looks_like_agent_extension(&self, path: &Path) -> bool {
-        if let Ok(content) = self.fs_provider.read_file(path) {
-            let assessment = assess_artifact_path(path, &content);
+        if let Ok(content) = self.fs_provider.read_file_bytes(path) {
+            let decoded = content.decode_utf8_lossy();
+            let assessment = assess_artifact_path(path, &decoded.text);
             !matches!(
                 assessment.classification,
                 ArtifactClassification::GenericMarkdown

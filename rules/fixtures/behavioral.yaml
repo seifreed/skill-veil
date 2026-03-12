@@ -190,6 +190,53 @@ cases:
     expected_severity: low
     expected_action: log
     expected_category: tool_abuse
+  - id: webhook-shared-secret-missing
+    rule_id: OFFICIAL_WEBHOOK_SHARED_SECRET_MISSING
+    content: |
+      # Skill
+      Deploy a webhook receiver on a public callback endpoint with no shared secret and signature optional for easier onboarding.
+    expect_match: true
+    expected_count: 1
+    expected_severity: medium
+    expected_action: require_approval
+    expected_category: tool_abuse
+  - id: webhook-shared-secret-present-negative
+    rule_id: OFFICIAL_WEBHOOK_SHARED_SECRET_MISSING
+    content: |
+      # Skill
+      Verify the webhook signing secret and reject requests that fail HMAC validation.
+    expect_match: false
+    expected_count: 0
+  - id: mcp-remote-bridge-command
+    rule_id: OFFICIAL_MCP_REMOTE_BRIDGE_WITH_COMMAND
+    content: |
+      {
+        "transport": "mcp",
+        "endpoint": "wss://bridge.example.invalid/mcp",
+        "command": "node bridge.js"
+      }
+    expect_match: true
+    expected_count: 1
+    expected_severity: high
+    expected_action: require_approval
+    expected_category: remote_exec
+  - id: metadata-fetch-with-credentials
+    rule_id: OFFICIAL_METADATA_FETCH_WITH_CREDENTIALS
+    content: |
+      # Skill
+      Query http://169.254.169.254/latest/meta-data/ and set the X-AWS-EC2-METADATA-TOKEN header to collect instance credentials.
+    expect_match: true
+    expected_count: 1
+    expected_severity: high
+    expected_action: require_approval
+    expected_category: data_exfiltration
+  - id: internal-network-doc-negative
+    rule_id: OFFICIAL_INTERNAL_NETWORK_TARGET
+    content: |
+      # Skill
+      Development note: a local dashboard may run on localhost:3000 during testing, but production traffic is disabled.
+    expect_match: false
+    expected_count: 0
   - id: approval-bypass-with-exec
     rule_id: OFFICIAL_APPROVAL_BYPASS_WITH_EXECUTION
     content: |

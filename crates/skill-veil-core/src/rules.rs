@@ -733,12 +733,19 @@ impl Default for RuleEngine<RegexPatternMatcher> {
 }
 
 /// Embedded YAML rules file
-const BUILTIN_RULES_YAML: &str = include_str!("builtin_rules.yaml");
+const OFFICIAL_CORE_RULES_YAML: &str = include_str!("../../../rules/official/core.yaml");
+const OFFICIAL_BEHAVIORAL_RULES_YAML: &str =
+    include_str!("../../../rules/official/behavioral.yaml");
 
 /// Get built-in rules by parsing the embedded YAML file
 fn get_builtin_rules() -> Vec<Rule> {
-    serde_yaml::from_str(BUILTIN_RULES_YAML)
-        .expect("Failed to parse embedded builtin_rules.yaml - this is a bug")
+    let mut rules = Vec::new();
+    for embedded_pack in [OFFICIAL_CORE_RULES_YAML, OFFICIAL_BEHAVIORAL_RULES_YAML] {
+        let parsed =
+            parse_rules_file(embedded_pack).expect("Failed to parse embedded official rules pack");
+        rules.extend(parsed);
+    }
+    rules
 }
 
 pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
@@ -931,7 +938,7 @@ mod tests {
         assert!(!findings.is_empty());
         assert!(findings
             .iter()
-            .any(|f| f.rule_id == "SKILL_REMOTE_EXEC_POWERSHELL"));
+            .any(|f| f.rule_id == "SKILL_REMOTE_EXEC_POWERSHELL_IEX"));
     }
 
     #[test]

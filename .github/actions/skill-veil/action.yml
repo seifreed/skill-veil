@@ -1,0 +1,212 @@
+name: skill-veil
+description: Reusable composite action to run skill-veil scans in CI
+
+inputs:
+  command:
+    description: Scan subcommand to run. Intended values are scan-package, scan, scan-file, or scan-dataset.
+    required: false
+    default: scan-package
+  cargo-root:
+    description: Directory that contains the skill-veil Cargo workspace used to run cargo.
+    required: false
+    default: .
+  path:
+    description: Target file or directory to scan.
+    required: false
+    default: .
+  format:
+    description: Output format passed to skill-veil.
+    required: false
+    default: json
+  output:
+    description: Report path relative to cargo-root. Leave empty to write to stdout.
+    required: false
+    default: skill-veil-report.json
+  fail-on:
+    description: Optional severity threshold for scan failure.
+    required: false
+    default: ""
+  min-severity:
+    description: Optional minimum severity to report.
+    required: false
+    default: ""
+  rules-dir:
+    description: Optional custom rules directory.
+    required: false
+    default: ""
+  profile:
+    description: Optional policy profile.
+    required: false
+    default: ""
+  baseline:
+    description: Optional baseline file for accepted findings.
+    required: false
+    default: ""
+  waivers:
+    description: Optional waivers file for approved findings.
+    required: false
+    default: ""
+  policy:
+    description: Optional policy file.
+    required: false
+    default: ""
+  no-recursive:
+    description: Set to true to disable recursive package scanning.
+    required: false
+    default: "false"
+  quiet-summary:
+    description: Set to true to print a compact CI summary for text mode.
+    required: false
+    default: "false"
+  explain-policy:
+    description: Set to true to show policy action explanations in text mode.
+    required: false
+    default: "false"
+  preset:
+    description: Optional scan preset such as local, ci, or strict.
+    required: false
+    default: ""
+  finding-limit:
+    description: Optional per-file finding limit for text mode.
+    required: false
+    default: ""
+  verbose:
+    description: Set to true to enable verbose scanner output.
+    required: false
+    default: "false"
+  quiet:
+    description: Set to true to suppress non-error output.
+    required: false
+    default: "false"
+  install-rust:
+    description: Set to false if the job already installed Rust.
+    required: false
+    default: "true"
+  rust-toolchain:
+    description: Rust toolchain version used when install-rust is true.
+    required: false
+    default: stable
+  cache:
+    description: Set to false to skip cargo cache restore/save.
+    required: false
+    default: "true"
+
+outputs:
+  report-path:
+    description: Absolute report path when output is set.
+    value: ${{ steps.run-scan.outputs.report-path }}
+  command-line:
+    description: Expanded command line used by the action.
+    value: ${{ steps.run-scan.outputs.command-line }}
+  sarif-path:
+    description: Absolute SARIF path when format=sarif and output is set.
+    value: ${{ steps.run-scan.outputs.sarif-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust toolchain
+      if: ${{ inputs.install-rust == 'true' }}
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ inputs.rust-toolchain }}
+
+    - name: Cache cargo artifacts
+      if: ${{ inputs.cache == 'true' }}
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ inputs.cargo-root }}
+
+    - name: Run skill-veil
+      id: run-scan
+      shell: bash
+      working-directory: ${{ inputs.cargo-root }}
+      run: |
+        set -euo pipefail
+
+        cmd=(cargo run -p skill-veil -- "${{ inputs.command }}" "${{ inputs.path }}" --format "${{ inputs.format }}")
+
+        if [ -n "${{ inputs.output }}" ]; then
+          mkdir -p "$(dirname "${{ inputs.output }}")"
+          cmd+=(--output "${{ inputs.output }}")
+        fi
+
+        if [ -n "${{ inputs.fail-on }}" ]; then
+          cmd+=(--fail-on "${{ inputs.fail-on }}")
+        fi
+
+        if [ -n "${{ inputs.min-severity }}" ]; then
+          cmd+=(--min-severity "${{ inputs.min-severity }}")
+        fi
+
+        if [ -n "${{ inputs.rules-dir }}" ]; then
+          cmd+=(--rules-dir "${{ inputs.rules-dir }}")
+        fi
+
+        if [ -n "${{ inputs.profile }}" ]; then
+          cmd+=(--profile "${{ inputs.profile }}")
+        fi
+
+        if [ -n "${{ inputs.baseline }}" ]; then
+          cmd+=(--baseline "${{ inputs.baseline }}")
+        fi
+
+        if [ -n "${{ inputs.waivers }}" ]; then
+          cmd+=(--waivers "${{ inputs.waivers }}")
+        fi
+
+        if [ -n "${{ inputs.policy }}" ]; then
+          cmd+=(--policy "${{ inputs.policy }}")
+        fi
+
+        if [ "${{ inputs.no-recursive }}" = "true" ]; then
+          cmd+=(--no-recursive)
+        fi
+
+        if [ "${{ inputs.quiet-summary }}" = "true" ]; then
+          cmd+=(--quiet-summary)
+        fi
+
+        if [ "${{ inputs.explain-policy }}" = "true" ]; then
+          cmd+=(--explain-policy)
+        fi
+
+        if [ -n "${{ inputs.preset }}" ]; then
+          cmd+=(--preset "${{ inputs.preset }}")
+        fi
+
+        if [ -n "${{ inputs.finding-limit }}" ]; then
+          cmd+=(--finding-limit "${{ inputs.finding-limit }}")
+        fi
+
+        if [ "${{ inputs.verbose }}" = "true" ]; then
+          cmd+=(-v)
+        fi
+
+        if [ "${{ inputs.quiet }}" = "true" ]; then
+          cmd+=(-q)
+        fi
+
+        command_line="$(printf '%q ' "${cmd[@]}")"
+        command_line="${command_line% }"
+        echo "Running ${command_line}"
+        echo "command-line=${command_line}" >> "$GITHUB_OUTPUT"
+
+        "${cmd[@]}"
+
+        if [ -n "${{ inputs.output }}" ]; then
+          if [[ "${{ inputs.output }}" = /* ]]; then
+            report_path="${{ inputs.output }}"
+          else
+            report_path="${PWD}/${{ inputs.output }}"
+          fi
+        else
+          report_path=""
+        fi
+
+        echo "report-path=${report_path}" >> "$GITHUB_OUTPUT"
+        if [ "${{ inputs.format }}" = "sarif" ]; then
+          echo "sarif-path=${report_path}" >> "$GITHUB_OUTPUT"
+        else
+          echo "sarif-path=" >> "$GITHUB_OUTPUT"
+        fi
