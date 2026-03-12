@@ -4,6 +4,7 @@
 
 mod benchmark_output;
 mod cli_args;
+mod color;
 mod commands;
 mod dataset;
 mod rule_tools;
@@ -75,18 +76,22 @@ fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Commands::Scan(args) => commands::run_scan(args, ScanTargetMode::Auto, cli.quiet)?,
-        Commands::ScanFile(args) => commands::run_scan(args, ScanTargetMode::File, cli.quiet)?,
-        Commands::ScanPackage(args) => {
-            commands::run_scan(args, ScanTargetMode::Package, cli.quiet)?
+        Commands::Scan(args) => {
+            commands::run_scan(args, ScanTargetMode::Auto, cli.quiet, cli.color)?
         }
-        Commands::ScanDataset(args) => run_scan_dataset(args, cli.quiet)?,
+        Commands::ScanFile(args) => {
+            commands::run_scan(args, ScanTargetMode::File, cli.quiet, cli.color)?
+        }
+        Commands::ScanPackage(args) => {
+            commands::run_scan(args, ScanTargetMode::Package, cli.quiet, cli.color)?
+        }
+        Commands::ScanDataset(args) => run_scan_dataset(args, cli.quiet, cli.color)?,
         Commands::Benchmark(args) => commands::run_benchmark(args)?,
         Commands::Baseline { action } => match action {
             BaselineAction::Create(args) => commands::run_baseline_create(args)?,
             BaselineAction::Update(args) => commands::run_baseline_update(args)?,
         },
-        Commands::Diff(args) => commands::run_diff(args)?,
+        Commands::Diff(args) => commands::run_diff(args, cli.color)?,
         Commands::Waivers { action } => match action {
             WaiversAction::Validate(args) => commands::run_waivers_validate(args)?,
         },

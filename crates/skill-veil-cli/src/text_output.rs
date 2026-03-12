@@ -1,40 +1,73 @@
 use anyhow::{Context, Result};
-use skill_veil_core::{RecommendedAction, ScanResult, Severity};
+use skill_veil_core::{RecommendedAction, ScanResult};
 
 use crate::cli_args::OutputFormat;
+use crate::color::ColorMode;
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone)]
 pub(crate) struct TextOutputOptions {
     pub(crate) quiet_summary: bool,
     pub(crate) explain_policy: bool,
     pub(crate) finding_limit: Option<usize>,
+    pub(crate) color: ColorMode,
+}
+
+impl Default for TextOutputOptions {
+    fn default() -> Self {
+        Self {
+            quiet_summary: false,
+            explain_policy: false,
+            finding_limit: None,
+            color: ColorMode::from_choice(crate::cli_args::ColorChoiceArg::Never, false),
+        }
+    }
 }
 
 pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOptions) -> String {
     let mut output = String::new();
 
     for result in results {
-        output.push_str(&format!("\n=== {} ===\n", result.path.display()));
+        output.push_str(&format!(
+            "\n{} {} {}\n",
+            options.color.heading("==="),
+            result.path.display(),
+            options.color.heading("===")
+        ));
         if let Some(package_id) = &result.package_id {
             output.push_str(&format!("Package ID: {}\n", package_id));
         }
-        output.push_str(&format!("Verdict: {}\n", result.verdict));
         output.push_str(&format!(
-            "Package Health: {} (hygiene/posture, independent from verdict)\n",
-            result.verdict_report.package_health
+            "Verdict: {}\n",
+            options.color.verdict(result.verdict)
+        ));
+        output.push_str(&format!(
+            "Package Health: {} {}\n",
+            options
+                .color
+                .package_health(result.verdict_report.package_health),
+            options
+                .color
+                .muted("(hygiene/posture, independent from verdict)")
         ));
         output.push_str(&format!("Heuristic Score: {}\n", result.heuristic_score));
         output.push_str(&format!(
             "Package Risk: {} | Action: {}\n",
-            result.summary.risk_score, result.summary.recommended_action
+            result.summary.risk_score,
+            options.color.action(result.summary.recommended_action)
         ));
         output.push_str(&format!(
             "Primary Risk: {} | Action: {}\n",
-            result.primary_summary.risk_score, result.primary_summary.recommended_action
+            result.primary_summary.risk_score,
+            options
+                .color
+                .action(result.primary_summary.recommended_action)
         ));
         output.push_str(&format!(
             "Supporting Package Risk: {} | Action: {}\n\n",
-            result.supporting_summary.risk_score, result.supporting_summary.recommended_action
+            result.supporting_summary.risk_score,
+            options
+                .color
+                .action(result.supporting_summary.recommended_action)
         ));
         append_verdict_reasons(&mut output, result);
 
@@ -49,7 +82,7 @@ pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOpti
         } else if result.findings.is_empty() {
             output.push_str("  No findings.\n");
         } else {
-            append_findings_by_scope(&mut output, result, options.finding_limit);
+            append_findings_by_scope(&mut output, result, options.finding_limit, options.color);
         }
 
         append_policy_reasons(&mut output, result);
@@ -167,6 +200,7 @@ fn append_findings_by_scope(
     output: &mut String,
     result: &ScanResult,
     finding_limit: Option<usize>,
+    color: ColorMode,
 ) {
     append_scope_counts(output, result);
     output.push('\n');
@@ -175,14 +209,14 @@ fn append_findings_by_scope(
         output.push_str("  Main artifact findings: none\n\n");
     } else {
         output.push_str("  Main artifact findings:\n");
-        append_findings(output, &result.primary_findings, finding_limit);
+        append_findings(output, &result.primary_findings, finding_limit, color);
     }
 
     if result.supporting_findings.is_empty() {
         output.push_str("  Supporting artifact findings: none\n\n");
     } else {
         output.push_str("  Supporting artifact findings:\n");
-        append_findings(output, &result.supporting_findings, finding_limit);
+        append_findings(output, &result.supporting_findings, finding_limit, color);
     }
 }
 
@@ -190,19 +224,15 @@ fn append_findings(
     output: &mut String,
     findings: &[skill_veil_core::Finding],
     finding_limit: Option<usize>,
+    color: ColorMode,
 ) {
     let display_limit = finding_limit.unwrap_or(findings.len());
     for finding in findings.iter().take(display_limit) {
-        let severity_icon = match finding.severity {
-            Severity::Critical => "[CRIT]",
-            Severity::High => "[HIGH]",
-            Severity::Medium => "[MED] ",
-            Severity::Low => "[LOW] ",
-        };
-
         output.push_str(&format!(
             "  {} {} ({})\n",
-            severity_icon, finding.rule_id, finding.category
+            color.severity_label(finding.severity),
+            color.rule(&finding.rule_id),
+            finding.category
         ));
         output.push_str(&format!("      {}\n", finding.reason));
         output.push_str(&format!("      Remediation: {}\n", finding.remediation));
@@ -403,9 +433,13 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     }
 }
 
-pub(crate) fn format_diff_text(diff: &skill_veil_core::DiffReport) -> String {
+pub(crate) fn format_diff_text(diff: &skill_veil_core::DiffReport, color: ColorMode) -> String {
     let mut output = String::new();
-    output.push_str("--- Diff ---\n");
+    output.push_str(&format!(
+        "{} Diff {}\n",
+        color.heading("---"),
+        color.heading("---")
+    ));
     output.push_str(&format!(
         "New findings: {}\nResolved findings: {}\nWaived findings: {}\nBaselined findings: {}\nUnchanged findings: {}\n",
         diff.new_findings.len(),
@@ -420,7 +454,7 @@ pub(crate) fn format_diff_text(diff: &skill_veil_core::DiffReport) -> String {
         for entry in &diff.new_findings {
             output.push_str(&format!(
                 "  - {} {} {}\n",
-                entry.rule_id,
+                color.rule(&entry.rule_id),
                 entry.artifact_path.as_deref().unwrap_or("-"),
                 entry.reason
             ));
@@ -432,7 +466,7 @@ pub(crate) fn format_diff_text(diff: &skill_veil_core::DiffReport) -> String {
         for entry in &diff.resolved_findings {
             output.push_str(&format!(
                 "  - {} {} {}\n",
-                entry.rule_id,
+                color.rule(&entry.rule_id),
                 entry.artifact_path.as_deref().unwrap_or("-"),
                 entry.reason
             ));
@@ -444,7 +478,7 @@ pub(crate) fn format_diff_text(diff: &skill_veil_core::DiffReport) -> String {
         for entry in &diff.waived_findings {
             output.push_str(&format!(
                 "  - {} {} {}\n",
-                entry.rule_id,
+                color.rule(&entry.rule_id),
                 entry.artifact_path.as_deref().unwrap_or("-"),
                 entry.reason
             ));
@@ -456,7 +490,7 @@ pub(crate) fn format_diff_text(diff: &skill_veil_core::DiffReport) -> String {
         for entry in &diff.baselined_findings {
             output.push_str(&format!(
                 "  - {} {} {}\n",
-                entry.rule_id,
+                color.rule(&entry.rule_id),
                 entry.artifact_path.as_deref().unwrap_or("-"),
                 entry.reason
             ));

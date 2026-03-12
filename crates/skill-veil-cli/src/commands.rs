@@ -5,10 +5,11 @@ use crate::{
         format_benchmark_text, render_benchmark_dashboard, render_benchmark_tuning_report,
     },
     cli_args::{
-        BaselineCreateArgs, BaselineUpdateArgs, BenchmarkArgs, DiffArgs, DiffFailPolicyArg,
-        OutputFormat, PolicyProfileArg, PolicyValidateArgs, ScanArgs, ScanPresetArg, SeverityArg,
-        WaiversValidateArgs,
+        BaselineCreateArgs, BaselineUpdateArgs, BenchmarkArgs, ColorChoiceArg, DiffArgs,
+        DiffFailPolicyArg, OutputFormat, PolicyProfileArg, PolicyValidateArgs, ScanArgs,
+        ScanPresetArg, SeverityArg, WaiversValidateArgs,
     },
+    color::ColorMode,
 };
 use anyhow::{Context, Result};
 use skill_veil_core::{
@@ -19,6 +20,7 @@ use skill_veil_core::{
     RecommendedAction, ScanOptions, ScanTargetMode, Scanner, POLICY_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn load_rule_engine_from_dir(rules_dir: &Path) -> Result<skill_veil_core::RuleEngine> {
@@ -54,12 +56,22 @@ pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
     args
 }
 
-pub(crate) fn run_scan(args: ScanArgs, target_mode: ScanTargetMode, quiet: bool) -> Result<()> {
+pub(crate) fn run_scan(
+    args: ScanArgs,
+    target_mode: ScanTargetMode,
+    quiet: bool,
+    color_choice: ColorChoiceArg,
+) -> Result<()> {
     let args = apply_scan_preset(args);
+    let color = ColorMode::from_choice(
+        color_choice,
+        args.output.is_none() && std::io::stdout().is_terminal(),
+    );
     let text_options = TextOutputOptions {
         quiet_summary: args.quiet_summary,
         explain_policy: args.explain_policy,
         finding_limit: args.finding_limit,
+        color,
     };
     let options = ScanOptions {
         min_severity: args.min_severity.map(Into::into),
@@ -303,7 +315,7 @@ pub(crate) fn run_policy_validate(args: PolicyValidateArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_diff(args: DiffArgs) -> Result<()> {
+pub(crate) fn run_diff(args: DiffArgs, color_choice: ColorChoiceArg) -> Result<()> {
     let previous = load_json_reports(&args.previous)?;
     let current = load_json_reports(&args.current)?;
     let baseline = args
@@ -323,10 +335,11 @@ pub(crate) fn run_diff(args: DiffArgs) -> Result<()> {
 
     let output = match args.format {
         OutputFormat::Text => {
+            let color = ColorMode::from_choice(color_choice, std::io::stdout().is_terminal());
             if args.ci_summary {
                 format_diff_ci_summary(&diff)
             } else {
-                format_diff_text(&diff)
+                format_diff_text(&diff, color)
             }
         }
         OutputFormat::Json => {

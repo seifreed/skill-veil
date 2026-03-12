@@ -1,5 +1,7 @@
 use super::*;
 use crate::benchmark_output::render_benchmark_dashboard;
+use crate::cli_args::ColorChoiceArg;
+use crate::color::ColorMode;
 use crate::dataset::format_dataset_verdicts_text;
 use crate::dataset::DatasetPackageVerdictEntry;
 use crate::text_output::{format_diff_ci_summary, format_text_output, TextOutputOptions};
@@ -148,6 +150,7 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
             quiet_summary: true,
             explain_policy: false,
             finding_limit: None,
+            color: ColorMode::from_choice(ColorChoiceArg::Never, false),
         },
     );
 
@@ -228,6 +231,7 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
             quiet_summary: false,
             explain_policy: true,
             finding_limit: None,
+            color: ColorMode::from_choice(ColorChoiceArg::Never, false),
         },
     );
 
@@ -528,7 +532,11 @@ fn test_format_dataset_verdicts_text_analyst_summary_is_compact() {
         package_root_summary: Vec::new(),
     };
 
-    let output = format_dataset_verdicts_text(&[entry], true);
+    let output = format_dataset_verdicts_text(
+        &[entry],
+        true,
+        ColorMode::from_choice(ColorChoiceArg::Never, false),
+    );
 
     assert!(output.contains("[suspicious] package=abc123"));
     assert!(output.contains("scope=supporting_artifact"));
@@ -557,7 +565,11 @@ fn test_format_dataset_verdicts_text_full_includes_detailed_fields() {
         package_root_summary: Vec::new(),
     };
 
-    let output = format_dataset_verdicts_text(&[entry], false);
+    let output = format_dataset_verdicts_text(
+        &[entry],
+        false,
+        ColorMode::from_choice(ColorChoiceArg::Never, false),
+    );
 
     assert!(output.contains("malicious package=pkg001"));
     assert!(output.contains("health=healthy"));

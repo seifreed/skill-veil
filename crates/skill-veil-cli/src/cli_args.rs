@@ -2,6 +2,13 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum ColorChoiceArg {
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 pub enum SeverityArg {
     Low,
     Medium,
@@ -26,6 +33,8 @@ pub struct Cli {
     pub verbose: bool,
     #[arg(short, long, global = true)]
     pub quiet: bool,
+    #[arg(long, global = true, value_enum, default_value = "auto")]
+    pub color: ColorChoiceArg,
     #[command(subcommand)]
     pub command: Commands,
 }

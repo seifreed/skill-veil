@@ -1,6 +1,7 @@
+use crate::color::ColorMode;
 use crate::text_output::{format_results, TextOutputOptions};
 use crate::{
-    cli_args::{DatasetViewArg, OutputFormat, ScanArgs},
+    cli_args::{ColorChoiceArg, DatasetViewArg, OutputFormat, ScanArgs},
     commands::apply_scan_preset,
 };
 use anyhow::{Context, Result};
@@ -11,6 +12,7 @@ use skill_veil_core::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -84,12 +86,21 @@ struct DatasetPreparation {
     skipped_archives: usize,
 }
 
-pub(crate) fn run_scan_dataset(args: ScanArgs, quiet: bool) -> Result<()> {
+pub(crate) fn run_scan_dataset(
+    args: ScanArgs,
+    quiet: bool,
+    color_choice: ColorChoiceArg,
+) -> Result<()> {
     let args = apply_scan_preset(args);
+    let color = ColorMode::from_choice(
+        color_choice,
+        args.output.is_none() && std::io::stdout().is_terminal(),
+    );
     let text_options = TextOutputOptions {
         quiet_summary: args.quiet_summary,
         explain_policy: args.explain_policy,
         finding_limit: args.finding_limit,
+        color,
     };
     let options = ScanOptions {
         min_severity: args.min_severity.map(Into::into),
@@ -222,6 +233,7 @@ pub(crate) fn run_scan_dataset(args: ScanArgs, quiet: bool) -> Result<()> {
                 output.push_str(&format_dataset_verdicts_text(
                     &aggregated_package_verdicts,
                     args.analyst_summary,
+                    color,
                 ));
             } else {
                 output.push_str(&format_results(
@@ -580,32 +592,37 @@ fn zip_source_signature(zip_path: &Path) -> Result<String> {
 pub(crate) fn format_dataset_verdicts_text(
     entries: &[DatasetPackageVerdictEntry],
     analyst_summary: bool,
+    color: ColorMode,
 ) -> String {
     let mut lines = String::new();
-    lines.push_str("\n--- Verdict Triage ---\n");
+    lines.push_str(&format!(
+        "\n{} Verdict Triage {}\n",
+        color.heading("---"),
+        color.heading("---")
+    ));
 
     for entry in entries {
         if analyst_summary {
-            lines.push_str(&format_dataset_verdict_analyst_line(entry));
+            lines.push_str(&format_dataset_verdict_analyst_line(entry, color));
         } else {
             lines.push_str(&format!(
                 "{} package={} health={} blast_radius={} declared_permissions={} rule={} why={} main={} supporting={} package_root={} path={}\n",
-                entry.final_verdict,
+                color.verdict(entry.final_verdict),
                 entry.package_id.as_deref().unwrap_or("unknown"),
                 entry
                     .package_health
-                    .map(|health| health.to_string())
+                    .map(|health| color.package_health(health))
                     .unwrap_or_else(|| "healthy".to_string()),
                 entry
                     .blast_radius
-                    .map(|level| level.to_string())
+                    .map(|level| color.blast_radius(level))
                     .unwrap_or_else(|| "low".to_string()),
                 render_declared_permissions(&entry.declared_permissions),
-                entry.top_rule.as_deref().unwrap_or("none"),
+                color.rule(entry.top_rule.as_deref().unwrap_or("none")),
                 entry.strongest_reason.as_deref().unwrap_or("no_strong_cause"),
-                render_scope_summary(&entry.main_summary),
-                render_scope_summary(&entry.supporting_summary),
-                render_scope_summary(&entry.package_root_summary),
+                color.scope(render_scope_summary(&entry.main_summary)),
+                color.scope(render_scope_summary(&entry.supporting_summary)),
+                color.scope(render_scope_summary(&entry.package_root_summary)),
                 entry.representative_path
             ));
         }
@@ -614,7 +631,10 @@ pub(crate) fn format_dataset_verdicts_text(
     lines
 }
 
-fn format_dataset_verdict_analyst_line(entry: &DatasetPackageVerdictEntry) -> String {
+fn format_dataset_verdict_analyst_line(
+    entry: &DatasetPackageVerdictEntry,
+    color: ColorMode,
+) -> String {
     let scope = strongest_scope(entry);
     let top_reason = entry
         .strongest_reason
@@ -622,17 +642,17 @@ fn format_dataset_verdict_analyst_line(entry: &DatasetPackageVerdictEntry) -> St
         .unwrap_or("no_strong_cause");
     format!(
         "[{verdict}] package={package} health={health} blast={blast} scope={scope} rule={rule} perms={perms} reason={reason}\n",
-        verdict = entry.final_verdict,
+        verdict = color.verdict(entry.final_verdict),
         package = entry.package_id.as_deref().unwrap_or("unknown"),
         health = entry
             .package_health
-            .map(|health| health.to_string())
+            .map(|health| color.package_health(health))
             .unwrap_or_else(|| "healthy".to_string()),
-        scope = scope,
-        rule = entry.top_rule.as_deref().unwrap_or("none"),
+        scope = color.scope(scope),
+        rule = color.rule(entry.top_rule.as_deref().unwrap_or("none")),
         blast = entry
             .blast_radius
-            .map(|level| level.to_string())
+            .map(|level| color.blast_radius(level))
             .unwrap_or_else(|| "low".to_string()),
         perms = render_declared_permissions(&entry.declared_permissions),
         reason = top_reason,
