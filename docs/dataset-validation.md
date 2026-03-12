@@ -72,4 +72,4 @@ Recommended local-only paths:
 - `dataset_extracted/`
 - `dataset_vt_new/`
 
-These are already ignored by the repository `.gitignore`.
+Keep these directories outside version control when running local dataset validation.

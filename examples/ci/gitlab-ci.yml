@@ -20,7 +20,7 @@ skill_veil_pr_gate:
     - cargo run -p skill-veil -- scan-package . --preset ci --format json --output artifacts/current.json
     - cargo run -p skill-veil -- scan-package "$BASE_REF_DIR" --preset ci --format json --output artifacts/previous.json
     - cargo run -p skill-veil -- scan-package . --format sarif --output artifacts/current.sarif
-    - ./scripts/ci/skill-veil-pr-gate.sh artifacts/previous.json artifacts/current.json .skill-veil/baseline.json .skill-veil/waivers.yaml
+    - cargo run -p skill-veil -- diff artifacts/previous.json artifacts/current.json --baseline .skill-veil/baseline.json --waivers .skill-veil/waivers.yaml --ci-summary --fail-on-new-active
   after_script:
     - git worktree remove --force "$BASE_REF_DIR" || true
   artifacts:

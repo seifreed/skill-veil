@@ -9,8 +9,7 @@ Phase 7.1 ships three adoption assets:
 
 - reusable GitHub composite action: `.github/actions/skill-veil/action.yml`
 - CI templates: `examples/ci/github-actions-pr-gating.yml` and `examples/ci/gitlab-ci.yml`
-- local pre-commit example: `.pre-commit-config.yaml`
-- generic PR-gate script: `scripts/ci/skill-veil-pr-gate.sh`
+- local CI gate: run `cargo fmt --all --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and `cargo test --all-targets --all-features`
 - extra CI examples: `examples/ci/github-actions-sarif-upload.yml` and `examples/ci/jenkins.Jenkinsfile`
 
 ## 1. Generate current reports
@@ -163,16 +162,18 @@ Reference templates:
 
 Keep these files in version control if your team wants reproducible gating.
 
-## 9. Pre-commit example
+## 9. Local gate example
 
-The repository-level `.pre-commit-config.yaml` shows a conservative local gate:
+Use a conservative local gate before opening a PR:
 
 ```bash
-cargo run -q -p skill-veil -- scan-package . --format text --quiet-summary --fail-on high
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
 ```
 
-That hook is useful for fast developer feedback before the CI diff gate runs on
-the merge request or pull request.
+That local sequence is useful for fast developer feedback before the CI diff gate
+runs on the merge request or pull request.
 
 ## 10. Large datasets, marketplace mirrors, and monorepos
 

@@ -34,7 +34,7 @@ Use:
 
 - standard issues for bugs or improvements
 - rule pack proposal templates for new rules
-- private disclosure via [../SECURITY.md](../SECURITY.md) for vulnerabilities or
+- private maintainer contact for vulnerabilities or
   scanner bypasses with security impact
 
 When reporting a problem, include:

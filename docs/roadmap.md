@@ -161,6 +161,5 @@ Scope:
 - semantic versioning.
 
 Deliverables:
-- `SECURITY.md`,
 - `CONTRIBUTING.md`,
 - public roadmap and proposal templates.

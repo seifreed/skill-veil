@@ -12,7 +12,7 @@ pipeline {
 
     stage('Gate diff') {
       steps {
-        sh './scripts/ci/skill-veil-pr-gate.sh artifacts/previous.json artifacts/current.json .skill-veil/baseline.json .skill-veil/waivers.yaml'
+        sh 'cargo run -p skill-veil -- diff artifacts/previous.json artifacts/current.json --baseline .skill-veil/baseline.json --waivers .skill-veil/waivers.yaml --ci-summary --fail-on-new-active'
       }
     }
   }

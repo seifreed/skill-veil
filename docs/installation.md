@@ -41,12 +41,14 @@ skill-veil scan-file examples/malicious-skill/SKILL.md
 Use `checksums.txt` from the release to verify downloaded archives before
 placing the binary in your `PATH`.
 
-## Install helper
+## Manual archive installation
 
-The repository ships a small helper that understands both `.tar.gz` and `.zip`
-release artifacts:
+Extract the release archive for your platform and place the binary somewhere on
+your `PATH`.
 
 ```bash
-./scripts/install-release.sh skill-veil-linux-x86_64.tar.gz "$HOME/.local/bin"
-./scripts/install-release.sh skill-veil-windows-x86_64.zip "$HOME/bin"
+tar -xzf skill-veil-linux-x86_64.tar.gz
+install -m 0755 skill-veil "$HOME/.local/bin/skill-veil"
 ```
+
+Windows releases are shipped as `.zip` archives containing `skill-veil.exe`.

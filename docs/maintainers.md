@@ -21,7 +21,7 @@ Maintainers are expected to:
 - review code, rule, and benchmark changes
 - preserve compatibility promises documented in [versioning.md](versioning.md)
 - keep `rules/official/` curated and reproducible
-- review security reports under [../SECURITY.md](../SECURITY.md)
+- review vulnerability and bypass reports through the maintainer contact process
 - ensure releases follow [release-process.md](release-process.md)
 
 ## Adding Maintainers

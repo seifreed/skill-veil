@@ -76,7 +76,8 @@ cargo install --path crates/skill-veil-cli
 
 ```bash
 # Example
-./scripts/install-release.sh skill-veil-linux-x86_64.tar.gz "$HOME/.local/bin"
+tar -xzf skill-veil-linux-x86_64.tar.gz
+install -m 0755 skill-veil "$HOME/.local/bin/skill-veil"
 ```
 
 Full installation notes: [docs/installation.md](docs/installation.md)
@@ -441,7 +442,6 @@ Contributions are welcome.
 Start here:
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
-- [SECURITY.md](SECURITY.md)
 - [docs/maintainers.md](docs/maintainers.md)
 - [docs/governance.md](docs/governance.md)
 - [docs/versioning.md](docs/versioning.md)

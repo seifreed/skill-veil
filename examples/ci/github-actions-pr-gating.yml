@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./scripts/ci/skill-veil-pr-gate.sh artifacts/previous.json artifacts/current.json .skill-veil/baseline.json .skill-veil/waivers.yaml
+          cargo run -p skill-veil -- diff artifacts/previous.json artifacts/current.json --baseline .skill-veil/baseline.json --waivers .skill-veil/waivers.yaml --ci-summary --fail-on-new-active
 
       - name: Generate SARIF
         id: sarif
