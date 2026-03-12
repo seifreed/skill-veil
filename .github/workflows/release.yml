@@ -30,27 +30,24 @@ jobs:
       - name: Check published core version
         id: core_version
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
+          published="$(
+            curl -fsSL \
+              -H 'User-Agent: skill-veil-release' \
+              https://crates.io/api/v1/crates/skill-veil-core 2>/dev/null \
+            | python3 -c 'import json, sys; payload = json.load(sys.stdin); print(payload["crate"]["newest_version"])' \
+            || true
+          )"
+          current="$(python3 - <<'PY'
           import tomllib
-          import urllib.request
           from pathlib import Path
-
-          published = ""
-          try:
-              with urllib.request.urlopen("https://crates.io/api/v1/crates/skill-veil-core", timeout=10) as response:
-                  payload = json.load(response)
-              published = payload["crate"]["newest_version"]
-          except Exception:
-              published = ""
 
           workspace = tomllib.loads(Path("Cargo.toml").read_text())
           manifest = tomllib.loads(Path("crates/skill-veil-core/Cargo.toml").read_text())
-          current = manifest["package"].get("version", workspace["workspace"]["package"]["version"])
-
-          print(f"published={published}")
-          print(f"current={current}")
+          print(manifest["package"].get("version", workspace["workspace"]["package"]["version"]))
           PY
+          )"
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
 
       - name: Publish core crate
         if: steps.core_version.outputs.published != steps.core_version.outputs.current
@@ -68,27 +65,24 @@ jobs:
       - name: Check published CLI version
         id: cli_version
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
+          published="$(
+            curl -fsSL \
+              -H 'User-Agent: skill-veil-release' \
+              https://crates.io/api/v1/crates/skill-veil 2>/dev/null \
+            | python3 -c 'import json, sys; payload = json.load(sys.stdin); print(payload["crate"]["newest_version"])' \
+            || true
+          )"
+          current="$(python3 - <<'PY'
           import tomllib
-          import urllib.request
           from pathlib import Path
-
-          published = ""
-          try:
-              with urllib.request.urlopen("https://crates.io/api/v1/crates/skill-veil", timeout=10) as response:
-                  payload = json.load(response)
-              published = payload["crate"]["newest_version"]
-          except Exception:
-              published = ""
 
           workspace = tomllib.loads(Path("Cargo.toml").read_text())
           manifest = tomllib.loads(Path("crates/skill-veil-cli/Cargo.toml").read_text())
-          current = manifest["package"].get("version", workspace["workspace"]["package"]["version"])
-
-          print(f"published={published}")
-          print(f"current={current}")
+          print(manifest["package"].get("version", workspace["workspace"]["package"]["version"]))
           PY
+          )"
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
 
       - name: Publish CLI crate
         if: steps.cli_version.outputs.published != steps.cli_version.outputs.current
