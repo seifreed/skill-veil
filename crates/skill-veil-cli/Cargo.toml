@@ -5,13 +5,17 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "CLI for skill-veil behavioral analysis"
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["security", "agents", "cli", "supply-chain", "mcp"]
+categories = ["command-line-utilities", "development-tools"]
 
 [[bin]]
 name = "skill-veil"
 path = "src/main.rs"
 
 [dependencies]
-skill-veil-core = { path = "../skill-veil-core" }
+skill-veil-core = { version = "0.1.0", path = "../skill-veil-core" }
 anyhow.workspace = true
 clap.workspace = true
 serde.workspace = true

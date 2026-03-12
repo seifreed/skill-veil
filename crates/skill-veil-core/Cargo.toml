@@ -5,6 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Core library for skill-veil behavioral analysis"
+repository.workspace = true
+readme = "../../README.md"
+keywords = ["security", "agents", "sast", "supply-chain", "mcp"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow.workspace = true

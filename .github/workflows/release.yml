@@ -9,6 +9,42 @@ permissions:
   contents: write
 
 jobs:
+  publish-crates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Dry-run publish core crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --dry-run -p skill-veil-core
+
+      - name: Publish core crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p skill-veil-core
+
+      - name: Wait for crates.io index
+        run: sleep 30
+
+      - name: Dry-run publish CLI crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --dry-run -p skill-veil
+
+      - name: Publish CLI crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p skill-veil
+
   benchmark-release:
     runs-on: ubuntu-latest
 
@@ -142,6 +178,7 @@ jobs:
 
   publish:
     needs:
+      - publish-crates
       - build-binaries
       - benchmark-release
     runs-on: ubuntu-latest

@@ -724,9 +724,8 @@ impl Default for RuleEngine<RegexPatternMatcher> {
 }
 
 /// Embedded YAML rules file
-const OFFICIAL_CORE_RULES_YAML: &str = include_str!("../../../rules/official/core.yaml");
-const OFFICIAL_BEHAVIORAL_RULES_YAML: &str =
-    include_str!("../../../rules/official/behavioral.yaml");
+const OFFICIAL_CORE_RULES_YAML: &str = include_str!("../resources/official/core.yaml");
+const OFFICIAL_BEHAVIORAL_RULES_YAML: &str = include_str!("../resources/official/behavioral.yaml");
 
 /// Get built-in rules by parsing the embedded YAML file
 fn get_builtin_rules() -> Vec<Rule> {
