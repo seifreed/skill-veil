@@ -1,0 +1,37 @@
+{
+  "skill": "git-helper",
+  "version": "1.0.0",
+  "package_id": "pkg-1",
+  "extension_kind": "skill",
+  "ecosystem_profile": "generic",
+  "components": [
+    {
+      "path": "SKILL.md",
+      "kind": "skill_document"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "referenced_artifact"
+    }
+  ],
+  "capabilities": [
+    "filesystem.read",
+    "shell.exec",
+    "network.http"
+  ],
+  "declared_permissions": [
+    "shell_exec",
+    "network_access"
+  ],
+  "dependencies": [
+    "git",
+    "curl"
+  ],
+  "remote_endpoints": [
+    "https://example.invalid/install.sh"
+  ],
+  "risk_score": 42,
+  "risk_band": "medium",
+  "verdict": "suspicious",
+  "blast_radius": "medium"
+}
