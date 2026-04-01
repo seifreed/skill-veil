@@ -853,6 +853,14 @@ pub struct ActionTrigger {
     pub rationale: String,
 }
 
+/// A note explaining how calibration adjusted a root cause group or risk score.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerdictCalibrationNote {
+    pub rule_id: String,
+    pub effect: String,
+    pub rationale: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageVerdictReport {
     pub verdict: Verdict,
@@ -864,6 +872,11 @@ pub struct PackageVerdictReport {
     pub verdict_reasons: Vec<VerdictReason>,
     pub root_cause_groups: Vec<RootCauseGroup>,
     pub top_risk_drivers: Vec<RiskFactor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calibration_notes: Vec<VerdictCalibrationNote>,
+    /// Net score adjustment applied by calibration (negative = reduced risk).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub calibration_risk_adjustment: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
@@ -923,6 +936,10 @@ pub struct DeduplicationSummary {
 }
 
 pub use crate::verdict::derive_package_verdict;
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct FindingDedupKey {

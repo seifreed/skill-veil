@@ -251,6 +251,7 @@ fn node_has_source(graph: &ArtifactGraph, node_path: &str, source: SourceSelecto
             edge.from == node_path
                 && matches!(edge.relation, ArtifactRelation::Downloads)
                 && edge.endpoint_kind != Some(EndpointKind::Registry)
+                && !looks_like_registry_url(&edge.to)
         }),
         SourceSelector::FilesystemWrite => {
             node_has_capability(graph, node_path, ArtifactCapability::FilesystemWrite)
@@ -326,6 +327,7 @@ fn source_summary(graph: &ArtifactGraph, node_path: &str, source: SourceSelector
                 edge.from == node_path
                     && matches!(edge.relation, ArtifactRelation::Downloads)
                     && edge.endpoint_kind != Some(EndpointKind::Registry)
+                    && !looks_like_registry_url(&edge.to)
             })
             .map(|edge| edge.to.clone())
             .unwrap_or_else(|| "remote_download".to_string()),
@@ -442,6 +444,23 @@ fn looks_like_external_sink(edge: &crate::artifact_graph::ArtifactEdge) -> bool 
     .any(|needle| lower.contains(needle))
 }
 
+fn looks_like_registry_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    [
+        "registry.npmjs.org",
+        "registry.yarnpkg.com",
+        "files.pythonhosted.org",
+        "pypi.org/packages",
+        "crates.io/api",
+        "static.crates.io",
+        "index.crates.io",
+        "registry.hub.docker.com",
+        "ghcr.io",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,11 +481,9 @@ mod tests {
         );
 
         let findings = derive_taint_findings(&graph);
-        assert!(
-            findings
-                .iter()
-                .all(|finding| finding.rule_id != "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION")
-        );
+        assert!(findings
+            .iter()
+            .all(|finding| finding.rule_id != "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"));
     }
 
     #[test]
@@ -481,11 +498,9 @@ mod tests {
         );
 
         let findings = derive_taint_findings(&graph);
-        assert!(
-            findings
-                .iter()
-                .any(|finding| finding.rule_id == "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK")
-        );
+        assert!(findings
+            .iter()
+            .any(|finding| finding.rule_id == "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK"));
     }
 
     #[test]

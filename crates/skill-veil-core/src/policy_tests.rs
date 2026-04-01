@@ -419,6 +419,8 @@ fn test_diff_reports_detects_new_and_resolved_findings() {
             verdict_reasons: Vec::new(),
             root_cause_groups: Vec::new(),
             top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
         },
     };
     let current = JsonReport {
@@ -458,6 +460,8 @@ fn test_diff_reports_detects_new_and_resolved_findings() {
             verdict_reasons: Vec::new(),
             root_cause_groups: Vec::new(),
             top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
         },
     };
 
@@ -513,6 +517,8 @@ fn test_diff_reports_classifies_waived_and_baselined_findings() {
             verdict_reasons: Vec::new(),
             root_cause_groups: Vec::new(),
             top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
         },
     };
     let baseline = BaselineFile {
@@ -562,6 +568,8 @@ fn test_diff_reports_classifies_waived_and_baselined_findings() {
             verdict_reasons: Vec::new(),
             root_cause_groups: Vec::new(),
             top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
         },
     };
     let waivers = WaiverFile {

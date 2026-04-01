@@ -44,7 +44,8 @@ pub(crate) fn calibrate_verdict_inputs(
             ThreatCategory::RemoteExec
                 | ThreatCategory::DataExfiltration
                 | ThreatCategory::CredentialExposure
-        ) && finding.recommended_action != RecommendedAction::Log;
+        ) && finding.recommended_action
+            != RecommendedAction::Log;
         is_known_chain_rule || is_actionable_chain_category
     });
     let has_remote_mcp_exec_pair = findings.iter().any(|finding| {

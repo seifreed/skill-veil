@@ -45,12 +45,30 @@ pub struct ArtifactNode {
     pub capabilities: Vec<ArtifactCapabilityFact>,
 }
 
+/// Describes the network endpoint category for a ConnectsTo or Downloads edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointKind {
+    /// Publicly addressable remote endpoint (attacker-controlled or external service).
+    Remote,
+    /// Known package registry (npm, PyPI, crates.io, …). Downloads from these are lower risk.
+    Registry,
+    /// Ephemeral or tunneled endpoint (ngrok, trycloudflare, …).
+    Transient,
+    /// Cloud provider metadata/control-plane endpoint (169.254.169.254, …).
+    ControlPlane,
+    /// Loopback or LAN-local endpoint.
+    Local,
+}
+
 /// A directed edge between two artifacts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArtifactEdge {
     pub from: String,
     pub to: String,
     pub relation: ArtifactRelation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_kind: Option<EndpointKind>,
 }
 
 /// Relationship between two artifacts.
@@ -121,10 +139,21 @@ impl ArtifactGraph {
         to: impl Into<String>,
         relation: ArtifactRelation,
     ) {
+        self.add_edge_with_endpoint(from, to, relation, None);
+    }
+
+    pub fn add_edge_with_endpoint(
+        &mut self,
+        from: impl Into<String>,
+        to: impl Into<String>,
+        relation: ArtifactRelation,
+        endpoint_kind: Option<EndpointKind>,
+    ) {
         let edge = ArtifactEdge {
             from: from.into(),
             to: to.into(),
             relation,
+            endpoint_kind,
         };
 
         if self.edges.iter().any(|existing| {

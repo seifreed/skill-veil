@@ -319,7 +319,7 @@ pub(crate) fn waiver_matches_finding(
         finding
             .artifact_path
             .as_ref()
-            .is_some_and(|artifact_path| artifact_path.ends_with(path))
+            .is_some_and(|artifact_path| std::path::Path::new(artifact_path).ends_with(path))
     });
     let context_matches = waiver
         .context
@@ -361,7 +361,7 @@ pub(crate) fn policy_override_matches(
         finding
             .artifact_path
             .as_ref()
-            .is_some_and(|artifact_path| artifact_path.ends_with(path))
+            .is_some_and(|artifact_path| std::path::Path::new(artifact_path).ends_with(path))
     });
     let context_matches = policy_override
         .context

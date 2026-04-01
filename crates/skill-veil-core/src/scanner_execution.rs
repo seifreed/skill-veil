@@ -107,13 +107,15 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     let artifact_kind = Scanner::<F, P>::artifact_kind_for_path(path);
     let artifact_path = path.display().to_string();
     let artifact_graph = scanner.build_artifact_graph(&doc);
-    let findings: Vec<_> = findings
+    let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph);
+    let mut findings: Vec<_> = findings
         .into_iter()
         .map(|finding| match artifact_kind {
             ArtifactKind::SkillDocument => finding,
             _ => finding.with_artifact(artifact_kind, artifact_path.clone()),
         })
         .collect();
+    findings.extend(taint_findings);
     let (findings, deduplication_summary) = deduplicate_findings(findings);
     let filter_outcome = scanner.filter_service.filter_with_summary(findings);
     let filtered_findings = filter_outcome.findings;

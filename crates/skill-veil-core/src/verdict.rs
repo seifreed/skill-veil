@@ -5,6 +5,7 @@ use crate::findings::{
     FindingSummary, HygieneSummary, PackageHealth, PackageVerdictReport, RecommendedAction,
     RootCauseGroup, SignalClass, ThreatCategory, Verdict, VerdictReason,
 };
+use crate::verdict_calibration::calibrate_verdict_inputs;
 
 #[must_use]
 pub fn derive_package_verdict(
@@ -13,7 +14,9 @@ pub fn derive_package_verdict(
     supporting_summary: &FindingSummary,
     package_summary: &FindingSummary,
 ) -> PackageVerdictReport {
-    let root_cause_groups = build_root_cause_groups(findings);
+    let raw_root_cause_groups = build_root_cause_groups(findings);
+    let calibration = calibrate_verdict_inputs(findings, &raw_root_cause_groups);
+    let root_cause_groups = calibration.root_cause_groups;
     let has_conclusive_supporting_malicious =
         findings.iter().any(is_conclusive_supporting_malicious);
     let compound_reasons = detect_compound_verdict_reasons(findings, &root_cause_groups);
@@ -101,6 +104,8 @@ pub fn derive_package_verdict(
         verdict_reasons,
         root_cause_groups,
         top_risk_drivers,
+        calibration_notes: calibration.notes,
+        calibration_risk_adjustment: calibration.risk_adjustment,
     }
 }
 
@@ -462,7 +467,7 @@ fn is_conclusive_supporting_malicious(finding: &Finding) -> bool {
     match finding.category {
         ThreatCategory::RemoteExec => has_remote_indicator,
         ThreatCategory::DataExfiltration => {
-            has_sensitive_payload && has_transmit_verb && has_exfil_channel
+            (has_sensitive_payload && has_transmit_verb) || has_exfil_channel
         }
         ThreatCategory::PersistentPromptTampering => true,
         _ => false,

@@ -59,6 +59,7 @@
 pub mod adapters;
 pub mod analyzer;
 pub mod artifact_graph;
+mod artifact_taint;
 pub mod benchmark;
 pub mod findings;
 pub mod policy;
@@ -75,6 +76,7 @@ mod scanner_support;
 mod scanner_types;
 pub mod services;
 mod verdict;
+mod verdict_calibration;
 
 #[cfg(feature = "yara")]
 pub mod yara_engine;
@@ -122,5 +124,5 @@ pub use ports::{DecodedText, FileContent, FileSystemProvider, MarkdownParser, Pa
 pub use adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
 pub use artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactEdge,
-    ArtifactGraph, ArtifactNode, ArtifactRelation,
+    ArtifactGraph, ArtifactNode, ArtifactRelation, EndpointKind,
 };
