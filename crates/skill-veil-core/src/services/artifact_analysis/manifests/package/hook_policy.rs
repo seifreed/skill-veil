@@ -141,6 +141,21 @@ pub(super) fn package_json_capabilities(json: &Value) -> Vec<ArtifactCapabilityF
     capabilities
 }
 
+pub(super) fn package_json_relations(json: &Value) -> Vec<ArtifactLink> {
+    let mut links = Vec::new();
+    if let Some(scripts) = json.get("scripts").and_then(Value::as_object) {
+        for hook in ["preinstall", "install", "postinstall"] {
+            if let Some(command) = scripts.get(hook).and_then(Value::as_str) {
+                links.push(ArtifactLink {
+                    target: command.to_string(),
+                    relation: ArtifactRelation::Executes,
+                });
+            }
+        }
+    }
+    links
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,19 +173,4 @@ mod tests {
         let json: Value = serde_json::json!({ "bin": "cli.js" });
         assert_eq!(PackageBinaryExposure::detect(&json), PackageBinaryExposure::Exposed);
     }
-}
-
-pub(super) fn package_json_relations(json: &Value) -> Vec<ArtifactLink> {
-    let mut links = Vec::new();
-    if let Some(scripts) = json.get("scripts").and_then(Value::as_object) {
-        for hook in ["preinstall", "install", "postinstall"] {
-            if let Some(command) = scripts.get(hook).and_then(Value::as_str) {
-                links.push(ArtifactLink {
-                    target: command.to_string(),
-                    relation: ArtifactRelation::Executes,
-                });
-            }
-        }
-    }
-    links
 }

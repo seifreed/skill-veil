@@ -78,9 +78,9 @@ fn calibration_traces(
     calibration_notes.iter().map(calibration_trace)
 }
 
-fn non_log_root_cause_groups<'a>(
-    root_cause_groups: &'a [RootCauseGroup],
-) -> impl Iterator<Item = &'a RootCauseGroup> {
+fn non_log_root_cause_groups(
+    root_cause_groups: &[RootCauseGroup],
+) -> impl Iterator<Item = &RootCauseGroup> {
     root_cause_groups
         .iter()
         .filter(|group| group.strongest_action != RecommendedAction::Log)

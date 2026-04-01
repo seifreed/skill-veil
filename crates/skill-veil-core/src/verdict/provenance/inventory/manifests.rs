@@ -37,7 +37,7 @@ fn count_manifest_dependencies(file_name: &str, content: &str) -> usize {
     match file_name {
         "package.json" | "composer.json" => serde_json::from_str::<serde_json::Value>(content)
             .ok()
-            .and_then(|json| {
+            .map(|json| {
                 let mut total = 0_usize;
                 for key in ["dependencies", "devDependencies", "optionalDependencies"] {
                     total += json
@@ -45,7 +45,7 @@ fn count_manifest_dependencies(file_name: &str, content: &str) -> usize {
                         .and_then(serde_json::Value::as_object)
                         .map_or(0, |map| map.len());
                 }
-                Some(total)
+                total
             })
             .unwrap_or(0),
         "pyproject.toml" => toml::from_str::<toml::Value>(content)
