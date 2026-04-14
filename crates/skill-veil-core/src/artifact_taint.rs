@@ -1,6 +1,7 @@
 use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation, EndpointKind};
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+    deduplicate_findings, ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction,
+    Severity, ThreatCategory,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -113,11 +114,11 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
                                 .evidence_kind(EvidenceKind::Behavior)
                                 .artifact(kind, Some((*source_node).clone()))
                                 .matched_on(MatchTarget::ReferencedFile {
-                                    path: (*source_node).clone(),
+                                    path: (*sink_node).clone(),
                                 })
                                 .match_value(format!(
-                                    "family={} source={} sink={} (cross-artifact: {} -> {})",
-                                    rule.family, src, snk, source_node, sink_node
+                                    "family={} source={} sink={}",
+                                    rule.family, src, snk
                                 ))
                                 .reason(rule.reason)
                                 .build(),
@@ -128,7 +129,11 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
         }
     }
 
-    findings
+    // Local deduplication to reduce overhead before returning to caller.
+    // Cross-node taint analysis can generate duplicate findings when multiple
+    // sink nodes match the same source-rule combination.
+    let (deduped, _summary) = deduplicate_findings(findings);
+    deduped
 }
 
 fn build_sibling_clusters(graph: &ArtifactGraph) -> Vec<BTreeSet<String>> {
@@ -418,15 +423,22 @@ fn looks_like_identity_target(target: &str) -> bool {
 }
 
 fn looks_like_external_sink(edge: &crate::artifact_graph::ArtifactEdge) -> bool {
+    // Known external endpoint kinds are conclusive
     if matches!(
         edge.endpoint_kind,
         Some(EndpointKind::Remote | EndpointKind::Transient | EndpointKind::ControlPlane)
     ) {
         return true;
     }
-    if edge.endpoint_kind == Some(EndpointKind::Registry) {
+    // Registry and Local endpoints are not external sinks
+    if matches!(
+        edge.endpoint_kind,
+        Some(EndpointKind::Registry | EndpointKind::Local)
+    ) {
         return false;
     }
+    // When endpoint_kind is None, fall back to string matching on the URL
+    // This is a best-effort heuristic that may miss some external sinks
 
     let lower = edge.to.to_ascii_lowercase();
     [

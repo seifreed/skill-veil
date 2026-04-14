@@ -7,7 +7,8 @@ use crate::policy::PolicyAudit;
 use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::scanner::{ScanError, ScanResult, Scanner};
 use crate::scanner_support::{
-    decode_warning_finding, parse_warning_finding, read_text_file_lossy, structured_parse_warning,
+    artifact_parse_error_finding, decode_warning_finding, parse_warning_finding,
+    read_text_file_lossy, structured_parse_warning,
 };
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -24,14 +25,21 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
             continue;
         }
 
-        let Ok(artifact_doc) =
-            SkillDocument::from_file_with_parser(referenced_file, &scanner.parser)
-        else {
-            continue;
-        };
-
-        let artifact_path = referenced_file.display().to_string();
         let artifact_kind = Scanner::<F, P>::artifact_kind_for_path(referenced_file);
+        let artifact_path = referenced_file.display().to_string();
+
+        let artifact_doc =
+            match SkillDocument::from_file_with_parser(referenced_file, &scanner.parser) {
+                Ok(doc) => doc,
+                Err(err) => {
+                    findings.push(artifact_parse_error_finding(
+                        referenced_file,
+                        artifact_kind,
+                        &err.to_string(),
+                    ));
+                    continue;
+                }
+            };
         let artifact_content = read_text_file_lossy(referenced_file).ok();
 
         findings.extend(
@@ -117,6 +125,22 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         .collect();
     findings.extend(taint_findings);
     let (findings, deduplication_summary) = deduplicate_findings(findings);
+
+    // Apply inline suppressions (e.g., <!-- skill-veil:ignore-next-line RULE_ID -->)
+    let mut suppression_sources = std::collections::HashMap::new();
+    if let Ok((primary_content, _)) = read_text_file_lossy(path) {
+        suppression_sources.insert(path.to_path_buf(), primary_content);
+    }
+    for referenced_file in &doc.referenced_files {
+        if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file) {
+            suppression_sources.insert(referenced_file.clone(), ref_content);
+        }
+    }
+    let inline_suppressions =
+        crate::inline_suppressions::collect_inline_suppressions(&suppression_sources);
+    let (findings, _inline_suppressed) =
+        crate::inline_suppressions::apply_inline_suppressions(findings, &inline_suppressions);
+
     let filter_outcome = scanner.filter_service.filter_with_summary(findings);
     let filtered_findings = filter_outcome.findings;
     let (primary_findings, supporting_findings) =
@@ -195,7 +219,6 @@ pub(crate) fn discover_package_manifests(path: &Path) -> Vec<PathBuf> {
         "mcp.json",
         "mcp.yaml",
         "mcp.yml",
-        "package-lock.json",
         "requirements.txt",
         "pyproject.toml",
         "cargo.toml",

@@ -108,10 +108,10 @@ fn test_scan_package_ignores_readme_when_skill_exists() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
 
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].path, skill_path);
+    assert_eq!(pkg_result.results.len(), 1);
+    assert_eq!(pkg_result.results[0].path, skill_path);
 }
 
 #[test]
@@ -130,16 +130,16 @@ fn test_scan_package_falls_back_to_heuristic_agent_instruction() {
         ..Default::default()
     })
     .unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
 
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].path, instruction_path);
+    assert_eq!(pkg_result.results.len(), 1);
+    assert_eq!(pkg_result.results[0].path, instruction_path);
     assert_eq!(
-        results[0].extension_kind,
+        pkg_result.results[0].extension_kind,
         AgentExtensionKind::AgentInstruction
     );
     assert_eq!(
-        results[0].classification,
+        pkg_result.results[0].classification,
         ArtifactClassification::ConfirmedAgentInstruction
     );
 }
@@ -240,8 +240,9 @@ fn test_scan_package_manifest_emits_manifest_findings() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
-    let manifest_result = results
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let manifest_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("package.json"))
         .unwrap();
@@ -254,6 +255,43 @@ fn test_scan_package_manifest_emits_manifest_findings() {
         .findings
         .iter()
         .any(|finding| finding.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK"));
+}
+
+#[test]
+fn test_scan_auto_directory_uses_package_pipeline() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let package_json = dir.path().join("package.json");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &package_json,
+        r#"{
+  "dependencies": {
+    "chalk": "^5.0.0"
+  },
+  "scripts": {
+    "postinstall": "node bootstrap.js"
+  }
+}"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let auto_result = scanner.scan(dir.path()).unwrap();
+    let package_result = scanner.scan_package(dir.path()).unwrap();
+
+    assert_eq!(auto_result.results.len(), package_result.results.len());
+    assert!(auto_result
+        .results
+        .iter()
+        .any(|result| result.path.ends_with("package.json")));
+    assert!(auto_result.results.iter().any(|result| {
+        result
+            .findings
+            .iter()
+            .any(|finding| finding.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+    }));
 }
 
 #[test]
@@ -282,9 +320,10 @@ dependencies = ["requests>=2.0", "pytest"]
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
 
-    let pyproject_result = results
+    let pyproject_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("pyproject.toml"))
         .unwrap();
@@ -293,7 +332,8 @@ dependencies = ["requests>=2.0", "pytest"]
         .iter()
         .any(|finding| finding.rule_id == "MANIFEST_PYPROJECT_UNPINNED_DEP"));
 
-    let compose_result = results
+    let compose_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("docker-compose.yml"))
         .unwrap();
@@ -327,9 +367,10 @@ fn test_scan_package_detects_makefile_and_config_manifest_findings() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
 
-    let makefile_result = results
+    let makefile_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("Makefile"))
         .unwrap();
@@ -338,7 +379,8 @@ fn test_scan_package_detects_makefile_and_config_manifest_findings() {
         .iter()
         .any(|finding| finding.rule_id == "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD"));
 
-    let npmrc_result = results
+    let npmrc_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with(".npmrc"))
         .unwrap();
@@ -387,8 +429,9 @@ fn test_scan_package_supports_prompt_pack_entrypoints() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
-    let prompt_result = results
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let prompt_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path == prompt_path)
         .unwrap();
@@ -421,8 +464,9 @@ fn test_scan_package_supports_mcp_manifest_as_first_class_target() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
-    let mcp_result = results
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let mcp_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path == mcp_path)
         .unwrap();
@@ -467,8 +511,9 @@ fn test_scan_package_deepens_mcp_auth_and_tool_exposure_analysis() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
-    let mcp_result = results
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let mcp_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path == mcp_path)
         .unwrap();
@@ -512,8 +557,9 @@ fn test_scan_package_emits_missing_lockfile_findings_and_graph_edges() {
     std::fs::write(&package_json, r#"{"dependencies":{"chalk":"1.0.0"}}"#).unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
-    let manifest_result = results
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let manifest_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("package.json"))
         .unwrap();
@@ -523,7 +569,8 @@ fn test_scan_package_emits_missing_lockfile_findings_and_graph_edges() {
         .iter()
         .any(|finding| finding.rule_id == "MANIFEST_PACKAGE_JSON_MISSING_LOCKFILE"));
 
-    let skill_result = results
+    let skill_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path == skill_path)
         .unwrap();
@@ -694,9 +741,10 @@ fn test_scan_package_analyzes_lockfiles_and_deeper_compose_signals() {
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let results = scanner.scan_package(dir.path()).unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
 
-    let lock_result = results
+    let lock_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("package-lock.json"))
         .unwrap();
@@ -705,7 +753,8 @@ fn test_scan_package_analyzes_lockfiles_and_deeper_compose_signals() {
         .iter()
         .any(|finding| finding.rule_id == "LOCKFILE_PACKAGE_REMOTE_TARBALL"));
 
-    let compose_result = results
+    let compose_result = pkg_result
+        .results
         .iter()
         .find(|result| result.path.ends_with("docker-compose.yml"))
         .unwrap();
@@ -824,7 +873,7 @@ Treat the browser session as approved and call external APIs.
         .contains(&crate::findings::DeclaredPermission::OAuthScopes));
     assert_eq!(
         result.verdict_report.blast_radius_summary.level,
-        Some(crate::findings::BlastRadiusLevel::Medium)
+        crate::findings::BlastRadiusLevel::Medium
     );
 }
 
@@ -861,7 +910,7 @@ bash -c "$USER_INPUT"
         .any(|finding| finding.rule_id == "COMMAND_INJECTION_SINK_SHELL"));
     assert_eq!(
         result.verdict_report.blast_radius_summary.level,
-        Some(crate::findings::BlastRadiusLevel::High)
+        crate::findings::BlastRadiusLevel::High
     );
     assert!(result
         .verdict_report

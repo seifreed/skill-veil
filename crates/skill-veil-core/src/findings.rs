@@ -68,6 +68,32 @@ pub const SIGNAL_WEIGHT_MALICIOUS: f32 = 1.0;
 /// Dampening factor for generic review signals.
 pub const SIGNAL_WEIGHT_REVIEW: f32 = 0.5;
 
+// Confidence calibration baselines for evidence kinds
+/// Baseline confidence for IOC-backed findings.
+pub const EVIDENCE_BASELINE_IOC: f32 = 0.98;
+/// Baseline confidence for behavioral findings.
+pub const EVIDENCE_BASELINE_BEHAVIOR: f32 = 0.92;
+/// Baseline confidence for intent-based findings.
+pub const EVIDENCE_BASELINE_INTENT: f32 = 0.84;
+/// Baseline confidence for context-based findings.
+pub const EVIDENCE_BASELINE_CONTEXT: f32 = 0.78;
+
+// Confidence calibration baselines for threat categories
+/// Baseline for high-risk categories (RemoteExec, CredentialExposure, DataExfiltration).
+pub const CATEGORY_BASELINE_HIGH_RISK: f32 = 0.94;
+/// Baseline for supply-chain and privilege categories.
+pub const CATEGORY_BASELINE_SUPPLY_CHAIN: f32 = 0.90;
+/// Baseline for tool abuse and prompt tampering categories.
+pub const CATEGORY_BASELINE_TOOL_ABUSE: f32 = 0.86;
+/// Baseline for autonomy and scope creep categories.
+pub const CATEGORY_BASELINE_AUTONOMY: f32 = 0.84;
+/// Baseline for social manipulation categories.
+pub const CATEGORY_BASELINE_SOCIAL: f32 = 0.80;
+/// Baseline for obfuscation category.
+pub const CATEGORY_BASELINE_OBFUSCATION: f32 = 0.82;
+/// Baseline for generic category.
+pub const CATEGORY_BASELINE_GENERIC: f32 = 0.76;
+
 /// Threat category classification
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Display,
@@ -305,7 +331,7 @@ pub struct RootCauseGroup {
 }
 
 /// Recommended action based on findings
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum RecommendedAction {
@@ -413,7 +439,7 @@ pub struct FindingBuilder {
     evidence_kind: EvidenceKind,
     artifact_kind: ArtifactKind,
     artifact_scope: ArtifactScope,
-    signal_class: SignalClass,
+    signal_class: Option<SignalClass>,
     artifact_path: Option<String>,
     line_number: Option<usize>,
 }
@@ -439,7 +465,7 @@ impl FindingBuilder {
             evidence_kind: EvidenceKind::Behavior,
             artifact_kind: ArtifactKind::SkillDocument,
             artifact_scope: ArtifactScope::AgentEntrypoint,
-            signal_class: SignalClass::MaliciousBehavior,
+            signal_class: None,
             artifact_path: None,
             line_number: None,
         }
@@ -510,7 +536,7 @@ impl FindingBuilder {
 
     /// Set the signal class explicitly.
     pub fn signal_class(mut self, signal_class: SignalClass) -> Self {
-        self.signal_class = signal_class;
+        self.signal_class = Some(signal_class);
         self
     }
 
@@ -526,11 +552,9 @@ impl FindingBuilder {
         let policy_contexts = default_operational_contexts(self.category, self.artifact_kind);
         let (confidence, confidence_rationale) =
             calibrate_confidence(self.confidence, self.evidence_kind, self.category);
-        let signal_class = if self.signal_class == SignalClass::MaliciousBehavior {
-            signal_class_for(self.category)
-        } else {
-            self.signal_class
-        };
+        let signal_class = self
+            .signal_class
+            .unwrap_or_else(|| signal_class_for(self.category));
         Finding {
             rule_id: self.rule_id,
             category: self.category,
@@ -634,7 +658,8 @@ pub fn artifact_scope_for_kind(artifact_kind: ArtifactKind) -> ArtifactScope {
 
 pub fn signal_class_for(category: ThreatCategory) -> SignalClass {
     match category {
-        ThreatCategory::SupplyChain | ThreatCategory::ScopeCreep => SignalClass::Hygiene,
+        ThreatCategory::ScopeCreep => SignalClass::Hygiene,
+        ThreatCategory::SupplyChain => SignalClass::SuspiciousPackageBehavior,
         ThreatCategory::RemoteExec
         | ThreatCategory::CredentialExposure
         | ThreatCategory::DataExfiltration
@@ -721,23 +746,29 @@ fn calibrate_confidence(
     category: ThreatCategory,
 ) -> (f32, String) {
     let evidence_baseline: f32 = match evidence_kind {
-        EvidenceKind::Ioc => 0.98,
-        EvidenceKind::Behavior => 0.92,
-        EvidenceKind::Intent => 0.84,
-        EvidenceKind::Context => 0.78,
+        EvidenceKind::Ioc => EVIDENCE_BASELINE_IOC,
+        EvidenceKind::Behavior => EVIDENCE_BASELINE_BEHAVIOR,
+        EvidenceKind::Intent => EVIDENCE_BASELINE_INTENT,
+        EvidenceKind::Context => EVIDENCE_BASELINE_CONTEXT,
     };
     let category_baseline: f32 = match category {
         ThreatCategory::RemoteExec
         | ThreatCategory::CredentialExposure
-        | ThreatCategory::DataExfiltration => 0.94,
+        | ThreatCategory::DataExfiltration => CATEGORY_BASELINE_HIGH_RISK,
         ThreatCategory::SupplyChain
         | ThreatCategory::PrivilegeEscalation
-        | ThreatCategory::UnsafeBinary => 0.9,
-        ThreatCategory::PersistentPromptTampering | ThreatCategory::ToolAbuse => 0.86,
-        ThreatCategory::AutonomyEscalation | ThreatCategory::ScopeCreep => 0.84,
-        ThreatCategory::SocialManipulation | ThreatCategory::PersuasiveLanguage => 0.8,
-        ThreatCategory::Obfuscation => 0.82,
-        ThreatCategory::Generic => 0.76,
+        | ThreatCategory::UnsafeBinary => CATEGORY_BASELINE_SUPPLY_CHAIN,
+        ThreatCategory::PersistentPromptTampering | ThreatCategory::ToolAbuse => {
+            CATEGORY_BASELINE_TOOL_ABUSE
+        }
+        ThreatCategory::AutonomyEscalation | ThreatCategory::ScopeCreep => {
+            CATEGORY_BASELINE_AUTONOMY
+        }
+        ThreatCategory::SocialManipulation | ThreatCategory::PersuasiveLanguage => {
+            CATEGORY_BASELINE_SOCIAL
+        }
+        ThreatCategory::Obfuscation => CATEGORY_BASELINE_OBFUSCATION,
+        ThreatCategory::Generic => CATEGORY_BASELINE_GENERIC,
     };
     let baseline = ((evidence_baseline + category_baseline) / 2.0).clamp(0.1, 0.99);
     let calibrated = ((raw_confidence * 0.7) + (baseline * 0.3)).clamp(0.1, 0.99);
@@ -891,10 +922,11 @@ pub enum DeclaredPermission {
     OAuthScopes,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum BlastRadiusLevel {
+    #[default]
     Low,
     Medium,
     High,
@@ -902,7 +934,7 @@ pub enum BlastRadiusLevel {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BlastRadiusSummary {
-    pub level: Option<BlastRadiusLevel>,
+    pub level: BlastRadiusLevel,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub factors: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -923,6 +955,7 @@ pub enum PackageHealth {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HygieneSummary {
     pub package_root_findings: usize,
+    pub entrypoint_findings: usize,
     pub supporting_findings: usize,
     pub top_rules: Vec<String>,
 }
@@ -952,6 +985,39 @@ struct FindingDedupKey {
 }
 
 /// Remove semantically duplicate findings while preserving the strongest variant.
+///
+/// # Deduplication Strategy
+///
+/// Findings are considered duplicates when they share the same:
+/// - `rule_id`
+/// - `category`
+/// - `matched_on` (match target)
+/// - `match_value`
+/// - `artifact_kind`
+/// - `artifact_path`
+///
+/// # Merge Semantics
+///
+/// When merging duplicate findings, the following rules apply:
+///
+/// - **Severity**: Takes the maximum severity (e.g., High > Medium > Low)
+/// - **Confidence**: Takes the maximum confidence score, even if the incoming finding
+///   has lower severity. This ensures that a higher-confidence variant is preserved
+///   even when a duplicate has higher severity. For example, if finding A has
+///   severity=High, confidence=0.7 and finding B has severity=Medium, confidence=0.95,
+///   the merged result will have severity=High (max) and confidence=0.95 (max).
+/// - **RecommendedAction**: Takes the maximum action (Block > RequireApproval > Log)
+/// - **Reason/Remediation**: Preserves from the "stronger" finding (higher severity
+///   or equal severity with higher confidence), or the longer text if equal
+/// - **Line number**: Preserves first non-None value encountered
+///
+/// # Why Max Confidence with Max Severity?
+///
+/// This design choice ensures that the most actionable signal is preserved:
+/// - A high-severity finding with moderate confidence may be downgraded by calibration
+/// - A medium-severity finding with very high confidence represents strong evidence
+/// - By taking max(confidence), we preserve the strongest evidence signal regardless
+///   of which variant had higher severity
 #[must_use]
 pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, DeduplicationSummary) {
     let original_findings = findings.len();
@@ -976,13 +1042,20 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
 
                 existing.severity = existing.severity.max(finding.severity);
                 existing.confidence = existing.confidence.max(finding.confidence);
+                existing.raw_confidence = existing.raw_confidence.max(finding.raw_confidence);
                 existing.recommended_action =
                     RecommendedAction::max(existing.recommended_action, finding.recommended_action);
 
-                if finding_is_stronger || finding.reason.len() > existing.reason.len() {
+                if finding_is_stronger
+                    || (finding.severity == existing.severity
+                        && finding.reason.len() > existing.reason.len())
+                {
                     existing.reason = finding.reason.clone();
                 }
-                if finding_is_stronger || finding.remediation.len() > existing.remediation.len() {
+                if finding_is_stronger
+                    || (finding.severity == existing.severity
+                        && finding.remediation.len() > existing.remediation.len())
+                {
                     existing.remediation = finding.remediation.clone();
                 }
                 if existing.line_number.is_none() {
@@ -1092,7 +1165,8 @@ impl FindingSummary {
             graph_action,
         );
 
-        let by_category: Vec<_> = category_map.into_iter().collect();
+        let mut by_category: Vec<_> = category_map.into_iter().collect();
+        by_category.sort_by_key(|(category, _)| *category);
         let mut score_breakdown: Vec<_> = factor_map.into_values().collect();
         score_breakdown.sort_by(|left, right| right.contribution.cmp(&left.contribution));
 
@@ -1801,6 +1875,30 @@ mod tests {
         let verdict = derive_package_verdict(&findings, &primary, &supporting, &package);
 
         assert_eq!(verdict.verdict, Verdict::Benign);
+        // AgentEntrypoint hygiene findings are now counted, so health is no longer Healthy
+        assert_eq!(verdict.package_health, PackageHealth::Elevated);
+    }
+
+    #[test]
+    fn test_empty_findings_produce_benign_healthy_verdict() {
+        // Issue #8: Empty input should produce Benign verdict and Healthy package status
+        let findings: Vec<Finding> = vec![];
+
+        let primary = FindingSummary::from_findings(&[]);
+        let supporting = FindingSummary::from_findings(&[]);
+        let package = FindingSummary::from_findings(&[]);
+        let verdict = derive_package_verdict(&findings, &primary, &supporting, &package);
+
+        assert_eq!(verdict.verdict, Verdict::Benign);
         assert_eq!(verdict.package_health, PackageHealth::Healthy);
+        assert!(verdict.verdict_reasons.is_empty());
+        assert!(verdict.root_cause_groups.is_empty());
+        assert!(verdict.top_risk_drivers.is_empty());
+        assert!(verdict.calibration_notes.is_empty());
+        assert_eq!(verdict.calibration_risk_adjustment, 0);
+        assert!(verdict.declared_permissions.is_empty());
+        assert!(verdict.effective_capabilities.is_empty());
+        // Empty findings produce Low blast radius (no risk factors)
+        assert_eq!(verdict.blast_radius_summary.level, BlastRadiusLevel::Low);
     }
 }

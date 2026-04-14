@@ -7,7 +7,9 @@ use crate::findings::ArtifactKind;
 use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::rules::RuleEngine;
 use crate::scanner_support::{load_optional_baseline, load_optional_policy, load_optional_waivers};
-pub use crate::scanner_types::{ScanError, ScanOptions, ScanResult, ScanTargetMode};
+pub use crate::scanner_types::{
+    PackageScanResult, ScanError, ScanErrorEntry, ScanOptions, ScanResult, ScanTargetMode,
+};
 use crate::services::{ArtifactAnalysisService, FileDiscoveryService, ScanFilterService};
 use crate::{scanner_execution, scanner_graph};
 use std::path::Path;
@@ -115,56 +117,86 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         scanner_execution::scan_document_path(self, path)
     }
 
-    pub fn scan_package(&self, path: impl AsRef<Path>) -> Result<Vec<ScanResult>, ScanError> {
+    pub fn scan_package(&self, path: impl AsRef<Path>) -> Result<PackageScanResult, ScanError> {
         let path = path.as_ref();
         if !path.exists() {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
         if path.is_file() {
-            return Ok(vec![self.scan_skill_file(path)?]);
+            let result = self.scan_file(path)?;
+            return Ok(PackageScanResult {
+                results: vec![result],
+                errors: Vec::new(),
+            });
         }
 
         let targets = scanner_execution::discover_package_targets(self, path)?;
-        let mut results = Vec::new();
+        let mut pkg_result = PackageScanResult::new();
         for target in targets {
             match self.scan_file(&target) {
-                Ok(result) => results.push(result),
-                Err(err) => tracing::warn!("Failed to scan {}: {}", target.display(), err),
+                Ok(result) => pkg_result.results.push(result),
+                Err(err) => {
+                    pkg_result
+                        .errors
+                        .push(crate::scanner_types::ScanErrorEntry {
+                            path: target.clone(),
+                            error: err.to_string(),
+                        });
+                    tracing::warn!("Failed to scan {}: {}", target.display(), err);
+                }
             }
         }
-        Ok(results)
+        Ok(pkg_result)
     }
 
-    pub fn scan_dir(&self, path: impl AsRef<Path>) -> Result<Vec<ScanResult>, ScanError> {
+    pub fn scan_dir(&self, path: impl AsRef<Path>) -> Result<PackageScanResult, ScanError> {
         let path = path.as_ref();
         if !path.exists() {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
 
         let skill_files = self.file_discovery.discover_skills(path);
-        let mut results = Vec::new();
+        let mut pkg_result = PackageScanResult::new();
         for file_path in skill_files {
             match self.scan_file(&file_path) {
-                Ok(result) => results.push(result),
-                Err(err) => tracing::warn!("Failed to scan {}: {}", file_path.display(), err),
+                Ok(result) => pkg_result.results.push(result),
+                Err(err) => {
+                    pkg_result
+                        .errors
+                        .push(crate::scanner_types::ScanErrorEntry {
+                            path: file_path.clone(),
+                            error: err.to_string(),
+                        });
+                    tracing::warn!("Failed to scan {}: {}", file_path.display(), err);
+                }
             }
         }
-        Ok(results)
+        Ok(pkg_result)
     }
 
-    pub fn scan(&self, path: impl AsRef<Path>) -> Result<Vec<ScanResult>, ScanError> {
+    pub fn scan(&self, path: impl AsRef<Path>) -> Result<PackageScanResult, ScanError> {
         let path = path.as_ref();
         match self.filter_service.target_mode() {
             ScanTargetMode::Auto => {
                 if path.is_file() {
-                    Ok(vec![self.scan_file(path)?])
+                    let result = self.scan_file(path)?;
+                    Ok(PackageScanResult {
+                        results: vec![result],
+                        errors: Vec::new(),
+                    })
                 } else if path.is_dir() {
-                    self.scan_dir(path)
+                    self.scan_package(path)
                 } else {
                     Err(ScanError::PathNotFound(path.to_path_buf()))
                 }
             }
-            ScanTargetMode::File => Ok(vec![self.scan_skill_file(path)?]),
+            ScanTargetMode::File => {
+                let result = self.scan_file(path)?;
+                Ok(PackageScanResult {
+                    results: vec![result],
+                    errors: Vec::new(),
+                })
+            }
             ScanTargetMode::Package => self.scan_package(path),
         }
     }

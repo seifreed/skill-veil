@@ -134,7 +134,7 @@ pub(super) fn looks_like_webhook_receiver_without_auth(content: &str) -> Option<
 
 pub(super) fn contains_ssrf_like_fetch_line(content: &str) -> bool {
     let regex = Regex::new(
-        r#"(?i)(curl|wget|fetch|requests\.(get|post)|axios\.(get|post)|invoke-webrequest|invoke-restmethod|httpx\.(get|post)|aiohttp|client\.get|client\.post).{0,180}(169\.254\.169\.254|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[A-Za-z0-9._-]+\.internal|[A-Za-z0-9._-]+\.local)"#,
+        r#"(?i)(curl|wget|fetch|requests\.(get|post)|axios\.(get|post)|invoke-webrequest|invoke-restmethod|httpx\.(get|post)|aiohttp|client\.get|client\.post).{0,180}(169\.254\.169\.254|127\.0\.0\.1|localhost|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|[A-Za-z0-9._-]+\.internal|[A-Za-z0-9._-]+\.local)"#,
     )
     .expect("valid regex");
     content.lines().any(|line| regex.is_match(line))

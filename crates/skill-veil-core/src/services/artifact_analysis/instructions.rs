@@ -298,15 +298,10 @@ pub(super) fn permission_and_network_findings(
     }
 
     let internal_target = contains_internal_network_target(content);
-    let localhost_like_target = matches!(
-        internal_target,
-        Some("localhost") | Some("127.0.0.1") | Some("0.0.0.0")
-    );
 
     if contains_ssrf_like_fetch_line(content)
         && internal_target.is_some()
         && !looks_like_local_dev_reference(content)
-        && !localhost_like_target
         && !looks_like_local_control_plane_reference(content)
     {
         findings.push(

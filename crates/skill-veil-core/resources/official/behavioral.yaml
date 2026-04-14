@@ -181,7 +181,7 @@ rules:
     severity: medium
     confidence: 0.76
     when: !regex
-      pattern: "(?i)(https?://[^\\s\"']+(ngrok|trycloudflare|workers\\.dev|raw\\.githubusercontent\\.com|pastebin\\.com))"
+      pattern: "(?i)(https?://[^\\s\"']+(ngrok|trycloudflare|workers\\.dev|pastebin\\.com))"
     action: require_approval
     reason: "MCP or agent artifact points to a high-risk remote endpoint commonly used for transient or opaque control planes"
     shield:

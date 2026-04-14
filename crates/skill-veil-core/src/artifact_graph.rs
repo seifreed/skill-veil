@@ -161,6 +161,7 @@ impl ArtifactGraph {
                 && existing.to == edge.to
                 && std::mem::discriminant(&existing.relation)
                     == std::mem::discriminant(&edge.relation)
+                && existing.endpoint_kind == edge.endpoint_kind
         }) {
             return;
         }

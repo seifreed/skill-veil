@@ -151,6 +151,8 @@ pub(super) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .filter(|line| !line.starts_with("-r ") && !line.starts_with("--requirement"))
+        .filter(|line| !line.starts_with("git+") && !line.starts_with("http"))
+        .filter(|line| !line.starts_with("-c ") && !line.starts_with("--"))
         .filter(|line| !line.contains("=="))
         .map(|line| {
             Finding::builder(
@@ -176,7 +178,8 @@ pub(super) fn analyze_dockerfile(path: &Path, content: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for line in content.lines().map(str::trim) {
-        if line.to_ascii_lowercase().starts_with("from ") && line.ends_with(":latest") {
+        let lower_line = line.to_ascii_lowercase();
+        if lower_line.starts_with("from ") && lower_line.contains(":latest") {
             findings.push(
                 Finding::builder("MANIFEST_DOCKER_LATEST_TAG", ThreatCategory::SupplyChain)
                     .severity(Severity::Low)
@@ -379,6 +382,7 @@ pub(super) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
                 if volume.starts_with("/:")
                     || volume.starts_with("/:/")
                     || volume.contains(":/host")
+                    || (volume.starts_with('/') && volume.contains(":/"))
                 {
                     findings.push(
                         Finding::builder(
@@ -655,7 +659,7 @@ pub(super) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
     if lower.contains(" expose ")
         || lower
             .lines()
-            .any(|line| line.trim_start().starts_with("EXPOSE "))
+            .any(|line| line.trim_start().starts_with("expose "))
     {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::NetworkAccess,
@@ -741,14 +745,23 @@ pub(super) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
             ));
         }
 
-        if mapping.contains_key(serde_yaml::Value::String("env_file".to_string())) {
+        if mapping.contains_key(serde_yaml::Value::String("env_file".to_string()))
+            && !capabilities.iter().any(|fact| {
+                fact.capability == ArtifactCapability::SecretAccess
+                    && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
+            })
+        {
             capabilities.push(ArtifactAnalysisService::declared_capability(
                 ArtifactCapability::SecretAccess,
             ));
         }
 
-        if mapping.contains_key(serde_yaml::Value::String("command".to_string()))
-            || mapping.contains_key(serde_yaml::Value::String("entrypoint".to_string()))
+        if (mapping.contains_key(serde_yaml::Value::String("command".to_string()))
+            || mapping.contains_key(serde_yaml::Value::String("entrypoint".to_string())))
+            && !capabilities.iter().any(|fact| {
+                fact.capability == ArtifactCapability::ProcessExecution
+                    && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
+            })
         {
             capabilities.push(ArtifactAnalysisService::declared_capability(
                 ArtifactCapability::ProcessExecution,

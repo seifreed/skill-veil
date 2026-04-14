@@ -1,5 +1,41 @@
+//! Verdict calibration logic for adjusting root cause groups.
+//!
+//! This module implements the calibration step that runs after root cause groups
+//! are derived from findings. Calibration adjusts verdicts to prevent false positives
+//! from isolated weak signals.
+//!
+//! # Calibration Ordering
+//!
+//! Calibration rules are applied **sequentially** in the order they appear in the
+//! `for group in &mut groups` loop. Each rule may modify `group.strongest_action`
+//! and `group.signal_class`. Rules check **snapshotted** pre-mutation state to
+//! ensure independence.
+//!
+//! This ordering is intentional and documented:
+//!
+//! 1. **DECLARED_PERMISSION_NETWORK_ACCESS** - Downgrades to `Log` if no stronger
+//!    behavior exists. This prevents network access declarations from escalating
+//!    verdicts on their own.
+//!
+//! 2. **CAPABILITY_PERMISSION_MISMATCH** - Downgrades to `Log` if no stronger
+//!    behavior exists. Capability mismatches are retained for explainability
+//!    but don't escalate without corroboration.
+//!
+//! 3. **INTERNAL_NETWORK_ACCESS** - Downgrades to `Log` if no network chain
+//!    evidence exists. Internal network access alone is not actionable.
+//!
+//! 4. **MCP_NO_AUTH_MODEL** - Downgrades to `Log` if no remote execution surface
+//!    is present. MCP servers without auth are a concern only when combined with
+//!    other risky capabilities.
+//!
+//! # Rule Independence
+//!
+//! Each calibration rule checks the group's **original** `strongest_action` (before
+//! any calibration modifications). This ensures rules are independent: an earlier
+//! downgrade cannot prevent a later rule from firing on the same group.
+
 use crate::findings::{
-    ArtifactScope, Finding, RecommendedAction, RootCauseGroup, SignalClass, ThreatCategory,
+    Finding, RecommendedAction, RootCauseGroup, SignalClass, ThreatCategory,
     VerdictCalibrationNote,
 };
 
@@ -58,20 +94,34 @@ pub(crate) fn calibrate_verdict_inputs(
         )
     });
 
-    for group in &mut groups {
+    // Snapshot original actions and signal classes so each calibration rule checks pre-mutation state.
+    // This makes rules independent: earlier downgrades don't prevent later rules from firing.
+    let original_snapshots: Vec<(RecommendedAction, SignalClass)> = groups
+        .iter()
+        .map(|group| (group.strongest_action, group.signal_class))
+        .collect();
+
+    for (i, group) in groups.iter_mut().enumerate() {
+        let (original_action, _original_signal_class) = original_snapshots[i];
+
         if group
             .representative_rules
             .iter()
             .any(|rule_id| rule_id == "DECLARED_PERMISSION_NETWORK_ACCESS")
             && !has_stronger_behavior
         {
-            if group.strongest_action != RecommendedAction::Log {
-                group.strongest_action = RecommendedAction::Log;
+            let was_downgraded = original_action != RecommendedAction::Log;
+            group.strongest_action = RecommendedAction::Log;
+            if was_downgraded {
                 risk_adjustment -= 10;
             }
             notes.push(VerdictCalibrationNote {
                 rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
-                effect: "downgraded_to_context".to_string(),
+                effect: if was_downgraded {
+                    "downgraded_to_context".to_string()
+                } else {
+                    "remains_context_only".to_string()
+                },
                 rationale: "Declared network access remains useful for blast-radius reporting, but it no longer drives package escalation without corroborating behavior.".to_string(),
             });
         }
@@ -82,13 +132,18 @@ pub(crate) fn calibrate_verdict_inputs(
             .any(|rule_id| rule_id == "CAPABILITY_PERMISSION_MISMATCH")
             && !has_stronger_behavior
         {
-            if group.strongest_action != RecommendedAction::Log {
-                group.strongest_action = RecommendedAction::Log;
+            let was_downgraded = original_action != RecommendedAction::Log;
+            group.strongest_action = RecommendedAction::Log;
+            if was_downgraded {
                 risk_adjustment -= 8;
             }
             notes.push(VerdictCalibrationNote {
                 rule_id: "CAPABILITY_PERMISSION_MISMATCH".to_string(),
-                effect: "requires_corroboration".to_string(),
+                effect: if was_downgraded {
+                    "downgraded_to_context".to_string()
+                } else {
+                    "remains_context_only".to_string()
+                },
                 rationale: "Capability mismatch is retained as an explainability signal, but it no longer escalates verdicts without stronger intent or behavioral evidence.".to_string(),
             });
         }
@@ -99,14 +154,19 @@ pub(crate) fn calibrate_verdict_inputs(
             .any(|rule_id| rule_id == "INTERNAL_NETWORK_ACCESS")
             && !has_network_chain
         {
-            if group.strongest_action != RecommendedAction::Log {
-                group.strongest_action = RecommendedAction::Log;
+            let was_downgraded = original_action != RecommendedAction::Log;
+            group.strongest_action = RecommendedAction::Log;
+            if was_downgraded {
                 risk_adjustment -= 12;
             }
             group.signal_class = SignalClass::ReviewSignal;
             notes.push(VerdictCalibrationNote {
                 rule_id: "INTERNAL_NETWORK_ACCESS".to_string(),
-                effect: "review_only_without_chain".to_string(),
+                effect: if was_downgraded {
+                    "downgraded_to_review_only".to_string()
+                } else {
+                    "remains_review_only".to_string()
+                },
                 rationale: "Internal or loopback network targets are treated as review-only unless paired with fetch, execution, exfiltration, or metadata-service behavior.".to_string(),
             });
         }
@@ -117,16 +177,19 @@ pub(crate) fn calibrate_verdict_inputs(
             .any(|rule_id| is_mcp_no_auth_rule(rule_id))
             && !has_remote_mcp_exec_pair
         {
-            if group.strongest_action == RecommendedAction::Block {
-                group.strongest_action = RecommendedAction::RequireApproval;
+            let was_downgraded = original_action != RecommendedAction::Log;
+            group.strongest_action = RecommendedAction::Log;
+            if was_downgraded {
                 risk_adjustment -= 6;
             }
-            if group.scope == ArtifactScope::PackageRootArtifact {
-                group.signal_class = SignalClass::SuspiciousPackageBehavior;
-            }
+            group.signal_class = SignalClass::ReviewSignal;
             notes.push(VerdictCalibrationNote {
                 rule_id: "MCP_NO_AUTH_MODEL".to_string(),
-                effect: "approval_without_exec_pair".to_string(),
+                effect: if was_downgraded {
+                    "downgraded_to_context".to_string()
+                } else {
+                    "remains_context_only".to_string()
+                },
                 rationale: "Remote MCP without auth is still risky, but it is not treated as standalone malicious behavior unless it widens into command or transport execution semantics.".to_string(),
             });
         }
@@ -162,6 +225,10 @@ fn is_mcp_no_auth_rule(rule_id: &str) -> bool {
 }
 
 fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
-    notes.sort_by(|left, right| left.rule_id.cmp(&right.rule_id));
+    notes.sort_by(|left, right| {
+        left.rule_id
+            .cmp(&right.rule_id)
+            .then_with(|| left.effect.cmp(&right.effect))
+    });
     notes.dedup_by(|left, right| left.rule_id == right.rule_id && left.effect == right.effect);
 }

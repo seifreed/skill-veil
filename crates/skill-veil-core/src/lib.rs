@@ -62,6 +62,7 @@ pub mod artifact_graph;
 mod artifact_taint;
 pub mod benchmark;
 pub mod findings;
+mod inline_suppressions;
 pub mod policy;
 mod policy_eval;
 mod policy_serializers;
@@ -115,7 +116,7 @@ pub use rules::{
     RuleCondition, RuleEngine, RulePackFile, RulePackKind, RulePackMetadata,
     RULE_PACK_SCHEMA_VERSION,
 };
-pub use scanner::{ScanOptions, ScanResult, ScanTargetMode, Scanner};
+pub use scanner::{PackageScanResult, ScanOptions, ScanResult, ScanTargetMode, Scanner};
 
 // Port traits (interfaces for dependency injection)
 pub use ports::{DecodedText, FileContent, FileSystemProvider, MarkdownParser, PatternMatcher};

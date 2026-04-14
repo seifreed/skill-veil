@@ -97,7 +97,7 @@ fn analyze_lockfile_json(
     reason: &str,
 ) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
-    if !content.contains(key) || !(content.contains("http://") || content.contains("https://")) {
+    if !(content.contains(key) && (content.contains("http://") || content.contains("https://"))) {
         return Vec::new();
     }
 

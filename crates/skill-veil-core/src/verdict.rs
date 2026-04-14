@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use crate::findings::{
     ArtifactScope, BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission, Finding,
-    FindingSummary, HygieneSummary, PackageHealth, PackageVerdictReport, RecommendedAction,
-    RootCauseGroup, SignalClass, ThreatCategory, Verdict, VerdictReason,
+    FindingSummary, HygieneSummary, MatchTarget, PackageHealth, PackageVerdictReport,
+    RecommendedAction, RootCauseGroup, SignalClass, ThreatCategory, Verdict, VerdictReason,
 };
 use crate::verdict_calibration::calibrate_verdict_inputs;
 
@@ -61,20 +61,24 @@ pub fn derive_package_verdict(
         && supporting_summary.recommended_action == RecommendedAction::Log
         && root_cause_groups.iter().any(|group| {
             group.signal_class == SignalClass::Hygiene
-                && (group.strongest_action == RecommendedAction::Block || group.finding_count >= 4)
+                && (group.strongest_action == RecommendedAction::Block
+                    || (group.finding_count >= 4
+                        && group.strongest_action >= RecommendedAction::RequireApproval))
         });
     let hygiene_summary = build_hygiene_summary(findings);
-    let declared_permissions =
-        derive_declared_permissions(findings, primary_summary, supporting_summary);
+    let declared_permissions = derive_declared_permissions(findings, supporting_summary);
     let blast_radius_summary = build_blast_radius_summary(findings, &declared_permissions);
     let effective_capabilities = derive_effective_capabilities(findings);
     let package_health =
-        if hygiene_summary.package_root_findings == 0 && hygiene_summary.supporting_findings == 0 {
+        if hygiene_summary.package_root_findings == 0
+            && hygiene_summary.entrypoint_findings == 0
+            && hygiene_summary.supporting_findings == 0
+        {
             PackageHealth::Healthy
         } else if severe_hygiene_only {
-            PackageHealth::Elevated
-        } else {
             PackageHealth::NeedsReview
+        } else {
+            PackageHealth::Elevated
         };
     let isolated_weak_package_root_signal =
         is_isolated_weak_package_root_signal(&root_cause_groups);
@@ -83,7 +87,9 @@ pub fn derive_package_verdict(
         || (has_supporting_block && has_conclusive_supporting_malicious)
     {
         Verdict::Malicious
-    } else if isolated_weak_package_root_signal {
+    } else if isolated_weak_package_root_signal && !has_actionable_non_package_root {
+        // Isolated weak package root signals are downgraded to Benign,
+        // but ONLY if there are no actionable signals in other artifacts
         Verdict::Benign
     } else if has_non_hygiene_signal || has_actionable_non_package_root {
         Verdict::Suspicious
@@ -120,7 +126,16 @@ fn detect_compound_verdict_reasons(
             group.category == category && group.strongest_action != RecommendedAction::Log
         })
     };
-    let has_rule = |rule_id: &str| findings.iter().any(|finding| finding.rule_id == rule_id);
+    // Check if a rule fired with an actionable recommendation (not Log)
+    // This ensures calibrated-down findings don't trigger compound verdicts
+    let has_rule = |rule_id: &str| {
+        findings.iter().any(|finding| {
+            finding.rule_id == rule_id && finding.recommended_action != RecommendedAction::Log
+        })
+    };
+    // Declared permissions are often calibrated down to Log for being context-only,
+    // but they still contribute to compound verdicts when paired with high-risk behavior.
+    // We don't check actionability here because the compound nature itself is the risk.
     let has_declared_permission_rule = |rule_id: &str| {
         findings.iter().any(|finding| {
             finding.rule_id == rule_id && finding.artifact_scope == ArtifactScope::AgentEntrypoint
@@ -226,7 +241,6 @@ fn is_isolated_weak_package_root_signal(root_cause_groups: &[RootCauseGroup]) ->
 
 fn derive_declared_permissions(
     findings: &[Finding],
-    _primary_summary: &FindingSummary,
     supporting_summary: &FindingSummary,
 ) -> Vec<DeclaredPermission> {
     let mut permissions = Vec::new();
@@ -411,11 +425,11 @@ fn build_blast_radius_summary(
             .iter()
             .any(|factor| factor == "remote execution" || factor == "data exfiltration")
     {
-        Some(BlastRadiusLevel::High)
+        BlastRadiusLevel::High
     } else if severe_count >= 1 || !declared_permissions.is_empty() || !factors.is_empty() {
-        Some(BlastRadiusLevel::Medium)
+        BlastRadiusLevel::Medium
     } else {
-        Some(BlastRadiusLevel::Low)
+        BlastRadiusLevel::Low
     };
 
     BlastRadiusSummary {
@@ -431,6 +445,15 @@ fn is_conclusive_supporting_malicious(finding: &Finding) -> bool {
         || finding.signal_class != SignalClass::MaliciousBehavior
         || finding.recommended_action != RecommendedAction::Block
     {
+        return false;
+    }
+
+    let is_code_context = matches!(
+        finding.matched_on,
+        MatchTarget::CodeBlock { .. } | MatchTarget::ReferencedFile { .. }
+    );
+
+    if !is_code_context {
         return false;
     }
 
@@ -470,6 +493,12 @@ fn is_conclusive_supporting_malicious(finding: &Finding) -> bool {
             (has_sensitive_payload && has_transmit_verb) || has_exfil_channel
         }
         ThreatCategory::PersistentPromptTampering => true,
+        // Credential exposure with block action and malicious signal is conclusive
+        ThreatCategory::CredentialExposure => true,
+        // Privilege escalation with block action and malicious signal is conclusive
+        ThreatCategory::PrivilegeEscalation => true,
+        // Supply chain install-time execution is conclusive
+        ThreatCategory::SupplyChain => has_remote_indicator || has_transmit_verb,
         _ => false,
     }
 }
@@ -520,6 +549,7 @@ fn build_root_cause_groups(findings: &[Finding]) -> Vec<RootCauseGroup> {
 fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
     let mut top_rules = BTreeMap::<String, usize>::new();
     let mut package_root_findings = 0_usize;
+    let mut entrypoint_findings = 0_usize;
     let mut supporting_findings = 0_usize;
 
     for finding in findings {
@@ -530,7 +560,7 @@ fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
         match finding.artifact_scope {
             ArtifactScope::PackageRootArtifact => package_root_findings += 1,
             ArtifactScope::SupportingArtifact => supporting_findings += 1,
-            ArtifactScope::AgentEntrypoint => {}
+            ArtifactScope::AgentEntrypoint => entrypoint_findings += 1,
         }
         *top_rules.entry(finding.rule_id.clone()).or_insert(0) += 1;
     }
@@ -540,6 +570,7 @@ fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
 
     HygieneSummary {
         package_root_findings,
+        entrypoint_findings,
         supporting_findings,
         top_rules: top_rules
             .into_iter()

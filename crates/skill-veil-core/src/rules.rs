@@ -212,8 +212,17 @@ fn calculate_line_number(content: &str, offset: usize) -> usize {
 
 impl CompiledRule {
     /// Compile a rule for matching
+    ///
+    /// This validates all regex patterns in the rule condition and returns an error
+    /// if any pattern has invalid regex syntax.
     pub fn compile(rule: Rule) -> Result<Self, RuleError> {
         let pattern_strings = Self::extract_pattern_strings(&rule.condition);
+        // Validate all regex patterns at compile time to catch syntax errors early
+        for pattern in &pattern_strings {
+            if let Err(e) = regex::Regex::new(pattern) {
+                return Err(RuleError::RegexError(e));
+            }
+        }
         Ok(Self {
             rule,
             pattern_strings,
@@ -360,16 +369,21 @@ impl CompiledRule {
             return false;
         };
 
+        let mut matched = false;
+        let content_lower = sec.content.to_lowercase();
         for value in values {
-            if sec.content.to_lowercase().contains(&value.to_lowercase()) {
+            if value.is_empty() {
+                continue;
+            }
+            if content_lower.contains(&value.to_lowercase()) {
                 let target = MatchTarget::Section {
                     name: section.to_string(),
                 };
                 findings.push(self.create_finding(target, value));
-                return true;
+                matched = true;
             }
         }
-        false
+        matched
     }
 
     fn check_section_regex_condition<M: PatternMatcher>(
@@ -442,14 +456,15 @@ impl CompiledRule {
         matcher: &M,
         findings: &mut Vec<Finding>,
     ) -> bool {
+        let mut matched = false;
         for cond in conditions {
             let mut branch_findings = Vec::new();
             if self.check_condition(cond, doc, matcher, &mut branch_findings) {
                 findings.extend(branch_findings);
-                return true;
+                matched = true;
             }
         }
-        false
+        matched
     }
 
     /// Check if all conditions match
@@ -739,6 +754,8 @@ fn get_builtin_rules() -> Vec<Rule> {
 }
 
 pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
+    let mut errors = Vec::new();
+
     if let Ok(pack) = serde_yaml::from_str::<RulePackFile>(content) {
         if !pack.rules.is_empty() {
             if !is_supported_rule_pack_schema(&pack.schema_version) {
@@ -749,6 +766,8 @@ pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
             }
             return Ok(pack.rules);
         }
+    } else if !content.trim().is_empty() {
+        errors.push("RulePackFile format".to_string());
     }
 
     if let Ok(feed) = serde_yaml::from_str::<IocFeedFile>(content) {
@@ -761,10 +780,27 @@ pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
             }
             return Ok(ioc_feed_to_rules(&feed));
         }
+    } else if !content.trim().is_empty() {
+        errors.push("IocFeedFile format".to_string());
     }
 
-    let rules: Vec<Rule> = serde_yaml::from_str(content)?;
-    Ok(rules)
+    match serde_yaml::from_str::<Vec<Rule>>(content) {
+        Ok(rules) => return Ok(rules),
+        Err(e) => {
+            errors.push(format!("rule list format: {}", e));
+        }
+    }
+
+    if errors.is_empty() {
+        Err(RuleError::InvalidRule(
+            "Rule file is empty or contains no valid rules".to_string(),
+        ))
+    } else {
+        Err(RuleError::InvalidRule(format!(
+            "Failed to parse rules file. Attempted formats: {}",
+            errors.join("; ")
+        )))
+    }
 }
 
 pub fn is_supported_rule_pack_schema(schema_version: &str) -> bool {
@@ -1027,6 +1063,43 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "TEST_SECTION_REGEX");
+    }
+
+    #[test]
+    fn test_section_contains_condition_emits_all_matching_values() {
+        let mut engine = RuleEngine::new();
+        engine
+            .add_rule(Rule {
+                id: "TEST_SECTION_CONTAINS_ANY".to_string(),
+                category: ThreatCategory::ToolAbuse,
+                severity: Severity::Medium,
+                confidence: 0.8,
+                condition: RuleCondition::SectionContains {
+                    section: "Setup".to_string(),
+                    values: vec![
+                        "extract cookies".to_string(),
+                        "browser tool".to_string(),
+                        "review".to_string(),
+                    ],
+                },
+                action: RecommendedAction::RequireApproval,
+                reason: "Section contains risky instructions".to_string(),
+                shield: None,
+                enabled: true,
+                tags: vec![],
+            })
+            .unwrap();
+
+        let doc = parse_test_doc(
+            "# Skill\n\n## Setup\nUse the browser tool to extract cookies and then review the session.\n",
+        );
+        let findings = engine.evaluate(&doc);
+
+        // All three values match the content, so three findings are emitted
+        assert_eq!(findings.len(), 3);
+        assert!(findings
+            .iter()
+            .all(|f| f.rule_id == "TEST_SECTION_CONTAINS_ANY"));
     }
 
     #[test]

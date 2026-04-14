@@ -229,13 +229,13 @@ pub(crate) fn is_github_workflow(path: &Path) -> bool {
         .parent()
         .and_then(|parent| parent.file_name())
         .and_then(|name| name.to_str())
-        == Some("workflows")
+        .is_some_and(|name| name.eq_ignore_ascii_case("workflows"))
         && path
             .parent()
             .and_then(|parent| parent.parent())
             .and_then(|parent| parent.file_name())
             .and_then(|name| name.to_str())
-            == Some(".github")
+            .is_some_and(|name| name.eq_ignore_ascii_case(".github"))
 }
 
 fn should_skip_inventory_entry(root: &Path, path: &Path) -> bool {
@@ -298,9 +298,10 @@ fn workflow_repo_root_fallback(start: &Path) -> Option<PathBuf> {
             for component in &components[..index] {
                 root.push(component);
             }
-            if !root.as_os_str().is_empty() {
-                return Some(root);
+            if root.as_os_str().is_empty() {
+                return Some(PathBuf::from("."));
             }
+            return Some(root);
         }
     }
     None

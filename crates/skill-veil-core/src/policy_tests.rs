@@ -63,6 +63,7 @@ fn test_generate_sarif() {
 
     assert_eq!(sarif.version, "2.1.0");
     assert_eq!(sarif.runs.len(), 1);
+    // 1 finding + 1 synthetic SKILL_VEIL_ACTION_TRIGGER result = 2 total
     assert_eq!(sarif.runs[0].results.len(), 2);
 }
 

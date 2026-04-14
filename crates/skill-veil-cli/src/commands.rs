@@ -87,8 +87,19 @@ pub(crate) fn run_scan(
     };
 
     let scanner = Scanner::with_std_adapters(options).context("Failed to initialize scanner")?;
-    let results = scanner.scan(&args.path).context("Failed to scan path")?;
-    let output_content = format_results(&results, args.format, text_options)?;
+    let scan_result = scanner.scan(&args.path).context("Failed to scan path")?;
+
+    if !scan_result.errors.is_empty() {
+        for err_entry in &scan_result.errors {
+            eprintln!(
+                "Warning: Failed to scan {}: {}",
+                err_entry.path.display(),
+                err_entry.error
+            );
+        }
+    }
+
+    let output_content = format_results(&scan_result.results, args.format, text_options)?;
 
     if let Some(output_path) = args.output {
         std::fs::write(&output_path, &output_content).context("Failed to write output file")?;
@@ -99,7 +110,7 @@ pub(crate) fn run_scan(
         print!("{}", output_content);
     }
 
-    if results.iter().any(|r| r.should_fail) {
+    if scan_result.results.iter().any(|r| r.should_fail) {
         std::process::exit(1);
     }
 
@@ -286,7 +297,11 @@ pub(crate) fn run_baseline_update(args: BaselineUpdateArgs) -> Result<()> {
         );
     }
 
-    let merged_entries: Vec<BaselineEntry> = current_map.into_values().collect();
+    let mut merged_map = existing_map;
+    for (fingerprint, entry) in current_map {
+        merged_map.insert(fingerprint, entry);
+    }
+    let merged_entries: Vec<BaselineEntry> = merged_map.into_values().collect();
     let updated = BaselineFile {
         schema_version: POLICY_SCHEMA_VERSION.to_string(),
         entries: merged_entries,

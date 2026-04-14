@@ -74,7 +74,10 @@ fn add_suppressions_from_capture(
     let reason = capture.get(3).map(|m| m.as_str().trim().to_string());
     let applies_to_line = if kind.ends_with("next-line") || standalone {
         Some(next_line_number)
+    } else if kind == "ignore" {
+        None // file-wide suppression
     } else {
+        // nosem / nosemgrep: suppress on the current line (not next-line, not file-wide)
         Some(line_number)
     };
 
@@ -196,10 +199,9 @@ pub(crate) fn apply_inline_suppressions(
                 let path_matches = finding
                     .artifact_path
                     .as_ref()
-                    .is_some_and(|artifact_path| {
+                    .is_none_or(|artifact_path| {
                         artifact_path == &suppression.path
-                            || std::path::Path::new(artifact_path)
-                                .ends_with(&suppression.path)
+                            || std::path::Path::new(artifact_path).ends_with(&suppression.path)
                     });
                 let rule_matches =
                     suppression.rule_id == "*" || suppression.rule_id == finding.rule_id;

@@ -413,7 +413,9 @@ impl ArtifactAnalysisService {
         if lower.contains("import ")
             || lower.contains("require(")
             || lower.contains("source ")
-            || lower.contains(". ")
+            || regex::Regex::new(r"(?m)^\s*\.\s+\S")
+                .expect("valid regex")
+                .is_match(&lower)
         {
             links.push(ArtifactLink {
                 target: "runtime-module".to_string(),

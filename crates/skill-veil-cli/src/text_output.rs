@@ -147,7 +147,8 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
                 .join(",")
         ));
     }
-    if let Some(level) = result.verdict_report.blast_radius_summary.level {
+    {
+        let level = result.verdict_report.blast_radius_summary.level;
         output.push_str(&format!("  Blast radius: {}\n", level));
         if !result
             .verdict_report

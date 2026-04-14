@@ -14,10 +14,10 @@ pub(crate) fn analyze_mcp_manifest(
     let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
     let has_remote_endpoint = Regex::new("(?i)(https?://|wss?://)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content);
     let has_exec_surface = Regex::new("(?i)(command|stdio|args|transport)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content);
 
     if has_remote_endpoint {
@@ -131,7 +131,7 @@ pub(crate) fn analyze_mcp_manifest(
     ));
 
     if Regex::new("(?i)(oauth|scope|scopes|bearer|authorization)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content)
     {
         findings.push(
@@ -180,7 +180,7 @@ pub(crate) fn mcp_manifest_relations(
     let mut links = artifact_analysis.generic_url_relations(content);
 
     if Regex::new("(?i)(command|stdio|args)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content)
     {
         links.push(crate::services::artifact_analysis::ArtifactLink {
@@ -190,7 +190,7 @@ pub(crate) fn mcp_manifest_relations(
     }
     if artifact_analysis.mcp_declares_inline_secret(content)
         || Regex::new("(?i)(oauth|scope|authorization|bearer|api[_-]?key)")
-            .unwrap()
+            .expect("valid regex")
             .is_match(content)
     {
         links.push(crate::services::artifact_analysis::ArtifactLink {
@@ -214,7 +214,7 @@ pub(crate) fn mcp_manifest_capabilities(
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
     if Regex::new("(?i)(command|stdio|args)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content)
     {
         capabilities.push(ArtifactAnalysisService::declared_capability(
@@ -222,7 +222,7 @@ pub(crate) fn mcp_manifest_capabilities(
         ));
     }
     if Regex::new("(?i)(https?://|wss?://)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content)
     {
         capabilities.push(ArtifactAnalysisService::declared_capability(
@@ -230,7 +230,7 @@ pub(crate) fn mcp_manifest_capabilities(
         ));
     }
     if Regex::new("(?i)(oauth|scope|authorization|bearer)")
-        .unwrap()
+        .expect("valid regex")
         .is_match(content)
     {
         capabilities.push(ArtifactAnalysisService::declared_capability(

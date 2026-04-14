@@ -222,7 +222,6 @@ fn sibling_package_manifests(path: &Path) -> Vec<PathBuf> {
         "mcp.json",
         "mcp.yaml",
         "mcp.yml",
-        "package-lock.json",
         "requirements.txt",
         "pyproject.toml",
         "cargo.toml",

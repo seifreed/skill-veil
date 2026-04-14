@@ -175,10 +175,15 @@ pub fn evaluate_corpus(
 
     for sample in manifest.samples {
         let sample_path = root.join(&sample.path);
-        let results = if sample_path.is_dir() {
+        let pkg_result = if sample_path.is_dir() {
             scanner.scan_package(&sample_path)
         } else {
-            scanner.scan_file(&sample_path).map(|result| vec![result])
+            scanner
+                .scan_file(&sample_path)
+                .map(|result| crate::scanner::PackageScanResult {
+                    results: vec![result],
+                    errors: Vec::new(),
+                })
         }
         .map_err(|error| BenchmarkError::SampleScan {
             id: sample.id.clone(),
@@ -186,6 +191,28 @@ pub fn evaluate_corpus(
             message: error.to_string(),
         })?;
 
+        if !pkg_result.errors.is_empty() {
+            let message = pkg_result
+                .errors
+                .iter()
+                .map(|entry| format!("{}: {}", entry.path.display(), entry.error))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(BenchmarkError::SampleScan {
+                id: sample.id.clone(),
+                path: sample_path.clone(),
+                message: format!("partial scan failure: {message}"),
+            });
+        }
+
+        let results = &pkg_result.results;
+        if results.is_empty() {
+            return Err(BenchmarkError::SampleScan {
+                id: sample.id.clone(),
+                path: sample_path.clone(),
+                message: "sample produced no scan results".to_string(),
+            });
+        }
         let recommended_action = results
             .iter()
             .fold(RecommendedAction::Log, |current, result| {
@@ -219,7 +246,7 @@ pub fn evaluate_corpus(
         let actual_label = classify_verdict(package_verdict);
         expected.push(sample.label);
         actual.push(actual_label);
-        for result in &results {
+        for result in results {
             deduplication.original_findings +=
                 result.deduplication_summary.original_findings as u32;
             deduplication.unique_findings += result.deduplication_summary.unique_findings as u32;
@@ -524,7 +551,8 @@ fn recommend_thresholds(samples: &[SampleEvaluation]) -> ThresholdRecommendation
                 .collect();
             let metrics = compute_metrics(&expected, &actual);
             let score = threshold_objective(&metrics, samples, &actual);
-            let acceptable_recall = metrics.recall + 0.02 >= current_metrics.recall;
+            let acceptable_recall =
+                current_metrics.recall > 0.0 && metrics.recall + 0.02 >= current_metrics.recall;
 
             if acceptable_recall && score > best_score {
                 best_approval = approval;
@@ -613,6 +641,8 @@ pub enum BenchmarkError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ScanOptions, ScanTargetMode};
+    use tempfile::tempdir;
 
     #[test]
     fn test_recommend_thresholds_can_reduce_false_positive_rate() {
@@ -703,5 +733,52 @@ mod tests {
             .by_signal_pair
             .iter()
             .any(|bucket| bucket.key == "behavior+remote_exec"));
+    }
+
+    #[test]
+    fn test_evaluate_corpus_fails_on_partial_package_scan_errors() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let dir = tempdir().unwrap();
+            let corpus_path = dir.path().join("corpus.yaml");
+            let sample_dir = dir.path().join("sample");
+            std::fs::create_dir_all(&sample_dir).unwrap();
+            std::fs::write(
+                sample_dir.join("SKILL.md"),
+                "# Skill\n\n## Setup\nInstall dependencies.\n",
+            )
+            .unwrap();
+            let package_json = sample_dir.join("package.json");
+            std::fs::write(&package_json, r#"{"dependencies":{"chalk":"^5.0.0"}}"#).unwrap();
+            let mut permissions = std::fs::metadata(&package_json).unwrap().permissions();
+            permissions.set_mode(0o000);
+            std::fs::set_permissions(&package_json, permissions).unwrap();
+            std::fs::write(
+                &corpus_path,
+                "samples:\n  - id: partial\n    path: sample\n    label: suspicious\n",
+            )
+            .unwrap();
+
+            let scanner = Scanner::with_std_adapters(ScanOptions {
+                target_mode: ScanTargetMode::Package,
+                ..Default::default()
+            })
+            .unwrap();
+            let error = evaluate_corpus(&scanner, &corpus_path).unwrap_err();
+
+            let mut restore_permissions = std::fs::metadata(&package_json).unwrap().permissions();
+            restore_permissions.set_mode(0o644);
+            let _ = std::fs::set_permissions(&package_json, restore_permissions);
+
+            match error {
+                BenchmarkError::SampleScan { id, message, .. } => {
+                    assert_eq!(id, "partial");
+                    assert!(message.contains("partial scan failure"));
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
     }
 }

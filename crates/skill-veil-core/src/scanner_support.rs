@@ -43,6 +43,28 @@ pub(crate) fn parse_warning_finding(
         .build()
 }
 
+pub(crate) fn artifact_parse_error_finding(
+    path: &Path,
+    artifact_kind: ArtifactKind,
+    error_msg: &str,
+) -> Finding {
+    Finding::builder("ARTIFACT_PARSE_ERROR", crate::findings::ThreatCategory::Obfuscation)
+        .severity(Severity::Medium)
+        .action(RecommendedAction::RequireApproval)
+        .evidence_kind(crate::findings::EvidenceKind::Context)
+        .artifact(artifact_kind, Some(path.display().to_string()))
+        .match_value(path.display().to_string())
+        .reason(format!(
+            "Referenced artifact could not be parsed: {}",
+            error_msg
+        ))
+        .remediation(
+            "Review the artifact manually. The file exists but could not be parsed as markdown or code, which may indicate obfuscation or corruption.",
+        )
+        .signal_class(crate::findings::SignalClass::SuspiciousPackageBehavior)
+        .build()
+}
+
 pub(crate) fn structured_parse_warning(
     path: &Path,
     content: &str,

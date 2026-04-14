@@ -101,6 +101,41 @@ pub struct ScanResult {
     pub should_fail: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanErrorEntry {
+    pub path: PathBuf,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackageScanResult {
+    pub results: Vec<ScanResult>,
+    pub errors: Vec<ScanErrorEntry>,
+}
+
+impl PackageScanResult {
+    pub fn new() -> Self {
+        Self {
+            results: Vec::new(),
+            errors: Vec::new(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.results.is_empty() && self.errors.is_empty()
+    }
+
+    pub fn total_count(&self) -> usize {
+        self.results.len() + self.errors.len()
+    }
+}
+
+impl Default for PackageScanResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScanResult {
     pub fn has_severity(&self, severity: Severity) -> bool {
         self.findings.iter().any(|f| f.severity >= severity)
@@ -120,13 +155,17 @@ impl ScanResult {
     ) -> (Vec<Finding>, Vec<Finding>) {
         let primary_path = path.display().to_string();
         findings.iter().cloned().partition(|finding| {
-            (finding
-                .artifact_path
-                .as_deref()
-                .is_none_or(|artifact_path| artifact_path == primary_path)
-                && finding.artifact_kind == primary_artifact_kind)
-                || (finding.artifact_path.is_none()
-                    && finding.artifact_kind == ArtifactKind::SkillDocument)
+            // Path-less SkillDocument findings are always primary
+            (finding.artifact_path.is_none()
+                && finding.artifact_kind == ArtifactKind::SkillDocument)
+                || (finding
+                    .artifact_path
+                    .as_deref()
+                    .is_none_or(|artifact_path| {
+                        Path::new(artifact_path) == Path::new(&primary_path)
+                            || Path::new(artifact_path).ends_with(path)
+                    })
+                    && finding.artifact_kind == primary_artifact_kind)
         })
     }
 

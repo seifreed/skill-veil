@@ -104,7 +104,10 @@ pub fn apply_policy_overrides_with_audit(
                     policy_override_matches(policy_override, &finding, now)
                 })
                 .max_by_key(|(index, policy_override)| {
-                    (policy_override_specificity(policy_override), *index)
+                    (
+                        policy_override_specificity(policy_override),
+                        usize::MAX - *index,
+                    )
                 })
                 .map(|(_, policy_override)| policy_override);
 
@@ -177,12 +180,13 @@ pub fn validate_policy(policy: &PolicyFile) -> Result<(), String> {
             return Err("Policy overrides must define a non-empty reason".to_string());
         }
         let key = format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
             policy_override.id,
             policy_override.rule_id,
             policy_override.artifact_path,
             policy_override.context,
-            policy_override.expires_at
+            policy_override.expires_at,
+            policy_override.action
         );
         if !seen.insert(key) {
             return Err("Duplicate policy override entries detected".to_string());
@@ -245,16 +249,7 @@ pub fn diff_reports_with_policy_state(
 
     for finding in current.iter().flat_map(|report| report.findings.iter()) {
         let fingerprint = finding_fingerprint(finding);
-        if baseline.is_some_and(|baseline_file| {
-            baseline_file
-                .entries
-                .iter()
-                .any(|entry| baseline_matches_finding(entry, finding))
-        }) {
-            baselined_findings.push(finding_to_diff_entry(finding));
-            continue;
-        }
-
+        // Check waivers first, then baseline — matches scan_filter.rs ordering
         if waivers.is_some_and(|waiver_file| {
             waiver_file
                 .waivers
@@ -262,6 +257,16 @@ pub fn diff_reports_with_policy_state(
                 .any(|waiver| waiver_matches_finding(waiver, finding, now))
         }) {
             waived_findings.push(finding_to_diff_entry(finding));
+            continue;
+        }
+
+        if baseline.is_some_and(|baseline_file| {
+            baseline_file
+                .entries
+                .iter()
+                .any(|entry| baseline_matches_finding(entry, finding))
+        }) {
+            baselined_findings.push(finding_to_diff_entry(finding));
             continue;
         }
 

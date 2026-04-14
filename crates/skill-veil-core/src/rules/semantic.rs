@@ -77,5 +77,10 @@ fn remote_domain(target: &str) -> Option<String> {
     }
 
     let normalized = normalized.to_ascii_lowercase();
-    (!normalized.is_empty()).then_some(normalized)
+    // Only treat as domain if it looks like one (has dot-separated structure, no spaces)
+    if normalized.contains('.') && !normalized.contains(' ') {
+        Some(normalized)
+    } else {
+        None
+    }
 }

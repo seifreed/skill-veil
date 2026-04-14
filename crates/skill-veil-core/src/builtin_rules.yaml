@@ -73,9 +73,8 @@
   category: supply_chain
   severity: medium
   confidence: 0.70
-  when: !all
-    - !regex
-      pattern: "(curl|wget|Invoke-WebRequest)\\s+.*\\.(sh|ps1|exe|bin)"
+  when: !regex
+    pattern: "(curl|wget|Invoke-WebRequest)\\s+.*\\.(sh|ps1|exe|bin)"
   action: require_approval
   reason: "Downloading executable without hash verification"
   shield:
@@ -547,7 +546,7 @@
   severity: critical
   confidence: 0.90
   when: !regex
-    pattern: "(?i)(pump|dump)\\s*(and|&)?\\s*(dump|pump)?|(viral|coordinated)\\s*(promo|pump|shill)|token\\s*(manipulation|fraud)"
+    pattern: "(?i)(pump|dump)\\s*(and|&)\\s*(dump|pump)|(viral|coordinated)\\s*(promo|pump|shill)|token\\s*(manipulation|fraud)"
   action: block
   reason: "Cryptocurrency pump-and-dump or market manipulation"
   shield:
@@ -638,7 +637,7 @@
     - fingerprint
 
 - id: SKILL_ERROR_HANDLER_HIJACK
-  category: remote_exec
+  category: data_exfiltration
   severity: high
   confidence: 0.80
   when: !regex
@@ -947,7 +946,7 @@
   severity: high
   confidence: 0.85
   when: !regex
-    pattern: "(?i)\\.(line_token|line_secret|token|secret|credentials|api_key)"
+    pattern: "(?i)(~/|\\$HOME/|/home/|\\bcat\\s+|\\bread\\s+)\\.(line_token|line_secret|token|secret|credentials|api_key)"
   action: require_approval
   reason: "Plaintext credential storage in dot files"
   shield:
@@ -1028,7 +1027,7 @@
   severity: high
   confidence: 0.85
   when: !regex
-    pattern: "(?i)(warmup|init|setup)\\s*\\(\\s*\\)|def\\s+(warmup|_init_|pre_run)|function\\s+warmup"
+    pattern: "(?i)(warmup|init|setup)\\s*\\(\\s*\\)|def\\s+(warmup|__init__|pre_run)|function\\s+warmup"
   action: require_approval
   reason: "Initialization function that may execute before argument parsing"
   shield:
@@ -1196,7 +1195,7 @@
   severity: medium
   confidence: 0.75
   when: !regex
-    pattern: "(?i)(curl|wget|fetch)\\s+['\"]?http://[^s]"
+    pattern: "(?i)(curl|wget|fetch)\\s+['\"]?http://"
   action: require_approval
   reason: "Unencrypted HTTP download - payload could be intercepted/modified"
   shield:

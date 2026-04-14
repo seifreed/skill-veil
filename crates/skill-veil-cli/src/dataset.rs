@@ -127,7 +127,7 @@ pub(crate) fn run_scan_dataset(
     }
 
     enum DatasetScanOutcome {
-        Results(Vec<ScanResult>),
+        Results(skill_veil_core::PackageScanResult),
         Skipped,
         Failed(String),
     }
@@ -135,7 +135,7 @@ pub(crate) fn run_scan_dataset(
     let outcomes: Vec<_> = package_roots
         .par_iter()
         .map(|package_root| match scanner.scan(package_root) {
-            Ok(results) => DatasetScanOutcome::Results(results),
+            Ok(pkg_result) => DatasetScanOutcome::Results(pkg_result),
             Err(skill_veil_core::scanner::ScanError::NoSkillEntrypoints(_)) => {
                 DatasetScanOutcome::Skipped
             }
@@ -148,8 +148,19 @@ pub(crate) fn run_scan_dataset(
     let mut skipped_packages = 0_usize;
     for outcome in outcomes {
         match outcome {
-            DatasetScanOutcome::Results(results) => {
-                if results.iter().any(|result| result.should_fail) {
+            DatasetScanOutcome::Results(pkg_result) => {
+                let has_errors = !pkg_result.errors.is_empty();
+                if !quiet && has_errors {
+                    for err_entry in &pkg_result.errors {
+                        eprintln!(
+                            "Dataset package scan warning: Failed to scan {}: {}",
+                            err_entry.path.display(),
+                            err_entry.error
+                        );
+                    }
+                }
+                let results = pkg_result.results;
+                if has_errors || results.iter().any(|result| result.should_fail) {
                     packages_with_failures += 1;
                 }
                 all_results.extend(results);
@@ -309,8 +320,8 @@ fn filter_dataset_results(results: &[ScanResult], view: DatasetViewArg) -> Vec<S
                 result.classification != skill_veil_core::ArtifactClassification::GenericMarkdown
             }
             DatasetViewArg::PackageRisk => {
-                result.classification == skill_veil_core::ArtifactClassification::GenericMarkdown
-                    || !result.supporting_findings.is_empty()
+                result.classification != skill_veil_core::ArtifactClassification::GenericMarkdown
+                    && !result.supporting_findings.is_empty()
             }
             DatasetViewArg::Verdicts => result.verdict != Verdict::Benign,
         })
@@ -332,14 +343,13 @@ fn count_verdicts(reports: &[JsonReport]) -> (usize, usize, usize) {
 fn count_warning_rule(reports: &[JsonReport], rule_id: &str) -> usize {
     reports
         .iter()
-        .map(|report| {
+        .filter(|report| {
             report
                 .findings
                 .iter()
-                .filter(|finding| finding.rule_id == rule_id)
-                .count()
+                .any(|finding| finding.rule_id == rule_id)
         })
-        .sum()
+        .count()
 }
 
 fn extract_package_id_from_skill_path(skill_path: &str) -> Option<String> {
@@ -807,11 +817,13 @@ fn aggregate_package_verdicts(entries: &[DatasetJsonEntry]) -> Vec<DatasetPackag
             package_id: Some(key),
             final_verdict,
             package_health,
-            blast_radius: representative
-                .report
-                .verdict_report
-                .blast_radius_summary
-                .level,
+            blast_radius: Some(
+                representative
+                    .report
+                    .verdict_report
+                    .blast_radius_summary
+                    .level,
+            ),
             declared_permissions: representative
                 .report
                 .verdict_report
