@@ -442,6 +442,7 @@ pub struct FindingBuilder {
     signal_class: Option<SignalClass>,
     artifact_path: Option<String>,
     line_number: Option<usize>,
+    action_explicit: bool,
 }
 
 impl FindingBuilder {
@@ -468,13 +469,16 @@ impl FindingBuilder {
             signal_class: None,
             artifact_path: None,
             line_number: None,
+            action_explicit: false,
         }
     }
 
     /// Set the severity level
     pub fn severity(mut self, severity: Severity) -> Self {
         self.severity = severity;
-        self.recommended_action = severity.default_action();
+        if !self.action_explicit {
+            self.recommended_action = severity.default_action();
+        }
         self
     }
 
@@ -509,8 +513,12 @@ impl FindingBuilder {
     }
 
     /// Set the recommended action explicitly.
+    ///
+    /// When called, the action is treated as intentional and will not be
+    /// overridden by a subsequent `.severity()` call.
     pub fn action(mut self, action: RecommendedAction) -> Self {
         self.recommended_action = action;
+        self.action_explicit = true;
         self
     }
 
@@ -781,7 +789,7 @@ fn calibrate_confidence(
 
 pub fn default_operational_contexts(
     category: ThreatCategory,
-    artifact_kind: ArtifactKind,
+    _artifact_kind: ArtifactKind,
 ) -> Vec<OperationalContext> {
     let mut contexts = Vec::new();
 
@@ -815,18 +823,6 @@ pub fn default_operational_contexts(
             contexts.push(OperationalContext::CodeModification);
         }
         ThreatCategory::Obfuscation | ThreatCategory::Generic => {}
-    }
-
-    if matches!(
-        artifact_kind,
-        ArtifactKind::PackageManifest
-            | ArtifactKind::ReferencedArtifact
-            | ArtifactKind::McpServerManifest
-    ) && matches!(
-        category,
-        ThreatCategory::RemoteExec | ThreatCategory::SupplyChain | ThreatCategory::UnsafeBinary
-    ) {
-        contexts.push(OperationalContext::Install);
     }
 
     contexts.sort_by_key(|context| match context {
@@ -984,40 +980,40 @@ struct FindingDedupKey {
     artifact_path: Option<String>,
 }
 
-/// Remove semantically duplicate findings while preserving the strongest variant.
+/// Split findings into primary (entrypoint) and supporting (referenced artifacts) groups.
 ///
-/// # Deduplication Strategy
-///
-/// Findings are considered duplicates when they share the same:
-/// - `rule_id`
-/// - `category`
-/// - `matched_on` (match target)
-/// - `match_value`
-/// - `artifact_kind`
-/// - `artifact_path`
+/// A finding is considered primary if it matches the primary path and artifact kind,
+/// or if it is a path-less finding whose artifact kind matches the primary kind.
+pub(crate) fn split_findings_by_scope(
+    path: &std::path::Path,
+    primary_artifact_kind: ArtifactKind,
+    findings: &[Finding],
+) -> (Vec<Finding>, Vec<Finding>) {
+    let primary_path = path.display().to_string();
+    findings.iter().cloned().partition(|finding| {
+        finding.artifact_kind == primary_artifact_kind
+            && (finding.artifact_path.is_none()
+                || finding
+                    .artifact_path
+                    .as_deref()
+                    .is_some_and(|artifact_path| {
+                        std::path::Path::new(artifact_path) == std::path::Path::new(&primary_path)
+                            || std::path::Path::new(&primary_path).ends_with(artifact_path)
+                            || std::path::Path::new(artifact_path).ends_with(&primary_path)
+                    }))
+    })
+}
+
+/// Deduplicate findings that match on the same rule, category, match target,
+/// artifact kind, and artifact path.
 ///
 /// # Merge Semantics
 ///
-/// When merging duplicate findings, the following rules apply:
-///
-/// - **Severity**: Takes the maximum severity (e.g., High > Medium > Low)
-/// - **Confidence**: Takes the maximum confidence score, even if the incoming finding
-///   has lower severity. This ensures that a higher-confidence variant is preserved
-///   even when a duplicate has higher severity. For example, if finding A has
-///   severity=High, confidence=0.7 and finding B has severity=Medium, confidence=0.95,
-///   the merged result will have severity=High (max) and confidence=0.95 (max).
+/// - **Severity**: Takes the maximum severity
+/// - **Confidence**: Takes the maximum confidence score
 /// - **RecommendedAction**: Takes the maximum action (Block > RequireApproval > Log)
-/// - **Reason/Remediation**: Preserves from the "stronger" finding (higher severity
-///   or equal severity with higher confidence), or the longer text if equal
+/// - **Reason/Remediation**: Preserves from the stronger finding
 /// - **Line number**: Preserves first non-None value encountered
-///
-/// # Why Max Confidence with Max Severity?
-///
-/// This design choice ensures that the most actionable signal is preserved:
-/// - A high-severity finding with moderate confidence may be downgraded by calibration
-/// - A medium-severity finding with very high confidence represents strong evidence
-/// - By taking max(confidence), we preserve the strongest evidence signal regardless
-///   of which variant had higher severity
 #[must_use]
 pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, DeduplicationSummary) {
     let original_findings = findings.len();
@@ -1045,6 +1041,11 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
                 existing.raw_confidence = existing.raw_confidence.max(finding.raw_confidence);
                 existing.recommended_action =
                     RecommendedAction::max(existing.recommended_action, finding.recommended_action);
+
+                if finding_is_stronger {
+                    existing.signal_class = finding.signal_class;
+                    existing.evidence_kind = finding.evidence_kind;
+                }
 
                 if finding_is_stronger
                     || (finding.severity == existing.severity
@@ -1145,7 +1146,7 @@ impl FindingSummary {
                 .or_insert(factor);
         }
 
-        let risk_score = (total_score.min(100.0)) as u32;
+        let risk_score = total_score.min(100.0).round() as u32;
 
         let score_based_action = if risk_score > RISK_THRESHOLD_BLOCK {
             RecommendedAction::Block
@@ -1417,6 +1418,50 @@ mod tests {
     use crate::artifact_graph::{
         ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactGraph,
     };
+
+    #[test]
+    fn test_split_findings_by_scope_rejects_subdirectory_path() {
+        // A finding from "other/skill.md" should NOT be classified as primary
+        // when the primary path is "/project/skill.md".
+        let primary_path = std::path::Path::new("/project/skill.md");
+        let finding = Finding::builder("RULE", ThreatCategory::Generic)
+            .artifact(
+                ArtifactKind::SkillDocument,
+                Some("other/skill.md".to_string()),
+            )
+            .matched_on(MatchTarget::Document)
+            .match_value("x")
+            .reason("x")
+            .build();
+
+        let (primary, supporting) =
+            split_findings_by_scope(primary_path, ArtifactKind::SkillDocument, &[finding]);
+
+        assert!(
+            primary.is_empty(),
+            "Finding from 'other/skill.md' should not match primary path '/project/skill.md'"
+        );
+        assert_eq!(supporting.len(), 1);
+    }
+
+    #[test]
+    fn test_split_findings_by_scope_accepts_short_artifact_path() {
+        // A finding with artifact_path "skill.md" should match primary path
+        // "/project/skill.md" because primary ends with the artifact path.
+        let primary_path = std::path::Path::new("/project/skill.md");
+        let finding = Finding::builder("RULE", ThreatCategory::Generic)
+            .artifact(ArtifactKind::SkillDocument, Some("skill.md".to_string()))
+            .matched_on(MatchTarget::Document)
+            .match_value("x")
+            .reason("x")
+            .build();
+
+        let (primary, supporting) =
+            split_findings_by_scope(primary_path, ArtifactKind::SkillDocument, &[finding]);
+
+        assert_eq!(primary.len(), 1);
+        assert!(supporting.is_empty());
+    }
 
     #[test]
     fn test_severity_ordering() {
@@ -1734,7 +1779,7 @@ mod tests {
                 ThreatCategory::ScopeCreep,
             )
             .artifact_scope(ArtifactScope::AgentEntrypoint)
-            .action(RecommendedAction::Log)
+            .action(RecommendedAction::RequireApproval)
             .matched_on(MatchTarget::Document)
             .match_value("browser full")
             .reason("declared permission")
@@ -1875,8 +1920,101 @@ mod tests {
         let verdict = derive_package_verdict(&findings, &primary, &supporting, &package);
 
         assert_eq!(verdict.verdict, Verdict::Benign);
-        // AgentEntrypoint hygiene findings are now counted, so health is no longer Healthy
-        assert_eq!(verdict.package_health, PackageHealth::Elevated);
+        // Benign + Elevated is contradictory, so health is downgraded to NeedsReview
+        assert_eq!(verdict.package_health, PackageHealth::NeedsReview);
+    }
+
+    #[test]
+    fn test_severe_hygiene_only_produces_needs_review() {
+        // Hygiene-only findings with RequireApproval should NOT escalate to
+        // Suspicious — only Block-level hygiene findings trigger that path.
+        let findings: Vec<Finding> = (0..4)
+            .map(|i| {
+                Finding::builder(format!("HYGIENE_RULE_{}", i), ThreatCategory::ScopeCreep)
+                    .severity(Severity::Medium)
+                    .action(RecommendedAction::RequireApproval)
+                    .signal_class(SignalClass::Hygiene)
+                    .artifact_scope(ArtifactScope::AgentEntrypoint)
+                    .matched_on(MatchTarget::Document)
+                    .match_value(format!("hygiene issue {}", i))
+                    .reason(format!("hygiene rule {} fired", i))
+                    .build()
+            })
+            .collect();
+
+        let primary = FindingSummary::from_findings(&findings);
+        let supporting = FindingSummary::from_findings(&[]);
+        let package = FindingSummary::from_findings(&findings);
+        let verdict = derive_package_verdict(&findings, &primary, &supporting, &package);
+
+        assert_eq!(verdict.verdict, Verdict::Benign);
+        assert_eq!(verdict.package_health, PackageHealth::NeedsReview);
+
+        // Block-level hygiene findings DO escalate to Suspicious.
+        let block_findings: Vec<Finding> = (0..2)
+            .map(|i| {
+                Finding::builder(format!("HYGIENE_BLOCK_{}", i), ThreatCategory::ScopeCreep)
+                    .severity(Severity::High)
+                    .action(RecommendedAction::Block)
+                    .signal_class(SignalClass::Hygiene)
+                    .artifact_scope(ArtifactScope::AgentEntrypoint)
+                    .matched_on(MatchTarget::Document)
+                    .match_value(format!("severe hygiene {}", i))
+                    .reason(format!("hygiene block rule {}", i))
+                    .build()
+            })
+            .collect();
+
+        let primary_b = FindingSummary::from_findings(&block_findings);
+        let package_b = FindingSummary::from_findings(&block_findings);
+        let verdict_b =
+            derive_package_verdict(&block_findings, &primary_b, &supporting, &package_b);
+
+        assert_eq!(verdict_b.verdict, Verdict::Suspicious);
+        assert_eq!(verdict_b.package_health, PackageHealth::NeedsReview);
+    }
+
+    #[test]
+    fn test_hygiene_with_non_log_action_prevents_isolated_weak_downgrade() {
+        // A single weak PackageRoot ReviewSignal would normally downgrade to Benign,
+        // but adding a Hygiene group with RequireApproval should prevent the downgrade
+        // because both groups are "actionable" (non-Log), so isolated_weak is false.
+        let findings = vec![
+            Finding::builder("WEAK_PKG_SIGNAL", ThreatCategory::Generic)
+                .severity(Severity::Medium)
+                .action(RecommendedAction::RequireApproval)
+                .signal_class(SignalClass::ReviewSignal)
+                .artifact(
+                    ArtifactKind::PackageManifest,
+                    Some("package.json".to_string()),
+                )
+                .matched_on(MatchTarget::Document)
+                .match_value("weak signal")
+                .reason("Weak package root signal")
+                .build(),
+            Finding::builder("HYGIENE_ACTION", ThreatCategory::ScopeCreep)
+                .severity(Severity::Medium)
+                .action(RecommendedAction::RequireApproval)
+                .signal_class(SignalClass::Hygiene)
+                .artifact_scope(ArtifactScope::AgentEntrypoint)
+                .matched_on(MatchTarget::Document)
+                .match_value("scope creep")
+                .reason("Hygiene with explicit action")
+                .build(),
+        ];
+
+        let summary = FindingSummary::from_findings(&findings);
+        let primary = FindingSummary::from_findings(&[]);
+        let supporting = FindingSummary::from_findings(&[]);
+        let verdict = derive_package_verdict(&findings, &primary, &supporting, &summary);
+
+        // Must NOT be Benign: the Hygiene group with RequireApproval counts as actionable,
+        // so there are 2 actionable groups and isolated_weak_package_root_signal is false.
+        assert_ne!(
+            verdict.verdict,
+            Verdict::Benign,
+            "Hygiene group with non-Log action must prevent isolated weak downgrade"
+        );
     }
 
     #[test]

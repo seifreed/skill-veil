@@ -1,5 +1,5 @@
 use crate::findings::{
-    derive_package_verdict, ArtifactKind, FindingSummary, RecommendedAction, Severity, Verdict,
+    derive_package_verdict, FindingSummary, RecommendedAction, Severity, Verdict,
 };
 use crate::policy::{
     context_label, severity_to_sarif_level, ContextPolicy, JsonReport, PolicyGenerator,
@@ -53,16 +53,24 @@ pub(crate) fn generate_shield_md(generator: &PolicyGenerator) -> String {
 pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
     let summary =
         FindingSummary::from_findings_and_graph(&generator.findings, &generator.artifact_graph);
-    let primary_findings = split_primary_findings(generator);
-    let supporting_findings = split_supporting_findings(generator);
-    let primary_summary = FindingSummary::from_findings(&primary_findings);
-    let supporting_summary = FindingSummary::from_findings(&supporting_findings);
-    let verdict_report = derive_package_verdict(
+    let skill_path = std::path::Path::new(&generator.skill_path);
+    let (primary_findings, supporting_findings) = crate::findings::split_findings_by_scope(
+        skill_path,
+        generator.primary_artifact_kind,
         &generator.findings,
-        &primary_summary,
-        &supporting_summary,
-        &summary,
     );
+    let primary_summary =
+        FindingSummary::from_findings_and_graph(&primary_findings, &generator.artifact_graph);
+    let supporting_summary =
+        FindingSummary::from_findings_and_graph(&supporting_findings, &generator.artifact_graph);
+    let verdict_report = generator.verdict_report.clone().unwrap_or_else(|| {
+        derive_package_verdict(
+            &generator.findings,
+            &primary_summary,
+            &supporting_summary,
+            &summary,
+        )
+    });
     let policies = generator.generate_policies();
     let context_policies = generator.generate_context_policies();
 
@@ -140,7 +148,26 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
         });
     }
 
-    let report = generate_json(generator);
+    let verdict_report = generator.verdict_report.clone().unwrap_or_else(|| {
+        let sarif_skill_path = std::path::Path::new(&generator.skill_path);
+        let (primary_findings, supporting_findings) = crate::findings::split_findings_by_scope(
+            sarif_skill_path,
+            generator.primary_artifact_kind,
+            &generator.findings,
+        );
+        let primary_summary =
+            FindingSummary::from_findings_and_graph(&primary_findings, &generator.artifact_graph);
+        let supporting_summary = FindingSummary::from_findings_and_graph(
+            &supporting_findings,
+            &generator.artifact_graph,
+        );
+        derive_package_verdict(
+            &generator.findings,
+            &primary_summary,
+            &supporting_summary,
+            &summary,
+        )
+    });
     rules.push(SarifRule {
         id: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
         name: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
@@ -151,7 +178,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
             text: "Explains the final benign/suspicious/malicious package judgment".to_string(),
         },
         default_configuration: SarifConfiguration {
-            level: severity_to_sarif_level(match report.verdict {
+            level: severity_to_sarif_level(match verdict_report.verdict {
                 Verdict::Malicious => Severity::High,
                 Verdict::Suspicious => Severity::Medium,
                 Verdict::Benign => Severity::Low,
@@ -187,7 +214,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
                 "signal_class": finding.signal_class,
                 "evidence_kind": finding.evidence_kind,
                 "recommended_action": finding.recommended_action,
-                "package_verdict": report.verdict,
+                "package_verdict": verdict_report.verdict,
             })),
         })
         .collect();
@@ -213,19 +240,19 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
         properties: Some(serde_json::json!({
             "recommended_action": trigger.action,
             "trigger_factor": trigger.factor,
-            "package_verdict": report.verdict,
+            "package_verdict": verdict_report.verdict,
         })),
     }));
 
     results.push(SarifResult {
         rule_id: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
-        level: severity_to_sarif_level(match report.verdict {
+        level: severity_to_sarif_level(match verdict_report.verdict {
             Verdict::Malicious => Severity::High,
             Verdict::Suspicious => Severity::Medium,
             Verdict::Benign => Severity::Low,
         }),
         message: SarifMessage {
-            text: format!("Final package verdict: {}", report.verdict),
+            text: format!("Final package verdict: {}", verdict_report.verdict),
         },
         locations: vec![SarifLocation {
             physical_location: SarifPhysicalLocation {
@@ -236,11 +263,11 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
             },
         }],
         properties: Some(serde_json::json!({
-            "verdict": report.verdict,
-            "verdict_reasons": report.verdict_report.verdict_reasons,
-            "root_cause_groups": report.verdict_report.root_cause_groups,
-            "top_risk_drivers": report.verdict_report.top_risk_drivers,
-            "heuristic_score": report.heuristic_score,
+            "verdict": verdict_report.verdict,
+            "verdict_reasons": verdict_report.verdict_reasons,
+            "root_cause_groups": verdict_report.root_cause_groups,
+            "top_risk_drivers": verdict_report.top_risk_drivers,
+            "heuristic_score": generator.heuristic_score,
             "artifact_scope": "package",
         })),
     });
@@ -260,50 +287,6 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
             results,
         }],
     }
-}
-
-fn split_primary_findings(generator: &PolicyGenerator) -> Vec<crate::findings::Finding> {
-    generator
-        .findings
-        .iter()
-        .filter(|finding| {
-            finding
-                .artifact_path
-                .as_deref()
-                .is_none_or(|artifact_path| artifact_path == generator.skill_path)
-                && matches!(
-                    finding.artifact_kind,
-                    ArtifactKind::SkillDocument
-                        | ArtifactKind::AgentInstruction
-                        | ArtifactKind::PromptPackDocument
-                        | ArtifactKind::McpServerManifest
-                        | ArtifactKind::PackageManifest
-                )
-        })
-        .cloned()
-        .collect()
-}
-
-fn split_supporting_findings(generator: &PolicyGenerator) -> Vec<crate::findings::Finding> {
-    generator
-        .findings
-        .iter()
-        .filter(|finding| {
-            !(finding
-                .artifact_path
-                .as_deref()
-                .is_none_or(|artifact_path| artifact_path == generator.skill_path)
-                && matches!(
-                    finding.artifact_kind,
-                    ArtifactKind::SkillDocument
-                        | ArtifactKind::AgentInstruction
-                        | ArtifactKind::PromptPackDocument
-                        | ArtifactKind::McpServerManifest
-                        | ArtifactKind::PackageManifest
-                ))
-        })
-        .cloned()
-        .collect()
 }
 
 fn append_shield_policy(output: &mut String, policy: &ShieldPolicy) {
@@ -333,5 +316,14 @@ fn append_context_policy(output: &mut String, policy: &ContextPolicy) {
     ));
     for rationale in &policy.rationale {
         output.push_str(&format!("  rationale: {}\n", rationale));
+    }
+}
+
+/// Returns a minimal valid SARIF 2.1.0 document with no runs.
+pub fn empty_sarif_report() -> SarifReport {
+    SarifReport {
+        schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
+        version: "2.1.0".to_string(),
+        runs: vec![],
     }
 }

@@ -6,10 +6,12 @@ use crate::analyzer::{
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{Finding, OperationalContext as PolicyContext, RecommendedAction, Severity};
 
+pub use crate::policy_serializers::empty_sarif_report;
 pub use crate::policy_state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
-    baseline_from_reports, diff_reports, diff_reports_with_policy_state, finding_fingerprint,
-    load_baseline, load_policy, load_waivers, validate_policy, validate_waivers,
+    baseline_from_reports, count_baseline_matches, diff_reports, diff_reports_with_policy_state,
+    finding_fingerprint, load_baseline, load_policy, load_waivers, validate_policy,
+    validate_waivers,
 };
 pub use crate::policy_types::{
     AppliedPolicyOverride, BaselineEntry, BaselineFile, ConfiguredProfile, ContextActionOverride,
@@ -139,6 +141,7 @@ impl PolicyGenerator {
         Self {
             skill_name: skill_name.into(),
             skill_path: skill_path.into(),
+            primary_artifact_kind: crate::findings::ArtifactKind::SkillDocument,
             extension_kind: AgentExtensionKind::Skill,
             classification: ArtifactClassification::ConfirmedSkill,
             package_id: None,
@@ -151,7 +154,17 @@ impl PolicyGenerator {
             policy: None,
             suppression_summary: SuppressionSummary::default(),
             policy_audit: PolicyAudit::default(),
+            verdict_report: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_primary_artifact_kind(
+        mut self,
+        artifact_kind: crate::findings::ArtifactKind,
+    ) -> Self {
+        self.primary_artifact_kind = artifact_kind;
+        self
     }
 
     #[must_use]
@@ -198,6 +211,15 @@ impl PolicyGenerator {
     #[must_use]
     pub fn with_policy_audit(mut self, policy_audit: PolicyAudit) -> Self {
         self.policy_audit = policy_audit;
+        self
+    }
+
+    #[must_use]
+    pub fn with_verdict_report(
+        mut self,
+        verdict_report: crate::findings::PackageVerdictReport,
+    ) -> Self {
+        self.verdict_report = Some(verdict_report);
         self
     }
 

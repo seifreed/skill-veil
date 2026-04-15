@@ -1,7 +1,6 @@
 use crate::artifact_graph::ArtifactCapability;
 use crate::findings::{
-    default_operational_contexts, Finding, FindingSummary, OperationalContext as PolicyContext,
-    RecommendedAction,
+    default_operational_contexts, Finding, OperationalContext as PolicyContext, RecommendedAction,
 };
 use crate::policy::{
     ContextPolicy, PolicyGenerator, PolicyProfile, ShieldPolicy, POLICY_EXPIRY_DAYS,
@@ -11,9 +10,11 @@ use std::collections::HashMap;
 
 impl PolicyGenerator {
     pub(crate) fn generate_policies(&self) -> Vec<ShieldPolicy> {
-        let summary = FindingSummary::from_findings_and_graph(&self.findings, &self.artifact_graph);
         let mut policy_map: HashMap<String, ShieldPolicy> = HashMap::new();
 
+        // Keyed by rule_id: each PolicyGenerator operates on a single skill, so
+        // rule_id is sufficient for deduplication. The policy_id embeds skill_name
+        // for external uniqueness but is not used as the merge key.
         for finding in &self.findings {
             let policy_id = format!("{}-{}", finding.rule_id.to_lowercase(), self.skill_name);
             let recommendation = format!(
@@ -48,13 +49,7 @@ impl PolicyGenerator {
                 });
         }
 
-        let mut policies: Vec<_> = policy_map
-            .into_values()
-            .map(|mut policy| {
-                policy.action = RecommendedAction::max(policy.action, summary.recommended_action);
-                policy
-            })
-            .collect();
+        let mut policies: Vec<_> = policy_map.into_values().collect();
         policies.sort_by(|left, right| left.id.cmp(&right.id));
         policies
     }

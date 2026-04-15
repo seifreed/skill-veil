@@ -72,6 +72,8 @@ pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOpti
         append_verdict_reasons(&mut output, result);
 
         if options.explain_policy {
+            append_scope_counts(&mut output, result);
+            output.push('\n');
             append_policy_reasons(&mut output, result);
             continue;
         }
@@ -121,11 +123,13 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
     }
 
     if result.verdict_report.hygiene_summary.package_root_findings > 0
+        || result.verdict_report.hygiene_summary.entrypoint_findings > 0
         || result.verdict_report.hygiene_summary.supporting_findings > 0
     {
         output.push_str(&format!(
-            "  Package hygiene: package_root={} supporting={} top_rules={}\n",
+            "  Package hygiene: package_root={} entrypoint={} supporting={} top_rules={}\n",
             result.verdict_report.hygiene_summary.package_root_findings,
+            result.verdict_report.hygiene_summary.entrypoint_findings,
             result.verdict_report.hygiene_summary.supporting_findings,
             if result.verdict_report.hygiene_summary.top_rules.is_empty() {
                 "none".to_string()
@@ -259,9 +263,8 @@ fn append_findings(
 }
 
 fn append_policy_reasons(output: &mut String, result: &ScanResult) {
-    let report = result.to_json_report();
     output.push_str("  Policy precedence:\n");
-    for stage in &report.policy_audit.precedence_order {
+    for stage in &result.policy_audit.precedence_order {
         output.push_str(&format!("    - {}\n", stage));
     }
 
@@ -277,9 +280,10 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         }
     }
 
-    if !report.context_policies.is_empty() {
+    let context_policies = result.context_policies();
+    if !context_policies.is_empty() {
         output.push_str("  Context policies:\n");
-        for policy in &report.context_policies {
+        for policy in &context_policies {
             output.push_str(&format!(
                 "    - {} => {}\n",
                 serde_json::to_string(&policy.context)
@@ -290,9 +294,9 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         }
     }
 
-    if !report.policy_audit.applied_overrides.is_empty() {
+    if !result.policy_audit.applied_overrides.is_empty() {
         output.push_str("  Applied overrides:\n");
-        for applied in &report.policy_audit.applied_overrides {
+        for applied in &result.policy_audit.applied_overrides {
             output.push_str(&format!(
                 "    - {}: {} -> {} ({})\n",
                 applied.rule_id, applied.original_action, applied.effective_action, applied.reason
@@ -300,17 +304,35 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         }
     }
 
-    if let Some(fail_on) = report.policy_audit.effective_fail_on {
+    if let Some(fail_on) = result.policy_audit.effective_fail_on {
         output.push_str(&format!("  Effective fail_on: {}\n", fail_on));
     }
 
-    if report.suppression_summary.baseline_suppressed > 0
-        || report.suppression_summary.waiver_suppressed > 0
+    if result.suppression_summary.baseline_suppressed > 0
+        || result.suppression_summary.waiver_suppressed > 0
+        || result.suppression_summary.inline_suppressed > 0
     {
         output.push_str(&format!(
-            "  Suppressed findings: baseline={} waiver={}\n",
-            report.suppression_summary.baseline_suppressed,
-            report.suppression_summary.waiver_suppressed
+            "  Suppressed findings: baseline={} waiver={} inline={}\n",
+            result.suppression_summary.baseline_suppressed,
+            result.suppression_summary.waiver_suppressed,
+            result.suppression_summary.inline_suppressed
+        ));
+    }
+
+    if !result.verdict_report.calibration_notes.is_empty() {
+        output.push_str("  Calibration notes:\n");
+        for note in &result.verdict_report.calibration_notes {
+            output.push_str(&format!(
+                "    - {} [{}]: {}\n",
+                note.rule_id, note.effect, note.rationale
+            ));
+        }
+    }
+    if result.verdict_report.calibration_risk_adjustment != 0 {
+        output.push_str(&format!(
+            "  Calibration risk adjustment: {}\n",
+            result.verdict_report.calibration_risk_adjustment
         ));
     }
 
@@ -330,6 +352,10 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     let total_waiver_suppressed: usize = results
         .iter()
         .map(|r| r.suppression_summary.waiver_suppressed)
+        .sum();
+    let total_inline_suppressed: usize = results
+        .iter()
+        .map(|r| r.suppression_summary.inline_suppressed)
         .sum();
     let total_overrides: usize = results
         .iter()
@@ -360,10 +386,10 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
         medium,
         low
     ));
-    if total_baseline_suppressed > 0 || total_waiver_suppressed > 0 {
+    if total_baseline_suppressed > 0 || total_waiver_suppressed > 0 || total_inline_suppressed > 0 {
         output.push_str(&format!(
-            "Suppressed findings: baseline={} waiver={}\n",
-            total_baseline_suppressed, total_waiver_suppressed
+            "Suppressed findings: baseline={} waiver={} inline={}\n",
+            total_baseline_suppressed, total_waiver_suppressed, total_inline_suppressed
         ));
     }
     if total_overrides > 0 {
@@ -415,7 +441,7 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
 
     let mut context_counts = std::collections::BTreeMap::new();
     for result in results {
-        for policy in &result.to_json_report().context_policies {
+        for policy in &result.context_policies() {
             *context_counts
                 .entry(
                     serde_json::to_string(&policy.context)
@@ -526,13 +552,23 @@ pub(crate) fn format_sarif_output(results: &[ScanResult]) -> Result<String> {
             if let Some(run) = sarif.runs.first_mut() {
                 if let Some(other_run) = other.runs.first() {
                     run.results.extend(other_run.results.clone());
+                    let existing_rule_ids: std::collections::HashSet<_> =
+                        run.tool.driver.rules.iter().map(|r| r.id.clone()).collect();
+                    for rule in &other_run.tool.driver.rules {
+                        if !existing_rule_ids.contains(&rule.id) {
+                            run.tool.driver.rules.push(rule.clone());
+                        }
+                    }
                 }
             }
         }
 
         serde_json::to_string_pretty(&sarif).context("Failed to serialize SARIF")
     } else {
-        Ok("{}".to_string())
+        Ok(
+            serde_json::to_string_pretty(&skill_veil_core::empty_sarif_report())
+                .context("Failed to serialize empty SARIF")?,
+        )
     }
 }
 

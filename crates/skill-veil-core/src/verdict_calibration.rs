@@ -35,8 +35,7 @@
 //! downgrade cannot prevent a later rule from firing on the same group.
 
 use crate::findings::{
-    Finding, RecommendedAction, RootCauseGroup, SignalClass, ThreatCategory,
-    VerdictCalibrationNote,
+    Finding, RecommendedAction, RootCauseGroup, SignalClass, ThreatCategory, VerdictCalibrationNote,
 };
 
 #[derive(Debug, Clone)]
@@ -101,23 +100,62 @@ pub(crate) fn calibrate_verdict_inputs(
         .map(|group| (group.strongest_action, group.signal_class))
         .collect();
 
-    for (i, group) in groups.iter_mut().enumerate() {
-        let (original_action, _original_signal_class) = original_snapshots[i];
+    // Check findings directly instead of representative_rules (which is truncated to 5
+    // entries and could exclude calibration-relevant rules).
+    let group_has_rule =
+        |group: &RootCauseGroup, original_signal_class: SignalClass, rule_id: &str| -> bool {
+            findings.iter().any(|f| {
+                f.artifact_scope == group.scope
+                    && f.category == group.category
+                    && f.signal_class == original_signal_class
+                    && f.rule_id == rule_id
+            })
+        };
+    let group_has_mcp_no_auth_rule =
+        |group: &RootCauseGroup, original_signal_class: SignalClass| -> bool {
+            findings.iter().any(|f| {
+                f.artifact_scope == group.scope
+                    && f.category == group.category
+                    && f.signal_class == original_signal_class
+                    && is_mcp_no_auth_rule(&f.rule_id)
+            })
+        };
 
-        if group
-            .representative_rules
-            .iter()
-            .any(|rule_id| rule_id == "DECLARED_PERMISSION_NETWORK_ACCESS")
-            && !has_stronger_behavior
+    // Accumulate excluded rule IDs per group so successive calibration rules don't
+    // re-include findings that a previous rule already calibrated away.
+    let mut accumulated_exclusions: Vec<Vec<&str>> = vec![Vec::new(); groups.len()];
+    // Track the action before each calibration rule fires, so effect strings
+    // and risk_adjustment reflect what THIS rule actually changed (not cumulative
+    // delta from original).
+    let mut pre_rule_actions: Vec<RecommendedAction> =
+        groups.iter().map(|g| g.strongest_action).collect();
+
+    for (i, group) in groups.iter_mut().enumerate() {
+        let (original_action, original_signal_class) = original_snapshots[i];
+        pre_rule_actions[i] = original_action;
+
+        if group_has_rule(
+            group,
+            original_signal_class,
+            "DECLARED_PERMISSION_NETWORK_ACCESS",
+        ) && !has_stronger_behavior
         {
-            let was_downgraded = original_action != RecommendedAction::Log;
-            group.strongest_action = RecommendedAction::Log;
-            if was_downgraded {
+            accumulated_exclusions[i].push("DECLARED_PERMISSION_NETWORK_ACCESS");
+            group.strongest_action = recalculate_group_action_excluding(
+                findings,
+                group,
+                original_signal_class,
+                &accumulated_exclusions[i],
+            );
+            let changed_from_previous =
+                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            if changed_from_previous {
                 risk_adjustment -= 10;
             }
+            pre_rule_actions[i] = group.strongest_action;
             notes.push(VerdictCalibrationNote {
                 rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
-                effect: if was_downgraded {
+                effect: if changed_from_previous {
                     "downgraded_to_context".to_string()
                 } else {
                     "remains_context_only".to_string()
@@ -126,20 +164,28 @@ pub(crate) fn calibrate_verdict_inputs(
             });
         }
 
-        if group
-            .representative_rules
-            .iter()
-            .any(|rule_id| rule_id == "CAPABILITY_PERMISSION_MISMATCH")
-            && !has_stronger_behavior
+        if group_has_rule(
+            group,
+            original_signal_class,
+            "CAPABILITY_PERMISSION_MISMATCH",
+        ) && !has_stronger_behavior
         {
-            let was_downgraded = original_action != RecommendedAction::Log;
-            group.strongest_action = RecommendedAction::Log;
-            if was_downgraded {
+            accumulated_exclusions[i].push("CAPABILITY_PERMISSION_MISMATCH");
+            group.strongest_action = recalculate_group_action_excluding(
+                findings,
+                group,
+                original_signal_class,
+                &accumulated_exclusions[i],
+            );
+            let changed_from_previous =
+                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            if changed_from_previous {
                 risk_adjustment -= 8;
             }
+            pre_rule_actions[i] = group.strongest_action;
             notes.push(VerdictCalibrationNote {
                 rule_id: "CAPABILITY_PERMISSION_MISMATCH".to_string(),
-                effect: if was_downgraded {
+                effect: if changed_from_previous {
                     "downgraded_to_context".to_string()
                 } else {
                     "remains_context_only".to_string()
@@ -148,21 +194,28 @@ pub(crate) fn calibrate_verdict_inputs(
             });
         }
 
-        if group
-            .representative_rules
-            .iter()
-            .any(|rule_id| rule_id == "INTERNAL_NETWORK_ACCESS")
+        if group_has_rule(group, original_signal_class, "INTERNAL_NETWORK_ACCESS")
             && !has_network_chain
         {
-            let was_downgraded = original_action != RecommendedAction::Log;
-            group.strongest_action = RecommendedAction::Log;
-            if was_downgraded {
+            accumulated_exclusions[i].push("INTERNAL_NETWORK_ACCESS");
+            group.strongest_action = recalculate_group_action_excluding(
+                findings,
+                group,
+                original_signal_class,
+                &accumulated_exclusions[i],
+            );
+            let changed_from_previous =
+                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            if changed_from_previous {
                 risk_adjustment -= 12;
             }
-            group.signal_class = SignalClass::ReviewSignal;
+            if changed_from_previous || group.strongest_action == RecommendedAction::Log {
+                group.signal_class = SignalClass::ReviewSignal;
+            }
+            pre_rule_actions[i] = group.strongest_action;
             notes.push(VerdictCalibrationNote {
                 rule_id: "INTERNAL_NETWORK_ACCESS".to_string(),
-                effect: if was_downgraded {
+                effect: if changed_from_previous {
                     "downgraded_to_review_only".to_string()
                 } else {
                     "remains_review_only".to_string()
@@ -171,21 +224,27 @@ pub(crate) fn calibrate_verdict_inputs(
             });
         }
 
-        if group
-            .representative_rules
-            .iter()
-            .any(|rule_id| is_mcp_no_auth_rule(rule_id))
-            && !has_remote_mcp_exec_pair
-        {
-            let was_downgraded = original_action != RecommendedAction::Log;
-            group.strongest_action = RecommendedAction::Log;
-            if was_downgraded {
+        if group_has_mcp_no_auth_rule(group, original_signal_class) && !has_remote_mcp_exec_pair {
+            accumulated_exclusions[i]
+                .extend_from_slice(&["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"]);
+            group.strongest_action = recalculate_group_action_excluding(
+                findings,
+                group,
+                original_signal_class,
+                &accumulated_exclusions[i],
+            );
+            let changed_from_previous =
+                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            if changed_from_previous {
                 risk_adjustment -= 6;
             }
-            group.signal_class = SignalClass::ReviewSignal;
+            if changed_from_previous || group.strongest_action == RecommendedAction::Log {
+                group.signal_class = SignalClass::ReviewSignal;
+            }
+            pre_rule_actions[i] = group.strongest_action;
             notes.push(VerdictCalibrationNote {
                 rule_id: "MCP_NO_AUTH_MODEL".to_string(),
-                effect: if was_downgraded {
+                effect: if changed_from_previous {
                     "downgraded_to_context".to_string()
                 } else {
                     "remains_context_only".to_string()
@@ -224,11 +283,36 @@ fn is_mcp_no_auth_rule(rule_id: &str) -> bool {
     )
 }
 
+/// Recalculate a group's strongest action from findings that are NOT in the excluded set.
+/// This prevents calibration of one rule from silencing other legitimate rules in the same group.
+fn recalculate_group_action_excluding(
+    findings: &[Finding],
+    group: &RootCauseGroup,
+    original_signal_class: SignalClass,
+    excluded_rule_ids: &[&str],
+) -> RecommendedAction {
+    findings
+        .iter()
+        .filter(|f| {
+            f.artifact_scope == group.scope
+                && f.category == group.category
+                && f.signal_class == original_signal_class
+                && !excluded_rule_ids.contains(&f.rule_id.as_str())
+        })
+        .fold(RecommendedAction::Log, |acc, f| {
+            RecommendedAction::max(acc, f.recommended_action)
+        })
+}
+
 fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
-    notes.sort_by(|left, right| {
-        left.rule_id
-            .cmp(&right.rule_id)
-            .then_with(|| left.effect.cmp(&right.effect))
+    notes.sort_by(|a, b| {
+        a.rule_id
+            .cmp(&b.rule_id)
+            .then_with(|| a.effect.cmp(&b.effect))
+            .then_with(|| a.rationale.cmp(&b.rationale))
     });
-    notes.dedup_by(|left, right| left.rule_id == right.rule_id && left.effect == right.effect);
+    // The comparison is symmetric (field equality), so dedup_by parameter order is irrelevant.
+    notes.dedup_by(|a, b| {
+        a.rule_id == b.rule_id && a.effect == b.effect && a.rationale == b.rationale
+    });
 }

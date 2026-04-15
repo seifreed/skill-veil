@@ -10,13 +10,19 @@ use crate::verdict_calibration::calibrate_verdict_inputs;
 #[must_use]
 pub fn derive_package_verdict(
     findings: &[Finding],
-    primary_summary: &FindingSummary,
+    // Reserved for future primary-level verdict logic (e.g. primary risk score thresholds).
+    _primary_summary: &FindingSummary,
     supporting_summary: &FindingSummary,
     package_summary: &FindingSummary,
 ) -> PackageVerdictReport {
     let raw_root_cause_groups = build_root_cause_groups(findings);
     let calibration = calibrate_verdict_inputs(findings, &raw_root_cause_groups);
     let root_cause_groups = calibration.root_cause_groups;
+    assert_eq!(
+        raw_root_cause_groups.len(),
+        root_cause_groups.len(),
+        "Calibration must preserve root cause group count for zip safety"
+    );
     let has_conclusive_supporting_malicious =
         findings.iter().any(is_conclusive_supporting_malicious);
     let compound_reasons = detect_compound_verdict_reasons(findings, &root_cause_groups);
@@ -51,35 +57,50 @@ pub fn derive_package_verdict(
                 | SignalClass::ReviewSignal
         ) && group.strongest_action != RecommendedAction::Log
     });
+    // Check pre-calibration groups too: if calibration downgraded any non-hygiene signal,
+    // we should not treat the package as "hygiene-only" or "isolated weak signal".
+    // Calibration preserves group order and count, so zip by index is safe.
+    let calibration_weakened_non_hygiene = raw_root_cause_groups
+        .iter()
+        .zip(root_cause_groups.iter())
+        .any(|(raw_group, calibrated)| {
+            let is_non_hygiene = matches!(
+                raw_group.signal_class,
+                SignalClass::MaliciousBehavior
+                    | SignalClass::SuspiciousPackageBehavior
+                    | SignalClass::ReviewSignal
+            ) && raw_group.strongest_action != RecommendedAction::Log;
+            if !is_non_hygiene {
+                return false;
+            }
+            calibrated.strongest_action.priority() < raw_group.strongest_action.priority()
+                || calibrated.signal_class != raw_group.signal_class
+        });
     let has_actionable_non_package_root = root_cause_groups.iter().any(|group| {
         group.scope != ArtifactScope::PackageRootArtifact
             && group.strongest_action != RecommendedAction::Log
             && group.signal_class != SignalClass::Hygiene
     });
     let severe_hygiene_only = !has_non_hygiene_signal
-        && primary_summary.recommended_action == RecommendedAction::Log
-        && supporting_summary.recommended_action == RecommendedAction::Log
+        && !calibration_weakened_non_hygiene
         && root_cause_groups.iter().any(|group| {
             group.signal_class == SignalClass::Hygiene
-                && (group.strongest_action == RecommendedAction::Block
-                    || (group.finding_count >= 4
-                        && group.strongest_action >= RecommendedAction::RequireApproval))
+                && group.strongest_action == RecommendedAction::Block
         });
     let hygiene_summary = build_hygiene_summary(findings);
     let declared_permissions = derive_declared_permissions(findings, supporting_summary);
     let blast_radius_summary = build_blast_radius_summary(findings, &declared_permissions);
-    let effective_capabilities = derive_effective_capabilities(findings);
-    let package_health =
-        if hygiene_summary.package_root_findings == 0
-            && hygiene_summary.entrypoint_findings == 0
-            && hygiene_summary.supporting_findings == 0
-        {
-            PackageHealth::Healthy
-        } else if severe_hygiene_only {
-            PackageHealth::NeedsReview
-        } else {
-            PackageHealth::Elevated
-        };
+    let effective_capabilities = derive_effective_capabilities(&root_cause_groups);
+    let package_health = if hygiene_summary.package_root_findings == 0
+        && hygiene_summary.entrypoint_findings == 0
+        && hygiene_summary.supporting_findings == 0
+    {
+        PackageHealth::Healthy
+    } else if severe_hygiene_only {
+        PackageHealth::NeedsReview
+    } else {
+        PackageHealth::Elevated
+    };
     let isolated_weak_package_root_signal =
         is_isolated_weak_package_root_signal(&root_cause_groups);
     let verdict = if has_malicious_behavior
@@ -87,14 +108,31 @@ pub fn derive_package_verdict(
         || (has_supporting_block && has_conclusive_supporting_malicious)
     {
         Verdict::Malicious
-    } else if isolated_weak_package_root_signal && !has_actionable_non_package_root {
+    } else if isolated_weak_package_root_signal
+        && !has_actionable_non_package_root
+        && !calibration_weakened_non_hygiene
+        && calibration.notes.is_empty()
+        && package_summary.risk_score <= 25
+    {
         // Isolated weak package root signals are downgraded to Benign,
         // but ONLY if there are no actionable signals in other artifacts
+        // and no calibration rule matched at all. If calibration acted
+        // (even without changing the action — e.g., only signal_class was
+        // modified), the "isolated" appearance may be an artifact of
+        // calibration, not reality, so we must not downgrade.
         Verdict::Benign
-    } else if has_non_hygiene_signal || has_actionable_non_package_root {
+    } else if has_non_hygiene_signal || has_actionable_non_package_root || severe_hygiene_only {
         Verdict::Suspicious
     } else {
         Verdict::Benign
+    };
+
+    // A Benign verdict with Elevated health is contradictory — downgrade to NeedsReview.
+    let package_health = if verdict == Verdict::Benign && package_health == PackageHealth::Elevated
+    {
+        PackageHealth::NeedsReview
+    } else {
+        package_health
     };
 
     let mut top_risk_drivers = package_summary.score_breakdown.clone();
@@ -126,16 +164,33 @@ fn detect_compound_verdict_reasons(
             group.category == category && group.strongest_action != RecommendedAction::Log
         })
     };
-    // Check if a rule fired with an actionable recommendation (not Log)
-    // This ensures calibrated-down findings don't trigger compound verdicts
+    // Check if a rule fired with an actionable recommendation (not Log).
+    // NOTE: This checks the original finding action, NOT calibrated state.
+    // Calibration only modifies root_cause_groups, not individual findings.
+    // The debug_assert below guards against accidentally using a calibrated
+    // rule here — use has_category for rules subject to verdict calibration.
+    const CALIBRATED_RULE_IDS: &[&str] = &[
+        "DECLARED_PERMISSION_NETWORK_ACCESS",
+        "CAPABILITY_PERMISSION_MISMATCH",
+        "INTERNAL_NETWORK_ACCESS",
+        "MCP_NO_AUTH_MODEL",
+        "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT",
+    ];
     let has_rule = |rule_id: &str| {
+        debug_assert!(
+            !CALIBRATED_RULE_IDS.contains(&rule_id),
+            "has_rule checks pre-calibration actions; use has_category for calibrated rule {rule_id}"
+        );
         findings.iter().any(|finding| {
             finding.rule_id == rule_id && finding.recommended_action != RecommendedAction::Log
         })
     };
-    // Declared permissions are often calibrated down to Log for being context-only,
-    // but they still contribute to compound verdicts when paired with high-risk behavior.
-    // We don't check actionability here because the compound nature itself is the risk.
+    // Declared permissions contribute to compound verdicts by their mere
+    // presence, regardless of action level.  Policy overrides can downgrade
+    // individual permission findings to Log, but compound patterns represent
+    // an architectural risk that cannot be waived rule-by-rule.  Checking
+    // only rule presence (not action) prevents policy overrides from
+    // silently disabling compound verdict detection.
     let has_declared_permission_rule = |rule_id: &str| {
         findings.iter().any(|finding| {
             finding.rule_id == rule_id && finding.artifact_scope == ArtifactScope::AgentEntrypoint
@@ -266,19 +321,32 @@ fn derive_declared_permissions(
         }
     }
 
-    let values = findings
+    let entrypoint_findings: Vec<_> = findings
         .iter()
         .filter(|finding| finding.artifact_scope == ArtifactScope::AgentEntrypoint)
-        .map(|finding| {
-            format!(
-                "{} {} {}",
-                finding.rule_id.to_ascii_lowercase(),
-                finding.reason.to_ascii_lowercase(),
-                finding.match_value.to_ascii_lowercase()
-            )
+        .collect();
+
+    // Only infer keyword-based permissions from findings that belong to
+    // declared-permission, capability, or official rules.  This prevents
+    // generic rule matches (e.g. ScopeCreep, Generic) from inflating the
+    // declared-permissions list with false positives from broad substrings.
+    let permission_relevant_findings: Vec<_> = entrypoint_findings
+        .iter()
+        .filter(|finding| {
+            finding.rule_id.starts_with("DECLARED_PERMISSION_")
+                || finding.rule_id.starts_with("CAPABILITY_")
+                || finding.rule_id.starts_with("OFFICIAL_")
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect();
+
+    // Match keywords against match_value only (not rule_id or reason) to avoid
+    // false positives from metadata containing generic substrings like "api" or "token".
+    let any_finding_matches = |keywords: &[&str]| -> bool {
+        permission_relevant_findings.iter().any(|finding| {
+            let text = finding.match_value.to_ascii_lowercase();
+            keywords.iter().any(|kw| text.contains(kw))
+        })
+    };
 
     let add_if = |permissions: &mut Vec<DeclaredPermission>, cond: bool, permission| {
         if cond && !permissions.contains(&permission) {
@@ -288,58 +356,78 @@ fn derive_declared_permissions(
 
     add_if(
         &mut permissions,
-        values.contains("browser")
-            || values.contains("navigation")
-            || values.contains("click any element")
-            || values.contains("full autonomous browser")
-            || values.contains("allow-all"),
+        any_finding_matches(&[
+            "browser",
+            "navigation",
+            "click any element",
+            "full autonomous browser",
+            "allow-all",
+        ]),
         DeclaredPermission::BrowserFull,
     );
     add_if(
         &mut permissions,
-        values.contains("write file")
-            || values.contains("delete work")
-            || values.contains("modify"),
+        any_finding_matches(&["write file", "delete work", "modify"]),
         DeclaredPermission::FileWrite,
     );
     add_if(
         &mut permissions,
-        values.contains("shell")
-            || values.contains("command")
-            || values.contains("stdio")
-            || supporting_summary
-                .score_breakdown
-                .iter()
-                .any(|factor| factor.factor.contains("process_execution")),
+        any_finding_matches(&[
+            "shell",
+            "command",
+            "run command",
+            "execute command",
+            "shell command",
+            "stdio",
+        ]) || supporting_summary
+            .score_breakdown
+            .iter()
+            .any(|factor| factor.factor.contains("process_execution")),
         DeclaredPermission::ShellExec,
     );
     add_if(
         &mut permissions,
-        values.contains("http://")
-            || values.contains("https://")
-            || values.contains("webhook")
-            || values.contains("network")
-            || values.contains("api"),
+        any_finding_matches(&[
+            "http://",
+            "https://",
+            "webhook",
+            "network",
+            "api endpoint",
+            "api access",
+            "external api",
+            "api_key",
+        ]),
         DeclaredPermission::NetworkAccess,
     );
     add_if(
         &mut permissions,
-        values.contains("token")
-            || values.contains("secret")
-            || values.contains("password")
-            || values.contains("credential")
-            || values.contains("cookie"),
+        any_finding_matches(&[
+            "token",
+            "access_token",
+            "api_token",
+            "auth token",
+            "bearer token",
+            "secret",
+            "password",
+            "credential",
+            "cookie",
+        ]),
         DeclaredPermission::SecretsAccess,
     );
     add_if(
         &mut permissions,
-        values.contains("oauth")
-            || values.contains("scope")
-            || values.contains("read/write")
-            || values.contains("admin scope")
-            || values.contains("calendar")
-            || values.contains("drive")
-            || values.contains("slack"),
+        any_finding_matches(&[
+            "oauth",
+            "oauth scope",
+            "api scope",
+            "drive.scope",
+            "calendar.scope",
+            "read/write",
+            "admin scope",
+            "calendar",
+            "drive",
+            "slack",
+        ]),
         DeclaredPermission::OAuthScopes,
     );
 
@@ -347,10 +435,13 @@ fn derive_declared_permissions(
     permissions
 }
 
-fn derive_effective_capabilities(findings: &[Finding]) -> Vec<String> {
+fn derive_effective_capabilities(root_cause_groups: &[RootCauseGroup]) -> Vec<String> {
     let mut capabilities = BTreeMap::<String, usize>::new();
-    for finding in findings {
-        let key = match finding.category {
+    for group in root_cause_groups
+        .iter()
+        .filter(|g| g.strongest_action != RecommendedAction::Log)
+    {
+        let key = match group.category {
             ThreatCategory::RemoteExec => "process_execution",
             ThreatCategory::CredentialExposure => "secret_access",
             ThreatCategory::DataExfiltration => "network_exfiltration",
@@ -367,7 +458,7 @@ fn derive_effective_capabilities(findings: &[Finding]) -> Vec<String> {
             ThreatCategory::UnsafeBinary => "unsafe_binary",
             ThreatCategory::Generic => "generic_review",
         };
-        *capabilities.entry(key.to_string()).or_insert(0) += 1;
+        *capabilities.entry(key.to_string()).or_insert(0) += group.finding_count;
     }
     capabilities.into_keys().collect()
 }
@@ -377,14 +468,11 @@ fn build_blast_radius_summary(
     declared_permissions: &[DeclaredPermission],
 ) -> BlastRadiusSummary {
     let mut factors = Vec::new();
+    let mut severe_factors = Vec::new();
     let mut network_targets = Vec::new();
     let mut severe_count = 0_u32;
 
     for finding in findings {
-        if finding.recommended_action != RecommendedAction::Log {
-            severe_count += 1;
-        }
-
         let value = finding.match_value.to_ascii_lowercase();
         if [
             "http://",
@@ -412,6 +500,14 @@ fn build_blast_radius_summary(
             ThreatCategory::SupplyChain => "supply chain changes",
             _ => continue,
         };
+        if finding.recommended_action != RecommendedAction::Log
+            && finding.signal_class != SignalClass::Hygiene
+        {
+            severe_count += 1;
+            if !severe_factors.iter().any(|existing| existing == factor) {
+                severe_factors.push(factor.to_string());
+            }
+        }
         if !factors.iter().any(|existing| existing == factor) {
             factors.push(factor.to_string());
         }
@@ -421,9 +517,10 @@ fn build_blast_radius_summary(
     network_targets.dedup();
 
     let level = if severe_count >= 3
-        || factors
-            .iter()
-            .any(|factor| factor == "remote execution" || factor == "data exfiltration")
+        || (severe_count >= 2
+            && severe_factors
+                .iter()
+                .any(|factor| factor == "remote execution" || factor == "data exfiltration"))
     {
         BlastRadiusLevel::High
     } else if severe_count >= 1 || !declared_permissions.is_empty() || !factors.is_empty() {
@@ -521,8 +618,6 @@ fn build_root_cause_groups(findings: &[Finding]) -> Vec<RootCauseGroup> {
                     RecommendedAction::max(group.strongest_action, finding.recommended_action);
                 if !group.representative_rules.contains(&finding.rule_id) {
                     group.representative_rules.push(finding.rule_id.clone());
-                    group.representative_rules.sort();
-                    group.representative_rules.truncate(5);
                 }
             })
             .or_insert_with(|| RootCauseGroup {
@@ -536,6 +631,10 @@ fn build_root_cause_groups(findings: &[Finding]) -> Vec<RootCauseGroup> {
     }
 
     let mut groups: Vec<_> = groups.into_values().collect();
+    for group in &mut groups {
+        group.representative_rules.sort();
+        group.representative_rules.truncate(5);
+    }
     groups.sort_by(|left, right| {
         right
             .strongest_action

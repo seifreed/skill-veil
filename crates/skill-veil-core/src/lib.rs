@@ -101,15 +101,16 @@ pub use findings::{
     ThreatCategory, Verdict, VerdictReason,
 };
 pub use policy::{
-    AppliedPolicyOverride, BaselineEntry, BaselineFile, ConfiguredProfile, ContextActionOverride,
-    ContextPolicy, DiffEntry, DiffReport, JsonReport, PolicyAudit, PolicyFile, PolicyGenerator,
-    PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy, SuppressionSummary, WaiverEntry,
-    WaiverFile, POLICY_PRECEDENCE_ORDER, POLICY_SCHEMA_VERSION,
+    empty_sarif_report, AppliedPolicyOverride, BaselineEntry, BaselineFile, ConfiguredProfile,
+    ContextActionOverride, ContextPolicy, DiffEntry, DiffReport, JsonReport, PolicyAudit,
+    PolicyFile, PolicyGenerator, PolicyOverride, PolicyProfile, PolicyProfiles, ShieldPolicy,
+    SuppressionSummary, WaiverEntry, WaiverFile, POLICY_PRECEDENCE_ORDER, POLICY_SCHEMA_VERSION,
 };
 pub use policy_state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
-    baseline_from_reports, diff_reports, diff_reports_with_policy_state, finding_fingerprint,
-    load_baseline, load_policy, load_waivers, validate_policy, validate_waivers,
+    baseline_from_reports, count_baseline_matches, diff_reports, diff_reports_with_policy_state,
+    finding_fingerprint, load_baseline, load_policy, load_waivers, validate_policy,
+    validate_waivers,
 };
 pub use rules::{
     default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file, IocFeedFile, Rule,

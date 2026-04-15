@@ -11,7 +11,9 @@ use std::path::Path;
 pub fn finding_fingerprint(finding: &Finding) -> String {
     let mut hasher = Sha256::new();
     hasher.update(finding.rule_id.as_bytes());
+    hasher.update(b"\0");
     hasher.update(finding.reason.as_bytes());
+    hasher.update(b"\0");
     hasher.update(
         finding
             .artifact_path
@@ -19,6 +21,10 @@ pub fn finding_fingerprint(finding: &Finding) -> String {
             .unwrap_or_default()
             .as_bytes(),
     );
+    hasher.update(b"\0");
+    hasher.update(finding.match_value.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(finding.matched_on.to_string().as_bytes());
     format!("{:x}", hasher.finalize())
 }
 
@@ -49,14 +55,29 @@ pub fn apply_baseline(findings: Vec<Finding>, baseline: Option<&BaselineFile>) -
 
     findings
         .into_iter()
-        .filter(|finding| {
-            let fingerprint = finding_fingerprint(finding);
-            !baseline
-                .entries
-                .iter()
-                .any(|entry| entry.fingerprint == fingerprint)
-        })
+        .filter(|finding| !finding_in_baseline(finding, baseline))
         .collect()
+}
+
+/// Count how many findings in the slice match a baseline entry.
+/// Used to compute accurate suppression counts independently of application order.
+#[must_use]
+pub fn count_baseline_matches(findings: &[Finding], baseline: Option<&BaselineFile>) -> usize {
+    let Some(baseline) = baseline else {
+        return 0;
+    };
+    findings
+        .iter()
+        .filter(|finding| finding_in_baseline(finding, baseline))
+        .count()
+}
+
+fn finding_in_baseline(finding: &Finding, baseline: &BaselineFile) -> bool {
+    let fingerprint = finding_fingerprint(finding);
+    baseline
+        .entries
+        .iter()
+        .any(|entry| entry.fingerprint == fingerprint)
 }
 
 #[must_use]
@@ -104,18 +125,16 @@ pub fn apply_policy_overrides_with_audit(
                     policy_override_matches(policy_override, &finding, now)
                 })
                 .max_by_key(|(index, policy_override)| {
-                    (
-                        policy_override_specificity(policy_override),
-                        usize::MAX - *index,
-                    )
+                    (policy_override_specificity(policy_override), *index)
                 })
                 .map(|(_, policy_override)| policy_override);
 
             if let Some(policy_override) = selected {
                 let original_action = finding.recommended_action;
+                let fingerprint = finding_fingerprint(&finding);
                 finding.recommended_action = policy_override.action;
                 audit.push(AppliedPolicyOverride {
-                    finding_fingerprint: finding_fingerprint(&finding),
+                    finding_fingerprint: fingerprint,
                     rule_id: finding.rule_id.clone(),
                     artifact_path: finding.artifact_path.clone(),
                     override_id: policy_override.id.clone(),

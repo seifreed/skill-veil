@@ -153,29 +153,22 @@ impl ScanResult {
         primary_artifact_kind: ArtifactKind,
         findings: &[Finding],
     ) -> (Vec<Finding>, Vec<Finding>) {
-        let primary_path = path.display().to_string();
-        findings.iter().cloned().partition(|finding| {
-            // Path-less SkillDocument findings are always primary
-            (finding.artifact_path.is_none()
-                && finding.artifact_kind == ArtifactKind::SkillDocument)
-                || (finding
-                    .artifact_path
-                    .as_deref()
-                    .is_none_or(|artifact_path| {
-                        Path::new(artifact_path) == Path::new(&primary_path)
-                            || Path::new(artifact_path).ends_with(path)
-                    })
-                    && finding.artifact_kind == primary_artifact_kind)
-        })
+        crate::findings::split_findings_by_scope(path, primary_artifact_kind, findings)
     }
 
     fn policy_generator(&self) -> PolicyGenerator {
+        let primary_artifact_kind = self
+            .primary_findings
+            .first()
+            .map(|f| f.artifact_kind)
+            .unwrap_or(ArtifactKind::SkillDocument);
         let mut generator = PolicyGenerator::new(
             &self.name,
             self.path.to_string_lossy(),
             self.findings.clone(),
             self.artifact_graph.clone(),
         )
+        .with_primary_artifact_kind(primary_artifact_kind)
         .with_extension_kind(self.extension_kind)
         .with_artifact_classification(
             self.classification,
@@ -193,6 +186,7 @@ impl ScanResult {
         generator
             .with_suppression_summary(self.suppression_summary.clone())
             .with_policy_audit(self.policy_audit.clone())
+            .with_verdict_report(self.verdict_report.clone())
     }
 
     pub fn to_shield_md(&self) -> String {
@@ -205,5 +199,9 @@ impl ScanResult {
 
     pub fn to_sarif_report(&self) -> SarifReport {
         self.policy_generator().generate_sarif()
+    }
+
+    pub fn context_policies(&self) -> Vec<crate::policy::ContextPolicy> {
+        self.policy_generator().generate_context_policies()
     }
 }

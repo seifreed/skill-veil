@@ -3,8 +3,8 @@ use crate::analyzer::{
 };
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{
-    Finding, FindingSummary, OperationalContext as PolicyContext, PackageVerdictReport,
-    RecommendedAction, Severity, ThreatCategory, Verdict,
+    ArtifactKind, Finding, FindingSummary, OperationalContext as PolicyContext,
+    PackageVerdictReport, RecommendedAction, Severity, ThreatCategory, Verdict,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,8 @@ pub struct ContextPolicy {
 pub struct SuppressionSummary {
     pub baseline_suppressed: usize,
     pub waiver_suppressed: usize,
+    #[serde(default)]
+    pub inline_suppressed: usize,
     pub active_findings: usize,
 }
 
@@ -300,6 +302,7 @@ pub struct JsonReport {
 pub struct PolicyGenerator {
     pub(crate) skill_name: String,
     pub(crate) skill_path: String,
+    pub(crate) primary_artifact_kind: ArtifactKind,
     pub(crate) extension_kind: AgentExtensionKind,
     pub(crate) classification: ArtifactClassification,
     pub(crate) package_id: Option<String>,
@@ -312,6 +315,9 @@ pub struct PolicyGenerator {
     pub(crate) policy: Option<PolicyFile>,
     pub(crate) suppression_summary: SuppressionSummary,
     pub(crate) policy_audit: PolicyAudit,
+    /// Pre-computed verdict report from the scan pipeline.
+    /// When present, serializers reuse this instead of re-deriving the verdict.
+    pub(crate) verdict_report: Option<PackageVerdictReport>,
 }
 
 pub(crate) fn default_policy_schema_version() -> String {

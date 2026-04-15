@@ -82,12 +82,17 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
 
     // Cross-node taint: source on node A, sink on sibling node B
     // (siblings = nodes sharing a parent via References/Contains edges)
+    //
+    // Cap per-cluster findings to avoid quadratic explosion when a parent
+    // references many children that each expose sources and sinks.
+    const MAX_CROSS_NODE_FINDINGS_PER_CLUSTER: usize = 50;
     let sibling_clusters = build_sibling_clusters(graph);
     for cluster in &sibling_clusters {
         if cluster.len() < 2 {
             continue;
         }
-        for group in &groups {
+        let mut cluster_finding_count = 0_usize;
+        'cluster: for group in &groups {
             let source_nodes: Vec<&String> = cluster
                 .iter()
                 .filter(|path| node_has_source(graph, path, group.source))
@@ -123,6 +128,10 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
                                 .reason(rule.reason)
                                 .build(),
                         );
+                        cluster_finding_count += 1;
+                        if cluster_finding_count >= MAX_CROSS_NODE_FINDINGS_PER_CLUSTER {
+                            break 'cluster;
+                        }
                     }
                 }
             }
@@ -137,19 +146,21 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
 }
 
 fn build_sibling_clusters(graph: &ArtifactGraph) -> Vec<BTreeSet<String>> {
-    let mut parent_to_children: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut parent_to_cluster: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for edge in &graph.edges {
         if matches!(
             edge.relation,
             ArtifactRelation::References | ArtifactRelation::Contains
         ) {
-            parent_to_children
-                .entry(edge.from.clone())
-                .or_default()
-                .insert(edge.to.clone());
+            let cluster = parent_to_cluster.entry(edge.from.clone()).or_default();
+            // Include the parent so parent→child taint paths are detected.
+            // The cross-node loop skips source_node == sink_node, so
+            // per-node findings are not double-counted.
+            cluster.insert(edge.from.clone());
+            cluster.insert(edge.to.clone());
         }
     }
-    parent_to_children.into_values().collect()
+    parent_to_cluster.into_values().collect()
 }
 
 fn default_rules() -> Vec<ArtifactTaintRule> {
@@ -211,14 +222,23 @@ fn group_rules(rules: Vec<ArtifactTaintRule>) -> Vec<ArtifactTaintRuleGroup> {
             .push(rule);
     }
 
-    groups
+    let mut result: Vec<_> = groups
         .into_iter()
         .map(|((source, sink), rules)| ArtifactTaintRuleGroup {
             source,
             sink,
             rules,
         })
-        .collect()
+        .collect();
+
+    // Sort by max severity descending so the per-cluster budget is consumed
+    // by the highest-severity rules first (not by enum declaration order).
+    result.sort_by(|a, b| {
+        let max_sev = |group: &ArtifactTaintRuleGroup| group.rules.iter().map(|r| r.severity).max();
+        max_sev(b).cmp(&max_sev(a))
+    });
+
+    result
 }
 
 fn artifact_paths(graph: &ArtifactGraph) -> Vec<String> {
@@ -441,7 +461,9 @@ fn looks_like_external_sink(edge: &crate::artifact_graph::ArtifactEdge) -> bool 
     // This is a best-effort heuristic that may miss some external sinks
 
     let lower = edge.to.to_ascii_lowercase();
-    [
+
+    // Known malicious patterns (high confidence)
+    let known_external = [
         "discord.com/api/webhooks",
         "api.telegram.org/bot",
         "pastebin.com",
@@ -453,7 +475,24 @@ fn looks_like_external_sink(edge: &crate::artifact_graph::ArtifactEdge) -> bool 
         "webhook",
     ]
     .iter()
-    .any(|needle| lower.contains(needle))
+    .any(|needle| lower.contains(needle));
+    if known_external {
+        return true;
+    }
+
+    // Generic HTTP/HTTPS URLs that aren't known-safe registries or local endpoints
+    (lower.starts_with("http://") || lower.starts_with("https://"))
+        && !looks_like_registry_url(&edge.to)
+        && !looks_like_local_endpoint(&lower)
+}
+
+fn looks_like_local_endpoint(lower: &str) -> bool {
+    lower.contains("localhost")
+        || lower.contains("127.0.0.1")
+        || lower.contains("0.0.0.0")
+        || lower.contains("::1")
+        || lower.contains(".local")
+        || lower.contains(".internal")
 }
 
 fn looks_like_registry_url(url: &str) -> bool {
@@ -513,6 +552,32 @@ mod tests {
         assert!(findings
             .iter()
             .any(|finding| finding.rule_id == "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK"));
+    }
+
+    #[test]
+    fn taint_detects_parent_child_secret_to_network() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_node("deploy.sh", ArtifactKind::ReferencedArtifact);
+        // Parent reads a secret
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        // Parent references child
+        graph.add_edge("skill.md", "deploy.sh", ArtifactRelation::References);
+        // Child connects to external network
+        graph.add_edge(
+            "deploy.sh",
+            "https://attacker.example.com/exfil",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"),
+            "Expected cross-node parent→child taint finding, got: {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

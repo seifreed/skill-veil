@@ -128,10 +128,12 @@ fn test_generate_json_escalates_summary_from_graph_capabilities() {
         .score_breakdown
         .iter()
         .any(|factor| factor.factor == "capability_combo:privileged_host_filesystem"));
+    // Individual policies should retain their own action level, NOT be
+    // escalated by the global summary. The low-severity finding keeps Log.
     assert!(json
         .policies
         .iter()
-        .all(|policy| policy.action == RecommendedAction::Block));
+        .all(|policy| policy.action == RecommendedAction::Log));
 }
 
 #[test]

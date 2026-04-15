@@ -40,8 +40,6 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                     continue;
                 }
             };
-        let artifact_content = read_text_file_lossy(referenced_file).ok();
-
         findings.extend(
             scanner
                 .engine
@@ -56,7 +54,9 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                 }),
         );
 
-        if let Some((content, decode_warning)) = artifact_content {
+        {
+            let content = artifact_doc.raw_content;
+            let decode_warning = artifact_doc.decode_warning;
             if decode_warning {
                 findings.push(decode_warning_finding(referenced_file, artifact_kind));
             }
@@ -97,21 +97,20 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         ));
     }
     findings.extend(scan_supporting_artifacts(scanner, &doc));
-    if let Ok((content, _decode_warning)) = read_text_file_lossy(path) {
-        if let Some(parse_warning) = structured_parse_warning(
-            path,
-            &content,
-            Scanner::<F, P>::artifact_kind_for_path(path),
-        ) {
-            findings.push(parse_warning);
-        }
-        let sibling_files = Scanner::<F, P>::sibling_files(path);
-        findings.extend(
-            scanner
-                .artifact_analysis
-                .analyze(path, &content, &sibling_files),
-        );
+    let primary_content = doc.raw_content.clone();
+    if let Some(parse_warning) = structured_parse_warning(
+        path,
+        &primary_content,
+        Scanner::<F, P>::artifact_kind_for_path(path),
+    ) {
+        findings.push(parse_warning);
     }
+    let sibling_files = Scanner::<F, P>::sibling_files(path);
+    findings.extend(
+        scanner
+            .artifact_analysis
+            .analyze(path, &primary_content, &sibling_files),
+    );
     let artifact_kind = Scanner::<F, P>::artifact_kind_for_path(path);
     let artifact_path = path.display().to_string();
     let artifact_graph = scanner.build_artifact_graph(&doc);
@@ -128,9 +127,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
 
     // Apply inline suppressions (e.g., <!-- skill-veil:ignore-next-line RULE_ID -->)
     let mut suppression_sources = std::collections::HashMap::new();
-    if let Ok((primary_content, _)) = read_text_file_lossy(path) {
-        suppression_sources.insert(path.to_path_buf(), primary_content);
-    }
+    suppression_sources.insert(path.to_path_buf(), primary_content);
     for referenced_file in &doc.referenced_files {
         if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file) {
             suppression_sources.insert(referenced_file.clone(), ref_content);
@@ -138,16 +135,22 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     }
     let inline_suppressions =
         crate::inline_suppressions::collect_inline_suppressions(&suppression_sources);
-    let (findings, _inline_suppressed) =
-        crate::inline_suppressions::apply_inline_suppressions(findings, &inline_suppressions);
+    let primary_path_str = path.display().to_string();
+    let (findings, inline_suppressed) = crate::inline_suppressions::apply_inline_suppressions(
+        findings,
+        &inline_suppressions,
+        Some(&primary_path_str),
+    );
 
     let filter_outcome = scanner.filter_service.filter_with_summary(findings);
     let filtered_findings = filter_outcome.findings;
     let (primary_findings, supporting_findings) =
         ScanResult::split_findings_by_scope(path, artifact_kind, &filtered_findings);
     let summary = FindingSummary::from_findings_and_graph(&filtered_findings, &artifact_graph);
-    let primary_summary = FindingSummary::from_findings(&primary_findings);
-    let supporting_summary = FindingSummary::from_findings(&supporting_findings);
+    let primary_summary =
+        FindingSummary::from_findings_and_graph(&primary_findings, &artifact_graph);
+    let supporting_summary =
+        FindingSummary::from_findings_and_graph(&supporting_findings, &artifact_graph);
     let verdict_report = derive_package_verdict(
         &filtered_findings,
         &primary_summary,
@@ -177,7 +180,10 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         artifact_graph,
         profile: scanner.filter_service.profile(),
         policy: scanner.filter_service.policy().cloned(),
-        suppression_summary: filter_outcome.suppression_summary,
+        suppression_summary: crate::policy_types::SuppressionSummary {
+            inline_suppressed,
+            ..filter_outcome.suppression_summary
+        },
         policy_audit: PolicyAudit {
             effective_fail_on: scanner.filter_service.fail_on(),
             applied_overrides: filter_outcome.applied_overrides,
@@ -232,6 +238,7 @@ pub(crate) fn discover_package_manifests(path: &Path) -> Vec<PathBuf> {
 
     WalkDir::new(path)
         .into_iter()
+        .filter_entry(|entry| !should_skip_discovery_dir(path, entry))
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .filter_map(|entry| {
@@ -257,6 +264,7 @@ pub(crate) fn discover_lockfiles(path: &Path) -> Vec<PathBuf> {
 
     WalkDir::new(path)
         .into_iter()
+        .filter_entry(|entry| !should_skip_discovery_dir(path, entry))
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .filter_map(|entry| {
@@ -266,4 +274,29 @@ pub(crate) fn discover_lockfiles(path: &Path) -> Vec<PathBuf> {
                 .then(|| entry.into_path())
         })
         .collect()
+}
+
+fn should_skip_discovery_dir(_root: &Path, entry: &walkdir::DirEntry) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
+    entry.file_name().to_str().is_some_and(|name| {
+        matches!(
+            name,
+            "node_modules"
+                | "vendor"
+                | ".git"
+                | "dist"
+                | "build"
+                | "target"
+                | ".venv"
+                | "venv"
+                | "__pycache__"
+                | ".yarn"
+                | ".pnpm-store"
+                | ".next"
+                | ".turbo"
+                | "coverage"
+        )
+    })
 }
