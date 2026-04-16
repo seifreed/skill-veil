@@ -87,12 +87,24 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
     // references many children that each expose sources and sinks.
     const MAX_CROSS_NODE_FINDINGS_PER_CLUSTER: usize = 50;
     let sibling_clusters = build_sibling_clusters(graph);
+    // Divide budget across groups so every source-sink family gets representation,
+    // even when a high-volume group would otherwise exhaust the entire budget.
+    debug_assert!(
+        groups.len() <= MAX_CROSS_NODE_FINDINGS_PER_CLUSTER,
+        "Number of taint rule groups ({}) exceeds per-cluster budget ({}); each group will be capped to 1 finding",
+        groups.len(),
+        MAX_CROSS_NODE_FINDINGS_PER_CLUSTER
+    );
+    let per_group_budget = if groups.is_empty() {
+        0
+    } else {
+        (MAX_CROSS_NODE_FINDINGS_PER_CLUSTER / groups.len()).max(1)
+    };
     for cluster in &sibling_clusters {
         if cluster.len() < 2 {
             continue;
         }
-        let mut cluster_finding_count = 0_usize;
-        'cluster: for group in &groups {
+        for group in &groups {
             let source_nodes: Vec<&String> = cluster
                 .iter()
                 .filter(|path| node_has_source(graph, path, group.source))
@@ -101,7 +113,8 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
                 .iter()
                 .filter(|path| node_has_sink(graph, path, group.sink))
                 .collect();
-            for source_node in &source_nodes {
+            let mut group_finding_count = 0_usize;
+            'group: for source_node in &source_nodes {
                 for sink_node in &sink_nodes {
                     if source_node == sink_node {
                         continue; // already covered by per-node pass
@@ -128,10 +141,12 @@ pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
                                 .reason(rule.reason)
                                 .build(),
                         );
-                        cluster_finding_count += 1;
-                        if cluster_finding_count >= MAX_CROSS_NODE_FINDINGS_PER_CLUSTER {
-                            break 'cluster;
-                        }
+                    }
+                    // Count actual findings (rules per pair) against the budget,
+                    // not just pairs, to enforce the intended findings cap.
+                    group_finding_count += group.rules.len();
+                    if group_finding_count >= per_group_budget {
+                        break 'group;
                     }
                 }
             }
@@ -396,6 +411,19 @@ fn sink_summary(graph: &ArtifactGraph, node_path: &str, sink: SinkSelector) -> S
                 edge.from == node_path && matches!(edge.relation, ArtifactRelation::Executes)
             })
             .map(|edge| edge.to.clone())
+            .or_else(|| {
+                if node_has_capability(graph, node_path, ArtifactCapability::ProcessExecution) {
+                    Some("process_execution".to_string())
+                } else if node_has_capability(
+                    graph,
+                    node_path,
+                    ArtifactCapability::InstallExecution,
+                ) {
+                    Some("install_execution".to_string())
+                } else {
+                    None
+                }
+            })
             .unwrap_or_else(|| "execution".to_string()),
         SinkSelector::Persistence => graph
             .edges
@@ -404,13 +432,21 @@ fn sink_summary(graph: &ArtifactGraph, node_path: &str, sink: SinkSelector) -> S
                 edge.from == node_path && matches!(edge.relation, ArtifactRelation::Persists)
             })
             .map(|edge| edge.to.clone())
+            .or_else(|| {
+                if node_has_capability(graph, node_path, ArtifactCapability::PersistenceSurface) {
+                    Some("persistence_surface".to_string())
+                } else {
+                    None
+                }
+            })
             .unwrap_or_else(|| "persistence".to_string()),
     }
 }
 
 fn looks_like_secret_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
-    [
+    // Specific secret file/variable patterns — match as substrings.
+    let specific_patterns = [
         ".env",
         ".npmrc",
         ".ssh",
@@ -423,23 +459,51 @@ fn looks_like_secret_target(target: &str) -> bool {
         "gh_token",
         "google_application_credentials",
         "slack_bot_token",
-        "token",
-        "secret",
-        "cookie",
-        "session",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    ];
+    if specific_patterns
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return true;
+    }
+    // Generic keywords — require a word-boundary-like separator to avoid
+    // matching substrings like "tokenizer", "session_config", etc.
+    let generic_keywords = ["token", "secret", "cookie", "session"];
+    generic_keywords
+        .iter()
+        .any(|keyword| lower.contains(keyword) && has_word_boundary(&lower, keyword))
+}
+
+/// Check that `keyword` appears in `text` at a word boundary: preceded and
+/// followed by a non-alphanumeric character (or string start/end).
+fn has_word_boundary(text: &str, keyword: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(keyword) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0 || !text.as_bytes()[abs_pos - 1].is_ascii_alphanumeric();
+        let after_pos = abs_pos + keyword.len();
+        let after_ok =
+            after_pos >= text.len() || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + 1;
+    }
+    false
 }
 
 fn looks_like_identity_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
-    lower.contains("oauth")
-        || lower.contains("token")
-        || lower.contains("session")
-        || lower.contains("cookie")
-        || lower.contains("credential")
-        || lower.contains("identity")
+    // "oauth" and "identity" are specific enough to match as substrings.
+    if lower.contains("oauth") || lower.contains("identity") {
+        return true;
+    }
+    // Generic keywords require word boundaries to avoid false positives
+    // like "tokenizer.py" or "credential_validator_test.py".
+    let generic_keywords = ["token", "session", "cookie", "credential"];
+    generic_keywords
+        .iter()
+        .any(|keyword| lower.contains(keyword) && has_word_boundary(&lower, keyword))
 }
 
 fn looks_like_external_sink(edge: &crate::artifact_graph::ArtifactEdge) -> bool {

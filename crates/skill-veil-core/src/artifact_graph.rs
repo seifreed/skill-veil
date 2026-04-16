@@ -115,7 +115,12 @@ impl ArtifactGraph {
     ) {
         let path = path.into();
         if let Some(existing) = self.nodes.iter_mut().find(|node| node.path == path) {
-            existing.kind = kind;
+            // Only overwrite kind if the existing kind is GenericArtifact.
+            // This preserves the first specific classification and prevents
+            // a later call from silently changing e.g. SkillDocument to PackageManifest.
+            if existing.kind == ArtifactKind::GenericArtifact {
+                existing.kind = kind;
+            }
             for capability in capabilities {
                 if !existing.capabilities.iter().any(|fact| {
                     fact.capability == capability.capability && fact.source == capability.source

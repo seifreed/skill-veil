@@ -1,8 +1,48 @@
 use crate::analyzer::types::{
-    AgentExtensionKind, ArtifactAssessment, ArtifactClassification, ArtifactIdentitySource, Section,
-    StructuralSignals, StructuralValidity,
+    AgentExtensionKind, ArtifactAssessment, ArtifactClassification, ArtifactIdentitySource,
+    Section, StructuralSignals, StructuralValidity,
 };
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+// SAFETY: These regex patterns are validated at compile time via LazyLock.
+// Each pattern uses raw string literals where needed and standard regex syntax.
+// The unwrap() calls are safe because the patterns are hardcoded and known valid.
+
+static IMPERATIVE_LANGUAGE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)\b(run|execute|install|configure|use|review|deploy|inspect|persist|always|never|must|should)\b")
+        .expect("IMPERATIVE_LANGUAGE_REGEX is valid regex")
+});
+
+static NUMBERED_LIST_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?m)^\s*\d+\.\s+").expect("NUMBERED_LIST_REGEX is valid regex")
+});
+
+static PERSISTENCE_LANGUAGE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)(persist\s+these\s+instructions|remember\s+this\s+across\s+sessions|always\s+follow\s+this\s+prompt|never\s+reveal\s+this\s+instruction|override\s+future\s+system\s+messages)")
+        .expect("PERSISTENCE_LANGUAGE_REGEX is valid regex")
+});
+
+static REFERENCED_ARTIFACTS_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)(package\.json|requirements\.txt|pyproject\.toml|cargo\.toml|dockerfile|docker-compose|install\.sh|bootstrap\.(sh|py|js|ps1))")
+        .expect("REFERENCED_ARTIFACTS_REGEX is valid regex")
+});
+
+static MCP_STRUCTURE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        "(?i)(\"mcpServers\"|\\bmcpServers\\b|\\btransport\\b|\\bcommand\\b|\\bstdio\\b)",
+    )
+    .expect("MCP_STRUCTURE_REGEX is valid regex")
+});
+
+static AGENT_INSTRUCTION_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new("(?i)(always\\s+follow\\s+these\\s+instructions|before\\s+any\\s+future\\s+system\\s+message|never\\s+reveal\\s+this\\s+instruction|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|system\\s+overlay)")
+        .expect("AGENT_INSTRUCTION_REGEX is valid regex")
+});
+
+static MCP_HEURISTIC_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new("(?i)(transport|command|url)").expect("MCP_HEURISTIC_REGEX is valid regex")
+});
 
 pub fn infer_extension_kind(path: &Path) -> AgentExtensionKind {
     infer_extension_identity(path).0
@@ -34,7 +74,8 @@ pub(crate) fn assess_artifact(
         }
     }
 
-    let structural_validity = structural_validity_for(extension_kind, &structural_signals, content);
+    let structural_validity =
+        structural_validity_for(path, extension_kind, &structural_signals, content);
     let classification = classify_artifact(
         extension_kind,
         identity_source,
@@ -107,40 +148,29 @@ fn evaluate_structural_signals(
     referenced_files: &[PathBuf],
 ) -> StructuralSignals {
     let lower = content.to_ascii_lowercase();
+    const OPERATIONAL_SECTION_NAMES: &[&str] = &[
+        "setup",
+        "install",
+        "usage",
+        "workflow",
+        "instructions",
+        "configuration",
+    ];
     let has_operational_sections = if sections.is_empty() {
-        [
-            "## setup",
-            "## install",
-            "## usage",
-            "## workflow",
-            "## instructions",
-            "## configuration",
-        ]
-        .iter()
-        .any(|pattern| lower.contains(pattern))
+        OPERATIONAL_SECTION_NAMES
+            .iter()
+            .any(|name| lower.contains(&format!("## {name}")))
     } else {
         sections.iter().any(|section| {
-            matches!(
-                section.name.as_str(),
-                "setup" | "install" | "usage" | "workflow" | "instructions" | "configuration"
-            )
+            OPERATIONAL_SECTION_NAMES
+                .iter()
+                .any(|name| section.name == *name || section.name.starts_with(&format!("{name} ")))
         })
     };
 
-    let has_imperative_language = regex::Regex::new(
-        "(?i)\\b(run|execute|install|configure|use|review|deploy|inspect|persist|always|never|must|should)\\b",
-    )
-    .unwrap()
-    .is_match(content);
-    let has_code_or_flows = content.contains("```")
-        || regex::Regex::new("(?m)^\\s*\\d+\\.\\s+")
-            .unwrap()
-            .is_match(content);
-    let has_persistence_language = regex::Regex::new(
-        "(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|always\\s+follow\\s+this\\s+prompt|never\\s+reveal\\s+this\\s+instruction|override\\s+future\\s+system\\s+messages)",
-    )
-    .unwrap()
-    .is_match(content);
+    let has_imperative_language = IMPERATIVE_LANGUAGE_REGEX.is_match(content);
+    let has_code_or_flows = content.contains("```") || NUMBERED_LIST_REGEX.is_match(content);
+    let has_persistence_language = PERSISTENCE_LANGUAGE_REGEX.is_match(content);
     let has_reasonable_structure = if sections.is_empty() {
         content
             .lines()
@@ -150,10 +180,8 @@ fn evaluate_structural_signals(
     } else {
         sections.len() >= 2
     };
-    let has_referenced_artifacts = !referenced_files.is_empty()
-        || regex::Regex::new("(?i)(package\\.json|requirements\\.txt|pyproject\\.toml|cargo\\.toml|dockerfile|docker-compose|install\\.sh|bootstrap\\.(sh|py|js|ps1))")
-            .unwrap()
-            .is_match(content);
+    let has_referenced_artifacts =
+        !referenced_files.is_empty() || REFERENCED_ARTIFACTS_REGEX.is_match(content);
 
     let mut score = 0_u8;
     if has_operational_sections {
@@ -193,19 +221,11 @@ fn looks_like_mcp_structure(path: &Path, content: &str) -> bool {
             .map(str::to_ascii_lowercase)
             .as_deref(),
         Some("json" | "yaml" | "yml")
-    ) && regex::Regex::new(
-        "(?i)(\"mcpServers\"|\\bmcpServers\\b|\\btransport\\b|\\bcommand\\b|\\bstdio\\b)",
-    )
-    .unwrap()
-    .is_match(content)
+    ) && MCP_STRUCTURE_REGEX.is_match(content)
 }
 
 fn looks_like_agent_instruction_content(content: &str) -> bool {
-    regex::Regex::new(
-        "(?i)(always\\s+follow\\s+these\\s+instructions|before\\s+any\\s+future\\s+system\\s+message|never\\s+reveal\\s+this\\s+instruction|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|system\\s+overlay)",
-    )
-    .unwrap()
-    .is_match(content)
+    AGENT_INSTRUCTION_REGEX.is_match(content)
 }
 
 fn looks_like_skill_content(signals: &StructuralSignals) -> bool {
@@ -216,30 +236,26 @@ fn looks_like_skill_content(signals: &StructuralSignals) -> bool {
 }
 
 fn structural_validity_for(
+    path: &Path,
     extension_kind: AgentExtensionKind,
     signals: &StructuralSignals,
     content: &str,
 ) -> StructuralValidity {
     match extension_kind {
-        AgentExtensionKind::McpServer
-            if looks_like_mcp_structure(Path::new("mcp.json"), content) =>
-        {
+        AgentExtensionKind::McpServer if looks_like_mcp_structure(path, content) => {
             StructuralValidity::Confirmed
         }
         AgentExtensionKind::AgentInstruction if signals.has_persistence_language => {
             StructuralValidity::Confirmed
         }
         AgentExtensionKind::Skill if signals.score >= 3 => StructuralValidity::Confirmed,
+        AgentExtensionKind::Skill if signals.score >= 2 => StructuralValidity::Heuristic,
         AgentExtensionKind::PromptPack | AgentExtensionKind::AgentInstruction
             if signals.score >= 2 || signals.has_reasonable_structure =>
         {
             StructuralValidity::Heuristic
         }
-        AgentExtensionKind::McpServer
-            if regex::Regex::new("(?i)(transport|command|url)")
-                .unwrap()
-                .is_match(content) =>
-        {
+        AgentExtensionKind::McpServer if MCP_HEURISTIC_REGEX.is_match(content) => {
             StructuralValidity::Heuristic
         }
         _ if signals.score >= 2 => StructuralValidity::Heuristic,

@@ -1,9 +1,13 @@
 use super::*;
+use crate::analyzer::{
+    AgentExtensionKind, ArtifactClassification, ArtifactIdentitySource, StructuralValidity,
+};
 use crate::artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactGraph,
 };
 use crate::findings::{
-    ArtifactKind, FindingSummary, MatchTarget, PackageVerdictReport, ThreatCategory, Verdict,
+    ArtifactKind, Finding, FindingSummary, MatchTarget, PackageVerdictReport, ThreatCategory,
+    Verdict,
 };
 use chrono::Utc;
 
@@ -45,7 +49,7 @@ fn test_generate_json() {
     assert!(json
         .context_policies
         .iter()
-        .any(|policy| policy.context == PolicyContext::Install));
+        .any(|policy| policy.context == OperationalContext::Install));
 }
 
 #[test]
@@ -154,7 +158,7 @@ fn test_generate_json_includes_context_policies_from_profile() {
     let policy = json
         .context_policies
         .iter()
-        .find(|policy| policy.context == PolicyContext::Secrets)
+        .find(|policy| policy.context == OperationalContext::Secrets)
         .expect("missing secrets context policy");
     assert_eq!(policy.action, RecommendedAction::Block);
     assert_eq!(json.policy_audit.effective_fail_on, None);
@@ -231,7 +235,7 @@ fn test_apply_waivers_filters_matching_findings() {
         schema_version: POLICY_SCHEMA_VERSION.to_string(),
         waivers: vec![WaiverEntry {
             rule_id: Some("TEST_RULE".to_string()),
-            artifact_path: Some("install.sh".to_string()),
+            artifact_path: Some("scripts/install.sh".to_string()),
             context: None,
             reason: "accepted".to_string(),
             expires_at: None,
@@ -254,7 +258,7 @@ fn test_apply_waivers_filters_matching_context() {
         waivers: vec![WaiverEntry {
             rule_id: Some("TEST_SECRET".to_string()),
             artifact_path: None,
-            context: Some(PolicyContext::Secrets),
+            context: Some(OperationalContext::Secrets),
             reason: "accepted".to_string(),
             expires_at: None,
         }],
@@ -292,8 +296,8 @@ fn test_apply_policy_overrides_uses_most_specific_match() {
             PolicyOverride {
                 id: None,
                 rule_id: Some("TEST_RULE".to_string()),
-                artifact_path: Some("install.sh".to_string()),
-                context: Some(PolicyContext::Install),
+                artifact_path: Some("scripts/install.sh".to_string()),
+                context: Some(OperationalContext::Install),
                 action: RecommendedAction::Log,
                 reason: "specific override".to_string(),
                 expires_at: None,
@@ -323,8 +327,8 @@ fn test_apply_policy_overrides_with_audit_records_override() {
         overrides: vec![PolicyOverride {
             id: Some("override-1".to_string()),
             rule_id: Some("TEST_RULE".to_string()),
-            artifact_path: Some("install.sh".to_string()),
-            context: Some(PolicyContext::Install),
+            artifact_path: Some("scripts/install.sh".to_string()),
+            context: Some(OperationalContext::Install),
             action: RecommendedAction::Log,
             reason: "specific override".to_string(),
             expires_at: None,
@@ -345,7 +349,7 @@ fn test_policy_file_can_override_profile_context_action() {
             team: Some(ConfiguredProfile {
                 fail_on: Some(Severity::Medium),
                 context_actions: vec![ContextActionOverride {
-                    context: PolicyContext::Network,
+                    context: OperationalContext::Network,
                     action: RecommendedAction::Block,
                 }],
             }),
@@ -359,7 +363,7 @@ fn test_policy_file_can_override_profile_context_action() {
         Some(Severity::Medium)
     );
     assert_eq!(
-        policy.resolve_context_action(PolicyProfile::Team, PolicyContext::Network),
+        policy.resolve_context_action(PolicyProfile::Team, OperationalContext::Network),
         RecommendedAction::Block
     );
 }
@@ -580,7 +584,7 @@ fn test_diff_reports_classifies_waived_and_baselined_findings() {
         waivers: vec![WaiverEntry {
             rule_id: Some("WAIVE_RULE".to_string()),
             artifact_path: None,
-            context: Some(PolicyContext::Secrets),
+            context: Some(OperationalContext::Secrets),
             reason: "approved".to_string(),
             expires_at: None,
         }],
@@ -596,4 +600,260 @@ fn test_diff_reports_classifies_waived_and_baselined_findings() {
     assert_eq!(diff.new_findings.len(), 0);
     assert_eq!(diff.waived_findings.len(), 1);
     assert_eq!(diff.baselined_findings.len(), 1);
+}
+
+#[test]
+fn test_diff_reports_waived_finding_with_changed_text_is_not_also_resolved() {
+    // Previous scan had a finding with one match_value
+    let previous_finding = Finding::builder("RULE_A", ThreatCategory::CredentialExposure)
+        .artifact(
+            ArtifactKind::ReferencedArtifact,
+            Some("scripts/deploy.sh".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("old_token_text")
+        .reason("old reason")
+        .build();
+    let previous_report = JsonReport {
+        skill_name: "a".to_string(),
+        skill_path: "a".to_string(),
+        timestamp: Utc::now(),
+        extension_kind: AgentExtensionKind::Skill,
+        classification: ArtifactClassification::ConfirmedSkill,
+        package_id: None,
+        identity_source: ArtifactIdentitySource::ExplicitName,
+        structural_validity: StructuralValidity::Confirmed,
+        heuristic_score: 0,
+        findings: vec![previous_finding],
+        primary_findings: Vec::new(),
+        supporting_findings: Vec::new(),
+        summary: FindingSummary::from_findings(&[]),
+        primary_summary: FindingSummary::from_findings(&[]),
+        supporting_summary: FindingSummary::from_findings(&[]),
+        artifact_graph: ArtifactGraph::new(),
+        policies: Vec::new(),
+        context_policies: Vec::new(),
+        profile: None,
+        suppression_summary: SuppressionSummary::default(),
+        policy_audit: PolicyAudit::default(),
+        verdict: Verdict::Suspicious,
+        verdict_report: PackageVerdictReport {
+            verdict: Verdict::Suspicious,
+            package_health: crate::findings::PackageHealth::NeedsReview,
+            hygiene_summary: crate::findings::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: crate::findings::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        },
+    };
+
+    // Current scan: same rule_id + artifact_path, but different match_value
+    let current_finding = Finding::builder("RULE_A", ThreatCategory::CredentialExposure)
+        .artifact(
+            ArtifactKind::ReferencedArtifact,
+            Some("scripts/deploy.sh".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("new_token_text")
+        .reason("updated reason")
+        .build();
+    let current_report = JsonReport {
+        skill_name: "a".to_string(),
+        skill_path: "a".to_string(),
+        timestamp: Utc::now(),
+        extension_kind: AgentExtensionKind::Skill,
+        classification: ArtifactClassification::ConfirmedSkill,
+        package_id: None,
+        identity_source: ArtifactIdentitySource::ExplicitName,
+        structural_validity: StructuralValidity::Confirmed,
+        heuristic_score: 0,
+        findings: vec![current_finding],
+        primary_findings: Vec::new(),
+        supporting_findings: Vec::new(),
+        summary: FindingSummary::from_findings(&[]),
+        primary_summary: FindingSummary::from_findings(&[]),
+        supporting_summary: FindingSummary::from_findings(&[]),
+        artifact_graph: ArtifactGraph::new(),
+        policies: Vec::new(),
+        context_policies: Vec::new(),
+        profile: None,
+        suppression_summary: SuppressionSummary::default(),
+        policy_audit: PolicyAudit::default(),
+        verdict: Verdict::Suspicious,
+        verdict_report: PackageVerdictReport {
+            verdict: Verdict::Suspicious,
+            package_health: crate::findings::PackageHealth::NeedsReview,
+            hygiene_summary: crate::findings::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: crate::findings::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        },
+    };
+
+    // Waiver matches the current finding by rule_id + artifact_path
+    let waivers = WaiverFile {
+        schema_version: POLICY_SCHEMA_VERSION.to_string(),
+        waivers: vec![WaiverEntry {
+            rule_id: Some("RULE_A".to_string()),
+            artifact_path: Some("scripts/deploy.sh".to_string()),
+            context: None,
+            reason: "accepted risk".to_string(),
+            expires_at: None,
+        }],
+    };
+
+    let diff =
+        diff_reports_with_policy_state(&[previous_report], &[current_report], None, Some(&waivers));
+
+    // The finding should appear as waived, NOT as resolved.
+    // Before the fix, the different fingerprints caused it to appear as both.
+    assert_eq!(
+        diff.waived_findings.len(),
+        1,
+        "Finding should be classified as waived"
+    );
+    assert_eq!(
+        diff.resolved_findings.len(),
+        0,
+        "Finding must NOT appear as resolved when it was waived in current scan"
+    );
+}
+
+#[test]
+fn test_diff_reports_waived_finding_with_fuzzy_path_is_not_resolved() {
+    // Previous scan had a finding with a full absolute-style path
+    let previous_finding = Finding::builder("RULE_B", ThreatCategory::CredentialExposure)
+        .artifact(
+            ArtifactKind::ReferencedArtifact,
+            Some("/repo/scripts/deploy.sh".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("token_value")
+        .reason("exposed token")
+        .build();
+    let previous_report = JsonReport {
+        skill_name: "a".to_string(),
+        skill_path: "a".to_string(),
+        timestamp: Utc::now(),
+        extension_kind: AgentExtensionKind::Skill,
+        classification: ArtifactClassification::ConfirmedSkill,
+        package_id: None,
+        identity_source: ArtifactIdentitySource::ExplicitName,
+        structural_validity: StructuralValidity::Confirmed,
+        heuristic_score: 0,
+        findings: vec![previous_finding],
+        primary_findings: Vec::new(),
+        supporting_findings: Vec::new(),
+        summary: FindingSummary::from_findings(&[]),
+        primary_summary: FindingSummary::from_findings(&[]),
+        supporting_summary: FindingSummary::from_findings(&[]),
+        artifact_graph: ArtifactGraph::new(),
+        policies: Vec::new(),
+        context_policies: Vec::new(),
+        profile: None,
+        suppression_summary: SuppressionSummary::default(),
+        policy_audit: PolicyAudit::default(),
+        verdict: Verdict::Suspicious,
+        verdict_report: PackageVerdictReport {
+            verdict: Verdict::Suspicious,
+            package_health: crate::findings::PackageHealth::NeedsReview,
+            hygiene_summary: crate::findings::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: crate::findings::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        },
+    };
+
+    // Current scan: same finding with the same full path
+    let current_finding = Finding::builder("RULE_B", ThreatCategory::CredentialExposure)
+        .artifact(
+            ArtifactKind::ReferencedArtifact,
+            Some("/repo/scripts/deploy.sh".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("token_value")
+        .reason("exposed token")
+        .build();
+    let current_report = JsonReport {
+        skill_name: "a".to_string(),
+        skill_path: "a".to_string(),
+        timestamp: Utc::now(),
+        extension_kind: AgentExtensionKind::Skill,
+        classification: ArtifactClassification::ConfirmedSkill,
+        package_id: None,
+        identity_source: ArtifactIdentitySource::ExplicitName,
+        structural_validity: StructuralValidity::Confirmed,
+        heuristic_score: 0,
+        findings: vec![current_finding],
+        primary_findings: Vec::new(),
+        supporting_findings: Vec::new(),
+        summary: FindingSummary::from_findings(&[]),
+        primary_summary: FindingSummary::from_findings(&[]),
+        supporting_summary: FindingSummary::from_findings(&[]),
+        artifact_graph: ArtifactGraph::new(),
+        policies: Vec::new(),
+        context_policies: Vec::new(),
+        profile: None,
+        suppression_summary: SuppressionSummary::default(),
+        policy_audit: PolicyAudit::default(),
+        verdict: Verdict::Suspicious,
+        verdict_report: PackageVerdictReport {
+            verdict: Verdict::Suspicious,
+            package_health: crate::findings::PackageHealth::NeedsReview,
+            hygiene_summary: crate::findings::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: crate::findings::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        },
+    };
+
+    // Waiver uses a relative (shorter) path that matches via paths_match suffix logic
+    let waivers = WaiverFile {
+        schema_version: POLICY_SCHEMA_VERSION.to_string(),
+        waivers: vec![WaiverEntry {
+            rule_id: Some("RULE_B".to_string()),
+            artifact_path: Some("scripts/deploy.sh".to_string()),
+            context: None,
+            reason: "accepted risk".to_string(),
+            expires_at: None,
+        }],
+    };
+
+    let diff =
+        diff_reports_with_policy_state(&[previous_report], &[current_report], None, Some(&waivers));
+
+    // The finding should be waived (fuzzy path match), NOT resolved.
+    // Before the fix, the exact-equality check on artifact_path in
+    // suppressed_logical_ids caused the previous finding to appear as
+    // "resolved" because "/repo/scripts/deploy.sh" != "scripts/deploy.sh".
+    assert_eq!(
+        diff.waived_findings.len(),
+        1,
+        "Finding should be classified as waived via fuzzy path match"
+    );
+    assert_eq!(
+        diff.resolved_findings.len(),
+        0,
+        "Finding must NOT appear as resolved when it was waived with a fuzzy path"
+    );
 }

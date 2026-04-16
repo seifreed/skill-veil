@@ -120,7 +120,11 @@ pub struct ThresholdRecommendation {
     pub current_block_threshold: u32,
     pub recommended_approval_threshold: u32,
     pub recommended_block_threshold: u32,
+    /// Metrics computed using score-based threshold classification.
+    /// May differ from top-level `CorpusEvaluation.metrics` which uses the
+    /// full verdict pipeline (calibration, compound detection, taint analysis).
     pub current_metrics: RegressionMetrics,
+    /// Metrics for the recommended thresholds, using score-based classification.
     pub recommended_metrics: RegressionMetrics,
     pub rationale: String,
 }
@@ -216,7 +220,7 @@ pub fn evaluate_corpus(
         let recommended_action = results
             .iter()
             .fold(RecommendedAction::Log, |current, result| {
-                RecommendedAction::max(current, result.summary.recommended_action)
+                current.max(result.summary.recommended_action)
             });
         let package_verdict = results.iter().fold(Verdict::Benign, |current, result| {
             match (current, result.verdict) {
@@ -364,14 +368,6 @@ fn attack_family_for_category(category: ThreatCategory) -> &'static str {
         ThreatCategory::Obfuscation => "obfuscation",
         ThreatCategory::UnsafeBinary => "unsafe_binary",
         ThreatCategory::Generic => "generic",
-    }
-}
-
-pub fn classify(action: RecommendedAction) -> SampleLabel {
-    match action {
-        RecommendedAction::Log => SampleLabel::Benign,
-        RecommendedAction::RequireApproval => SampleLabel::Suspicious,
-        RecommendedAction::Block => SampleLabel::Malicious,
     }
 }
 
@@ -552,7 +548,7 @@ fn recommend_thresholds(samples: &[SampleEvaluation]) -> ThresholdRecommendation
             let metrics = compute_metrics(&expected, &actual);
             let score = threshold_objective(&metrics, samples, &actual);
             let acceptable_recall =
-                current_metrics.recall > 0.0 && metrics.recall + 0.02 >= current_metrics.recall;
+                current_metrics.recall == 0.0 || metrics.recall + 0.02 >= current_metrics.recall;
 
             if acceptable_recall && score > best_score {
                 best_approval = approval;
@@ -607,9 +603,9 @@ fn classify_with_thresholds(
     approval_threshold: u32,
     block_threshold: u32,
 ) -> SampleLabel {
-    if risk_score > block_threshold {
+    if risk_score >= block_threshold {
         SampleLabel::Malicious
-    } else if risk_score > approval_threshold {
+    } else if risk_score >= approval_threshold {
         SampleLabel::Suspicious
     } else {
         SampleLabel::Benign

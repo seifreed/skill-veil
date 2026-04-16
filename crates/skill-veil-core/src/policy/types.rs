@@ -3,8 +3,8 @@ use crate::analyzer::{
 };
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{
-    ArtifactKind, Finding, FindingSummary, OperationalContext as PolicyContext,
-    PackageVerdictReport, RecommendedAction, Severity, ThreatCategory, Verdict,
+    ArtifactKind, Finding, FindingSummary, OperationalContext, PackageVerdictReport,
+    RecommendedAction, Severity, ThreatCategory, Verdict,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,7 @@ pub struct ConfiguredProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextActionOverride {
-    pub context: PolicyContext,
+    pub context: OperationalContext,
     pub action: RecommendedAction,
 }
 
@@ -53,7 +53,7 @@ pub struct PolicyOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<PolicyContext>,
+    pub context: Option<OperationalContext>,
     pub action: RecommendedAction,
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -73,7 +73,7 @@ pub struct AppliedPolicyOverride {
     pub specificity: usize,
     pub reason: String,
     #[serde(default)]
-    pub matched_contexts: Vec<PolicyContext>,
+    pub matched_contexts: Vec<OperationalContext>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,7 +97,7 @@ pub struct PolicyFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextPolicy {
-    pub context: PolicyContext,
+    pub context: OperationalContext,
     pub action: RecommendedAction,
     pub rationale: Vec<String>,
 }
@@ -108,6 +108,8 @@ pub struct SuppressionSummary {
     pub waiver_suppressed: usize,
     #[serde(default)]
     pub inline_suppressed: usize,
+    /// Count of findings with actionable recommendations (Block or RequireApproval).
+    /// Excludes Log-level findings which are informational only.
     pub active_findings: usize,
 }
 
@@ -141,7 +143,7 @@ pub struct WaiverEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context: Option<PolicyContext>,
+    pub context: Option<OperationalContext>,
     pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<DateTime<Utc>>,
@@ -153,6 +155,10 @@ pub struct DiffReport {
     pub resolved_findings: Vec<DiffEntry>,
     pub waived_findings: Vec<DiffEntry>,
     pub baselined_findings: Vec<DiffEntry>,
+    /// Count of findings present in both the current and previous scan that remain
+    /// active (not waived or baselined). This is purely informational; the total
+    /// `new + resolved + waived + baselined + unchanged` may not equal the union of
+    /// all findings across both scans.
     pub unchanged_findings: usize,
 }
 
@@ -160,6 +166,7 @@ pub struct DiffReport {
 pub struct DiffEntry {
     pub fingerprint: String,
     pub rule_id: String,
+    pub category: ThreatCategory,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     pub reason: String,
@@ -300,28 +307,223 @@ pub struct JsonReport {
 }
 
 pub struct PolicyGenerator {
-    pub(crate) skill_name: String,
-    pub(crate) skill_path: String,
-    pub(crate) primary_artifact_kind: ArtifactKind,
-    pub(crate) extension_kind: AgentExtensionKind,
-    pub(crate) classification: ArtifactClassification,
-    pub(crate) package_id: Option<String>,
-    pub(crate) identity_source: ArtifactIdentitySource,
-    pub(crate) structural_validity: StructuralValidity,
-    pub(crate) heuristic_score: u8,
-    pub(crate) findings: Vec<Finding>,
-    pub(crate) artifact_graph: ArtifactGraph,
-    pub(crate) profile: Option<PolicyProfile>,
-    pub(crate) policy: Option<PolicyFile>,
-    pub(crate) suppression_summary: SuppressionSummary,
-    pub(crate) policy_audit: PolicyAudit,
+    skill_name: String,
+    skill_path: String,
+    primary_artifact_kind: ArtifactKind,
+    extension_kind: AgentExtensionKind,
+    classification: ArtifactClassification,
+    package_id: Option<String>,
+    identity_source: ArtifactIdentitySource,
+    structural_validity: StructuralValidity,
+    heuristic_score: u8,
+    findings: Vec<Finding>,
+    artifact_graph: ArtifactGraph,
+    profile: Option<PolicyProfile>,
+    policy: Option<PolicyFile>,
+    suppression_summary: SuppressionSummary,
+    policy_audit: PolicyAudit,
     /// Pre-computed verdict report from the scan pipeline.
     /// When present, serializers reuse this instead of re-deriving the verdict.
-    pub(crate) verdict_report: Option<PackageVerdictReport>,
+    verdict_report: Option<PackageVerdictReport>,
+}
+
+impl PolicyGenerator {
+    /// The name of the skill being analyzed.
+    #[must_use]
+    pub fn skill_name(&self) -> &str {
+        &self.skill_name
+    }
+
+    /// Path to the primary skill artifact.
+    #[must_use]
+    pub fn skill_path(&self) -> &str {
+        &self.skill_path
+    }
+
+    /// The artifact kind of the primary entrypoint.
+    #[must_use]
+    pub fn primary_artifact_kind(&self) -> ArtifactKind {
+        self.primary_artifact_kind
+    }
+
+    /// The extension kind (Skill, AgentInstruction, etc.).
+    #[must_use]
+    pub fn extension_kind(&self) -> AgentExtensionKind {
+        self.extension_kind
+    }
+
+    /// The artifact classification result.
+    #[must_use]
+    pub fn classification(&self) -> ArtifactClassification {
+        self.classification
+    }
+
+    /// Optional package identifier.
+    #[must_use]
+    pub fn package_id(&self) -> Option<&str> {
+        self.package_id.as_deref()
+    }
+
+    /// How the artifact identity was determined.
+    #[must_use]
+    pub fn identity_source(&self) -> ArtifactIdentitySource {
+        self.identity_source
+    }
+
+    /// Structural validity of the analyzed artifact.
+    #[must_use]
+    pub fn structural_validity(&self) -> StructuralValidity {
+        self.structural_validity
+    }
+
+    /// Heuristic score assigned during analysis.
+    #[must_use]
+    pub fn heuristic_score(&self) -> u8 {
+        self.heuristic_score
+    }
+
+    /// The findings produced by analysis.
+    #[must_use]
+    pub fn findings(&self) -> &[Finding] {
+        &self.findings
+    }
+
+    /// The artifact dependency/capability graph.
+    #[must_use]
+    pub fn artifact_graph(&self) -> &ArtifactGraph {
+        &self.artifact_graph
+    }
+
+    /// The active policy profile, if any.
+    #[must_use]
+    pub fn profile(&self) -> Option<PolicyProfile> {
+        self.profile
+    }
+
+    /// The loaded policy file, if any.
+    #[must_use]
+    pub fn policy(&self) -> Option<&PolicyFile> {
+        self.policy.as_ref()
+    }
+
+    /// Summary of suppressed findings.
+    #[must_use]
+    pub fn suppression_summary(&self) -> &SuppressionSummary {
+        &self.suppression_summary
+    }
+
+    /// The policy audit trail.
+    #[must_use]
+    pub fn policy_audit(&self) -> &PolicyAudit {
+        &self.policy_audit
+    }
+
+    /// Pre-computed verdict report, if available.
+    #[must_use]
+    pub fn verdict_report(&self) -> Option<&PackageVerdictReport> {
+        self.verdict_report.as_ref()
+    }
+
+    pub fn new(
+        skill_name: impl Into<String>,
+        skill_path: impl Into<String>,
+        findings: Vec<Finding>,
+        artifact_graph: ArtifactGraph,
+    ) -> Self {
+        Self {
+            skill_name: skill_name.into(),
+            skill_path: skill_path.into(),
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+            extension_kind: AgentExtensionKind::Skill,
+            classification: ArtifactClassification::ConfirmedSkill,
+            package_id: None,
+            identity_source: ArtifactIdentitySource::ExplicitName,
+            structural_validity: StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            findings,
+            artifact_graph,
+            profile: None,
+            policy: None,
+            suppression_summary: SuppressionSummary::default(),
+            policy_audit: PolicyAudit::default(),
+            verdict_report: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_primary_artifact_kind(mut self, artifact_kind: ArtifactKind) -> Self {
+        self.primary_artifact_kind = artifact_kind;
+        self
+    }
+
+    #[must_use]
+    pub fn with_profile(mut self, profile: PolicyProfile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    #[must_use]
+    pub fn with_extension_kind(mut self, extension_kind: AgentExtensionKind) -> Self {
+        self.extension_kind = extension_kind;
+        self
+    }
+
+    #[must_use]
+    pub fn with_artifact_classification(
+        mut self,
+        classification: ArtifactClassification,
+        package_id: Option<String>,
+        identity_source: ArtifactIdentitySource,
+        structural_validity: StructuralValidity,
+        heuristic_score: u8,
+    ) -> Self {
+        self.classification = classification;
+        self.package_id = package_id;
+        self.identity_source = identity_source;
+        self.structural_validity = structural_validity;
+        self.heuristic_score = heuristic_score;
+        self
+    }
+
+    #[must_use]
+    pub fn with_policy(mut self, policy: PolicyFile) -> Self {
+        self.policy = Some(policy);
+        self
+    }
+
+    #[must_use]
+    pub fn with_suppression_summary(mut self, suppression_summary: SuppressionSummary) -> Self {
+        self.suppression_summary = suppression_summary;
+        self
+    }
+
+    #[must_use]
+    pub fn with_policy_audit(mut self, policy_audit: PolicyAudit) -> Self {
+        self.policy_audit = policy_audit;
+        self
+    }
+
+    #[must_use]
+    pub fn with_verdict_report(mut self, verdict_report: PackageVerdictReport) -> Self {
+        self.verdict_report = Some(verdict_report);
+        self
+    }
+
+    pub fn generate_shield_md(&self) -> String {
+        super::serializers::generate_shield_md(self)
+    }
+
+    pub fn generate_json(&self) -> JsonReport {
+        super::serializers::generate_json(self)
+    }
+
+    pub fn generate_sarif(&self) -> SarifReport {
+        super::serializers::generate_sarif(self)
+    }
 }
 
 pub(crate) fn default_policy_schema_version() -> String {
-    crate::policy::POLICY_SCHEMA_VERSION.to_string()
+    super::POLICY_SCHEMA_VERSION.to_string()
 }
 
 pub(crate) fn empty_finding_summary() -> FindingSummary {

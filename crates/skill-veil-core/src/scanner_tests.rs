@@ -1,7 +1,7 @@
 use super::*;
 use crate::analyzer::{AgentExtensionKind, ArtifactClassification};
 use crate::artifact_graph::{ArtifactCapability, ArtifactRelation};
-use crate::findings::MatchTarget;
+use crate::findings::{ArtifactKind, MatchTarget};
 use crate::Severity;
 use std::io::Write;
 use tempfile::{tempdir, NamedTempFile};

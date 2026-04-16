@@ -1,18 +1,18 @@
-use crate::findings::{
-    derive_package_verdict, FindingSummary, RecommendedAction, Severity, Verdict,
-};
-use crate::policy::{
+use super::{
     context_label, severity_to_sarif_level, ContextPolicy, JsonReport, PolicyGenerator,
     SarifArtifactLocation, SarifConfiguration, SarifDriver, SarifLocation, SarifMessage,
     SarifPhysicalLocation, SarifRegion, SarifReport, SarifResult, SarifRule, SarifRun, SarifTool,
     ShieldPolicy,
+};
+use crate::findings::{
+    derive_package_verdict, Finding, FindingSummary, RecommendedAction, Severity, Verdict,
 };
 use std::collections::HashMap;
 
 pub(crate) fn generate_shield_md(generator: &PolicyGenerator) -> String {
     let mut output = String::new();
     output.push_str("# SHIELD Policy\n\n");
-    output.push_str(&format!("Generated for: `{}`\n\n", generator.skill_name));
+    output.push_str(&format!("Generated for: `{}`\n\n", generator.skill_name()));
     output.push_str("---\n\n");
 
     let policies = generator.generate_policies();
@@ -31,14 +31,14 @@ pub(crate) fn generate_shield_md(generator: &PolicyGenerator) -> String {
     }
 
     output.push_str("## Policy Precedence\n\n");
-    for stage in &generator.policy_audit.precedence_order {
+    for stage in &generator.policy_audit().precedence_order {
         output.push_str(&format!("- {}\n", stage));
     }
     output.push('\n');
 
-    if !generator.policy_audit.applied_overrides.is_empty() {
+    if !generator.policy_audit().applied_overrides.is_empty() {
         output.push_str("## Applied Overrides\n\n");
-        for applied in &generator.policy_audit.applied_overrides {
+        for applied in &generator.policy_audit().applied_overrides {
             output.push_str(&format!(
                 "- {}: {} -> {} ({})\n",
                 applied.rule_id, applied.original_action, applied.effective_action, applied.reason
@@ -52,20 +52,20 @@ pub(crate) fn generate_shield_md(generator: &PolicyGenerator) -> String {
 
 pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
     let summary =
-        FindingSummary::from_findings_and_graph(&generator.findings, &generator.artifact_graph);
-    let skill_path = std::path::Path::new(&generator.skill_path);
+        FindingSummary::from_findings_and_graph(generator.findings(), generator.artifact_graph());
+    let skill_path = std::path::Path::new(generator.skill_path());
     let (primary_findings, supporting_findings) = crate::findings::split_findings_by_scope(
         skill_path,
-        generator.primary_artifact_kind,
-        &generator.findings,
+        generator.primary_artifact_kind(),
+        generator.findings(),
     );
     let primary_summary =
-        FindingSummary::from_findings_and_graph(&primary_findings, &generator.artifact_graph);
+        FindingSummary::from_findings_and_graph(&primary_findings, generator.artifact_graph());
     let supporting_summary =
-        FindingSummary::from_findings_and_graph(&supporting_findings, &generator.artifact_graph);
-    let verdict_report = generator.verdict_report.clone().unwrap_or_else(|| {
+        FindingSummary::from_findings_and_graph(&supporting_findings, generator.artifact_graph());
+    let verdict_report = generator.verdict_report().cloned().unwrap_or_else(|| {
         derive_package_verdict(
-            &generator.findings,
+            generator.findings(),
             &primary_summary,
             &supporting_summary,
             &summary,
@@ -75,16 +75,16 @@ pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
     let context_policies = generator.generate_context_policies();
 
     JsonReport {
-        skill_name: generator.skill_name.clone(),
-        skill_path: generator.skill_path.clone(),
-        extension_kind: generator.extension_kind,
-        classification: generator.classification,
-        package_id: generator.package_id.clone(),
-        identity_source: generator.identity_source,
-        structural_validity: generator.structural_validity,
-        heuristic_score: generator.heuristic_score,
+        skill_name: generator.skill_name().to_string(),
+        skill_path: generator.skill_path().to_string(),
+        extension_kind: generator.extension_kind(),
+        classification: generator.classification(),
+        package_id: generator.package_id().map(ToString::to_string),
+        identity_source: generator.identity_source(),
+        structural_validity: generator.structural_validity(),
+        heuristic_score: generator.heuristic_score(),
         timestamp: chrono::Utc::now(),
-        findings: generator.findings.clone(),
+        findings: generator.findings().to_vec(),
         primary_findings,
         supporting_findings,
         summary,
@@ -92,19 +92,26 @@ pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
         supporting_summary,
         verdict: verdict_report.verdict,
         verdict_report,
-        artifact_graph: generator.artifact_graph.clone(),
+        artifact_graph: generator.artifact_graph().clone(),
         policies,
         context_policies,
-        profile: generator.profile,
-        suppression_summary: generator.suppression_summary.clone(),
-        policy_audit: generator.policy_audit.clone(),
+        profile: generator.profile(),
+        suppression_summary: generator.suppression_summary().clone(),
+        policy_audit: generator.policy_audit().clone(),
     }
 }
 
 pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
-    let mut rules_map: HashMap<String, _> = HashMap::new();
-    for finding in &generator.findings {
-        rules_map.entry(finding.rule_id.clone()).or_insert(finding);
+    let mut rules_map: HashMap<String, &Finding> = HashMap::new();
+    for finding in generator.findings() {
+        rules_map
+            .entry(finding.rule_id.clone())
+            .and_modify(|existing| {
+                if finding.severity > existing.severity {
+                    *existing = finding;
+                }
+            })
+            .or_insert(finding);
     }
 
     let mut rules: Vec<SarifRule> = rules_map
@@ -125,7 +132,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
         .collect();
 
     let summary =
-        FindingSummary::from_findings_and_graph(&generator.findings, &generator.artifact_graph);
+        FindingSummary::from_findings_and_graph(generator.findings(), generator.artifact_graph());
     if !summary.action_triggers.is_empty() {
         rules.push(SarifRule {
             id: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
@@ -148,21 +155,21 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
         });
     }
 
-    let verdict_report = generator.verdict_report.clone().unwrap_or_else(|| {
-        let sarif_skill_path = std::path::Path::new(&generator.skill_path);
+    let verdict_report = generator.verdict_report().cloned().unwrap_or_else(|| {
+        let sarif_skill_path = std::path::Path::new(generator.skill_path());
         let (primary_findings, supporting_findings) = crate::findings::split_findings_by_scope(
             sarif_skill_path,
-            generator.primary_artifact_kind,
-            &generator.findings,
+            generator.primary_artifact_kind(),
+            generator.findings(),
         );
         let primary_summary =
-            FindingSummary::from_findings_and_graph(&primary_findings, &generator.artifact_graph);
+            FindingSummary::from_findings_and_graph(&primary_findings, generator.artifact_graph());
         let supporting_summary = FindingSummary::from_findings_and_graph(
             &supporting_findings,
-            &generator.artifact_graph,
+            generator.artifact_graph(),
         );
         derive_package_verdict(
-            &generator.findings,
+            generator.findings(),
             &primary_summary,
             &supporting_summary,
             &summary,
@@ -187,7 +194,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
     });
 
     let mut results: Vec<SarifResult> = generator
-        .findings
+        .findings()
         .iter()
         .map(|finding| SarifResult {
             rule_id: finding.rule_id.clone(),
@@ -201,7 +208,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
                         uri: finding
                             .artifact_path
                             .clone()
-                            .unwrap_or_else(|| generator.skill_path.clone()),
+                            .unwrap_or_else(|| generator.skill_path().to_string()),
                     },
                     region: finding
                         .line_number
@@ -232,7 +239,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
         locations: vec![SarifLocation {
             physical_location: SarifPhysicalLocation {
                 artifact_location: SarifArtifactLocation {
-                    uri: generator.skill_path.clone(),
+                    uri: generator.skill_path().to_string(),
                 },
                 region: None,
             },
@@ -257,7 +264,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
         locations: vec![SarifLocation {
             physical_location: SarifPhysicalLocation {
                 artifact_location: SarifArtifactLocation {
-                    uri: generator.skill_path.clone(),
+                    uri: generator.skill_path().to_string(),
                 },
                 region: None,
             },
@@ -267,7 +274,7 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
             "verdict_reasons": verdict_report.verdict_reasons,
             "root_cause_groups": verdict_report.root_cause_groups,
             "top_risk_drivers": verdict_report.top_risk_drivers,
-            "heuristic_score": generator.heuristic_score,
+            "heuristic_score": generator.heuristic_score(),
             "artifact_scope": "package",
         })),
     });

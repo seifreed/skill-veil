@@ -17,9 +17,9 @@ pub(super) fn analyze(
         "requirements.txt" => service.analyze_requirements_txt(path, content, sibling_files),
         "pyproject.toml" => service.analyze_pyproject_toml(path, content, sibling_files),
         "cargo.toml" => service.analyze_cargo_toml(path, content, sibling_files),
-        "package-lock.json" => service.analyze_package_lock(path, content),
+        "package-lock.json" | "npm-shrinkwrap.json" => service.analyze_package_lock(path, content),
         "cargo.lock" => service.analyze_cargo_lock(path, content),
-        "poetry.lock" => service.analyze_poetry_lock(path, content),
+        "poetry.lock" | "pipfile.lock" => service.analyze_poetry_lock(path, content),
         "uv.lock" => service.analyze_uv_lock(path, content),
         "yarn.lock" => service.analyze_yarn_lock(path, content),
         "pnpm-lock.yaml" => service.analyze_pnpm_lock(path, content),
@@ -58,7 +58,13 @@ pub(super) fn infer_relations(
         "docker-compose.yml" | "docker-compose.yaml" => service.docker_compose_relations(content),
         "dockerfile" => service.dockerfile_relations(content),
         "package.json" => service.package_json_relations(content),
-        "package-lock.json" | "cargo.lock" | "poetry.lock" | "uv.lock" | "yarn.lock"
+        "package-lock.json"
+        | "npm-shrinkwrap.json"
+        | "cargo.lock"
+        | "poetry.lock"
+        | "pipfile.lock"
+        | "uv.lock"
+        | "yarn.lock"
         | "pnpm-lock.yaml" => service.lockfile_relations(content),
         "makefile" => service.makefile_relations(content),
         ".npmrc" => service.npmrc_relations(content),
@@ -88,6 +94,9 @@ pub(super) fn infer_capabilities(
         "docker-compose.yml" | "docker-compose.yaml" => {
             service.docker_compose_capabilities(content)
         }
+        "requirements.txt" => service.requirements_txt_capabilities(content),
+        "pyproject.toml" => service.pyproject_toml_capabilities(content),
+        "cargo.toml" => service.cargo_toml_capabilities(content),
         "makefile" => service.makefile_capabilities(content),
         ".npmrc" => service.npmrc_capabilities(content),
         "pip.conf" => service.pip_conf_capabilities(content),
@@ -97,7 +106,13 @@ pub(super) fn infer_capabilities(
         _ if is_prompt_pack_document(path) => {
             instructions::instruction_capabilities(service, content)
         }
-        "package-lock.json" | "cargo.lock" | "poetry.lock" | "uv.lock" | "yarn.lock"
+        "package-lock.json"
+        | "npm-shrinkwrap.json"
+        | "cargo.lock"
+        | "poetry.lock"
+        | "pipfile.lock"
+        | "uv.lock"
+        | "yarn.lock"
         | "pnpm-lock.yaml" => service.lockfile_capabilities(content),
         _ if looks_like_script(path) => service.script_capabilities(content),
         _ => Vec::new(),
@@ -125,11 +140,15 @@ pub(super) fn is_prompt_pack_document(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
         .is_some_and(|name| name.to_ascii_lowercase().ends_with(".prompt.md"))
-        || path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|value| value.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("prompts"))
+        || (path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("md"))
+            && path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|value| value.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("prompts")))
 }
 
 pub(super) fn looks_like_script(path: &Path) -> bool {
@@ -138,6 +157,6 @@ pub(super) fn looks_like_script(path: &Path) -> bool {
             .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("sh" | "bash" | "zsh" | "ps1" | "py" | "js" | "ts")
+        Some("sh" | "bash" | "zsh" | "ps1" | "py" | "js" | "ts" | "mjs" | "cjs" | "mts" | "cts")
     )
 }

@@ -30,13 +30,29 @@
 //!
 //! # Rule Independence
 //!
-//! Each calibration rule checks the group's **original** `strongest_action` (before
-//! any calibration modifications). This ensures rules are independent: an earlier
-//! downgrade cannot prevent a later rule from firing on the same group.
+//! Each calibration rule's **firing condition** checks the group's original state
+//! (via snapshotted `original_signal_class`), so earlier downgrades cannot prevent
+//! a later rule from firing on the same group. However, the **effect measurement**
+//! (`changed_from_previous`) compares against the action before *that specific rule*
+//! (not the original), which is intentional to avoid double-counting risk adjustments
+//! when multiple rules apply to the same group.
 
 use crate::findings::{
     Finding, RecommendedAction, RootCauseGroup, SignalClass, ThreatCategory, VerdictCalibrationNote,
 };
+
+/// Rule IDs that verdict calibration may downgrade or reclassify.
+///
+/// This is the single source of truth used by both calibration logic and the
+/// compound verdict detector in `verdict.rs` to guard against accidentally
+/// checking a calibrated rule's raw finding action.
+pub(crate) const CALIBRATED_RULE_IDS: &[&str] = &[
+    "DECLARED_PERMISSION_NETWORK_ACCESS",
+    "CAPABILITY_PERMISSION_MISMATCH",
+    "INTERNAL_NETWORK_ACCESS",
+    "MCP_NO_AUTH_MODEL",
+    "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct VerdictCalibration {
@@ -100,8 +116,8 @@ pub(crate) fn calibrate_verdict_inputs(
         .map(|group| (group.strongest_action, group.signal_class))
         .collect();
 
-    // Check findings directly instead of representative_rules (which is truncated to 5
-    // entries and could exclude calibration-relevant rules).
+    // Check findings directly instead of representative_rules (which is truncated to
+    // MAX_REPRESENTATIVE_RULES entries and could exclude calibration-relevant rules).
     let group_has_rule =
         |group: &RootCauseGroup, original_signal_class: SignalClass, rule_id: &str| -> bool {
             findings.iter().any(|f| {
@@ -131,8 +147,7 @@ pub(crate) fn calibrate_verdict_inputs(
         groups.iter().map(|g| g.strongest_action).collect();
 
     for (i, group) in groups.iter_mut().enumerate() {
-        let (original_action, original_signal_class) = original_snapshots[i];
-        pre_rule_actions[i] = original_action;
+        let original_signal_class = original_snapshots[i].1;
 
         if group_has_rule(
             group,
@@ -141,14 +156,15 @@ pub(crate) fn calibrate_verdict_inputs(
         ) && !has_stronger_behavior
         {
             accumulated_exclusions[i].push("DECLARED_PERMISSION_NETWORK_ACCESS");
-            group.strongest_action = recalculate_group_action_excluding(
+            let (new_action, remaining_count) = recalculate_group_action_excluding(
                 findings,
                 group,
                 original_signal_class,
                 &accumulated_exclusions[i],
             );
-            let changed_from_previous =
-                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            group.strongest_action = new_action;
+            group.finding_count = remaining_count;
+            let changed_from_previous = group.strongest_action < pre_rule_actions[i];
             if changed_from_previous {
                 risk_adjustment -= 10;
             }
@@ -171,14 +187,15 @@ pub(crate) fn calibrate_verdict_inputs(
         ) && !has_stronger_behavior
         {
             accumulated_exclusions[i].push("CAPABILITY_PERMISSION_MISMATCH");
-            group.strongest_action = recalculate_group_action_excluding(
+            let (new_action, remaining_count) = recalculate_group_action_excluding(
                 findings,
                 group,
                 original_signal_class,
                 &accumulated_exclusions[i],
             );
-            let changed_from_previous =
-                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            group.strongest_action = new_action;
+            group.finding_count = remaining_count;
+            let changed_from_previous = group.strongest_action < pre_rule_actions[i];
             if changed_from_previous {
                 risk_adjustment -= 8;
             }
@@ -198,17 +215,23 @@ pub(crate) fn calibrate_verdict_inputs(
             && !has_network_chain
         {
             accumulated_exclusions[i].push("INTERNAL_NETWORK_ACCESS");
-            group.strongest_action = recalculate_group_action_excluding(
+            let (new_action, remaining_count) = recalculate_group_action_excluding(
                 findings,
                 group,
                 original_signal_class,
                 &accumulated_exclusions[i],
             );
-            let changed_from_previous =
-                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            group.strongest_action = new_action;
+            group.finding_count = remaining_count;
+            let changed_from_previous = group.strongest_action < pre_rule_actions[i];
             if changed_from_previous {
                 risk_adjustment -= 12;
             }
+            // Reclassify to ReviewSignal so that verdict.rs does not treat an
+            // isolated internal-network finding as MaliciousBehavior or
+            // SuspiciousPackageBehavior. This is safe because the calibration
+            // condition already confirmed no network-chain evidence exists —
+            // true positives always have corroborating chain rules.
             if changed_from_previous || group.strongest_action == RecommendedAction::Log {
                 group.signal_class = SignalClass::ReviewSignal;
             }
@@ -227,14 +250,15 @@ pub(crate) fn calibrate_verdict_inputs(
         if group_has_mcp_no_auth_rule(group, original_signal_class) && !has_remote_mcp_exec_pair {
             accumulated_exclusions[i]
                 .extend_from_slice(&["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"]);
-            group.strongest_action = recalculate_group_action_excluding(
+            let (new_action, remaining_count) = recalculate_group_action_excluding(
                 findings,
                 group,
                 original_signal_class,
                 &accumulated_exclusions[i],
             );
-            let changed_from_previous =
-                group.strongest_action.priority() < pre_rule_actions[i].priority();
+            group.strongest_action = new_action;
+            group.finding_count = remaining_count;
+            let changed_from_previous = group.strongest_action < pre_rule_actions[i];
             if changed_from_previous {
                 risk_adjustment -= 6;
             }
@@ -254,6 +278,11 @@ pub(crate) fn calibrate_verdict_inputs(
         }
     }
 
+    // Remove groups that lost all their findings during calibration.
+    // These phantom groups would otherwise inflate root_cause_groups counts
+    // and produce confusing "0 finding(s)" entries in verdict reasons.
+    groups.retain(|g| g.finding_count > 0);
+
     dedup_notes(&mut notes);
 
     VerdictCalibration {
@@ -264,16 +293,8 @@ pub(crate) fn calibrate_verdict_inputs(
 }
 
 fn is_permission_model_rule(rule_id: &str) -> bool {
-    matches!(
-        rule_id,
-        "DECLARED_PERMISSION_NETWORK_ACCESS"
-            | "DECLARED_PERMISSION_BROWSER_FULL"
-            | "DECLARED_PERMISSION_FILE_WRITE"
-            | "DECLARED_PERMISSION_SHELL_EXEC"
-            | "DECLARED_PERMISSION_SECRETS_ACCESS"
-            | "DECLARED_PERMISSION_OAUTH_SCOPES"
-            | "CAPABILITY_PERMISSION_MISMATCH"
-    )
+    crate::findings::is_declared_permission_rule(rule_id)
+        || rule_id == "CAPABILITY_PERMISSION_MISMATCH"
 }
 
 fn is_mcp_no_auth_rule(rule_id: &str) -> bool {
@@ -283,15 +304,16 @@ fn is_mcp_no_auth_rule(rule_id: &str) -> bool {
     )
 }
 
-/// Recalculate a group's strongest action from findings that are NOT in the excluded set.
+/// Recalculate a group's strongest action and remaining finding count from findings
+/// that are NOT in the excluded set.
 /// This prevents calibration of one rule from silencing other legitimate rules in the same group.
 fn recalculate_group_action_excluding(
     findings: &[Finding],
     group: &RootCauseGroup,
     original_signal_class: SignalClass,
     excluded_rule_ids: &[&str],
-) -> RecommendedAction {
-    findings
+) -> (RecommendedAction, usize) {
+    let remaining: Vec<_> = findings
         .iter()
         .filter(|f| {
             f.artifact_scope == group.scope
@@ -299,9 +321,11 @@ fn recalculate_group_action_excluding(
                 && f.signal_class == original_signal_class
                 && !excluded_rule_ids.contains(&f.rule_id.as_str())
         })
-        .fold(RecommendedAction::Log, |acc, f| {
-            RecommendedAction::max(acc, f.recommended_action)
-        })
+        .collect();
+    let action = remaining.iter().fold(RecommendedAction::Log, |acc, f| {
+        acc.max(f.recommended_action)
+    });
+    (action, remaining.len())
 }
 
 fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
@@ -315,4 +339,92 @@ fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
     notes.dedup_by(|a, b| {
         a.rule_id == b.rule_id && a.effect == b.effect && a.rationale == b.rationale
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Ensure CALIBRATED_RULE_IDS stays in sync with the rules that
+    /// calibration actually checks. Every rule referenced by
+    /// `is_permission_model_rule` that has its own calibration branch,
+    /// `is_mcp_no_auth_rule`, and directly named rules must appear.
+    #[test]
+    fn calibrated_rule_ids_covers_all_calibration_targets() {
+        // Rules that have explicit calibration branches in calibrate_verdict_inputs
+        let expected: &[&str] = &[
+            "DECLARED_PERMISSION_NETWORK_ACCESS",
+            "CAPABILITY_PERMISSION_MISMATCH",
+            "INTERNAL_NETWORK_ACCESS",
+            "MCP_NO_AUTH_MODEL",
+            "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT",
+        ];
+
+        for rule_id in expected {
+            assert!(
+                CALIBRATED_RULE_IDS.contains(rule_id),
+                "Calibration target rule '{rule_id}' is missing from CALIBRATED_RULE_IDS. \
+                 Add it to the constant in verdict_calibration.rs."
+            );
+        }
+
+        for rule_id in CALIBRATED_RULE_IDS {
+            assert!(
+                expected.contains(rule_id),
+                "CALIBRATED_RULE_IDS contains '{rule_id}' which is not a known calibration target. \
+                 Either add a calibration branch or remove it from the constant."
+            );
+        }
+    }
+
+    #[test]
+    fn calibration_updates_finding_count_when_excluding_rules() {
+        use crate::findings::{
+            ArtifactScope, Finding, MatchTarget, RootCauseGroup, Severity, ThreatCategory,
+        };
+
+        // Two findings in the same group, both DECLARED_PERMISSION_NETWORK_ACCESS
+        let findings = vec![
+            Finding::builder(
+                "DECLARED_PERMISSION_NETWORK_ACCESS",
+                ThreatCategory::DataExfiltration,
+            )
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .signal_class(SignalClass::SuspiciousPackageBehavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("network access")
+            .reason("declared network")
+            .build(),
+            Finding::builder(
+                "DECLARED_PERMISSION_NETWORK_ACCESS",
+                ThreatCategory::DataExfiltration,
+            )
+            .severity(Severity::Low)
+            .action(RecommendedAction::Log)
+            .signal_class(SignalClass::SuspiciousPackageBehavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("another network ref")
+            .reason("declared network 2")
+            .build(),
+        ];
+
+        let root_cause_groups = vec![RootCauseGroup {
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::DataExfiltration,
+            signal_class: SignalClass::SuspiciousPackageBehavior,
+            finding_count: 2,
+            strongest_action: RecommendedAction::RequireApproval,
+            representative_rules: vec!["DECLARED_PERMISSION_NETWORK_ACCESS".to_string()],
+        }];
+
+        let result = calibrate_verdict_inputs(&findings, &root_cause_groups);
+
+        // Both findings were excluded by the DECLARED_PERMISSION_NETWORK_ACCESS rule,
+        // so the group is removed entirely (phantom groups with 0 findings are pruned).
+        assert!(
+            result.root_cause_groups.is_empty(),
+            "Groups with 0 remaining findings should be pruned"
+        );
+    }
 }

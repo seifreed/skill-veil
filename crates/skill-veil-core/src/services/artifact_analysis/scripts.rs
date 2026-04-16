@@ -4,6 +4,99 @@ use crate::findings::{
 use crate::services::ArtifactAnalysisService;
 use regex::Regex;
 use std::path::Path;
+use std::sync::LazyLock;
+
+static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "SCRIPT_REMOTE_BINARY_DOWNLOAD",
+            Regex::new(
+                "(?i)(curl|wget).*(\\.sh|\\.ps1|\\.py|\\.js|\\.exe|\\.pkg|\\.dmg|\\.deb|\\.rpm)",
+            )
+            .expect("valid regex: remote binary download"),
+        ),
+        (
+            "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
+            Regex::new("(?i)invoke-webrequest.+(\\.ps1|\\.exe|\\.zip)")
+                .expect("valid regex: powershell remote download"),
+        ),
+    ]
+});
+
+static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "SCRIPT_DEFERRED_EXECUTION",
+            Regex::new("(?i)(crontab|schtasks|at\\s+\\d|systemd-run|launchctl\\s+load)")
+                .expect("valid regex: deferred execution"),
+        ),
+        (
+            "SCRIPT_PERSISTENCE",
+            Regex::new("(?i)(/etc/cron|~/\\.config/autostart|launchagents|startup\\\\|runonce)")
+                .expect("valid regex: persistence"),
+        ),
+    ]
+});
+
+static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "COMMAND_INJECTION_SINK_SHELL",
+            Regex::new(r#"(?i)(bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*"#)
+                .expect("valid regex: shell command injection"),
+        ),
+        (
+            "UNSAFE_USER_CONTROLLED_EXEC_SHELL",
+            Regex::new(r#"(?i)(curl|wget)[^\n]{0,180}(\$[1-9]|\$\{?[A-Za-z_]*(INPUT|USER_INPUT|CMD|COMMAND|ARGS?|REQUEST_URL|TARGET_URL)\}?)"#)
+                .expect("valid regex: shell unsafe user exec"),
+        ),
+    ]
+});
+
+static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "COMMAND_INJECTION_SINK_PYTHON",
+            Regex::new(r#"(?i)subprocess\.(run|popen|call)\([^)]*shell\s*=\s*true"#)
+                .expect("valid regex: python command injection"),
+        ),
+        (
+            "UNSAFE_USER_CONTROLLED_EXEC_PYTHON",
+            Regex::new(r#"(?i)os\.system\(f?["'][^"']*\{[A-Za-z_][A-Za-z0-9_]*\}"#)
+                .expect("valid regex: python unsafe user exec"),
+        ),
+    ]
+});
+
+static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "COMMAND_INJECTION_SINK_NODE",
+            Regex::new(r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)"#)
+                .expect("valid regex: node command injection"),
+        ),
+        (
+            "UNSAFE_USER_CONTROLLED_EXEC_NODE",
+            Regex::new(r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input)"#)
+                .expect("valid regex: node unsafe user exec"),
+        ),
+    ]
+});
+
+static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    vec![
+        (
+            "COMMAND_INJECTION_SINK_POWERSHELL",
+            Regex::new(r#"(?i)invoke-expression\s+\$[A-Za-z_][A-Za-z0-9_]*"#)
+                .expect("valid regex: powershell command injection"),
+        ),
+        (
+            "UNSAFE_USER_CONTROLLED_EXEC_POWERSHELL",
+            Regex::new(r#"(?i)start-process\s+\$[A-Za-z_][A-Za-z0-9_]*"#)
+                .expect("valid regex: powershell unsafe user exec"),
+        ),
+    ]
+});
 
 pub(crate) fn analyze_script(
     artifact_analysis: &ArtifactAnalysisService,
@@ -19,21 +112,10 @@ pub(crate) fn analyze_script(
     let lower = content.to_ascii_lowercase();
     let mut findings = Vec::new();
 
-    let remote_binary_patterns = [
-        (
-            "SCRIPT_REMOTE_BINARY_DOWNLOAD",
-            "(?i)(curl|wget).*(\\.sh|\\.ps1|\\.py|\\.js|\\.exe|\\.pkg|\\.dmg|\\.deb|\\.rpm)",
-        ),
-        (
-            "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
-            "(?i)invoke-webrequest.+(\\.ps1|\\.exe|\\.zip)",
-        ),
-    ];
-    for (rule_id, pattern) in remote_binary_patterns {
-        let regex = Regex::new(pattern).expect("valid regex");
+    for (rule_id, regex) in REMOTE_BINARY_PATTERNS.iter() {
         for matched in regex.find_iter(content) {
             findings.push(
-                Finding::builder(rule_id, ThreatCategory::SupplyChain)
+                Finding::builder(*rule_id, ThreatCategory::SupplyChain)
                     .severity(Severity::High)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Behavior)
@@ -51,21 +133,10 @@ pub(crate) fn analyze_script(
         }
     }
 
-    let deferred_patterns = [
-        (
-            "SCRIPT_DEFERRED_EXECUTION",
-            "(?i)(crontab|schtasks|at\\s+\\d|systemd-run|launchctl\\s+load)",
-        ),
-        (
-            "SCRIPT_PERSISTENCE",
-            "(?i)(/etc/cron|~/\\.config/autostart|launchagents|startup\\\\|runonce)",
-        ),
-    ];
-    for (rule_id, pattern) in deferred_patterns {
-        let regex = Regex::new(pattern).expect("valid regex");
+    for (rule_id, regex) in DEFERRED_PATTERNS.iter() {
         for matched in regex.find_iter(content) {
             findings.push(
-                Finding::builder(rule_id, ThreatCategory::PrivilegeEscalation)
+                Finding::builder(*rule_id, ThreatCategory::PrivilegeEscalation)
                     .severity(Severity::Medium)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Behavior)
@@ -83,8 +154,10 @@ pub(crate) fn analyze_script(
         }
     }
 
-    if matches!(language.as_str(), "js" | "ts")
-        && (lower.contains("child_process") || lower.contains("exec(") || lower.contains("spawn("))
+    if matches!(
+        language.as_str(),
+        "js" | "ts" | "mjs" | "cjs" | "mts" | "cts"
+    ) && (lower.contains("child_process") || lower.contains("exec(") || lower.contains("spawn("))
     {
         let risky_process_exec = [
             "curl ",
@@ -133,27 +206,47 @@ pub(crate) fn analyze_script(
         );
     }
 
-    if language == "py"
-        && (lower.contains("subprocess.")
-            || lower.contains("os.system(")
-            || lower.contains("requests.get("))
-    {
-        findings.push(
-            Finding::builder("SCRIPT_PYTHON_EXEC_NETWORK", ThreatCategory::RemoteExec)
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Behavior)
-                .artifact(
-                    ArtifactKind::ReferencedArtifact,
-                    Some(artifact_path.clone()),
-                )
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value("subprocess/requests")
-                .reason("Python script combines execution or network primitives")
-                .build(),
-        );
+    if language == "py" {
+        let has_exec = lower.contains("subprocess.") || lower.contains("os.system(");
+        let has_network = lower.contains("requests.get(")
+            || lower.contains("requests.post(")
+            || lower.contains("urllib.request")
+            || lower.contains("httpx.");
+        if has_exec && has_network {
+            findings.push(
+                Finding::builder("SCRIPT_PYTHON_EXEC_NETWORK", ThreatCategory::RemoteExec)
+                    .severity(Severity::Medium)
+                    .action(RecommendedAction::RequireApproval)
+                    .evidence_kind(EvidenceKind::Behavior)
+                    .artifact(
+                        ArtifactKind::ReferencedArtifact,
+                        Some(artifact_path.clone()),
+                    )
+                    .matched_on(MatchTarget::ReferencedFile {
+                        path: artifact_path.clone(),
+                    })
+                    .match_value("subprocess+network")
+                    .reason("Python script combines execution and network primitives")
+                    .build(),
+            );
+        } else if has_exec {
+            findings.push(
+                Finding::builder("SCRIPT_PYTHON_EXEC", ThreatCategory::RemoteExec)
+                    .severity(Severity::Low)
+                    .action(RecommendedAction::Log)
+                    .evidence_kind(EvidenceKind::Context)
+                    .artifact(
+                        ArtifactKind::ReferencedArtifact,
+                        Some(artifact_path.clone()),
+                    )
+                    .matched_on(MatchTarget::ReferencedFile {
+                        path: artifact_path.clone(),
+                    })
+                    .match_value("subprocess")
+                    .reason("Python script uses execution primitives")
+                    .build(),
+            );
+        }
     }
 
     if language == "py"
@@ -261,7 +354,9 @@ pub(crate) fn analyze_script(
     if matches!(language.as_str(), "sh" | "bash" | "zsh")
         && (lower.contains("> /etc/")
             || lower.contains("tee /etc/")
-            || lower.contains("echo ") && lower.contains(">> ~/."))
+            || lower
+                .lines()
+                .any(|line| line.contains("echo ") && line.contains(">> ~/.")))
     {
         findings.push(
             Finding::builder(
@@ -284,16 +379,18 @@ pub(crate) fn analyze_script(
         );
     }
 
-    if matches!(language.as_str(), "js" | "ts")
-        && ((lower.contains("process.env")
-            && (lower.contains("token")
-                || lower.contains("secret")
-                || lower.contains("cookie")
-                || lower.contains("session")
-                || lower.contains("auth")))
-            || lower.contains("fs.readfilesync(process.env")
-            || lower.contains("fs.readfilesync(\"/etc/")
-            || lower.contains("fs.readfilesync('/etc/"))
+    if matches!(
+        language.as_str(),
+        "js" | "ts" | "mjs" | "cjs" | "mts" | "cts"
+    ) && ((lower.contains("process.env")
+        && (lower.contains("token")
+            || lower.contains("secret")
+            || lower.contains("cookie")
+            || lower.contains("session")
+            || lower.contains("auth")))
+        || lower.contains("fs.readfilesync(process.env")
+        || lower.contains("fs.readfilesync(\"/etc/")
+        || lower.contains("fs.readfilesync('/etc/"))
     {
         findings.push(
             Finding::builder(
@@ -316,56 +413,14 @@ pub(crate) fn analyze_script(
         );
     }
 
-    let shell_injection_patterns = [
-        (
-            "COMMAND_INJECTION_SINK_SHELL",
-            r#"(?i)(bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*"#,
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_SHELL",
-            r#"(?i)(curl|wget)[^\n]{0,180}(\$[1-9]|\$\{?[A-Za-z_]*(INPUT|USER_INPUT|CMD|COMMAND|ARGS?|REQUEST_URL|TARGET_URL)\}?)"#,
-        ),
-    ];
-    let python_injection_patterns = [
-        (
-            "COMMAND_INJECTION_SINK_PYTHON",
-            r#"(?i)subprocess\.(run|popen|call)\([^)]*shell\s*=\s*true"#,
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_PYTHON",
-            r#"(?i)os\.system\(f?["'][^"']*\{[A-Za-z_][A-Za-z0-9_]*\}"#,
-        ),
-    ];
-    let node_injection_patterns = [
-        (
-            "COMMAND_INJECTION_SINK_NODE",
-            r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)"#,
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_NODE",
-            r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input)"#,
-        ),
-    ];
-    let powershell_injection_patterns = [
-        (
-            "COMMAND_INJECTION_SINK_POWERSHELL",
-            r#"(?i)invoke-expression\s+\$[A-Za-z_][A-Za-z0-9_]*"#,
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_POWERSHELL",
-            r#"(?i)start-process\s+\$[A-Za-z_][A-Za-z0-9_]*"#,
-        ),
-    ];
-
-    let patterns = match language.as_str() {
-        "sh" | "bash" | "zsh" => &shell_injection_patterns[..],
-        "py" => &python_injection_patterns[..],
-        "js" | "ts" => &node_injection_patterns[..],
-        "ps1" => &powershell_injection_patterns[..],
-        _ => &[][..],
+    let patterns: &[(&str, Regex)] = match language.as_str() {
+        "sh" | "bash" | "zsh" => &SHELL_INJECTION_PATTERNS,
+        "py" => &PYTHON_INJECTION_PATTERNS,
+        "js" | "ts" | "mjs" | "cjs" | "mts" | "cts" => &NODE_INJECTION_PATTERNS,
+        "ps1" => &POWERSHELL_INJECTION_PATTERNS,
+        _ => &[],
     };
-    for (rule_id, pattern) in patterns {
-        let regex = Regex::new(pattern).expect("valid regex");
+    for (rule_id, regex) in patterns {
         for matched in regex.find_iter(content) {
             findings.push(
                 Finding::builder(*rule_id, ThreatCategory::RemoteExec)

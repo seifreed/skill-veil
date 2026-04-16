@@ -35,6 +35,15 @@ impl MarkdownParser for PulldownMarkdownParser {
                         section.content = current_content.trim().to_string();
                         section.code_blocks = code_blocks.clone();
                         sections.push(section);
+                    } else if !current_content.trim().is_empty() || !code_blocks.is_empty() {
+                        // Preserve pre-heading content as a preamble section so
+                        // code blocks before the first heading are not discarded.
+                        sections.push(Section {
+                            name: String::new(),
+                            level: 0,
+                            content: current_content.trim().to_string(),
+                            code_blocks: code_blocks.clone(),
+                        });
                     }
                     current_content.clear();
                     code_blocks.clear();

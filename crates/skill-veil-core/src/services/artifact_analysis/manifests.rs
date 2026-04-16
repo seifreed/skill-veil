@@ -21,6 +21,12 @@ pub(super) fn analyze_package_json(
     let mut findings = Vec::new();
     let artifact_path = path.display().to_string();
 
+    // Suppress unpinned dep findings when a lockfile exists, since the
+    // lockfile pins exact versions regardless of the version specifier.
+    let has_lockfile = package_json_expected_lockfiles(content)
+        .iter()
+        .any(|lockfile| sibling_has_file(sibling_files, lockfile));
+
     for dependency_field in ["dependencies", "devDependencies", "optionalDependencies"] {
         let Some(dependencies) = json.get(dependency_field).and_then(Value::as_object) else {
             continue;
@@ -31,10 +37,11 @@ pub(super) fn analyze_package_json(
                 continue;
             };
 
-            if version_str.starts_with('^')
-                || version_str.starts_with('~')
-                || version_str == "latest"
-                || version_str == "*"
+            if !has_lockfile
+                && (version_str.starts_with('^')
+                    || version_str.starts_with('~')
+                    || version_str == "latest"
+                    || version_str == "*")
             {
                 findings.push(
                     Finding::builder(
@@ -153,7 +160,7 @@ pub(super) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
         .filter(|line| !line.starts_with("-r ") && !line.starts_with("--requirement"))
         .filter(|line| !line.starts_with("git+") && !line.starts_with("http"))
         .filter(|line| !line.starts_with("-c ") && !line.starts_with("--"))
-        .filter(|line| !line.contains("=="))
+        .filter(|line| !line.contains("==") && !line.contains("~=") && !line.contains("!="))
         .map(|line| {
             Finding::builder(
                 "MANIFEST_REQUIREMENTS_UNPINNED_DEP",
@@ -218,14 +225,15 @@ pub(super) fn analyze_pyproject_toml(
         .and_then(TomlValue::as_array)
     {
         for dependency in dependencies.iter().filter_map(TomlValue::as_str) {
-            if !(dependency.contains("==") || dependency.contains("@")) {
+            if !(dependency.contains("==") || dependency.contains("~=") || dependency.contains("@"))
+            {
                 findings.push(
                     Finding::builder(
                         "MANIFEST_PYPROJECT_UNPINNED_DEP",
                         ThreatCategory::SupplyChain,
                     )
                     .severity(Severity::Low)
-                    .action(RecommendedAction::RequireApproval)
+                    .action(RecommendedAction::Log)
                     .evidence_kind(EvidenceKind::Context)
                     .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .matched_on(MatchTarget::ReferencedFile {
@@ -266,34 +274,17 @@ pub(super) fn analyze_cargo_toml(
     let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
 
-    if let Some(dependencies) = toml.get("dependencies").and_then(TomlValue::as_table) {
-        for (name, dependency) in dependencies {
-            let version = match dependency {
-                TomlValue::String(version) => Some(version.as_str()),
-                TomlValue::Table(table) => table.get("version").and_then(TomlValue::as_str),
-                _ => None,
-            };
+    // Suppress unpinned dep findings when Cargo.lock exists, since the
+    // lockfile pins exact versions. In Cargo, `^` is the default operator.
+    let has_lockfile = sibling_has_file(sibling_files, "Cargo.lock");
 
-            if let Some(version) = version {
-                if version.starts_with('^') || version.starts_with('~') || version == "*" {
-                    findings.push(
-                        Finding::builder(
-                            "MANIFEST_CARGO_UNPINNED_DEP",
-                            ThreatCategory::SupplyChain,
-                        )
-                        .severity(Severity::Low)
-                        .action(RecommendedAction::RequireApproval)
-                        .evidence_kind(EvidenceKind::Context)
-                        .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                        .matched_on(MatchTarget::ReferencedFile {
-                            path: artifact_path.clone(),
-                        })
-                        .match_value(format!("{name} = {version}"))
-                        .reason("Cargo dependency is not strictly pinned")
-                        .build(),
-                    );
-                }
-            }
+    if !has_lockfile {
+        if let Some(dependencies) = toml.get("dependencies").and_then(TomlValue::as_table) {
+            findings.extend(
+                dependencies.iter().filter_map(|(name, dep)| {
+                    cargo_unpinned_dep_finding(name, dep, &artifact_path)
+                }),
+            );
         }
     }
 
@@ -380,8 +371,12 @@ pub(super) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
         {
             for volume in volumes.iter().filter_map(serde_yaml::Value::as_str) {
                 if volume.starts_with("/:")
-                    || volume.starts_with("/:/")
                     || volume.contains(":/host")
+                    || volume.starts_with("/var/run/docker.sock:")
+                    || volume.starts_with("/etc/")
+                    || volume.starts_with("/root")
+                    || volume.starts_with("/proc")
+                    || volume.starts_with("/sys")
                     || (volume.starts_with('/') && volume.contains(":/"))
                 {
                     findings.push(
@@ -456,7 +451,7 @@ pub(super) fn analyze_makefile(path: &Path, content: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for line in content.lines().map(str::trim) {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("curl ") || lower.contains("wget ") {
+        if !lower.starts_with('#') && (lower.contains("curl ") || lower.contains("wget ")) {
             findings.push(
                 Finding::builder(
                     "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD",
@@ -653,29 +648,49 @@ pub(super) fn pyproject_expected_lockfiles(content: &str) -> Vec<&'static str> {
 }
 
 pub(super) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
-    let mut capabilities = Vec::new();
-    let lower = content.to_ascii_lowercase();
+    let mut has_expose = false;
+    let mut has_run = false;
+    let mut has_copy_or_add = false;
+    let mut has_network_download = false;
 
-    if lower.contains(" expose ")
-        || lower
-            .lines()
-            .any(|line| line.trim_start().starts_with("expose "))
-    {
+    for line in content.lines() {
+        let trimmed = line.trim_start().to_ascii_lowercase();
+        if !has_expose && (trimmed.starts_with("expose ") || trimmed == "expose") {
+            has_expose = true;
+        }
+        if !has_run && trimmed.starts_with("run ") {
+            has_run = true;
+        }
+        if !has_copy_or_add && (trimmed.starts_with("copy ") || trimmed.starts_with("add ")) {
+            has_copy_or_add = true;
+        }
+        if !has_network_download
+            && !trimmed.starts_with('#')
+            && (trimmed.contains("curl ")
+                || trimmed.contains("wget ")
+                || trimmed.contains("invoke-webrequest"))
+        {
+            has_network_download = true;
+        }
+    }
+
+    let mut capabilities = Vec::new();
+    if has_expose {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
-    if lower.contains("curl ") || lower.contains("wget ") || lower.contains("invoke-webrequest") {
+    if has_network_download {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
-    if lower.contains("run ") {
+    if has_run {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }
-    if lower.contains(" copy ") || lower.contains(" add ") {
+    if has_copy_or_add {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::FilesystemWrite,
         ));
@@ -773,18 +788,32 @@ pub(super) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
 }
 
 pub(super) fn makefile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
-    let lower = content.to_ascii_lowercase();
+    let mut has_network = false;
+    let mut has_exec = false;
+    for line in content.lines() {
+        let lower = line.trim_start().to_ascii_lowercase();
+        if lower.starts_with('#') {
+            continue;
+        }
+        if !has_network && (lower.contains("curl ") || lower.contains("wget ")) {
+            has_network = true;
+        }
+        if !has_exec
+            && (lower.contains("bash ")
+                || lower.contains("python ")
+                || lower.contains("node ")
+                || lower.contains("sh "))
+        {
+            has_exec = true;
+        }
+    }
     let mut capabilities = Vec::new();
-    if lower.contains("curl ") || lower.contains("wget ") {
+    if has_network {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
-    if lower.contains("bash ")
-        || lower.contains("python ")
-        || lower.contains("node ")
-        || lower.contains("sh ")
-    {
+    if has_exec {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::ProcessExecution,
         ));
@@ -824,6 +853,143 @@ pub(super) fn pip_conf_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     capabilities
 }
 
+pub(super) fn requirements_txt_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
+    let mut capabilities = Vec::new();
+    let network_deps = [
+        "requests",
+        "httpx",
+        "aiohttp",
+        "urllib3",
+        "paramiko",
+        "grpcio",
+        "websockets",
+        "tornado",
+    ];
+    let exec_deps = ["subprocess32", "pexpect", "fabric", "invoke"];
+
+    for line in content.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let dep_name = line
+            .split(['=', '>', '<', '~', '[', ';'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if network_deps.iter().any(|d| dep_name == *d) {
+            capabilities.push(ArtifactAnalysisService::observed_capability(
+                ArtifactCapability::NetworkAccess,
+            ));
+        }
+        if exec_deps.iter().any(|d| dep_name == *d) {
+            capabilities.push(ArtifactAnalysisService::observed_capability(
+                ArtifactCapability::ProcessExecution,
+            ));
+        }
+    }
+    capabilities.dedup_by_key(|c| c.capability);
+    capabilities
+}
+
+pub(super) fn pyproject_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
+    let Ok(toml) = content.parse::<TomlValue>() else {
+        return Vec::new();
+    };
+
+    let mut dep_strings = Vec::new();
+    if let Some(deps) = toml
+        .get("project")
+        .and_then(|p| p.get("dependencies"))
+        .and_then(TomlValue::as_array)
+    {
+        dep_strings.extend(deps.iter().filter_map(TomlValue::as_str));
+    }
+    if let Some(deps) = toml
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("dependencies"))
+        .and_then(TomlValue::as_table)
+    {
+        dep_strings.extend(deps.keys().map(String::as_str));
+    }
+
+    let network_deps = [
+        "requests",
+        "httpx",
+        "aiohttp",
+        "urllib3",
+        "paramiko",
+        "grpcio",
+        "websockets",
+        "tornado",
+    ];
+    let exec_deps = ["subprocess32", "pexpect", "fabric", "invoke"];
+    let mut capabilities = Vec::new();
+
+    for dep in &dep_strings {
+        let dep_name = dep
+            .split(['=', '>', '<', '~', '[', ';'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if network_deps.iter().any(|d| dep_name == *d) {
+            capabilities.push(ArtifactAnalysisService::observed_capability(
+                ArtifactCapability::NetworkAccess,
+            ));
+        }
+        if exec_deps.iter().any(|d| dep_name == *d) {
+            capabilities.push(ArtifactAnalysisService::observed_capability(
+                ArtifactCapability::ProcessExecution,
+            ));
+        }
+    }
+    capabilities.dedup_by_key(|c| c.capability);
+    capabilities
+}
+
+pub(super) fn cargo_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
+    let Ok(toml) = content.parse::<TomlValue>() else {
+        return Vec::new();
+    };
+
+    let mut dep_names = Vec::new();
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(deps) = toml.get(section).and_then(TomlValue::as_table) {
+            dep_names.extend(deps.keys().map(String::as_str));
+        }
+    }
+
+    let network_crates = [
+        "reqwest",
+        "hyper",
+        "surf",
+        "ureq",
+        "attohttpc",
+        "tonic",
+        "tarpc",
+    ];
+    let exec_crates = ["nix", "command-fds", "duct"];
+    let mut capabilities = Vec::new();
+
+    for dep in &dep_names {
+        let name = dep.to_ascii_lowercase();
+        if network_crates.iter().any(|d| name == *d) {
+            capabilities.push(ArtifactAnalysisService::observed_capability(
+                ArtifactCapability::NetworkAccess,
+            ));
+        }
+        if exec_crates.iter().any(|d| name == *d) {
+            capabilities.push(ArtifactAnalysisService::observed_capability(
+                ArtifactCapability::ProcessExecution,
+            ));
+        }
+    }
+    capabilities.dedup_by_key(|c| c.capability);
+    capabilities
+}
+
 pub(super) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
     let mut links = Vec::new();
     for line in content.lines().map(str::trim) {
@@ -834,7 +1000,7 @@ pub(super) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
                 relation: ArtifactRelation::Loads,
             });
         }
-        if lower.contains("curl ") || lower.contains("wget ") {
+        if !lower.starts_with('#') && (lower.contains("curl ") || lower.contains("wget ")) {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
                 relation: ArtifactRelation::Downloads,
@@ -842,6 +1008,41 @@ pub(super) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
         }
     }
     links
+}
+
+fn sibling_has_file(sibling_files: &[PathBuf], name: &str) -> bool {
+    sibling_files.iter().any(|f| {
+        f.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case(name))
+    })
+}
+
+fn cargo_unpinned_dep_finding(name: &str, dep: &TomlValue, artifact_path: &str) -> Option<Finding> {
+    let version = match dep {
+        TomlValue::String(v) => Some(v.as_str()),
+        TomlValue::Table(t) => t.get("version").and_then(TomlValue::as_str),
+        _ => None,
+    }?;
+    if !(version.starts_with('^') || version.starts_with('~') || version == "*") {
+        return None;
+    }
+    Some(
+        Finding::builder("MANIFEST_CARGO_UNPINNED_DEP", ThreatCategory::SupplyChain)
+            .severity(Severity::Low)
+            .action(RecommendedAction::Log)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(
+                ArtifactKind::PackageManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value(format!("{name} = {version}"))
+            .reason("Cargo dependency is not strictly pinned")
+            .build(),
+    )
 }
 
 pub(super) fn docker_compose_relations(content: &str) -> Vec<ArtifactLink> {
@@ -917,13 +1118,15 @@ pub(super) fn makefile_relations(content: &str) -> Vec<ArtifactLink> {
     let mut links = Vec::new();
     for line in content.lines().map(str::trim) {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("curl ") || lower.contains("wget ") {
+        if !lower.starts_with('#') && (lower.contains("curl ") || lower.contains("wget ")) {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
                 relation: ArtifactRelation::Downloads,
             });
         }
-        if lower.contains("bash ") || lower.contains("python ") || lower.contains("node ") {
+        if !lower.starts_with('#')
+            && (lower.contains("bash ") || lower.contains("python ") || lower.contains("node "))
+        {
             links.push(ArtifactLink {
                 target: line.to_string(),
                 relation: ArtifactRelation::Executes,

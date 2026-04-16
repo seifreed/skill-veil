@@ -5,6 +5,26 @@ use crate::findings::{
 use crate::services::ArtifactAnalysisService;
 use regex::Regex;
 use std::path::Path;
+use std::sync::LazyLock;
+
+static RE_REMOTE_ENDPOINT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("(?i)(https?://|wss?://)").expect("valid regex: remote endpoint"));
+static RE_EXEC_SURFACE_TRANSPORT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(command|stdio|args|transport)").expect("valid regex: exec surface transport")
+});
+static RE_EXEC_SURFACE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("(?i)(command|stdio|args)").expect("valid regex: exec surface"));
+static RE_IDENTITY_SCOPE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(oauth|scope|scopes|bearer|authorization)")
+        .expect("valid regex: identity scope")
+});
+static RE_AUTH_OR_APIKEY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(oauth|scope|authorization|bearer|api[_-]?key)")
+        .expect("valid regex: auth or api key")
+});
+static RE_IDENTITY_ACCESS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(oauth|scope|authorization|bearer)").expect("valid regex: identity access")
+});
 
 pub(crate) fn analyze_mcp_manifest(
     artifact_analysis: &ArtifactAnalysisService,
@@ -13,12 +33,8 @@ pub(crate) fn analyze_mcp_manifest(
 ) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
-    let has_remote_endpoint = Regex::new("(?i)(https?://|wss?://)")
-        .expect("valid regex")
-        .is_match(content);
-    let has_exec_surface = Regex::new("(?i)(command|stdio|args|transport)")
-        .expect("valid regex")
-        .is_match(content);
+    let has_remote_endpoint = RE_REMOTE_ENDPOINT.is_match(content);
+    let has_exec_surface = RE_EXEC_SURFACE_TRANSPORT.is_match(content);
 
     if has_remote_endpoint {
         findings.push(
@@ -130,10 +146,7 @@ pub(crate) fn analyze_mcp_manifest(
         ArtifactKind::McpServerManifest,
     ));
 
-    if Regex::new("(?i)(oauth|scope|scopes|bearer|authorization)")
-        .expect("valid regex")
-        .is_match(content)
-    {
+    if RE_IDENTITY_SCOPE.is_match(content) {
         findings.push(
             Finding::builder("MCP_BROAD_IDENTITY_SCOPE", ThreatCategory::ScopeCreep)
                 .severity(Severity::Medium)
@@ -179,19 +192,13 @@ pub(crate) fn mcp_manifest_relations(
 ) -> Vec<crate::services::artifact_analysis::ArtifactLink> {
     let mut links = artifact_analysis.generic_url_relations(content);
 
-    if Regex::new("(?i)(command|stdio|args)")
-        .expect("valid regex")
-        .is_match(content)
-    {
+    if RE_EXEC_SURFACE.is_match(content) {
         links.push(crate::services::artifact_analysis::ArtifactLink {
             target: "mcp-process-transport".to_string(),
             relation: ArtifactRelation::Executes,
         });
     }
-    if artifact_analysis.mcp_declares_inline_secret(content)
-        || Regex::new("(?i)(oauth|scope|authorization|bearer|api[_-]?key)")
-            .expect("valid regex")
-            .is_match(content)
+    if artifact_analysis.mcp_declares_inline_secret(content) || RE_AUTH_OR_APIKEY.is_match(content)
     {
         links.push(crate::services::artifact_analysis::ArtifactLink {
             target: "mcp-auth".to_string(),
@@ -213,26 +220,17 @@ pub(crate) fn mcp_manifest_capabilities(
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
-    if Regex::new("(?i)(command|stdio|args)")
-        .expect("valid regex")
-        .is_match(content)
-    {
+    if RE_EXEC_SURFACE.is_match(content) {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }
-    if Regex::new("(?i)(https?://|wss?://)")
-        .expect("valid regex")
-        .is_match(content)
-    {
+    if RE_REMOTE_ENDPOINT.is_match(content) {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
-    if Regex::new("(?i)(oauth|scope|authorization|bearer)")
-        .expect("valid regex")
-        .is_match(content)
-    {
+    if RE_IDENTITY_ACCESS.is_match(content) {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::IdentityAccess,
         ));

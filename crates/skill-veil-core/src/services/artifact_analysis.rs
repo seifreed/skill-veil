@@ -17,6 +17,36 @@ use crate::findings::{
 };
 use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+static RE_OPAQUE_MCP_ENDPOINT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        "(?i)(ngrok|trycloudflare|workers\\.dev|raw\\.githubusercontent\\.com|pastebin\\.com)",
+    )
+    .expect("valid regex: opaque MCP endpoint")
+});
+static RE_MCP_NO_AUTH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?is)(\"auth\"\\s*:\\s*\"none\"|authentication\\s*:\\s*none|no auth|without auth|auth\\s*:\\s*none)")
+        .expect("valid regex: MCP no auth")
+});
+static RE_MCP_INLINE_SECRET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?is)(bearer\\s+[A-Za-z0-9._-]{8,}|authorization\\s*:\\s*bearer|api[_-]?key|_authtoken=|token\\s*[:=]\\s*[A-Za-z0-9._-]{8,})")
+        .expect("valid regex: MCP inline secret")
+});
+static RE_MCP_PERMISSIVE_TOOLS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?is)(\"tools\"\\s*:\\s*\\[[^\\]]*\"\\*\"|allow_all_tools|all_tools|tool_permissions\\s*:\\s*\"all\"|expose all tools)")
+        .expect("valid regex: MCP permissive tools")
+});
+static RE_QUOTED_TOOL_NAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#""([A-Za-z0-9._:-]{2,})""#).expect("valid regex: quoted tool name")
+});
+static RE_MCP_TOOLS_ARRAY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?is)"tools"\s*:\s*\[([^\]]+)\]"#).expect("valid regex: MCP tools array")
+});
+static RE_GENERIC_URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"https?://[^\s"']+"#).expect("valid regex: generic URL"));
+static RE_SHELL_SOURCE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*\.\s+\S").expect("valid regex: shell source command"));
 
 fn extract_http_urls(content: &str) -> Vec<String> {
     network::extract_http_urls(content)
@@ -61,40 +91,28 @@ fn infer_declared_intent(content: &str) -> (&'static str, usize) {
 }
 
 fn is_opaque_mcp_endpoint(content: &str) -> bool {
-    Regex::new(
-        "(?i)(ngrok|trycloudflare|workers\\.dev|raw\\.githubusercontent\\.com|pastebin\\.com)",
-    )
-    .expect("valid regex")
-    .is_match(content)
+    RE_OPAQUE_MCP_ENDPOINT.is_match(content)
 }
 
 fn mcp_declares_no_auth(content: &str) -> bool {
-    Regex::new("(?is)(\"auth\"\\s*:\\s*\"none\"|authentication\\s*:\\s*none|no auth|without auth|auth\\s*:\\s*none)")
-        .expect("valid regex")
-        .is_match(content)
+    RE_MCP_NO_AUTH.is_match(content)
 }
 
 fn mcp_declares_inline_secret(content: &str) -> bool {
-    Regex::new("(?is)(bearer\\s+[A-Za-z0-9._-]{8,}|authorization\\s*:\\s*bearer|api[_-]?key|_authtoken=|token\\s*[:=]\\s*[A-Za-z0-9._-]{8,})")
-        .expect("valid regex")
-        .is_match(content)
+    RE_MCP_INLINE_SECRET.is_match(content)
 }
 
 fn mcp_declares_permissive_tools(content: &str) -> bool {
-    Regex::new("(?is)(\"tools\"\\s*:\\s*\\[[^\\]]*\"\\*\"|allow_all_tools|all_tools|tool_permissions\\s*:\\s*\"all\"|expose all tools)")
-        .expect("valid regex")
-        .is_match(content)
+    RE_MCP_PERMISSIVE_TOOLS.is_match(content)
 }
 
 fn extract_mcp_tool_names(content: &str) -> Vec<String> {
     let mut tools = Vec::new();
-    let quoted_tool = Regex::new(r#""([A-Za-z0-9._:-]{2,})""#).expect("valid regex");
-    if let Some(array_match) = Regex::new(r#"(?is)"tools"\s*:\s*\[([^\]]+)\]"#)
-        .expect("valid regex")
+    if let Some(array_match) = RE_MCP_TOOLS_ARRAY
         .captures(content)
         .and_then(|captures| captures.get(1))
     {
-        for capture in quoted_tool.captures_iter(array_match.as_str()) {
+        for capture in RE_QUOTED_TOOL_NAME.captures_iter(array_match.as_str()) {
             if let Some(name) = capture.get(1) {
                 let value = name.as_str().to_string();
                 if !tools.contains(&value) {
@@ -253,6 +271,18 @@ impl ArtifactAnalysisService {
         manifests::package_json_capabilities(content)
     }
 
+    fn requirements_txt_capabilities(&self, content: &str) -> Vec<ArtifactCapabilityFact> {
+        manifests::requirements_txt_capabilities(content)
+    }
+
+    fn pyproject_toml_capabilities(&self, content: &str) -> Vec<ArtifactCapabilityFact> {
+        manifests::pyproject_toml_capabilities(content)
+    }
+
+    fn cargo_toml_capabilities(&self, content: &str) -> Vec<ArtifactCapabilityFact> {
+        manifests::cargo_toml_capabilities(content)
+    }
+
     fn package_json_expected_lockfiles(&self, content: &str) -> Vec<&'static str> {
         manifests::package_json_expected_lockfiles(content)
     }
@@ -311,8 +341,13 @@ impl ArtifactAnalysisService {
             || lower.contains("os.environ")
             || lower.contains("getenv(")
             || lower.contains(".env")
-            || lower.contains("token")
-            || lower.contains("secret")
+            || lower.contains("access_token")
+            || lower.contains("api_token")
+            || lower.contains("auth_token")
+            || lower.contains("bearer_token")
+            || lower.contains("secret_key")
+            || lower.contains("client_secret")
+            || lower.contains("_authtoken")
         {
             capabilities.push(Self::observed_capability(ArtifactCapability::SecretAccess));
         }
@@ -413,9 +448,7 @@ impl ArtifactAnalysisService {
         if lower.contains("import ")
             || lower.contains("require(")
             || lower.contains("source ")
-            || regex::Regex::new(r"(?m)^\s*\.\s+\S")
-                .expect("valid regex")
-                .is_match(&lower)
+            || RE_SHELL_SOURCE.is_match(&lower)
         {
             links.push(ArtifactLink {
                 target: "runtime-module".to_string(),
@@ -533,8 +566,7 @@ impl ArtifactAnalysisService {
 
     pub(crate) fn generic_url_relations(&self, content: &str) -> Vec<ArtifactLink> {
         let mut links = Vec::new();
-        let regex = Regex::new(r#"https?://[^\s"']+"#).unwrap();
-        for matched in regex.find_iter(content) {
+        for matched in RE_GENERIC_URL.find_iter(content) {
             links.push(ArtifactLink {
                 target: matched.as_str().to_string(),
                 relation: ArtifactRelation::ConnectsTo,

@@ -1,8 +1,8 @@
-use crate::findings::{default_operational_contexts, Finding, OperationalContext};
-use crate::policy::{
+use super::{
     AppliedPolicyOverride, BaselineEntry, BaselineFile, DiffEntry, DiffReport, JsonReport,
     PolicyFile, PolicyOverride, WaiverEntry, WaiverFile, POLICY_SCHEMA_VERSION,
 };
+use crate::findings::{default_operational_contexts, Finding, OperationalContext, ThreatCategory};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -61,6 +61,10 @@ pub fn apply_baseline(findings: Vec<Finding>, baseline: Option<&BaselineFile>) -
 
 /// Count how many findings in the slice match a baseline entry.
 /// Used to compute accurate suppression counts independently of application order.
+///
+/// NOTE: This assumes `apply_baseline` performs simple removal of matched findings.
+/// If `apply_baseline` semantics change (e.g., to downgrade actions instead of removing),
+/// this function must be updated to match.
 #[must_use]
 pub fn count_baseline_matches(findings: &[Finding], baseline: Option<&BaselineFile>) -> usize {
     let Some(baseline) = baseline else {
@@ -132,6 +136,10 @@ pub fn apply_policy_overrides_with_audit(
             if let Some(policy_override) = selected {
                 let original_action = finding.recommended_action;
                 let fingerprint = finding_fingerprint(&finding);
+                // Policy overrides unconditionally replace the action, including
+                // escalation (e.g., Log → Block). This is intentional for enterprise
+                // use cases. The audit trail (AppliedPolicyOverride) records both
+                // original_action and effective_action for full visibility.
                 finding.recommended_action = policy_override.action;
                 audit.push(AppliedPolicyOverride {
                     finding_fingerprint: fingerprint,
@@ -297,15 +305,58 @@ pub fn diff_reports_with_policy_state(
         .filter(|(fingerprint, _)| !previous_map.contains_key(*fingerprint))
         .map(|(_, entry)| entry.clone())
         .collect();
+
+    // Helper: check if a DiffEntry's logical identity (rule_id + category + artifact_path)
+    // matches any entry in a list. Uses suffix-based paths_match for consistency with
+    // waiver/baseline path matching.
+    let logical_id_matches =
+        |ids: &[(String, Option<String>, ThreatCategory)], entry: &DiffEntry| -> bool {
+            ids.iter().any(|id| {
+                id.0 == entry.rule_id
+                    && id.2 == entry.category
+                    && match (&id.1, &entry.artifact_path) {
+                        (Some(pa), Some(pb)) => paths_match(pa, pb),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            })
+        };
+
+    // Build logical IDs from current active findings to detect "text-changed"
+    // findings that are still logically present under a new fingerprint.
+    let current_logical_ids: Vec<(String, Option<String>, ThreatCategory)> = active_current
+        .values()
+        .map(|entry| {
+            (
+                entry.rule_id.clone(),
+                entry.artifact_path.clone(),
+                entry.category,
+            )
+        })
+        .collect();
+
+    // Logical IDs of findings suppressed by waivers or baselines.
+    let suppressed_logical_ids: Vec<(String, Option<String>, ThreatCategory)> = waived_findings
+        .iter()
+        .chain(baselined_findings.iter())
+        .map(|entry| {
+            (
+                entry.rule_id.clone(),
+                entry.artifact_path.clone(),
+                entry.category,
+            )
+        })
+        .collect();
+
+    // A previous finding is "resolved" only if:
+    // 1. Its exact fingerprint is NOT in current active (didn't survive unchanged)
+    // 2. Its logical ID is NOT in current active (not still present with changed text)
+    // 3. Its logical ID is NOT suppressed (not waived/baselined)
     let resolved_findings = previous_map
         .iter()
         .filter(|(fingerprint, _)| !active_current.contains_key(*fingerprint))
-        .filter(|(fingerprint, _)| {
-            !waived_findings
-                .iter()
-                .chain(baselined_findings.iter())
-                .any(|entry| &entry.fingerprint == *fingerprint)
-        })
+        .filter(|(_, entry)| !logical_id_matches(&current_logical_ids, entry))
+        .filter(|(_, entry)| !logical_id_matches(&suppressed_logical_ids, entry))
         .map(|(_, entry)| entry.clone())
         .collect();
     let unchanged_findings = active_current
@@ -326,6 +377,30 @@ pub(crate) fn default_policy_schema_version() -> String {
     POLICY_SCHEMA_VERSION.to_string()
 }
 
+/// Compare two artifact paths for logical equality.
+///
+/// Supports suffix matching when the shorter path has >1 component, so
+/// `"scripts/install.sh"` matches `"/repo/scripts/install.sh"`. A bare
+/// filename like `"package.json"` will NOT match across directories.
+///
+/// **Trade-off**: a 2-component waiver path like `"src/main.rs"` will match
+/// any directory ending in `src/main.rs`. This is intentional for ergonomic
+/// waiver/baseline definitions, but users should use longer paths when
+/// disambiguation is needed.
+pub(crate) fn paths_match(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let pa = std::path::Path::new(a);
+    let pb = std::path::Path::new(b);
+    // Only allow suffix matching when the shorter path has >1 component
+    // to prevent bare filenames (e.g. "package.json") from matching
+    // across unrelated directories.
+    let a_components = pa.components().count();
+    let b_components = pb.components().count();
+    (b_components > 1 && pa.ends_with(pb)) || (a_components > 1 && pb.ends_with(pa))
+}
+
 pub(crate) fn waiver_matches_finding(
     waiver: &WaiverEntry,
     finding: &Finding,
@@ -343,7 +418,7 @@ pub(crate) fn waiver_matches_finding(
         finding
             .artifact_path
             .as_ref()
-            .is_some_and(|artifact_path| std::path::Path::new(artifact_path).ends_with(path))
+            .is_some_and(|artifact_path| paths_match(artifact_path, path))
     });
     let context_matches = waiver
         .context
@@ -360,6 +435,7 @@ pub(crate) fn finding_to_diff_entry(finding: &Finding) -> DiffEntry {
     DiffEntry {
         fingerprint: finding_fingerprint(finding),
         rule_id: finding.rule_id.clone(),
+        category: finding.category,
         artifact_path: finding.artifact_path.clone(),
         reason: finding.reason.clone(),
     }
@@ -385,7 +461,7 @@ pub(crate) fn policy_override_matches(
         finding
             .artifact_path
             .as_ref()
-            .is_some_and(|artifact_path| std::path::Path::new(artifact_path).ends_with(path))
+            .is_some_and(|artifact_path| paths_match(artifact_path, path))
     });
     let context_matches = policy_override
         .context
@@ -409,9 +485,9 @@ pub(crate) fn policy_override_specificity(policy_override: &PolicyOverride) -> u
 }
 
 pub(crate) fn finding_contexts(finding: &Finding) -> Vec<OperationalContext> {
-    if finding.policy_contexts.is_empty() {
+    if finding.operational_contexts.is_empty() {
         default_operational_contexts(finding.category, finding.artifact_kind)
     } else {
-        finding.policy_contexts.clone()
+        finding.operational_contexts.clone()
     }
 }

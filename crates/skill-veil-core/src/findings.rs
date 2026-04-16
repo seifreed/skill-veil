@@ -4,7 +4,6 @@
 
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilitySource, ArtifactGraph};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fmt;
 use strum_macros::Display;
 
@@ -59,6 +58,12 @@ pub const CAPABILITY_COMBO_WEIGHT_PRIVILEGED_HOST: u32 = 25;
 pub const CAPABILITY_COMBO_WEIGHT_INSTALL_NETWORK: u32 = 12;
 /// Bonus applied to install-time execution that also exposes binaries.
 pub const CAPABILITY_COMBO_WEIGHT_INSTALL_BINARY: u32 = 8;
+/// Bonus applied to secret access combined with network connectivity.
+pub const CAPABILITY_COMBO_WEIGHT_SECRET_NETWORK: u32 = 10;
+/// Bonus applied to persistence combined with network connectivity.
+pub const CAPABILITY_COMBO_WEIGHT_PERSISTENCE_NETWORK: u32 = 8;
+/// Bonus applied to browser automation combined with identity/OAuth access.
+pub const CAPABILITY_COMBO_WEIGHT_BROWSER_IDENTITY: u32 = 10;
 /// Dampening factor for hygiene-only signals.
 pub const SIGNAL_WEIGHT_HYGIENE: f32 = 0.35;
 /// Dampening factor for suspicious but not clearly malicious signals.
@@ -255,7 +260,9 @@ impl EvidenceKind {
 }
 
 /// Artifact type where the finding was observed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Display,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ArtifactKind {
@@ -280,7 +287,9 @@ pub enum ArtifactKind {
 }
 
 /// High-level scope of the artifact within the package.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Display,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ArtifactScope {
@@ -343,24 +352,6 @@ pub enum RecommendedAction {
     Block,
 }
 
-impl RecommendedAction {
-    pub(crate) fn priority(self) -> u8 {
-        match self {
-            Self::Log => 0,
-            Self::RequireApproval => 1,
-            Self::Block => 2,
-        }
-    }
-
-    pub fn max(left: Self, right: Self) -> Self {
-        if left.priority() >= right.priority() {
-            left
-        } else {
-            right
-        }
-    }
-}
-
 /// A security finding from analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
@@ -399,7 +390,7 @@ pub struct Finding {
     pub artifact_path: Option<String>,
     /// Operational contexts impacted by this finding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub policy_contexts: Vec<OperationalContext>,
+    pub operational_contexts: Vec<OperationalContext>,
     /// Line number if available
     pub line_number: Option<usize>,
 }
@@ -557,7 +548,7 @@ impl FindingBuilder {
     /// Build the Finding instance
     #[must_use]
     pub fn build(self) -> Finding {
-        let policy_contexts = default_operational_contexts(self.category, self.artifact_kind);
+        let operational_contexts = default_operational_contexts(self.category, self.artifact_kind);
         let (confidence, confidence_rationale) =
             calibrate_confidence(self.confidence, self.evidence_kind, self.category);
         let signal_class = self
@@ -574,7 +565,7 @@ impl FindingBuilder {
             match_value: self.match_value,
             reason: self.reason,
             remediation: if self.remediation.is_empty() {
-                default_remediation(self.category, &policy_contexts).to_string()
+                default_remediation(self.category, &operational_contexts).to_string()
             } else {
                 self.remediation
             },
@@ -584,7 +575,7 @@ impl FindingBuilder {
             artifact_scope: self.artifact_scope,
             signal_class,
             artifact_path: self.artifact_path,
-            policy_contexts,
+            operational_contexts,
             line_number: self.line_number,
         }
     }
@@ -647,6 +638,72 @@ impl Finding {
     pub fn weighted_score(&self) -> f32 {
         self.severity.weight() as f32 * self.confidence * signal_weight(self.signal_class)
     }
+
+    /// Whether this finding represents conclusive evidence of malicious behavior
+    /// in a supporting artifact (code block or referenced file).
+    #[must_use]
+    pub fn is_conclusive_malicious_evidence(&self) -> bool {
+        if self.artifact_scope != ArtifactScope::SupportingArtifact
+            || self.signal_class != SignalClass::MaliciousBehavior
+            || self.recommended_action != RecommendedAction::Block
+        {
+            return false;
+        }
+
+        let is_code_context = matches!(
+            self.matched_on,
+            MatchTarget::CodeBlock { .. } | MatchTarget::ReferencedFile { .. }
+        );
+
+        if !is_code_context {
+            return false;
+        }
+
+        let value = self.match_value.to_ascii_lowercase();
+        let has_remote_indicator = [
+            "http://",
+            "https://",
+            "curl ",
+            "wget ",
+            "fetch(",
+            "requests.get",
+            "urllib.request.urlopen",
+            "invoke-webrequest",
+            "iwr ",
+        ]
+        .iter()
+        .any(|needle| value.contains(needle));
+        let has_sensitive_payload = ["cookie", "token", "secret", "session"]
+            .iter()
+            .any(|needle| value.contains(needle));
+        let has_transmit_verb = ["send", "post", "upload", "forward", "exfiltrate"]
+            .iter()
+            .any(|needle| value.contains(needle));
+        let has_exfil_channel = [
+            "discord.com/api/webhooks",
+            "api.telegram.org/bot",
+            "smtp.",
+            "sendgrid",
+            "mailgun",
+        ]
+        .iter()
+        .any(|needle| value.contains(needle));
+
+        match self.category {
+            ThreatCategory::RemoteExec => has_remote_indicator,
+            ThreatCategory::DataExfiltration => {
+                (has_sensitive_payload && has_transmit_verb) || has_exfil_channel
+            }
+            ThreatCategory::PersistentPromptTampering => true,
+            // Credential exposure with block action and malicious signal is conclusive
+            ThreatCategory::CredentialExposure => true,
+            // Privilege escalation with block action and malicious signal is conclusive
+            ThreatCategory::PrivilegeEscalation => true,
+            // Supply chain install-time execution is conclusive
+            ThreatCategory::SupplyChain => has_remote_indicator || has_transmit_verb,
+            _ => false,
+        }
+    }
 }
 
 pub fn artifact_scope_for_kind(artifact_kind: ArtifactKind) -> ArtifactScope {
@@ -691,11 +748,11 @@ fn signal_weight(signal_class: SignalClass) -> f32 {
     }
 }
 
-fn default_remediation(category: ThreatCategory, policy_contexts: &[OperationalContext]) -> String {
-    let context_hint = if policy_contexts.is_empty() {
+fn default_remediation(category: ThreatCategory, contexts: &[OperationalContext]) -> String {
+    let context_hint = if contexts.is_empty() {
         "Primary operational context: review required.".to_string()
     } else {
-        let labels = policy_contexts
+        let labels = contexts
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>()
@@ -918,6 +975,52 @@ pub enum DeclaredPermission {
     OAuthScopes,
 }
 
+/// Canonical mapping from rule IDs to declared permissions.
+///
+/// This is the single source of truth used by `derive_declared_permissions` in
+/// `verdict.rs` and `is_permission_model_rule` in `verdict_calibration.rs`.
+pub const DECLARED_PERMISSION_RULES: &[(&str, DeclaredPermission)] = &[
+    (
+        "DECLARED_PERMISSION_BROWSER_FULL",
+        DeclaredPermission::BrowserFull,
+    ),
+    (
+        "DECLARED_PERMISSION_FILE_WRITE",
+        DeclaredPermission::FileWrite,
+    ),
+    (
+        "DECLARED_PERMISSION_SHELL_EXEC",
+        DeclaredPermission::ShellExec,
+    ),
+    (
+        "DECLARED_PERMISSION_NETWORK_ACCESS",
+        DeclaredPermission::NetworkAccess,
+    ),
+    (
+        "DECLARED_PERMISSION_SECRETS_ACCESS",
+        DeclaredPermission::SecretsAccess,
+    ),
+    (
+        "DECLARED_PERMISSION_OAUTH_SCOPES",
+        DeclaredPermission::OAuthScopes,
+    ),
+];
+
+/// Look up the declared permission for a given rule ID.
+pub fn declared_permission_for_rule(rule_id: &str) -> Option<DeclaredPermission> {
+    DECLARED_PERMISSION_RULES
+        .iter()
+        .find(|(id, _)| *id == rule_id)
+        .map(|(_, perm)| *perm)
+}
+
+/// Check whether a rule ID corresponds to a declared permission rule.
+pub fn is_declared_permission_rule(rule_id: &str) -> bool {
+    DECLARED_PERMISSION_RULES
+        .iter()
+        .any(|(id, _)| *id == rule_id)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -970,13 +1073,14 @@ fn is_zero(value: &i32) -> bool {
     *value == 0
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FindingDedupKey {
     rule_id: String,
-    category: String,
-    matched_on: String,
+    category: ThreatCategory,
+    matched_on: String, // MatchTarget has no Hash
     match_value: String,
-    artifact_kind: String,
+    artifact_kind: ArtifactKind,
+    artifact_scope: ArtifactScope,
     artifact_path: Option<String>,
 }
 
@@ -997,9 +1101,9 @@ pub(crate) fn split_findings_by_scope(
                     .artifact_path
                     .as_deref()
                     .is_some_and(|artifact_path| {
-                        std::path::Path::new(artifact_path) == std::path::Path::new(&primary_path)
-                            || std::path::Path::new(&primary_path).ends_with(artifact_path)
-                            || std::path::Path::new(artifact_path).ends_with(&primary_path)
+                        let pp = std::path::Path::new(&primary_path);
+                        let ap = std::path::Path::new(artifact_path);
+                        ap == pp || pp.ends_with(artifact_path)
                     }))
     })
 }
@@ -1017,15 +1121,16 @@ pub(crate) fn split_findings_by_scope(
 #[must_use]
 pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, DeduplicationSummary) {
     let original_findings = findings.len();
-    let mut deduped = BTreeMap::<FindingDedupKey, Finding>::new();
+    let mut deduped = std::collections::HashMap::<FindingDedupKey, Finding>::new();
 
     for finding in findings {
         let key = FindingDedupKey {
             rule_id: finding.rule_id.clone(),
-            category: finding.category.to_string(),
+            category: finding.category,
             matched_on: finding.matched_on.to_string(),
             match_value: finding.match_value.clone(),
-            artifact_kind: finding.artifact_kind.to_string(),
+            artifact_kind: finding.artifact_kind,
+            artifact_scope: finding.artifact_scope,
             artifact_path: finding.artifact_path.clone(),
         };
 
@@ -1035,16 +1140,22 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
                 let finding_is_stronger = finding.severity > existing.severity
                     || (finding.severity == existing.severity
                         && finding.confidence > existing.confidence);
+                let confidence_from_new = finding.confidence > existing.confidence;
 
                 existing.severity = existing.severity.max(finding.severity);
                 existing.confidence = existing.confidence.max(finding.confidence);
-                existing.raw_confidence = existing.raw_confidence.max(finding.raw_confidence);
                 existing.recommended_action =
-                    RecommendedAction::max(existing.recommended_action, finding.recommended_action);
+                    existing.recommended_action.max(finding.recommended_action);
 
                 if finding_is_stronger {
                     existing.signal_class = finding.signal_class;
                     existing.evidence_kind = finding.evidence_kind;
+                }
+                // Take raw_confidence and confidence_rationale from the finding that
+                // contributed the max calibrated confidence, keeping them aligned.
+                if confidence_from_new {
+                    existing.raw_confidence = finding.raw_confidence;
+                    existing.confidence_rationale = finding.confidence_rationale.clone();
                 }
 
                 if finding_is_stronger
@@ -1146,11 +1257,15 @@ impl FindingSummary {
                 .or_insert(factor);
         }
 
-        let risk_score = total_score.min(100.0).round() as u32;
+        let risk_score = if total_score.is_finite() {
+            total_score.clamp(0.0, 100.0).round() as u32
+        } else {
+            100 // treat non-finite as max risk
+        };
 
-        let score_based_action = if risk_score > RISK_THRESHOLD_BLOCK {
+        let score_based_action = if risk_score >= RISK_THRESHOLD_BLOCK {
             RecommendedAction::Block
-        } else if risk_score > RISK_THRESHOLD_APPROVAL {
+        } else if risk_score >= RISK_THRESHOLD_APPROVAL {
             RecommendedAction::RequireApproval
         } else {
             RecommendedAction::Log
@@ -1159,12 +1274,11 @@ impl FindingSummary {
         let finding_based_action = findings
             .iter()
             .fold(RecommendedAction::Log, |current, finding| {
-                RecommendedAction::max(current, finding.recommended_action)
+                current.max(finding.recommended_action)
             });
-        let recommended_action = RecommendedAction::max(
-            RecommendedAction::max(score_based_action, finding_based_action),
-            graph_action,
-        );
+        let recommended_action = score_based_action
+            .max(finding_based_action)
+            .max(graph_action);
 
         let mut by_category: Vec<_> = category_map.into_iter().collect();
         by_category.sort_by_key(|(category, _)| *category);
@@ -1179,21 +1293,191 @@ impl FindingSummary {
             recommended_action,
             score_breakdown,
             action_triggers: {
-                action_triggers
-                    .sort_by(|left, right| right.action.priority().cmp(&left.action.priority()));
+                action_triggers.sort_by(|left, right| right.action.cmp(&left.action));
                 action_triggers
             },
         }
     }
 }
 
+/// Accumulates capability combination scores, risk factors, and action triggers.
+struct CapabilityScoreAccumulator {
+    scored_combos: std::collections::HashSet<&'static str>,
+    total_score: u32,
+    action: RecommendedAction,
+    factors: Vec<RiskFactor>,
+    triggers: Vec<ActionTrigger>,
+}
+
+impl CapabilityScoreAccumulator {
+    fn new() -> Self {
+        Self {
+            scored_combos: std::collections::HashSet::new(),
+            total_score: 0,
+            action: RecommendedAction::Log,
+            factors: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
+    fn score_combo(
+        &mut self,
+        key: &'static str,
+        combo_action: RecommendedAction,
+        weight: u32,
+        factor_label: &str,
+        combo_rationale: &str,
+        trigger_rationale: &str,
+    ) {
+        self.action = self.action.max(combo_action);
+        if self.scored_combos.insert(key) {
+            self.total_score += weight;
+            self.factors.push(RiskFactor {
+                factor: factor_label.to_string(),
+                contribution: weight,
+                rationale: combo_rationale.to_string(),
+            });
+            self.triggers.push(ActionTrigger {
+                action: combo_action,
+                factor: factor_label.to_string(),
+                rationale: trigger_rationale.to_string(),
+            });
+        }
+    }
+
+    fn into_parts(self) -> (u32, RecommendedAction, Vec<RiskFactor>, Vec<ActionTrigger>) {
+        (self.total_score, self.action, self.factors, self.triggers)
+    }
+}
+
+/// Detect and score capability combinations on a single artifact node.
+fn detect_node_capability_combos(
+    node: &crate::artifact_graph::ArtifactNode,
+    acc: &mut CapabilityScoreAccumulator,
+) {
+    let has_cap = |cap: ArtifactCapability| -> bool {
+        node.capabilities.iter().any(|fact| fact.capability == cap)
+    };
+    let has_privileged = has_cap(ArtifactCapability::PrivilegedRuntime);
+    let has_host_fs = has_cap(ArtifactCapability::HostFilesystemAccess);
+    let has_install = has_cap(ArtifactCapability::InstallExecution);
+    let has_network = has_cap(ArtifactCapability::NetworkAccess);
+    let has_binary = has_cap(ArtifactCapability::ExposesBinary);
+    let has_secret_access = has_cap(ArtifactCapability::SecretAccess);
+    let has_persistence = has_cap(ArtifactCapability::PersistenceSurface);
+    let has_browser_access = has_cap(ArtifactCapability::BrowserAccess);
+    let has_identity_access = has_cap(ArtifactCapability::IdentityAccess);
+
+    if has_privileged && has_host_fs {
+        acc.score_combo(
+            "privileged_host_filesystem",
+            RecommendedAction::Block,
+            CAPABILITY_COMBO_WEIGHT_PRIVILEGED_HOST,
+            "capability_combo:privileged_host_filesystem",
+            &format!(
+                "Artifact combines privileged runtime with host filesystem access: {}",
+                node.path
+            ),
+            &format!(
+                "Block forced because {} combines privileged runtime with host filesystem access",
+                node.path
+            ),
+        );
+    }
+
+    if has_install && has_network {
+        acc.score_combo(
+            "install_network",
+            RecommendedAction::RequireApproval,
+            CAPABILITY_COMBO_WEIGHT_INSTALL_NETWORK,
+            "capability_combo:install_network",
+            &format!(
+                "Artifact combines install-time execution with network access: {}",
+                node.path
+            ),
+            &format!(
+                "Approval forced because {} combines install-time execution with network access",
+                node.path
+            ),
+        );
+    }
+
+    if has_install && has_binary {
+        acc.score_combo(
+            "install_binary",
+            RecommendedAction::RequireApproval,
+            CAPABILITY_COMBO_WEIGHT_INSTALL_BINARY,
+            "capability_combo:install_binary",
+            &format!(
+                "Artifact combines install-time execution with exposed binaries: {}",
+                node.path
+            ),
+            &format!(
+                "Approval forced because {} combines install-time execution with exposed binaries",
+                node.path
+            ),
+        );
+    }
+
+    if has_secret_access && has_network {
+        acc.score_combo(
+            "secret_access_network",
+            RecommendedAction::RequireApproval,
+            CAPABILITY_COMBO_WEIGHT_SECRET_NETWORK,
+            "capability_combo:secret_access_network",
+            &format!(
+                "Artifact combines secret access with network connectivity: {}",
+                node.path
+            ),
+            &format!(
+                "Approval forced because {} combines secret access with network connectivity",
+                node.path
+            ),
+        );
+    }
+
+    if has_persistence && has_network {
+        acc.score_combo(
+            "persistence_network",
+            RecommendedAction::RequireApproval,
+            CAPABILITY_COMBO_WEIGHT_PERSISTENCE_NETWORK,
+            "capability_combo:persistence_network",
+            &format!(
+                "Artifact combines persistence with network connectivity: {}",
+                node.path
+            ),
+            &format!(
+                "Approval forced because {} combines persistence with network connectivity",
+                node.path
+            ),
+        );
+    }
+
+    if has_browser_access && has_identity_access {
+        acc.score_combo(
+            "browser_identity_scope",
+            RecommendedAction::RequireApproval,
+            CAPABILITY_COMBO_WEIGHT_BROWSER_IDENTITY,
+            "capability_combo:browser_identity_scope",
+            &format!(
+                "Artifact combines broad browser automation with identity-linked access: {}",
+                node.path
+            ),
+            &format!(
+                "Approval forced because {} combines broad browser automation with identity-linked access",
+                node.path
+            ),
+        );
+    }
+}
+
 fn graph_risk_context(
     artifact_graph: &ArtifactGraph,
 ) -> (u32, RecommendedAction, Vec<RiskFactor>, Vec<ActionTrigger>) {
-    let mut total_score = 0;
-    let mut action = RecommendedAction::Log;
-    let mut factors = Vec::new();
-    let mut triggers = Vec::new();
+    let mut acc = CapabilityScoreAccumulator::new();
+    // Track scored capability types to avoid double-counting
+    // the same capability across multiple nodes.
+    let mut scored_capabilities = std::collections::HashSet::<String>::new();
 
     for node in &artifact_graph.nodes {
         for capability in &node.capabilities {
@@ -1264,152 +1548,22 @@ fn graph_risk_context(
                 ),
             };
 
-            total_score += contribution;
-            factors.push(RiskFactor {
-                factor,
-                contribution,
-                rationale: format!("{rationale}: {}", node.path),
-            });
+            // Only count each capability type (by factor key) once across all nodes
+            // to prevent score inflation from duplicate capabilities on multiple artifacts.
+            if scored_capabilities.insert(factor.clone()) {
+                acc.total_score += contribution;
+                acc.factors.push(RiskFactor {
+                    factor,
+                    contribution,
+                    rationale: format!("{rationale}: {}", node.path),
+                });
+            }
         }
 
-        let has_privileged = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::PrivilegedRuntime);
-        let has_host_fs = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::HostFilesystemAccess);
-        let has_install = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::InstallExecution);
-        let has_network = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::NetworkAccess);
-        let has_binary = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::ExposesBinary);
-        let has_secret_access = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::SecretAccess);
-        let has_persistence = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::PersistenceSurface);
-        let has_browser_access = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::BrowserAccess);
-        let has_identity_access = node
-            .capabilities
-            .iter()
-            .any(|fact| fact.capability == ArtifactCapability::IdentityAccess);
-
-        if has_privileged && has_host_fs {
-            total_score += CAPABILITY_COMBO_WEIGHT_PRIVILEGED_HOST;
-            action = RecommendedAction::max(action, RecommendedAction::Block);
-            factors.push(RiskFactor {
-                factor: "capability_combo:privileged_host_filesystem".to_string(),
-                contribution: CAPABILITY_COMBO_WEIGHT_PRIVILEGED_HOST,
-                rationale: format!(
-                    "Artifact combines privileged runtime with host filesystem access: {}",
-                    node.path
-                ),
-            });
-            triggers.push(ActionTrigger {
-                action: RecommendedAction::Block,
-                factor: "capability_combo:privileged_host_filesystem".to_string(),
-                rationale: format!(
-                    "Block forced because {} combines privileged runtime with host filesystem access",
-                    node.path
-                ),
-            });
-        }
-
-        if has_install && has_network {
-            total_score += CAPABILITY_COMBO_WEIGHT_INSTALL_NETWORK;
-            action = RecommendedAction::max(action, RecommendedAction::RequireApproval);
-            factors.push(RiskFactor {
-                factor: "capability_combo:install_network".to_string(),
-                contribution: CAPABILITY_COMBO_WEIGHT_INSTALL_NETWORK,
-                rationale: format!(
-                    "Artifact combines install-time execution with network access: {}",
-                    node.path
-                ),
-            });
-            triggers.push(ActionTrigger {
-                action: RecommendedAction::RequireApproval,
-                factor: "capability_combo:install_network".to_string(),
-                rationale: format!(
-                    "Approval forced because {} combines install-time execution with network access",
-                    node.path
-                ),
-            });
-        }
-
-        if has_install && has_binary {
-            total_score += CAPABILITY_COMBO_WEIGHT_INSTALL_BINARY;
-            action = RecommendedAction::max(action, RecommendedAction::RequireApproval);
-            factors.push(RiskFactor {
-                factor: "capability_combo:install_binary".to_string(),
-                contribution: CAPABILITY_COMBO_WEIGHT_INSTALL_BINARY,
-                rationale: format!(
-                    "Artifact combines install-time execution with exposed binaries: {}",
-                    node.path
-                ),
-            });
-            triggers.push(ActionTrigger {
-                action: RecommendedAction::RequireApproval,
-                factor: "capability_combo:install_binary".to_string(),
-                rationale: format!(
-                    "Approval forced because {} combines install-time execution with exposed binaries",
-                    node.path
-                ),
-            });
-        }
-
-        if has_secret_access && has_network {
-            action = RecommendedAction::max(action, RecommendedAction::RequireApproval);
-            triggers.push(ActionTrigger {
-                action: RecommendedAction::RequireApproval,
-                factor: "capability_combo:secret_access_network".to_string(),
-                rationale: format!(
-                    "Approval forced because {} combines secret access with network connectivity",
-                    node.path
-                ),
-            });
-        }
-
-        if has_persistence && has_network {
-            action = RecommendedAction::max(action, RecommendedAction::RequireApproval);
-            triggers.push(ActionTrigger {
-                action: RecommendedAction::RequireApproval,
-                factor: "capability_combo:persistence_network".to_string(),
-                rationale: format!(
-                    "Approval forced because {} combines persistence with network connectivity",
-                    node.path
-                ),
-            });
-        }
-
-        if has_browser_access && has_identity_access {
-            action = RecommendedAction::max(action, RecommendedAction::RequireApproval);
-            triggers.push(ActionTrigger {
-                action: RecommendedAction::RequireApproval,
-                factor: "capability_combo:browser_identity_scope".to_string(),
-                rationale: format!(
-                    "Approval forced because {} combines broad browser automation with identity-linked access",
-                    node.path
-                ),
-            });
-        }
+        detect_node_capability_combos(node, &mut acc);
     }
 
-    (total_score, action, factors, triggers)
+    acc.into_parts()
 }
 
 #[cfg(test)]
@@ -1562,7 +1716,7 @@ mod tests {
         assert_eq!(finding.artifact_kind, ArtifactKind::ReferencedArtifact);
         assert_eq!(finding.artifact_path.as_deref(), Some("scripts/install.sh"));
         assert!(finding
-            .policy_contexts
+            .operational_contexts
             .contains(&OperationalContext::Install));
     }
 
@@ -1670,16 +1824,16 @@ mod tests {
             .build();
 
         assert!(prompt_tampering
-            .policy_contexts
+            .operational_contexts
             .contains(&OperationalContext::CodeModification));
         assert!(tool_abuse
-            .policy_contexts
+            .operational_contexts
             .contains(&OperationalContext::Secrets));
         assert!(autonomy
-            .policy_contexts
+            .operational_contexts
             .contains(&OperationalContext::ExternalComms));
         assert!(social
-            .policy_contexts
+            .operational_contexts
             .contains(&OperationalContext::ExternalComms));
     }
 
@@ -1876,8 +2030,9 @@ mod tests {
         let findings =
             vec![
                 Finding::builder("MCP_TOOLING_TRANSPORT_DECLARED", ThreatCategory::ToolAbuse)
+                    .severity(Severity::Low)
                     .artifact_scope(ArtifactScope::PackageRootArtifact)
-                    .action(RecommendedAction::RequireApproval)
+                    .action(RecommendedAction::Log)
                     .matched_on(MatchTarget::Document)
                     .match_value("mcp transport")
                     .reason("transport declared")

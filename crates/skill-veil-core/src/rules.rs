@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
+use tracing::warn;
 
 /// Versioned schema string for external rule packs.
 pub const RULE_PACK_SCHEMA_VERSION: &str = "skill-veil.dev/rules/v1alpha1";
@@ -131,7 +132,6 @@ pub struct RulePackMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RulePackFile {
-    #[serde(default = "default_rule_pack_schema_version")]
     pub schema_version: String,
     #[serde(default)]
     pub metadata: RulePackMetadata,
@@ -141,7 +141,6 @@ pub struct RulePackFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IocFeedFile {
-    #[serde(default = "default_rule_pack_schema_version")]
     pub schema_version: String,
     #[serde(default)]
     pub metadata: RulePackMetadata,
@@ -159,10 +158,6 @@ fn default_confidence() -> f32 {
 
 fn default_enabled() -> bool {
     true
-}
-
-fn default_rule_pack_schema_version() -> String {
-    RULE_PACK_SCHEMA_VERSION.to_string()
 }
 
 /// Condition for rule matching
@@ -435,6 +430,7 @@ impl CompiledRule {
         doc: &SkillDocument,
         findings: &mut Vec<Finding>,
     ) -> bool {
+        let mut matched = false;
         for lang in languages {
             if doc.has_code_language(lang) {
                 let target = MatchTarget::CodeBlock {
@@ -442,10 +438,10 @@ impl CompiledRule {
                 };
                 let match_value = format!("Code block with language: {}", lang);
                 findings.push(self.create_finding(target, match_value));
-                return true;
+                matched = true;
             }
         }
-        false
+        matched
     }
 
     /// Check if any of the conditions match
@@ -538,11 +534,6 @@ impl CompiledRule {
 /// // Create with default rules
 /// let engine = RuleEngine::with_defaults().unwrap();
 /// assert!(engine.rule_count() > 0);
-///
-/// // Filter rules by category or severity
-/// use skill_veil_core::findings::{ThreatCategory, Severity};
-/// let remote_exec_rules = engine.rules_by_category(ThreatCategory::RemoteExec);
-/// let critical_rules = engine.rules_by_severity(Severity::Critical);
 /// ```
 pub struct RuleEngine<M: PatternMatcher = RegexPatternMatcher> {
     rules: Vec<CompiledRule>,
@@ -616,7 +607,7 @@ impl<M: PatternMatcher> RuleEngine<M> {
 
     /// Load built-in rules
     fn load_builtin_rules(&mut self) -> Result<(), RuleError> {
-        let builtin_rules = get_builtin_rules();
+        let builtin_rules = get_builtin_rules()?;
         for rule in builtin_rules {
             self.rules.push(CompiledRule::compile(rule)?);
         }
@@ -645,42 +636,54 @@ impl<M: PatternMatcher> RuleEngine<M> {
     }
 
     /// Load rules from a YAML file
+    ///
+    /// Rules whose ID already exists in the engine are silently skipped,
+    /// giving builtins (loaded first) priority over external packs.
     pub fn load_rules_file(&mut self, path: impl AsRef<Path>) -> Result<(), RuleError> {
         let content = std::fs::read_to_string(path.as_ref())?;
         for rule in parse_rules_file(&content)? {
-            self.rules.push(CompiledRule::compile(rule)?);
+            let compiled = CompiledRule::compile(rule)?;
+            if self
+                .rules
+                .iter()
+                .any(|existing| existing.rule.id == compiled.rule.id)
+            {
+                warn!(
+                    rule_id = %compiled.rule.id,
+                    path = %path.as_ref().display(),
+                    "skipping duplicate rule ID (builtin takes priority)"
+                );
+            } else {
+                self.rules.push(compiled);
+            }
         }
 
         Ok(())
     }
 
     /// Add a single rule
+    ///
+    /// Skips the rule if one with the same ID already exists.
     pub fn add_rule(&mut self, rule: Rule) -> Result<(), RuleError> {
-        self.rules.push(CompiledRule::compile(rule)?);
+        let compiled = CompiledRule::compile(rule)?;
+        if self
+            .rules
+            .iter()
+            .any(|existing| existing.rule.id == compiled.rule.id)
+        {
+            warn!(
+                rule_id = %compiled.rule.id,
+                "skipping duplicate rule ID (existing rule takes priority)"
+            );
+        } else {
+            self.rules.push(compiled);
+        }
         Ok(())
     }
 
     /// Get all loaded rules
     pub fn rules(&self) -> Vec<&Rule> {
         self.rules.iter().map(|cr| &cr.rule).collect()
-    }
-
-    /// Get rules filtered by category
-    pub fn rules_by_category(&self, category: ThreatCategory) -> Vec<&Rule> {
-        self.rules
-            .iter()
-            .filter(|cr| cr.rule.category == category)
-            .map(|cr| &cr.rule)
-            .collect()
-    }
-
-    /// Get rules filtered by severity
-    pub fn rules_by_severity(&self, severity: Severity) -> Vec<&Rule> {
-        self.rules
-            .iter()
-            .filter(|cr| cr.rule.severity == severity)
-            .map(|cr| &cr.rule)
-            .collect()
     }
 
     /// Evaluate all rules against a document
@@ -743,14 +746,12 @@ const OFFICIAL_CORE_RULES_YAML: &str = include_str!("../resources/official/core.
 const OFFICIAL_BEHAVIORAL_RULES_YAML: &str = include_str!("../resources/official/behavioral.yaml");
 
 /// Get built-in rules by parsing the embedded YAML file
-fn get_builtin_rules() -> Vec<Rule> {
+fn get_builtin_rules() -> Result<Vec<Rule>, RuleError> {
     let mut rules = Vec::new();
     for embedded_pack in [OFFICIAL_CORE_RULES_YAML, OFFICIAL_BEHAVIORAL_RULES_YAML] {
-        let parsed =
-            parse_rules_file(embedded_pack).expect("Failed to parse embedded official rules pack");
-        rules.extend(parsed);
+        rules.extend(parse_rules_file(embedded_pack)?);
     }
-    rules
+    Ok(rules)
 }
 
 pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
@@ -846,6 +847,7 @@ fn artifact_kind_for_document(doc: &SkillDocument) -> ArtifactKind {
         }
         Some(name) if name.ends_with(".prompt.md") => ArtifactKind::PromptPackDocument,
         Some("skill.md") => ArtifactKind::SkillDocument,
+        Some(name) if name.ends_with(".skill.md") => ArtifactKind::SkillDocument,
         _ => ArtifactKind::ReferencedArtifact,
     }
 }
@@ -888,7 +890,7 @@ fn ioc_feed_to_rules(feed: &IocFeedFile) -> Vec<Rule> {
             confidence: 0.99,
             condition: RuleCondition::Regex {
                 pattern: format!(
-                    "({})",
+                    "(?i)({})",
                     feed.ips
                         .iter()
                         .map(|ip| regex::escape(ip))

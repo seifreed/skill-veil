@@ -84,6 +84,7 @@ pub struct ScanResult {
     pub identity_source: ArtifactIdentitySource,
     pub structural_validity: StructuralValidity,
     pub heuristic_score: u8,
+    pub primary_artifact_kind: ArtifactKind,
     pub findings: Vec<Finding>,
     pub primary_findings: Vec<Finding>,
     pub supporting_findings: Vec<Finding>,
@@ -157,18 +158,13 @@ impl ScanResult {
     }
 
     fn policy_generator(&self) -> PolicyGenerator {
-        let primary_artifact_kind = self
-            .primary_findings
-            .first()
-            .map(|f| f.artifact_kind)
-            .unwrap_or(ArtifactKind::SkillDocument);
         let mut generator = PolicyGenerator::new(
             &self.name,
             self.path.to_string_lossy(),
             self.findings.clone(),
             self.artifact_graph.clone(),
         )
-        .with_primary_artifact_kind(primary_artifact_kind)
+        .with_primary_artifact_kind(self.primary_artifact_kind)
         .with_extension_kind(self.extension_kind)
         .with_artifact_classification(
             self.classification,

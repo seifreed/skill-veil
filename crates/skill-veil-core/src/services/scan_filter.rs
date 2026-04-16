@@ -135,7 +135,11 @@ impl ScanFilterService {
     /// `true` if any finding meets or exceeds the fail_on severity threshold
     pub fn should_fail(&self, findings: &[Finding]) -> bool {
         self.fail_on()
-            .map(|sev| findings.iter().any(|f| f.severity >= sev))
+            .map(|sev| {
+                findings
+                    .iter()
+                    .any(|f| f.severity >= sev && f.recommended_action != RecommendedAction::Log)
+            })
             .unwrap_or(false)
     }
 
@@ -310,6 +314,24 @@ mod tests {
     }
 
     #[test]
+    fn test_should_fail_respects_overridden_action() {
+        let options = ScanOptions {
+            fail_on: Some(Severity::High),
+            ..Default::default()
+        };
+        let filter = ScanFilterService::new(options);
+
+        // A High finding with action downgraded to Log (e.g. via policy override)
+        // should NOT trigger failure.
+        let mut finding = create_finding("R1", Severity::High);
+        finding.recommended_action = RecommendedAction::Log;
+        assert!(
+            !filter.should_fail(&[finding]),
+            "Finding with action overridden to Log should not trigger should_fail"
+        );
+    }
+
+    #[test]
     fn test_filter_with_summary_counts_waivers_and_baseline() {
         let finding = create_finding("R1", Severity::High).with_artifact(
             crate::findings::ArtifactKind::ReferencedArtifact,
@@ -368,7 +390,7 @@ mod tests {
             schema_version: crate::policy::POLICY_SCHEMA_VERSION.to_string(),
             waivers: vec![WaiverEntry {
                 rule_id: Some("R1".to_string()),
-                artifact_path: Some("install.sh".to_string()),
+                artifact_path: Some("scripts/install.sh".to_string()),
                 context: None,
                 reason: "accepted".to_string(),
                 expires_at: None,

@@ -1,9 +1,24 @@
 use crate::findings::Finding;
+use crate::policy::state::paths_match;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::sync::LazyLock;
+
+static STANDALONE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)^\s*(?:(?:<!--|#|//|/\*+|\*|;|--)\s*(?:skill-veil:)?|skill-veil:)(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?"#,
+    )
+    .expect("valid standalone suppression regex")
+});
+
+static INLINE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]+))?"#,
+    )
+    .expect("valid inline suppression regex")
+});
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InlineSuppression {
@@ -19,20 +34,12 @@ pub struct InlineSuppression {
 
 fn collect_comment_suppressions(path: &Path, content: &str) -> Vec<InlineSuppression> {
     let artifact_path = path.display().to_string();
-    let standalone_regex = Regex::new(
-        r#"(?i)^\s*(?:(?:<!--|#|//|/\*+|\*|;|--)\s*(?:skill-veil:)?|skill-veil:)(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?"#,
-    )
-    .expect("valid standalone suppression regex");
-    let inline_regex = Regex::new(
-        r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]+))?"#,
-    )
-    .expect("valid inline suppression regex");
 
     let mut suppressions = Vec::new();
     let lines: Vec<_> = content.lines().collect();
     for (index, line) in lines.iter().enumerate() {
         let line_number = index + 1;
-        if let Some(capture) = standalone_regex.captures(line) {
+        if let Some(capture) = STANDALONE_SUPPRESSION_REGEX.captures(line) {
             add_suppressions_from_capture(
                 &mut suppressions,
                 &artifact_path,
@@ -44,13 +51,14 @@ fn collect_comment_suppressions(path: &Path, content: &str) -> Vec<InlineSuppres
             continue;
         }
 
-        for capture in inline_regex.captures_iter(line) {
+        let next_line = next_significant_line(&lines, index);
+        for capture in INLINE_SUPPRESSION_REGEX.captures_iter(line) {
             add_suppressions_from_capture(
                 &mut suppressions,
                 &artifact_path,
                 line_number,
                 false,
-                next_significant_line(&lines, index),
+                next_line,
                 &capture,
             );
         }
@@ -78,7 +86,10 @@ fn add_suppressions_from_capture(
     // a standalone `# nosem` has no effect since it can't suppress the comment itself).
     // Only an inline `ignore` (appended to a content line) is file-wide.
     let applies_to_line = if kind.ends_with("next-line") {
-        Some(next_line_number.unwrap_or(line_number + 1))
+        match next_line_number {
+            Some(line) => Some(line),
+            None => return, // nothing to suppress at EOF
+        }
     } else if standalone && kind == "ignore" {
         // Standalone ignore: target next significant line if one exists,
         // otherwise treat as no-op (nothing to target at EOF).
@@ -89,7 +100,10 @@ fn add_suppressions_from_capture(
     } else if kind == "ignore" {
         None // inline file-wide suppression
     } else if standalone {
-        return; // standalone nosem/nosemgrep = no-op (can't suppress the comment line itself)
+        // Standalone nosem/nosemgrep on its own line is a no-op: it cannot
+        // suppress the comment line itself, matching standard semgrep semantics.
+        // Users who intend file-wide suppression should use `ignore` instead.
+        return;
     } else {
         // nosem / nosemgrep inline: suppress on the current line
         Some(line_number)
@@ -203,11 +217,9 @@ fn parse_json_suppression_object(
     })
 }
 
-pub(crate) fn collect_inline_suppressions(
-    sources: &HashMap<PathBuf, String>,
-) -> Vec<InlineSuppression> {
+pub(crate) fn collect_inline_suppressions(sources: &[(&Path, &str)]) -> Vec<InlineSuppression> {
     let mut suppressions = Vec::new();
-    for (path, content) in sources {
+    for &(path, content) in sources {
         suppressions.extend(collect_comment_suppressions(path, content));
         suppressions.extend(collect_json_suppressions(path, content));
     }
@@ -235,16 +247,15 @@ pub(crate) fn apply_inline_suppressions(
                 {
                     return false;
                 }
-                let paths_match = |a: &str, b: &str| -> bool {
-                    a == b
-                        || std::path::Path::new(a).ends_with(b)
-                        || std::path::Path::new(b).ends_with(a)
-                };
                 let path_matches = if suppression.applies_to_line.is_none() {
                     // File-wide suppression: only match findings that explicitly
                     // belong to this file. Do NOT fall through to primary_path,
                     // which would let a suppression in a referenced artifact
                     // silence unrelated findings on the primary document.
+                    // NOTE: path-less findings (artifact_path == None) are
+                    // intentionally excluded here — they cannot be attributed
+                    // to a specific file, so file-wide suppressions do not
+                    // apply to them. Use line-specific suppressions instead.
                     finding
                         .artifact_path
                         .as_ref()

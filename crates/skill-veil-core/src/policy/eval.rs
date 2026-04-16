@@ -1,9 +1,7 @@
+use super::{ContextPolicy, PolicyGenerator, PolicyProfile, ShieldPolicy, POLICY_EXPIRY_DAYS};
 use crate::artifact_graph::ArtifactCapability;
 use crate::findings::{
-    default_operational_contexts, Finding, OperationalContext as PolicyContext, RecommendedAction,
-};
-use crate::policy::{
-    ContextPolicy, PolicyGenerator, PolicyProfile, ShieldPolicy, POLICY_EXPIRY_DAYS,
+    default_operational_contexts, Finding, OperationalContext, RecommendedAction,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -15,12 +13,12 @@ impl PolicyGenerator {
         // Keyed by rule_id: each PolicyGenerator operates on a single skill, so
         // rule_id is sufficient for deduplication. The policy_id embeds skill_name
         // for external uniqueness but is not used as the merge key.
-        for finding in &self.findings {
-            let policy_id = format!("{}-{}", finding.rule_id.to_lowercase(), self.skill_name);
+        for finding in self.findings() {
+            let policy_id = format!("{}-{}", finding.rule_id.to_lowercase(), self.skill_name());
             let recommendation = format!(
                 "{}: skill name equals \"{}\"",
                 finding.severity.action_str(),
-                self.skill_name
+                self.skill_name()
             );
 
             policy_map
@@ -35,7 +33,7 @@ impl PolicyGenerator {
                     if finding.confidence > p.confidence {
                         p.confidence = finding.confidence;
                     }
-                    p.action = RecommendedAction::max(p.action, finding.recommended_action);
+                    p.action = p.action.max(finding.recommended_action);
                 })
                 .or_insert(ShieldPolicy {
                     id: policy_id,
@@ -55,13 +53,12 @@ impl PolicyGenerator {
     }
 
     pub(crate) fn generate_context_policies(&self) -> Vec<ContextPolicy> {
-        let mut context_map: HashMap<PolicyContext, ContextPolicy> = HashMap::new();
+        let mut context_map: HashMap<OperationalContext, ContextPolicy> = HashMap::new();
 
-        for finding in &self.findings {
+        for finding in self.findings() {
             for context in contexts_for_finding(finding) {
-                let action = RecommendedAction::max(
-                    finding.recommended_action,
-                    self.profile
+                let action = finding.recommended_action.max(
+                    self.profile()
                         .map(|profile| resolve_context_action(self, profile, context))
                         .unwrap_or(RecommendedAction::Log),
                 );
@@ -73,14 +70,14 @@ impl PolicyGenerator {
             }
         }
 
-        for node in &self.artifact_graph.nodes {
+        for node in &self.artifact_graph().nodes {
             for capability in &node.capabilities {
                 for context in contexts_for_capability(capability.capability)
                     .iter()
                     .copied()
                 {
                     let action = self
-                        .profile
+                        .profile()
                         .map(|profile| resolve_context_action(self, profile, context))
                         .unwrap_or(RecommendedAction::Log);
                     let rationale = format!(
@@ -101,24 +98,24 @@ impl PolicyGenerator {
 fn resolve_context_action(
     generator: &PolicyGenerator,
     profile: PolicyProfile,
-    context: PolicyContext,
+    context: OperationalContext,
 ) -> RecommendedAction {
-    generator.policy.as_ref().map_or_else(
+    generator.policy().map_or_else(
         || profile.default_action_for_context(context),
         |policy| policy.resolve_context_action(profile, context),
     )
 }
 
 fn upsert_context_policy(
-    context_map: &mut HashMap<PolicyContext, ContextPolicy>,
-    context: PolicyContext,
+    context_map: &mut HashMap<OperationalContext, ContextPolicy>,
+    context: OperationalContext,
     action: RecommendedAction,
     rationale: String,
 ) {
     context_map
         .entry(context)
         .and_modify(|policy| {
-            policy.action = RecommendedAction::max(policy.action, action);
+            policy.action = policy.action.max(action);
             if !policy.rationale.contains(&rationale) {
                 policy.rationale.push(rationale.clone());
             }
@@ -130,51 +127,55 @@ fn upsert_context_policy(
         });
 }
 
-fn context_sort_key(context: PolicyContext) -> u8 {
+fn context_sort_key(context: OperationalContext) -> u8 {
     match context {
-        PolicyContext::Install => 0,
-        PolicyContext::Network => 1,
-        PolicyContext::Secrets => 2,
-        PolicyContext::CodeModification => 3,
-        PolicyContext::ExternalComms => 4,
+        OperationalContext::Install => 0,
+        OperationalContext::Network => 1,
+        OperationalContext::Secrets => 2,
+        OperationalContext::CodeModification => 3,
+        OperationalContext::ExternalComms => 4,
     }
 }
 
-fn contexts_for_finding(finding: &Finding) -> Vec<PolicyContext> {
-    if finding.policy_contexts.is_empty() {
+fn contexts_for_finding(finding: &Finding) -> Vec<OperationalContext> {
+    if finding.operational_contexts.is_empty() {
         default_operational_contexts(finding.category, finding.artifact_kind)
     } else {
-        finding.policy_contexts.clone()
+        finding.operational_contexts.clone()
     }
 }
 
-fn contexts_for_capability(capability: ArtifactCapability) -> &'static [PolicyContext] {
+fn contexts_for_capability(capability: ArtifactCapability) -> &'static [OperationalContext] {
     match capability {
         ArtifactCapability::InstallExecution | ArtifactCapability::ExposesBinary => {
-            &[PolicyContext::Install]
+            &[OperationalContext::Install]
         }
-        ArtifactCapability::NetworkAccess => {
-            &[PolicyContext::Network, PolicyContext::ExternalComms]
-        }
-        ArtifactCapability::BrowserAccess => {
-            &[PolicyContext::Network, PolicyContext::CodeModification]
-        }
-        ArtifactCapability::IdentityAccess => {
-            &[PolicyContext::Secrets, PolicyContext::ExternalComms]
-        }
-        ArtifactCapability::InboundNetworkSurface => {
-            &[PolicyContext::Network, PolicyContext::ExternalComms]
-        }
+        ArtifactCapability::NetworkAccess => &[
+            OperationalContext::Network,
+            OperationalContext::ExternalComms,
+        ],
+        ArtifactCapability::BrowserAccess => &[
+            OperationalContext::Network,
+            OperationalContext::CodeModification,
+        ],
+        ArtifactCapability::IdentityAccess => &[
+            OperationalContext::Secrets,
+            OperationalContext::ExternalComms,
+        ],
+        ArtifactCapability::InboundNetworkSurface => &[
+            OperationalContext::Network,
+            OperationalContext::ExternalComms,
+        ],
         ArtifactCapability::PrivilegedRuntime | ArtifactCapability::HostFilesystemAccess => {
-            &[PolicyContext::CodeModification]
+            &[OperationalContext::CodeModification]
         }
         ArtifactCapability::ProcessExecution | ArtifactCapability::FilesystemWrite => {
-            &[PolicyContext::CodeModification]
+            &[OperationalContext::CodeModification]
         }
-        ArtifactCapability::SecretAccess => &[PolicyContext::Secrets],
+        ArtifactCapability::SecretAccess => &[OperationalContext::Secrets],
         ArtifactCapability::PersistenceSurface => &[
-            PolicyContext::CodeModification,
-            PolicyContext::ExternalComms,
+            OperationalContext::CodeModification,
+            OperationalContext::ExternalComms,
         ],
     }
 }

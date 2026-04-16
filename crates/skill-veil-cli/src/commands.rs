@@ -110,7 +110,7 @@ pub(crate) fn run_scan(
         print!("{}", output_content);
     }
 
-    if scan_result.results.iter().any(|r| r.should_fail) {
+    if !scan_result.errors.is_empty() || scan_result.results.iter().any(|r| r.should_fail) {
         std::process::exit(1);
     }
 

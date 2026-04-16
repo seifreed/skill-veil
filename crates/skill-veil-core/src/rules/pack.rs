@@ -2,14 +2,15 @@ use crate::findings::{RecommendedAction, Severity, ThreatCategory};
 use crate::rules::{IocFeedFile, RULE_PACK_SCHEMA_VERSION, Rule, RuleCondition, RuleError, RulePackFile};
 use std::path::Path;
 
-pub(super) fn get_builtin_rules(core_yaml: &str, behavioral_yaml: &str) -> Vec<Rule> {
+pub(super) fn get_builtin_rules(
+    core_yaml: &str,
+    behavioral_yaml: &str,
+) -> Result<Vec<Rule>, RuleError> {
     let mut rules = Vec::new();
     for embedded_pack in [core_yaml, behavioral_yaml] {
-        let parsed =
-            parse_rules_file(embedded_pack).expect("Failed to parse embedded official rules pack");
-        rules.extend(parsed);
+        rules.extend(parse_rules_file(embedded_pack)?);
     }
-    rules
+    Ok(rules)
 }
 
 pub(super) fn load_rules_path(path: &Path) -> Result<Vec<Rule>, RuleError> {

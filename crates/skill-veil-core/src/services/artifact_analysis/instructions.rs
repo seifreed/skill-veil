@@ -1,4 +1,32 @@
 use super::*;
+use regex::Regex;
+use std::sync::LazyLock;
+
+static RE_BROWSER_FULL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        "(?i)(browser:\\s*full|full autonomous browser|click any element|navigation:\\s*allow-all)",
+    )
+    .expect("valid regex: browser full access")
+});
+static RE_PERSISTENCE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|append\\s+to\\s+(agents|claude|system)\\.md)").expect("valid regex: persistence")
+});
+static RE_NETWORK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(http://|https://|browser tool|network tool)").expect("valid regex: network")
+});
+static RE_SECRET: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(token|secret|cookie|password|credential|session)")
+        .expect("valid regex: secret")
+});
+static RE_OAUTH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(oauth|scope|calendar|drive|slack|github pat)").expect("valid regex: oauth")
+});
+static RE_COGNITIVE_ROOTKIT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|always\\s+follow\\s+this\\s+prompt|never\\s+reveal\\s+this\\s+instruction|override\\s+future\\s+system\\s+messages)").expect("valid regex: cognitive rootkit")
+});
+static RE_PRIVILEGED_ROLE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new("(?i)(act\\s+as\\s+(root|administrator|system)|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|ignore\\s+all\\s+existing\\s+safety\\s+constraints)").expect("valid regex: privileged role")
+});
 
 pub(super) fn analyze_instruction_file(
     service: &ArtifactAnalysisService,
@@ -60,44 +88,27 @@ pub(super) fn instruction_capabilities(
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
-    if Regex::new(
-        "(?i)(browser:\\s*full|full autonomous browser|click any element|navigation:\\s*allow-all)",
-    )
-    .unwrap()
-    .is_match(content)
-    {
+    if RE_BROWSER_FULL.is_match(content) {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::BrowserAccess,
         ));
     }
-    if Regex::new("(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|append\\s+to\\s+(agents|claude|system)\\.md)")
-        .unwrap()
-        .is_match(content)
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+    if RE_PERSISTENCE.is_match(content) {
+        capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::PersistenceSurface,
         ));
     }
-    if Regex::new("(?i)(http://|https://|browser tool|network tool)")
-        .unwrap()
-        .is_match(content)
-    {
+    if RE_NETWORK.is_match(content) {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
-    if Regex::new("(?i)(token|secret|cookie|password|credential|session)")
-        .unwrap()
-        .is_match(content)
-    {
+    if RE_SECRET.is_match(content) {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::SecretAccess,
         ));
     }
-    if Regex::new("(?i)(oauth|scope|calendar|drive|slack|github pat)")
-        .unwrap()
-        .is_match(content)
-    {
+    if RE_OAUTH.is_match(content) {
         capabilities.push(ArtifactAnalysisService::declared_capability(
             ArtifactCapability::IdentityAccess,
         ));
@@ -119,10 +130,7 @@ fn semantic_persistence_findings(
     let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
 
-    if Regex::new("(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|always\\s+follow\\s+this\\s+prompt|never\\s+reveal\\s+this\\s+instruction|override\\s+future\\s+system\\s+messages)")
-        .unwrap()
-        .is_match(content)
-    {
+    if RE_COGNITIVE_ROOTKIT.is_match(content) {
         findings.push(
             Finding::builder(
                 "SEMANTIC_PERSISTENCE_COGNITIVE_ROOTKIT",
@@ -143,10 +151,7 @@ fn semantic_persistence_findings(
         );
     }
 
-    if Regex::new("(?i)(act\\s+as\\s+(root|administrator|system)|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|ignore\\s+all\\s+existing\\s+safety\\s+constraints)")
-        .unwrap()
-        .is_match(content)
-    {
+    if RE_PRIVILEGED_ROLE.is_match(content) {
         findings.push(
             Finding::builder(
                 "AGENT_EXTENSION_PRIVILEGED_PROMPT_ROLE",
@@ -197,7 +202,8 @@ pub(super) fn permission_and_network_findings(
             );
         };
 
-    for (rule_id, match_value, reason) in explicit_declared_permission_rules(content) {
+    let permission_rules = explicit_declared_permission_rules(content);
+    for (rule_id, match_value, reason) in &permission_rules {
         add_declared_permission(rule_id, match_value, reason);
     }
 
@@ -222,17 +228,14 @@ pub(super) fn permission_and_network_findings(
     }
 
     let (intent_kind, intent_strength) = infer_declared_intent(content);
-    let has_dangerous_permission_combo =
-        explicit_declared_permission_rules(content)
-            .iter()
-            .any(|(rule_id, _, _)| {
-                matches!(
-                    *rule_id,
-                    "DECLARED_PERMISSION_BROWSER_FULL"
-                        | "DECLARED_PERMISSION_FILE_WRITE"
-                        | "DECLARED_PERMISSION_SHELL_EXEC"
-                )
-            });
+    let has_dangerous_permission_combo = permission_rules.iter().any(|(rule_id, _, _)| {
+        matches!(
+            *rule_id,
+            "DECLARED_PERMISSION_BROWSER_FULL"
+                | "DECLARED_PERMISSION_FILE_WRITE"
+                | "DECLARED_PERMISSION_SHELL_EXEC"
+        )
+    });
     if intent_kind == "narrow" && intent_strength > 0 && has_dangerous_permission_combo {
         findings.push(
             Finding::builder(

@@ -3,7 +3,7 @@
 use crate::adapters::{PulldownMarkdownParser, StdFileSystemProvider};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
-use crate::findings::ArtifactKind;
+use crate::policy::{BaselineFile, PolicyFile, WaiverFile};
 use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::rules::RuleEngine;
 use crate::scanner_support::{load_optional_baseline, load_optional_policy, load_optional_waivers};
@@ -13,6 +13,28 @@ pub use crate::scanner_types::{
 use crate::services::{ArtifactAnalysisService, FileDiscoveryService, ScanFilterService};
 use crate::{scanner_execution, scanner_graph};
 use std::path::Path;
+
+type EngineAndPolicy = (
+    RuleEngine,
+    Option<BaselineFile>,
+    Option<WaiverFile>,
+    Option<PolicyFile>,
+);
+
+/// Build the rule engine and load optional policy files from scan options.
+///
+/// Shared by `with_std_adapters` and `with_custom_adapters` to avoid duplicating
+/// the engine + policy loading logic.
+fn build_engine_and_policy(options: &ScanOptions) -> Result<EngineAndPolicy, ScanError> {
+    let mut engine = RuleEngine::with_defaults()?;
+    if let Some(ref rules_dir) = options.rules_dir {
+        engine.load_from_dir(rules_dir)?;
+    }
+    let baseline = load_optional_baseline(options.baseline_path.as_deref())?;
+    let waivers = load_optional_waivers(options.waivers_path.as_deref())?;
+    let policy = load_optional_policy(options.policy_path.as_deref())?;
+    Ok((engine, baseline, waivers, policy))
+}
 
 /// Scanner for analyzing skills and related agent-extension packages.
 pub struct Scanner<
@@ -34,15 +56,7 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
 
     #[must_use = "Scanner::with_std_adapters() returns a Result that should be used"]
     pub fn with_std_adapters(options: ScanOptions) -> Result<Self, ScanError> {
-        let mut engine = RuleEngine::with_defaults()?;
-        if let Some(ref rules_dir) = options.rules_dir {
-            engine.load_from_dir(rules_dir)?;
-        }
-
-        let baseline = load_optional_baseline(options.baseline_path.as_deref())?;
-        let waivers = load_optional_waivers(options.waivers_path.as_deref())?;
-        let policy = load_optional_policy(options.policy_path.as_deref())?;
-
+        let (engine, baseline, waivers, policy) = build_engine_and_policy(&options)?;
         Ok(Self {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
@@ -62,15 +76,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         fs_provider: F,
         parser: P,
     ) -> Result<Self, ScanError> {
-        let mut engine = RuleEngine::with_defaults()?;
-        if let Some(ref rules_dir) = options.rules_dir {
-            engine.load_from_dir(rules_dir)?;
-        }
-
-        let baseline = load_optional_baseline(options.baseline_path.as_deref())?;
-        let waivers = load_optional_waivers(options.waivers_path.as_deref())?;
-        let policy = load_optional_policy(options.policy_path.as_deref())?;
-
+        let (engine, baseline, waivers, policy) = build_engine_and_policy(&options)?;
         Ok(Self {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
@@ -84,18 +90,6 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub(crate) fn build_artifact_graph(&self, doc: &SkillDocument) -> ArtifactGraph {
         scanner_graph::build_artifact_graph::<F>(&self.artifact_analysis, doc)
-    }
-
-    pub(crate) fn artifact_kind_for_path(path: &Path) -> ArtifactKind {
-        scanner_graph::artifact_kind_for_path::<F>(path)
-    }
-
-    pub(crate) fn sibling_files(path: &Path) -> Vec<std::path::PathBuf> {
-        scanner_graph::sibling_files(path)
-    }
-
-    pub(crate) fn derive_package_id(path: &Path) -> Option<String> {
-        scanner_graph::derive_package_id(path)
     }
 
     pub fn scan_file(&self, path: impl AsRef<Path>) -> Result<ScanResult, ScanError> {
@@ -123,10 +117,18 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
         if path.is_file() {
-            let result = self.scan_file(path)?;
-            return Ok(PackageScanResult {
-                results: vec![result],
-                errors: Vec::new(),
+            return Ok(match self.scan_file(path) {
+                Ok(result) => PackageScanResult {
+                    results: vec![result],
+                    errors: Vec::new(),
+                },
+                Err(err) => PackageScanResult {
+                    results: Vec::new(),
+                    errors: vec![crate::scanner_types::ScanErrorEntry {
+                        path: path.to_path_buf(),
+                        error: err.to_string(),
+                    }],
+                },
             });
         }
 
@@ -143,31 +145,6 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
                             error: err.to_string(),
                         });
                     tracing::warn!("Failed to scan {}: {}", target.display(), err);
-                }
-            }
-        }
-        Ok(pkg_result)
-    }
-
-    pub fn scan_dir(&self, path: impl AsRef<Path>) -> Result<PackageScanResult, ScanError> {
-        let path = path.as_ref();
-        if !path.exists() {
-            return Err(ScanError::PathNotFound(path.to_path_buf()));
-        }
-
-        let skill_files = self.file_discovery.discover_skills(path);
-        let mut pkg_result = PackageScanResult::new();
-        for file_path in skill_files {
-            match self.scan_file(&file_path) {
-                Ok(result) => pkg_result.results.push(result),
-                Err(err) => {
-                    pkg_result
-                        .errors
-                        .push(crate::scanner_types::ScanErrorEntry {
-                            path: file_path.clone(),
-                            error: err.to_string(),
-                        });
-                    tracing::warn!("Failed to scan {}: {}", file_path.display(), err);
                 }
             }
         }
