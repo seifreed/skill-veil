@@ -49,7 +49,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                         .with_match_target(MatchTarget::ReferencedFile {
                             path: artifact_path.clone(),
                         })
-                        .with_artifact(artifact_kind, artifact_path.clone())
+                        .with_artifact(artifact_kind, artifact_path.as_str())
                 }),
         );
 
@@ -77,7 +77,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                         if f.artifact_path.is_some() {
                             f
                         } else {
-                            f.with_artifact(artifact_kind, artifact_path.clone())
+                            f.with_artifact(artifact_kind, artifact_path.as_str())
                         }
                     }),
             );
@@ -118,8 +118,9 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     findings.extend(taint_findings);
     let (findings, deduplication_summary) = deduplicate_findings(findings);
 
-    let (findings, inline_suppressed) =
+    let (findings, suppressed_findings) =
         collect_and_apply_suppressions(findings, path, &doc, &primary_content);
+    let inline_suppressed = suppressed_findings.len();
 
     let filter_outcome = scanner.filter_service().filter_with_summary(findings);
     let filtered_findings = filter_outcome.findings;
@@ -150,6 +151,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         heuristic_score: doc.structural_signals.score,
         primary_artifact_kind: artifact_kind,
         findings: filtered_findings,
+        suppressed_findings,
         primary_findings,
         supporting_findings,
         summary,
@@ -222,7 +224,7 @@ fn collect_and_apply_suppressions(
     path: &Path,
     doc: &SkillDocument,
     primary_content: &str,
-) -> (Vec<Finding>, usize) {
+) -> (Vec<Finding>, Vec<Finding>) {
     let mut ref_contents: Vec<(PathBuf, String)> = Vec::new();
     for referenced_file in &doc.referenced_files {
         if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file) {

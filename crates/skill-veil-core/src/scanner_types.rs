@@ -86,6 +86,8 @@ pub struct ScanResult {
     pub heuristic_score: u8,
     pub primary_artifact_kind: ArtifactKind,
     pub findings: Vec<Finding>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub suppressed_findings: Vec<Finding>,
     pub primary_findings: Vec<Finding>,
     pub supporting_findings: Vec<Finding>,
     pub summary: FindingSummary,

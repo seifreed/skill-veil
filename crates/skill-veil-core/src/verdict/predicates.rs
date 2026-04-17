@@ -3,6 +3,15 @@ use crate::findings::{
     RootCauseGroup, SignalClass, Verdict, VerdictCalibrationNote, RISK_THRESHOLD_APPROVAL,
 };
 
+pub(super) struct VerdictInputs<'a> {
+    pub(super) findings: &'a [Finding],
+    pub(super) root_cause_groups: &'a [RootCauseGroup],
+    pub(super) raw_root_cause_groups: &'a [RootCauseGroup],
+    pub(super) compound_reasons: &'a [crate::findings::VerdictReason],
+    pub(super) primary_summary: &'a FindingSummary,
+    pub(super) supporting_summary: &'a FindingSummary,
+}
+
 pub(super) struct VerdictPredicates {
     pub(super) has_malicious_behavior: bool,
     pub(super) has_compound_malicious: bool,
@@ -17,15 +26,15 @@ pub(super) struct VerdictPredicates {
 }
 
 impl VerdictPredicates {
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn compute(
-        findings: &[Finding],
-        root_cause_groups: &[RootCauseGroup],
-        raw_root_cause_groups: &[RootCauseGroup],
-        compound_reasons: &[crate::findings::VerdictReason],
-        primary_summary: &FindingSummary,
-        supporting_summary: &FindingSummary,
-    ) -> Self {
+    pub(super) fn compute(inputs: &VerdictInputs<'_>) -> Self {
+        let VerdictInputs {
+            findings,
+            root_cause_groups,
+            raw_root_cause_groups,
+            compound_reasons,
+            primary_summary,
+            supporting_summary,
+        } = inputs;
         let has_malicious_behavior = root_cause_groups.iter().any(|group| {
             group.signal_class == SignalClass::MaliciousBehavior
                 && group.strongest_action == RecommendedAction::Block

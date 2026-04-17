@@ -27,7 +27,7 @@ pub use permissions::{
 pub use summary::{ActionTrigger, FindingSummary, RiskFactor, SeverityCounts};
 pub use types::{
     BlastRadiusSummary, Finding, HygieneSummary, PackageVerdictReport, RootCauseGroup,
-    VerdictCalibrationNote, VerdictReason,
+    SuppressionRecord, VerdictCalibrationNote, VerdictReason,
 };
 pub use weights::*;
 

@@ -6,7 +6,7 @@ use crate::findings::{
 use regex::Regex;
 use std::path::Path;
 
-pub(super) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
+pub(crate) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile_json(
         path,
         content,
@@ -16,7 +16,7 @@ pub(super) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
-pub(super) fn analyze_cargo_lock(path: &Path, content: &str) -> Vec<Finding> {
+pub(crate) fn analyze_cargo_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile_text(
         path,
         content,
@@ -26,7 +26,7 @@ pub(super) fn analyze_cargo_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
-pub(super) fn analyze_poetry_lock(path: &Path, content: &str) -> Vec<Finding> {
+pub(crate) fn analyze_poetry_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile_text(
         path,
         content,
@@ -36,7 +36,7 @@ pub(super) fn analyze_poetry_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
-pub(super) fn analyze_uv_lock(path: &Path, content: &str) -> Vec<Finding> {
+pub(crate) fn analyze_uv_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile_text(
         path,
         content,
@@ -46,7 +46,7 @@ pub(super) fn analyze_uv_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
-pub(super) fn analyze_yarn_lock(path: &Path, content: &str) -> Vec<Finding> {
+pub(crate) fn analyze_yarn_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile_text(
         path,
         content,
@@ -56,7 +56,7 @@ pub(super) fn analyze_yarn_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
-pub(super) fn analyze_pnpm_lock(path: &Path, content: &str) -> Vec<Finding> {
+pub(crate) fn analyze_pnpm_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile_text(
         path,
         content,
@@ -66,7 +66,7 @@ pub(super) fn analyze_pnpm_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
-pub(super) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
+pub(crate) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
     let lower = content.to_ascii_lowercase();
     let mut capabilities = Vec::new();
     if lower.contains("http://") || lower.contains("https://") || lower.contains("tarball:") {
@@ -77,7 +77,7 @@ pub(super) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     capabilities
 }
 
-pub(super) fn lockfile_relations(content: &str) -> Vec<ArtifactLink> {
+pub(crate) fn lockfile_relations(content: &str) -> Vec<ArtifactLink> {
     let lower = content.to_ascii_lowercase();
     let mut links = Vec::new();
     if lower.contains("http://") || lower.contains("https://") || lower.contains("tarball:") {

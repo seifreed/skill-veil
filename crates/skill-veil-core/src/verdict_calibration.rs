@@ -63,10 +63,10 @@ pub(crate) struct VerdictCalibration {
 
 /// Static configuration for a single calibration rule.
 struct CalibrationRule {
+    /// Rule IDs whose presence in a group triggers this calibration rule.
+    trigger_rule_ids: &'static [&'static str],
     /// Rule IDs to add to the accumulated exclusion list when this rule fires.
     rule_ids: &'static [&'static str],
-    /// Predicate that matches a finding's rule_id to determine if this rule applies to the group.
-    matches_rule: fn(&str) -> bool,
     /// Risk score reduction when the calibration downgrade takes effect.
     risk_delta: i32,
     /// Whether to reclassify the group's signal_class to `ReviewSignal` on downgrade.
@@ -78,31 +78,12 @@ struct CalibrationRule {
     note_rule_id: &'static str,
 }
 
-fn matches_declared_permission_network_access(rule_id: &str) -> bool {
-    rule_id == "DECLARED_PERMISSION_NETWORK_ACCESS"
-}
-
-fn matches_capability_permission_mismatch(rule_id: &str) -> bool {
-    rule_id == "CAPABILITY_PERMISSION_MISMATCH"
-}
-
-fn matches_internal_network_access(rule_id: &str) -> bool {
-    rule_id == "INTERNAL_NETWORK_ACCESS"
-}
-
-fn is_mcp_no_auth_rule(rule_id: &str) -> bool {
-    matches!(
-        rule_id,
-        "MCP_NO_AUTH_MODEL" | "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"
-    )
-}
-
 /// Ordered calibration pipeline. Rules are applied sequentially; see module-level docs
 /// for the ordering rationale and independence guarantees.
 const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
     CalibrationRule {
+        trigger_rule_ids: &["DECLARED_PERMISSION_NETWORK_ACCESS"],
         rule_ids: &["DECLARED_PERMISSION_NETWORK_ACCESS"],
-        matches_rule: matches_declared_permission_network_access,
         risk_delta: -10,
         reclassify_signal: false,
         effect_downgraded: "downgraded_to_context",
@@ -111,8 +92,8 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
         note_rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS",
     },
     CalibrationRule {
+        trigger_rule_ids: &["CAPABILITY_PERMISSION_MISMATCH"],
         rule_ids: &["CAPABILITY_PERMISSION_MISMATCH"],
-        matches_rule: matches_capability_permission_mismatch,
         risk_delta: -8,
         reclassify_signal: false,
         effect_downgraded: "downgraded_to_context",
@@ -121,8 +102,8 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
         note_rule_id: "CAPABILITY_PERMISSION_MISMATCH",
     },
     CalibrationRule {
+        trigger_rule_ids: &["INTERNAL_NETWORK_ACCESS"],
         rule_ids: &["INTERNAL_NETWORK_ACCESS"],
-        matches_rule: matches_internal_network_access,
         risk_delta: -12,
         // Reclassify to ReviewSignal so that verdict.rs does not treat an
         // isolated internal-network finding as MaliciousBehavior or
@@ -134,8 +115,8 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
         note_rule_id: "INTERNAL_NETWORK_ACCESS",
     },
     CalibrationRule {
+        trigger_rule_ids: &["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"],
         rule_ids: &["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"],
-        matches_rule: is_mcp_no_auth_rule,
         risk_delta: -6,
         reclassify_signal: true,
         effect_downgraded: "downgraded_to_context",
@@ -162,7 +143,10 @@ pub(crate) fn calibrate_verdict_inputs(
         finding.recommended_action != RecommendedAction::Log
             && !is_permission_model_rule(&finding.rule_id)
             && finding.rule_id != "INTERNAL_NETWORK_ACCESS"
-            && !is_mcp_no_auth_rule(&finding.rule_id)
+            && !matches!(
+                finding.rule_id.as_str(),
+                "MCP_NO_AUTH_MODEL" | "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"
+            )
             && matches!(
                 finding.signal_class,
                 SignalClass::SuspiciousPackageBehavior | SignalClass::MaliciousBehavior
@@ -227,13 +211,13 @@ pub(crate) fn calibrate_verdict_inputs(
     // MAX_REPRESENTATIVE_RULES entries and could exclude calibration-relevant rules).
     let group_has_matching_rule = |group: &RootCauseGroup,
                                    original_signal_class: SignalClass,
-                                   matches_rule: fn(&str) -> bool|
+                                   trigger_rule_ids: &[&str]|
      -> bool {
         findings.iter().any(|f| {
             f.artifact_scope == group.scope
                 && f.category == group.category
                 && f.signal_class == original_signal_class
-                && matches_rule(&f.rule_id)
+                && trigger_rule_ids.contains(&f.rule_id.as_str())
         })
     };
 
@@ -241,7 +225,9 @@ pub(crate) fn calibrate_verdict_inputs(
         let original_signal_class = original_snapshots[i].1;
 
         for (rule, &gate) in CALIBRATION_PIPELINE.iter().zip(gates.iter()) {
-            if !gate || !group_has_matching_rule(group, original_signal_class, rule.matches_rule) {
+            if !gate
+                || !group_has_matching_rule(group, original_signal_class, rule.trigger_rule_ids)
+            {
                 continue;
             }
 

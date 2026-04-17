@@ -27,6 +27,18 @@ pub struct RootCauseGroup {
     pub representative_rules: Vec<String>,
 }
 
+/// Audit record set on a finding when it is suppressed by an inline annotation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuppressionRecord {
+    /// Suppression kind: `"inline_comment"` or `"inline_json"`.
+    pub kind: String,
+    /// Rule ID that was suppressed (`"*"` for wildcard suppressions).
+    pub rule_id: String,
+    /// Reason declared in the annotation, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 /// A security finding from analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Finding {
@@ -68,6 +80,9 @@ pub struct Finding {
     pub operational_contexts: Vec<OperationalContext>,
     /// Line number if available
     pub line_number: Option<usize>,
+    /// Set when this finding was suppressed by an inline annotation; absent for active findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suppression: Option<SuppressionRecord>,
 }
 
 /// A note explaining how calibration adjusted a root cause group or risk score.

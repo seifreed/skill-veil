@@ -857,3 +857,82 @@ fn test_diff_reports_waived_finding_with_fuzzy_path_is_not_resolved() {
         "Finding must NOT appear as resolved when it was waived with a fuzzy path"
     );
 }
+
+#[test]
+fn sarif_output_conforms_to_2_1_0_schema() {
+    let findings = vec![
+        Finding::builder("SCHEMA_TEST_RULE", ThreatCategory::RemoteExec)
+            .severity(Severity::High)
+            .confidence(0.9)
+            .matched_on(MatchTarget::Document)
+            .match_value("curl | bash")
+            .reason("Schema compliance test finding")
+            .artifact(
+                crate::findings::ArtifactKind::SkillDocument,
+                Some("test.md".to_string()),
+            )
+            .line(42)
+            .build(),
+    ];
+
+    let generator = PolicyGenerator::new(
+        "schema-test-skill",
+        "test.md",
+        findings,
+        ArtifactGraph::new(),
+    );
+    let sarif = generator.generate_sarif();
+    let value = serde_json::to_value(&sarif).expect("SARIF must serialize to JSON");
+
+    // Top-level SARIF 2.1.0 required fields
+    assert_eq!(value["$schema"], "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json");
+    assert_eq!(value["version"], "2.1.0");
+    assert!(
+        value["runs"].is_array() && !value["runs"].as_array().unwrap().is_empty(),
+        "runs must be non-empty array"
+    );
+
+    // Run structure
+    let run = &value["runs"][0];
+    assert!(
+        run["tool"]["driver"]["name"].is_string(),
+        "driver.name required"
+    );
+    assert!(
+        run["tool"]["driver"]["rules"].is_array(),
+        "driver.rules required"
+    );
+    assert!(run["results"].is_array(), "results required");
+
+    // Finding result structure
+    let result = &run["results"][0];
+    assert!(result["ruleId"].is_string(), "ruleId required");
+    assert!(result["level"].is_string(), "level required");
+    assert!(
+        result["message"]["text"].is_string(),
+        "message.text required"
+    );
+    assert!(
+        result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"].is_string(),
+        "location uri required"
+    );
+    assert_eq!(
+        result["locations"][0]["physicalLocation"]["region"]["startLine"], 42,
+        "startLine must match"
+    );
+
+    // Extension properties
+    let props = &result["properties"];
+    assert!(
+        props["signal_class"].is_string(),
+        "signal_class extension required"
+    );
+    assert!(
+        props["recommended_action"].is_string(),
+        "recommended_action extension required"
+    );
+    assert!(
+        props["package_verdict"].is_string(),
+        "package_verdict extension required"
+    );
+}

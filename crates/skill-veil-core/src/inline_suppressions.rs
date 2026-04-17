@@ -1,4 +1,4 @@
-use crate::findings::Finding;
+use crate::findings::{Finding, SuppressionRecord};
 use crate::policy::state::paths_match;
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -230,63 +230,72 @@ pub(crate) fn apply_inline_suppressions(
     findings: Vec<Finding>,
     suppressions: &[InlineSuppression],
     primary_path: Option<&str>,
-) -> (Vec<Finding>, usize) {
+) -> (Vec<Finding>, Vec<Finding>) {
     if suppressions.is_empty() {
-        return (findings, 0);
+        return (findings, Vec::new());
     }
 
     let now = Utc::now();
-    let original_len = findings.len();
-    let filtered: Vec<_> = findings
-        .into_iter()
-        .filter(|finding| {
-            !suppressions.iter().any(|suppression| {
-                if suppression
-                    .expires_at
-                    .is_some_and(|expires_at| expires_at < now)
-                {
-                    return false;
-                }
-                let path_matches = if suppression.applies_to_line.is_none() {
-                    // File-wide suppression: only match findings that explicitly
-                    // belong to this file. Do NOT fall through to primary_path,
-                    // which would let a suppression in a referenced artifact
-                    // silence unrelated findings on the primary document.
-                    // NOTE: path-less findings (artifact_path == None) are
-                    // intentionally excluded here — they cannot be attributed
-                    // to a specific file, so file-wide suppressions do not
-                    // apply to them. Use line-specific suppressions instead.
-                    finding
-                        .artifact_path
-                        .as_ref()
-                        .is_some_and(|ap| paths_match(ap, &suppression.path))
-                } else {
-                    // Line-specific: allow primary_path fallback for path-less findings
-                    finding
-                        .artifact_path
-                        .as_ref()
-                        .is_some_and(|ap| paths_match(ap, &suppression.path))
-                        || (finding.artifact_path.is_none()
-                            && primary_path.is_some_and(|pp| paths_match(pp, &suppression.path)))
-                };
-                let rule_matches =
-                    suppression.rule_id == "*" || suppression.rule_id == finding.rule_id;
-                // Line-specific suppressions (ignore-next-line, nosem) only match
-                // findings that have a concrete line_number. Taint and artifact-graph
-                // findings lack line context, so they can only be suppressed by
-                // file-wide directives (applies_to_line == None). This is intentional:
-                // a line-specific comment should not silence cross-artifact signals.
-                let line_matches = suppression.applies_to_line.is_none_or(|line| {
-                    finding
-                        .line_number
-                        .is_some_and(|finding_line| finding_line == line)
-                });
+    let mut active: Vec<Finding> = Vec::new();
+    let mut suppressed: Vec<Finding> = Vec::new();
 
-                path_matches && rule_matches && line_matches
-            })
-        })
-        .collect();
+    for finding in findings {
+        let matched = suppressions.iter().find(|suppression| {
+            if suppression
+                .expires_at
+                .is_some_and(|expires_at| expires_at < now)
+            {
+                return false;
+            }
+            let path_matches = if suppression.applies_to_line.is_none() {
+                // File-wide suppression: only match findings that explicitly
+                // belong to this file. Do NOT fall through to primary_path,
+                // which would let a suppression in a referenced artifact
+                // silence unrelated findings on the primary document.
+                // NOTE: path-less findings (artifact_path == None) are
+                // intentionally excluded here — they cannot be attributed
+                // to a specific file, so file-wide suppressions do not
+                // apply to them. Use line-specific suppressions instead.
+                finding
+                    .artifact_path
+                    .as_ref()
+                    .is_some_and(|ap| paths_match(ap, &suppression.path))
+            } else {
+                // Line-specific: allow primary_path fallback for path-less findings
+                finding
+                    .artifact_path
+                    .as_ref()
+                    .is_some_and(|ap| paths_match(ap, &suppression.path))
+                    || (finding.artifact_path.is_none()
+                        && primary_path.is_some_and(|pp| paths_match(pp, &suppression.path)))
+            };
+            let rule_matches = suppression.rule_id == "*" || suppression.rule_id == finding.rule_id;
+            // Line-specific suppressions (ignore-next-line, nosem) only match
+            // findings that have a concrete line_number. Taint and artifact-graph
+            // findings lack line context, so they can only be suppressed by
+            // file-wide directives (applies_to_line == None). This is intentional:
+            // a line-specific comment should not silence cross-artifact signals.
+            let line_matches = suppression.applies_to_line.is_none_or(|line| {
+                finding
+                    .line_number
+                    .is_some_and(|finding_line| finding_line == line)
+            });
 
-    let suppressed_count = original_len.saturating_sub(filtered.len());
-    (filtered, suppressed_count)
+            path_matches && rule_matches && line_matches
+        });
+
+        if let Some(sup) = matched {
+            let mut tagged = finding;
+            tagged.suppression = Some(SuppressionRecord {
+                kind: sup.kind.clone(),
+                rule_id: sup.rule_id.clone(),
+                reason: sup.reason.clone(),
+            });
+            suppressed.push(tagged);
+        } else {
+            active.push(finding);
+        }
+    }
+
+    (active, suppressed)
 }

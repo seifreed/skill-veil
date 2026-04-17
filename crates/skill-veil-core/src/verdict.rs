@@ -56,14 +56,14 @@ pub fn derive_package_verdict(
     }));
     verdict_reasons.truncate(MAX_VERDICT_REASONS);
 
-    let predicates = predicates::VerdictPredicates::compute(
+    let predicates = predicates::VerdictPredicates::compute(&predicates::VerdictInputs {
         findings,
-        &root_cause_groups,
-        &raw_root_cause_groups,
-        &compound_reasons,
+        root_cause_groups: &root_cause_groups,
+        raw_root_cause_groups: &raw_root_cause_groups,
+        compound_reasons: &compound_reasons,
         primary_summary,
         supporting_summary,
-    );
+    });
 
     let hygiene_summary = hygiene::build_hygiene_summary(findings);
     let declared_permissions =

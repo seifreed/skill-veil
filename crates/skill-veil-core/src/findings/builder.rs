@@ -194,6 +194,7 @@ impl FindingBuilder {
             artifact_path: self.artifact_path,
             operational_contexts,
             line_number: self.line_number,
+            suppression: None,
         }
     }
 }
