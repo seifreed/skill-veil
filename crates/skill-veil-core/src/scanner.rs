@@ -41,11 +41,11 @@ pub struct Scanner<
     F: FileSystemProvider = StdFileSystemProvider,
     P: MarkdownParser = PulldownMarkdownParser,
 > {
-    pub(crate) engine: RuleEngine,
-    pub(crate) artifact_analysis: ArtifactAnalysisService,
-    pub(crate) file_discovery: FileDiscoveryService<F>,
-    pub(crate) filter_service: ScanFilterService,
-    pub(crate) parser: P,
+    engine: RuleEngine,
+    artifact_analysis: ArtifactAnalysisService,
+    file_discovery: FileDiscoveryService<F>,
+    filter_service: ScanFilterService,
+    parser: P,
 }
 
 impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
@@ -86,6 +86,26 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
             ),
             parser,
         })
+    }
+
+    pub(crate) fn engine(&self) -> &RuleEngine {
+        &self.engine
+    }
+
+    pub(crate) fn artifact_analysis(&self) -> &ArtifactAnalysisService {
+        &self.artifact_analysis
+    }
+
+    pub(crate) fn file_discovery(&self) -> &FileDiscoveryService<F> {
+        &self.file_discovery
+    }
+
+    pub(crate) fn filter_service(&self) -> &ScanFilterService {
+        &self.filter_service
+    }
+
+    pub(crate) fn parser(&self) -> &P {
+        &self.parser
     }
 
     pub(crate) fn build_artifact_graph(&self, doc: &SkillDocument) -> ArtifactGraph {

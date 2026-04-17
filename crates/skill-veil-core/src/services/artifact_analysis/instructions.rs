@@ -2,6 +2,9 @@ use super::*;
 use regex::Regex;
 use std::sync::LazyLock;
 
+const BROAD_PERMISSION_THRESHOLD: usize = 3;
+const METADATA_SERVICE_IP: &str = "169.254.169.254";
+
 static RE_BROWSER_FULL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         "(?i)(browser:\\s*full|full autonomous browser|click any element|navigation:\\s*allow-all)",
@@ -28,20 +31,25 @@ static RE_PRIVILEGED_ROLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("(?i)(act\\s+as\\s+(root|administrator|system)|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|ignore\\s+all\\s+existing\\s+safety\\s+constraints)").expect("valid regex: privileged role")
 });
 
+fn analyze_with_kind(
+    service: &ArtifactAnalysisService,
+    path: &Path,
+    content: &str,
+    kind: ArtifactKind,
+) -> Vec<Finding> {
+    let mut findings = semantic_persistence_findings(service, path, content, kind);
+    findings.extend(permission_and_network_findings(
+        service, path, content, kind,
+    ));
+    findings
+}
+
 pub(super) fn analyze_instruction_file(
     service: &ArtifactAnalysisService,
     path: &Path,
     content: &str,
 ) -> Vec<Finding> {
-    let mut findings =
-        semantic_persistence_findings(service, path, content, ArtifactKind::AgentInstruction);
-    findings.extend(permission_and_network_findings(
-        service,
-        path,
-        content,
-        ArtifactKind::AgentInstruction,
-    ));
-    findings
+    analyze_with_kind(service, path, content, ArtifactKind::AgentInstruction)
 }
 
 pub(super) fn analyze_skill_document(
@@ -49,15 +57,7 @@ pub(super) fn analyze_skill_document(
     path: &Path,
     content: &str,
 ) -> Vec<Finding> {
-    let mut findings =
-        semantic_persistence_findings(service, path, content, ArtifactKind::SkillDocument);
-    findings.extend(permission_and_network_findings(
-        service,
-        path,
-        content,
-        ArtifactKind::SkillDocument,
-    ));
-    findings
+    analyze_with_kind(service, path, content, ArtifactKind::SkillDocument)
 }
 
 pub(super) fn analyze_prompt_pack(
@@ -65,15 +65,7 @@ pub(super) fn analyze_prompt_pack(
     path: &Path,
     content: &str,
 ) -> Vec<Finding> {
-    let mut findings =
-        semantic_persistence_findings(service, path, content, ArtifactKind::PromptPackDocument);
-    findings.extend(permission_and_network_findings(
-        service,
-        path,
-        content,
-        ArtifactKind::PromptPackDocument,
-    ));
-    findings
+    analyze_with_kind(service, path, content, ArtifactKind::PromptPackDocument)
 }
 
 pub(super) fn instruction_relations(
@@ -209,7 +201,7 @@ pub(super) fn permission_and_network_findings(
 
     let broad_permission_count = declared_permission_count;
 
-    if broad_permission_count >= 3 {
+    if broad_permission_count >= BROAD_PERMISSION_THRESHOLD {
         findings.push(
             Finding::builder("SCOPE_OVERPROVISIONING", ThreatCategory::ScopeCreep)
                 .severity(Severity::Medium)
@@ -262,7 +254,8 @@ pub(super) fn permission_and_network_findings(
         ) || contains_internal_network_action(content))
             && !looks_like_local_dev_reference(content)
         {
-            let (rule_id, category, reason) = if target == "169.254.169.254" {
+            let is_metadata_service = target == METADATA_SERVICE_IP;
+            let (rule_id, category, reason) = if is_metadata_service {
                 (
                     "METADATA_SERVICE_ACCESS",
                     ThreatCategory::CredentialExposure,
@@ -278,13 +271,13 @@ pub(super) fn permission_and_network_findings(
             findings.push(
                 Finding::builder(rule_id, category)
                     .severity(Severity::Medium)
-                    .action(if target == "169.254.169.254" {
+                    .action(if is_metadata_service {
                         RecommendedAction::RequireApproval
                     } else {
                         RecommendedAction::Log
                     })
                     .evidence_kind(EvidenceKind::Behavior)
-                    .signal_class(if target == "169.254.169.254" {
+                    .signal_class(if is_metadata_service {
                         crate::findings::SignalClass::SuspiciousPackageBehavior
                     } else {
                         crate::findings::SignalClass::ReviewSignal

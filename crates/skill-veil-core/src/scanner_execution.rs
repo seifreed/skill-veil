@@ -28,7 +28,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
         let artifact_path = referenced_file.display().to_string();
 
         let artifact_doc =
-            match SkillDocument::from_file_with_parser(referenced_file, &scanner.parser) {
+            match SkillDocument::from_file_with_parser(referenced_file, scanner.parser()) {
                 Ok(doc) => doc,
                 Err(err) => {
                     findings.push(artifact_parse_error_finding(
@@ -41,7 +41,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
             };
         findings.extend(
             scanner
-                .engine
+                .engine()
                 .evaluate(&artifact_doc)
                 .into_iter()
                 .map(|finding| {
@@ -65,12 +65,12 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                 findings.push(parse_warning);
             }
             let sibling_files = crate::scanner_graph::sibling_files(
-                scanner.file_discovery.fs_provider(),
+                scanner.file_discovery().fs_provider(),
                 referenced_file,
             );
             findings.extend(
                 scanner
-                    .artifact_analysis
+                    .artifact_analysis()
                     .analyze(referenced_file, &content, &sibling_files)
                     .into_iter()
                     .map(|f| {
@@ -91,22 +91,22 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     path: &Path,
 ) -> Result<ScanResult, ScanError> {
-    let doc = SkillDocument::from_file_with_parser(path, &scanner.parser)?;
+    let doc = SkillDocument::from_file_with_parser(path, scanner.parser())?;
     let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(path);
     let artifact_path = path.display().to_string();
     let primary_content = doc.raw_content.clone();
 
-    let mut findings = scanner.engine.evaluate(&doc);
+    let mut findings = scanner.engine().evaluate(&doc);
     findings.extend(collect_primary_doc_warnings::<F>(&doc, path));
     findings.extend(scan_supporting_artifacts(scanner, &doc));
     if let Some(w) = structured_parse_warning(path, &primary_content, artifact_kind) {
         findings.push(w);
     }
     let sibling_files =
-        crate::scanner_graph::sibling_files(scanner.file_discovery.fs_provider(), path);
+        crate::scanner_graph::sibling_files(scanner.file_discovery().fs_provider(), path);
     findings.extend(
         scanner
-            .artifact_analysis
+            .artifact_analysis()
             .analyze(path, &primary_content, &sibling_files),
     );
 
@@ -121,7 +121,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     let (findings, inline_suppressed) =
         collect_and_apply_suppressions(findings, path, &doc, &primary_content);
 
-    let filter_outcome = scanner.filter_service.filter_with_summary(findings);
+    let filter_outcome = scanner.filter_service().filter_with_summary(findings);
     let filtered_findings = filter_outcome.findings;
     let (primary_findings, supporting_findings) =
         ScanResult::split_findings_by_scope(path, artifact_kind, &filtered_findings);
@@ -137,7 +137,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         &supporting_summary,
         &summary,
     );
-    let should_fail = scanner.filter_service.should_fail(&filtered_findings);
+    let should_fail = scanner.filter_service().should_fail(&filtered_findings);
 
     Ok(ScanResult {
         path: path.to_path_buf(),
@@ -159,8 +159,8 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         verdict_report,
         deduplication_summary,
         artifact_graph,
-        profile: scanner.filter_service.profile(),
-        policy: scanner.filter_service.policy().cloned(),
+        profile: scanner.filter_service().profile(),
+        policy: scanner.filter_service().policy().cloned(),
         suppression_summary: crate::policy::SuppressionSummary {
             inline_suppressed,
             ..filter_outcome.suppression_summary
@@ -172,7 +172,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
                 "baseline".to_string(),
                 "policy_overrides".to_string(),
             ],
-            effective_fail_on: scanner.filter_service.fail_on(),
+            effective_fail_on: scanner.filter_service().fail_on(),
             applied_overrides: filter_outcome.applied_overrides,
         },
         should_fail,
@@ -248,9 +248,9 @@ pub(crate) fn discover_package_targets<F: FileSystemProvider, P: MarkdownParser>
     scanner: &Scanner<F, P>,
     path: &Path,
 ) -> Result<Vec<PathBuf>, ScanError> {
-    let mut entrypoints = scanner.file_discovery.discover_skill_entrypoints(path);
+    let mut entrypoints = scanner.file_discovery().discover_skill_entrypoints(path);
     if entrypoints.is_empty() {
-        entrypoints = scanner.file_discovery.discover_heuristic_candidates(path);
+        entrypoints = scanner.file_discovery().discover_heuristic_candidates(path);
     }
     if entrypoints.is_empty() {
         return Err(ScanError::NoSkillEntrypoints(path.to_path_buf()));

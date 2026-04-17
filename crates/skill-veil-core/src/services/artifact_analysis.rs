@@ -90,40 +90,6 @@ fn infer_declared_intent(content: &str) -> (&'static str, usize) {
     permissions::infer_declared_intent(content)
 }
 
-fn is_opaque_mcp_endpoint(content: &str) -> bool {
-    RE_OPAQUE_MCP_ENDPOINT.is_match(content)
-}
-
-fn mcp_declares_no_auth(content: &str) -> bool {
-    RE_MCP_NO_AUTH.is_match(content)
-}
-
-fn mcp_declares_inline_secret(content: &str) -> bool {
-    RE_MCP_INLINE_SECRET.is_match(content)
-}
-
-fn mcp_declares_permissive_tools(content: &str) -> bool {
-    RE_MCP_PERMISSIVE_TOOLS.is_match(content)
-}
-
-fn extract_mcp_tool_names(content: &str) -> Vec<String> {
-    let mut tools = Vec::new();
-    if let Some(array_match) = RE_MCP_TOOLS_ARRAY
-        .captures(content)
-        .and_then(|captures| captures.get(1))
-    {
-        for capture in RE_QUOTED_TOOL_NAME.captures_iter(array_match.as_str()) {
-            if let Some(name) = capture.get(1) {
-                let value = name.as_str().to_string();
-                if !tools.contains(&value) {
-                    tools.push(value);
-                }
-            }
-        }
-    }
-    tools
-}
-
 pub struct ArtifactAnalysisService;
 
 #[derive(Debug, Clone)]
@@ -143,23 +109,37 @@ impl ArtifactAnalysisService {
     }
 
     pub(crate) fn is_opaque_mcp_endpoint(&self, content: &str) -> bool {
-        is_opaque_mcp_endpoint(content)
+        RE_OPAQUE_MCP_ENDPOINT.is_match(content)
     }
 
     pub(crate) fn mcp_declares_no_auth(&self, content: &str) -> bool {
-        mcp_declares_no_auth(content)
+        RE_MCP_NO_AUTH.is_match(content)
     }
 
     pub(crate) fn mcp_declares_inline_secret(&self, content: &str) -> bool {
-        mcp_declares_inline_secret(content)
+        RE_MCP_INLINE_SECRET.is_match(content)
     }
 
     pub(crate) fn mcp_declares_permissive_tools(&self, content: &str) -> bool {
-        mcp_declares_permissive_tools(content)
+        RE_MCP_PERMISSIVE_TOOLS.is_match(content)
     }
 
     pub(crate) fn extract_mcp_tool_names(&self, content: &str) -> Vec<String> {
-        extract_mcp_tool_names(content)
+        let mut tools = Vec::new();
+        if let Some(array_match) = RE_MCP_TOOLS_ARRAY
+            .captures(content)
+            .and_then(|captures| captures.get(1))
+        {
+            for capture in RE_QUOTED_TOOL_NAME.captures_iter(array_match.as_str()) {
+                if let Some(name) = capture.get(1) {
+                    let value = name.as_str().to_string();
+                    if !tools.contains(&value) {
+                        tools.push(value);
+                    }
+                }
+            }
+        }
+        tools
     }
 
     pub fn infer_relations(&self, path: &Path, content: &str) -> Vec<ArtifactLink> {
