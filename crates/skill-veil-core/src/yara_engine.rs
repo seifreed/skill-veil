@@ -43,7 +43,13 @@ impl YaraEngine {
     pub fn load_rules_dir(&mut self, dir: impl AsRef<Path>) -> Result<(), YaraError> {
         for entry in walkdir::WalkDir::new(dir.as_ref())
             .into_iter()
-            .filter_map(Result::ok)
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    tracing::warn!("Skipping entry while loading YARA rules: {err}");
+                    None
+                }
+            })
             .filter(|entry| {
                 entry
                     .path()

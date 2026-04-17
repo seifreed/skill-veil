@@ -89,7 +89,11 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
     }
 
     pub(crate) fn build_artifact_graph(&self, doc: &SkillDocument) -> ArtifactGraph {
-        scanner_graph::build_artifact_graph::<F>(&self.artifact_analysis, doc)
+        scanner_graph::build_artifact_graph::<F>(
+            &self.artifact_analysis,
+            self.file_discovery.fs_provider(),
+            doc,
+        )
     }
 
     pub fn scan_file(&self, path: impl AsRef<Path>) -> Result<ScanResult, ScanError> {

@@ -1,47 +1,46 @@
-use crate::findings::{ArtifactKind, RecommendedAction, Severity, ThreatCategory};
+use super::condition::RuleCondition;
+use crate::findings::{RecommendedAction, Severity, ThreatCategory};
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 
-/// Versioned schema string for external rule packs.
-pub const RULE_PACK_SCHEMA_VERSION: &str = "skill-veil.dev/rules/v1alpha1";
-
-/// Default confidence score for rules (0.0 - 1.0)
-pub const DEFAULT_RULE_CONFIDENCE: f32 = 0.9;
-
-#[derive(Error, Debug)]
-pub enum RuleError {
-    #[error("Failed to load rules: {0}")]
-    LoadError(String),
-    #[error("Invalid rule configuration: {0}")]
-    InvalidRule(String),
-    #[error("Regex compilation failed: {0}")]
-    RegexError(#[from] regex::Error),
-    #[error("YAML parsing error: {0}")]
-    YamlError(#[from] serde_yaml::Error),
-    #[error("IO error: {0}")]
-    IoError(#[from] std::io::Error),
-}
-
+/// Shield hint for policy generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShieldHint {
+    /// Scope for the shield policy
     pub scope: String,
 }
 
+/// A security detection rule
+///
+/// Rules define security patterns to detect in skill documents. Each rule
+/// specifies a condition to match, the threat category, severity level, and
+/// recommended action when matched.
+///
+/// Rules are typically defined in YAML format and loaded by the [`super::RuleEngine`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Rule {
+    /// Unique rule identifier
     pub id: String,
+    /// Threat category
     pub category: ThreatCategory,
+    /// Severity level
     pub severity: Severity,
+    /// Confidence score (0.0 - 1.0)
     #[serde(default = "default_confidence")]
     pub confidence: f32,
+    /// Condition that triggers the rule
     #[serde(rename = "when")]
     pub condition: RuleCondition,
+    /// Recommended action
     pub action: RecommendedAction,
+    /// Human-readable reason
     pub reason: String,
+    /// Shield policy hint
     #[serde(default)]
     pub shield: Option<ShieldHint>,
+    /// Whether the rule is enabled
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Tags for filtering
     #[serde(default)]
     pub tags: Vec<String>,
 }
@@ -66,7 +65,6 @@ pub struct RulePackMetadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RulePackFile {
-    #[serde(default = "default_rule_pack_schema_version")]
     pub schema_version: String,
     #[serde(default)]
     pub metadata: RulePackMetadata,
@@ -76,7 +74,6 @@ pub struct RulePackFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IocFeedFile {
-    #[serde(default = "default_rule_pack_schema_version")]
     pub schema_version: String,
     #[serde(default)]
     pub metadata: RulePackMetadata,
@@ -89,27 +86,9 @@ pub struct IocFeedFile {
 }
 
 fn default_confidence() -> f32 {
-    DEFAULT_RULE_CONFIDENCE
+    super::DEFAULT_RULE_CONFIDENCE
 }
 
 fn default_enabled() -> bool {
     true
-}
-
-fn default_rule_pack_schema_version() -> String {
-    RULE_PACK_SCHEMA_VERSION.to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuleCondition {
-    Regex { pattern: String },
-    SectionContains { section: String, values: Vec<String> },
-    SectionRegex { section: String, pattern: String },
-    ArtifactKind { kinds: Vec<ArtifactKind> },
-    #[cfg(feature = "yara")]
-    Yara { rule: String },
-    Any(Vec<RuleCondition>),
-    All(Vec<RuleCondition>),
-    CodeLanguage { languages: Vec<String> },
 }

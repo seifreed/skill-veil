@@ -57,7 +57,13 @@ impl FileSystemProvider for StdFileSystemProvider {
         let mut files = Vec::new();
 
         if recursive {
-            for entry in WalkDir::new(path).into_iter().filter_map(Result::ok) {
+            for entry in WalkDir::new(path).into_iter().filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err) => {
+                    tracing::warn!("Skipping entry during recursive file listing: {err}");
+                    None
+                }
+            }) {
                 if entry.file_type().is_file() {
                     if let Some(filename) = entry.path().file_name().and_then(|n| n.to_str()) {
                         if Self::matches_pattern(filename, pattern) {

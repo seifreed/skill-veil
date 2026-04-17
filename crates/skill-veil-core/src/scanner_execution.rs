@@ -64,7 +64,10 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
             {
                 findings.push(parse_warning);
             }
-            let sibling_files = crate::scanner_graph::sibling_files(referenced_file);
+            let sibling_files = crate::scanner_graph::sibling_files(
+                scanner.file_discovery.fs_provider(),
+                referenced_file,
+            );
             findings.extend(
                 scanner
                     .artifact_analysis
@@ -99,7 +102,8 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     if let Some(w) = structured_parse_warning(path, &primary_content, artifact_kind) {
         findings.push(w);
     }
-    let sibling_files = crate::scanner_graph::sibling_files(path);
+    let sibling_files =
+        crate::scanner_graph::sibling_files(scanner.file_discovery.fs_provider(), path);
     findings.extend(
         scanner
             .artifact_analysis
@@ -271,7 +275,16 @@ fn discover_files_by_name(root: &Path, names: &[&str]) -> Vec<PathBuf> {
     WalkDir::new(root)
         .into_iter()
         .filter_entry(|entry| !should_skip_discovery_dir(root, entry))
-        .filter_map(Result::ok)
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                tracing::warn!(
+                    "Skipping entry during package discovery in {}: {err}",
+                    root.display()
+                );
+                None
+            }
+        })
         .filter(|entry| entry.file_type().is_file())
         .filter_map(|entry| {
             let file_name = entry.file_name().to_str()?.to_ascii_lowercase();

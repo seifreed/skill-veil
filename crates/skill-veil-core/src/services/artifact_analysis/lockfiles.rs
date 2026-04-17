@@ -130,7 +130,9 @@ fn analyze_lockfile_text(
     pattern: &str,
     reason: &str,
 ) -> Vec<Finding> {
-    let regex = Regex::new(pattern).expect("valid regex");
+    let Ok(regex) = Regex::new(pattern) else {
+        return Vec::new();
+    };
     let artifact_path = path.display().to_string();
     let urls = extract_http_urls(content);
     let suspicious_urls: Vec<_> = urls

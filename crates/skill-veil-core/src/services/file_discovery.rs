@@ -60,6 +60,10 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
         }
     }
 
+    pub(crate) fn fs_provider(&self) -> &F {
+        &self.fs_provider
+    }
+
     /// Check whether the provided path is an explicit skill entrypoint.
     pub fn is_explicit_skill_file(path: &Path) -> bool {
         let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {

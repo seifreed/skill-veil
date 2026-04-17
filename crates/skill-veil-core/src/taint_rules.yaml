@@ -1,0 +1,39 @@
+- id: ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK
+  family: exfil
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.94
+  action: block
+  reason: "Artifact combines access to secret material with outbound network communication, consistent with secret exfiltration"
+  source: secret_access
+  sink: external_network
+
+- id: ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION
+  family: remote_exec
+  category: remote_exec
+  severity: critical
+  confidence: 0.93
+  action: block
+  reason: "Artifact combines remote download with subsequent execution behavior"
+  source: remote_download
+  sink: execution
+
+- id: ARTIFACT_TAINT_WRITE_TO_PERSISTENCE
+  family: persistence
+  category: persistent_prompt_tampering
+  severity: high
+  confidence: 0.87
+  action: require_approval
+  reason: "Artifact combines write behavior with persistence behavior, suggesting durable modification of future runtime state"
+  source: filesystem_write
+  sink: persistence
+
+- id: ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK
+  family: identity_exfil
+  category: data_exfiltration
+  severity: high
+  confidence: 0.88
+  action: require_approval
+  reason: "Artifact combines identity or OAuth access with outbound network communication, consistent with token or session exfiltration"
+  source: identity_access
+  sink: external_network
