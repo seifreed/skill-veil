@@ -49,10 +49,10 @@ pub(crate) fn analyze_package_json(
                     .severity(Severity::Low)
                     .action(RecommendedAction::Log)
                     .evidence_kind(EvidenceKind::Context)
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
+                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .match_value(format!("{name}@{version_str}"))
                     .reason("Manifest dependency is not strictly pinned")
                     .build(),
@@ -100,10 +100,10 @@ pub(crate) fn analyze_package_json(
                     } else {
                         EvidenceKind::Context
                     })
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
+                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .match_value(format!("{hook}: {command}"))
                     .reason(if risky_install_hook {
                         "Manifest defines an install lifecycle hook that fetches or executes code"
@@ -125,10 +125,10 @@ pub(crate) fn analyze_package_json(
             .severity(Severity::Low)
             .action(RecommendedAction::Log)
             .evidence_kind(EvidenceKind::Context)
-            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
+            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .match_value("bin")
             .reason("Manifest exposes executable binaries")
             .build(),
@@ -164,10 +164,10 @@ pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
             .severity(Severity::High)
             .action(RecommendedAction::Block)
             .evidence_kind(EvidenceKind::Behavior)
-            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
+            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .match_value(line)
             .reason("npm configuration embeds an authentication token")
             .build()

@@ -18,48 +18,6 @@ use crate::findings::{
 };
 use std::path::{Path, PathBuf};
 
-fn extract_http_urls(content: &str) -> Vec<String> {
-    network::extract_http_urls(content)
-}
-
-fn is_common_lockfile_source(url: &str) -> bool {
-    network::is_common_lockfile_source(url)
-}
-
-fn contains_internal_network_target(content: &str) -> Option<&'static str> {
-    network::contains_internal_network_target(content)
-}
-
-fn contains_internal_network_action(content: &str) -> bool {
-    network::contains_internal_network_action(content)
-}
-
-fn looks_like_local_dev_reference(content: &str) -> bool {
-    network::looks_like_local_dev_reference(content)
-}
-
-fn looks_like_local_control_plane_reference(content: &str) -> bool {
-    network::looks_like_local_control_plane_reference(content)
-}
-
-fn looks_like_webhook_receiver_without_auth(content: &str) -> Option<&'static str> {
-    network::looks_like_webhook_receiver_without_auth(content)
-}
-
-fn contains_ssrf_like_fetch_line(content: &str) -> bool {
-    network::contains_ssrf_like_fetch_line(content)
-}
-
-fn explicit_declared_permission_rules(
-    content: &str,
-) -> Vec<(&'static str, &'static str, &'static str)> {
-    permissions::explicit_declared_permission_rules(content)
-}
-
-fn infer_declared_intent(content: &str) -> (&'static str, usize) {
-    permissions::infer_declared_intent(content)
-}
-
 pub struct ArtifactAnalysisService;
 
 #[derive(Debug, Clone)]

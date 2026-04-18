@@ -1,3 +1,4 @@
+use super::network::looks_like_webhook_receiver_without_auth;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
@@ -26,15 +27,16 @@ static RE_IDENTITY_ACCESS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("(?i)(oauth|scope|authorization|bearer)").expect("valid regex: identity access")
 });
 
-pub(crate) fn analyze_mcp_manifest(
+const MCP_BROAD_TOOL_COUNT_THRESHOLD: usize = 5;
+
+fn mcp_remote_endpoint_findings(
     artifact_analysis: &ArtifactAnalysisService,
-    path: &Path,
     content: &str,
+    artifact_path: &str,
+    has_remote_endpoint: bool,
+    has_exec_surface: bool,
 ) -> Vec<Finding> {
-    let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
-    let has_remote_endpoint = RE_REMOTE_ENDPOINT.is_match(content);
-    let has_exec_surface = RE_EXEC_SURFACE_TRANSPORT.is_match(content);
 
     if has_remote_endpoint {
         findings.push(
@@ -42,9 +44,12 @@ pub(crate) fn analyze_mcp_manifest(
                 .severity(Severity::Medium)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::McpServerManifest,
+                    Some(artifact_path.to_string()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("remote MCP endpoint")
                 .reason("MCP manifest references a remote server endpoint")
@@ -62,9 +67,12 @@ pub(crate) fn analyze_mcp_manifest(
                     RecommendedAction::Log
                 })
                 .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::McpServerManifest,
+                    Some(artifact_path.to_string()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("mcp transport")
                 .reason("MCP manifest declares transport or command execution behavior")
@@ -78,9 +86,9 @@ pub(crate) fn analyze_mcp_manifest(
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.to_string()))
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("remote endpoint with command transport")
                 .reason(
@@ -96,9 +104,9 @@ pub(crate) fn analyze_mcp_manifest(
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.to_string()))
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("opaque remote MCP endpoint")
                 .reason("MCP manifest uses a transient or opaque remote endpoint commonly associated with tunnelled control planes")
@@ -106,15 +114,29 @@ pub(crate) fn analyze_mcp_manifest(
         );
     }
 
+    findings
+}
+
+fn mcp_auth_findings(
+    artifact_analysis: &ArtifactAnalysisService,
+    content: &str,
+    artifact_path: &str,
+    has_remote_endpoint: bool,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
     if has_remote_endpoint && artifact_analysis.mcp_declares_no_auth(content) {
         findings.push(
             Finding::builder("MCP_NO_AUTH_MODEL", ThreatCategory::ToolAbuse)
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::McpServerManifest,
+                    Some(artifact_path.to_string()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("auth: none")
                 .reason(
@@ -130,9 +152,9 @@ pub(crate) fn analyze_mcp_manifest(
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.to_string()))
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("inline MCP auth secret")
                 .reason("MCP manifest appears to embed bearer, token, or API key material directly in configuration")
@@ -140,11 +162,15 @@ pub(crate) fn analyze_mcp_manifest(
         );
     }
 
-    findings.extend(artifact_analysis.permission_and_network_findings(
-        path,
-        content,
-        ArtifactKind::McpServerManifest,
-    ));
+    findings
+}
+
+fn mcp_scope_and_tool_findings(
+    artifact_analysis: &ArtifactAnalysisService,
+    content: &str,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
 
     if RE_IDENTITY_SCOPE.is_match(content) {
         findings.push(
@@ -152,9 +178,9 @@ pub(crate) fn analyze_mcp_manifest(
                 .severity(Severity::Medium)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.to_string()))
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value("oauth scope")
                 .reason("MCP manifest references identity or OAuth scopes that may exceed the task intent")
@@ -163,15 +189,20 @@ pub(crate) fn analyze_mcp_manifest(
     }
 
     let mcp_tools = artifact_analysis.extract_mcp_tool_names(content);
-    if artifact_analysis.mcp_declares_permissive_tools(content) || mcp_tools.len() >= 5 {
+    if artifact_analysis.mcp_declares_permissive_tools(content)
+        || mcp_tools.len() >= MCP_BROAD_TOOL_COUNT_THRESHOLD
+    {
         findings.push(
             Finding::builder("MCP_PERMISSIVE_TOOL_EXPOSURE", ThreatCategory::ToolAbuse)
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.clone()))
+                .artifact(
+                    ArtifactKind::McpServerManifest,
+                    Some(artifact_path.to_string()),
+                )
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value(if mcp_tools.is_empty() {
                     "all tools".to_string()
@@ -183,6 +214,41 @@ pub(crate) fn analyze_mcp_manifest(
         );
     }
 
+    findings
+}
+
+pub(crate) fn analyze_mcp_manifest(
+    artifact_analysis: &ArtifactAnalysisService,
+    path: &Path,
+    content: &str,
+) -> Vec<Finding> {
+    let artifact_path = path.display().to_string();
+    let has_remote_endpoint = RE_REMOTE_ENDPOINT.is_match(content);
+    let has_exec_surface = RE_EXEC_SURFACE_TRANSPORT.is_match(content);
+
+    let mut findings = mcp_remote_endpoint_findings(
+        artifact_analysis,
+        content,
+        &artifact_path,
+        has_remote_endpoint,
+        has_exec_surface,
+    );
+    findings.extend(mcp_auth_findings(
+        artifact_analysis,
+        content,
+        &artifact_path,
+        has_remote_endpoint,
+    ));
+    findings.extend(artifact_analysis.permission_and_network_findings(
+        path,
+        content,
+        ArtifactKind::McpServerManifest,
+    ));
+    findings.extend(mcp_scope_and_tool_findings(
+        artifact_analysis,
+        content,
+        &artifact_path,
+    ));
     findings
 }
 
@@ -240,7 +306,7 @@ pub(crate) fn mcp_manifest_capabilities(
             ArtifactCapability::SecretAccess,
         ));
     }
-    if super::looks_like_webhook_receiver_without_auth(content).is_some() {
+    if looks_like_webhook_receiver_without_auth(content).is_some() {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::InboundNetworkSurface,
         ));

@@ -175,7 +175,7 @@ pub(crate) fn run_scan_dataset(
     let dataset_results = filtering::filter_dataset_results(&all_results, args.dataset_view);
     let dataset_reports: Vec<_> = dataset_results
         .iter()
-        .map(|result| result.to_json_report())
+        .map(|result| result.policy_generator().generate_json())
         .collect();
     let dataset_entries: Vec<_> = dataset_reports
         .iter()

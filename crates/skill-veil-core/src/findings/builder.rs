@@ -6,6 +6,27 @@ use super::{
 
 const DEFAULT_FINDING_CONFIDENCE: f32 = 0.9;
 
+const REMOTE_EXEC_INDICATORS: &[&str] = &[
+    "http://",
+    "https://",
+    "curl ",
+    "wget ",
+    "fetch(",
+    "requests.get",
+    "urllib.request.urlopen",
+    "invoke-webrequest",
+    "iwr ",
+];
+const SENSITIVE_PAYLOAD_KEYWORDS: &[&str] = &["cookie", "token", "secret", "session"];
+const TRANSMIT_VERBS: &[&str] = &["send", "post", "upload", "forward", "exfiltrate"];
+const EXFIL_CHANNELS: &[&str] = &[
+    "discord.com/api/webhooks",
+    "api.telegram.org/bot",
+    "smtp.",
+    "sendgrid",
+    "mailgun",
+];
+
 fn signal_weight(signal_class: SignalClass) -> f32 {
     match signal_class {
         SignalClass::Hygiene => super::SIGNAL_WEIGHT_HYGIENE,
@@ -278,34 +299,14 @@ impl Finding {
         }
 
         let value = self.match_value.to_ascii_lowercase();
-        let has_remote_indicator = [
-            "http://",
-            "https://",
-            "curl ",
-            "wget ",
-            "fetch(",
-            "requests.get",
-            "urllib.request.urlopen",
-            "invoke-webrequest",
-            "iwr ",
-        ]
-        .iter()
-        .any(|needle| value.contains(needle));
-        let has_sensitive_payload = ["cookie", "token", "secret", "session"]
-            .iter()
-            .any(|needle| value.contains(needle));
-        let has_transmit_verb = ["send", "post", "upload", "forward", "exfiltrate"]
-            .iter()
-            .any(|needle| value.contains(needle));
-        let has_exfil_channel = [
-            "discord.com/api/webhooks",
-            "api.telegram.org/bot",
-            "smtp.",
-            "sendgrid",
-            "mailgun",
-        ]
-        .iter()
-        .any(|needle| value.contains(needle));
+        self.evidence_matches_category(&value)
+    }
+
+    fn evidence_matches_category(&self, value: &str) -> bool {
+        let has_remote_indicator = REMOTE_EXEC_INDICATORS.iter().any(|s| value.contains(s));
+        let has_sensitive_payload = SENSITIVE_PAYLOAD_KEYWORDS.iter().any(|s| value.contains(s));
+        let has_transmit_verb = TRANSMIT_VERBS.iter().any(|s| value.contains(s));
+        let has_exfil_channel = EXFIL_CHANNELS.iter().any(|s| value.contains(s));
 
         match self.category {
             ThreatCategory::RemoteExec => has_remote_indicator,
@@ -316,7 +317,14 @@ impl Finding {
             ThreatCategory::CredentialExposure => true,
             ThreatCategory::PrivilegeEscalation => true,
             ThreatCategory::SupplyChain => has_remote_indicator || has_transmit_verb,
-            _ => false,
+            ThreatCategory::ToolAbuse
+            | ThreatCategory::AutonomyEscalation
+            | ThreatCategory::PersuasiveLanguage
+            | ThreatCategory::SocialManipulation
+            | ThreatCategory::ScopeCreep
+            | ThreatCategory::Obfuscation
+            | ThreatCategory::UnsafeBinary
+            | ThreatCategory::Generic => false,
         }
     }
 }

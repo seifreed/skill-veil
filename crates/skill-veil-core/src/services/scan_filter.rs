@@ -8,7 +8,7 @@ use crate::policy::{
     apply_baseline, apply_policy_overrides_with_audit, apply_waivers, count_baseline_matches,
     AppliedPolicyOverride, BaselineFile, PolicyFile, PolicyProfile, SuppressionSummary, WaiverFile,
 };
-use crate::scanner::{ScanOptions, ScanTargetMode};
+use crate::scanner_types::{ScanOptions, ScanTargetMode};
 
 #[derive(Debug, Clone)]
 pub struct FilterOutcome {
@@ -70,22 +70,15 @@ impl ScanFilterService {
     }
 
     pub fn filter_with_summary(&self, findings: Vec<Finding>) -> FilterOutcome {
-        let findings = findings
-            .into_iter()
-            .filter(|f| self.should_include(f))
-            .collect::<Vec<_>>();
-        let pre_waiver_count = findings.len();
-        let findings = apply_waivers(findings, self.waivers.as_ref());
-        let waiver_suppressed = pre_waiver_count.saturating_sub(findings.len());
+        let findings = self.apply_severity_filter(findings);
+        let (findings, waiver_suppressed) = self.apply_waivers_stage(findings);
         // Count baseline matches AFTER waivers so `baseline_suppressed` reflects
         // the effective contribution of the baseline — i.e., how many findings
         // the baseline actually removes given that waivers have already run.
         // If a finding matches both a waiver and a baseline entry, the waiver
         // wins (higher precedence) and baseline_suppressed will be 0 for it.
-        let baseline_suppressed = count_baseline_matches(&findings, self.baseline.as_ref());
-        let findings = apply_baseline(findings, self.baseline.as_ref());
-        let (findings, applied_overrides) =
-            apply_policy_overrides_with_audit(findings, self.policy.as_ref());
+        let (findings, baseline_suppressed) = self.apply_baseline_stage(findings);
+        let (findings, applied_overrides) = self.apply_overrides_stage(findings);
 
         FilterOutcome {
             suppression_summary: SuppressionSummary {
@@ -100,6 +93,33 @@ impl ScanFilterService {
             applied_overrides,
             findings,
         }
+    }
+
+    fn apply_severity_filter(&self, findings: Vec<Finding>) -> Vec<Finding> {
+        findings
+            .into_iter()
+            .filter(|f| self.should_include(f))
+            .collect()
+    }
+
+    fn apply_waivers_stage(&self, findings: Vec<Finding>) -> (Vec<Finding>, usize) {
+        let pre_count = findings.len();
+        let findings = apply_waivers(findings, self.waivers.as_ref());
+        let suppressed = pre_count.saturating_sub(findings.len());
+        (findings, suppressed)
+    }
+
+    fn apply_baseline_stage(&self, findings: Vec<Finding>) -> (Vec<Finding>, usize) {
+        let suppressed = count_baseline_matches(&findings, self.baseline.as_ref());
+        let findings = apply_baseline(findings, self.baseline.as_ref());
+        (findings, suppressed)
+    }
+
+    fn apply_overrides_stage(
+        &self,
+        findings: Vec<Finding>,
+    ) -> (Vec<Finding>, Vec<AppliedPolicyOverride>) {
+        apply_policy_overrides_with_audit(findings, self.policy.as_ref())
     }
 
     /// Determine if a finding should be included based on filter options

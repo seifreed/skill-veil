@@ -24,10 +24,10 @@ pub(crate) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
             .severity(Severity::Low)
             .action(RecommendedAction::Log)
             .evidence_kind(EvidenceKind::Context)
-            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
+            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .match_value(line)
             .reason("Python requirement is not strictly pinned")
             .build()
@@ -123,10 +123,10 @@ pub(crate) fn analyze_pip_conf(path: &Path, content: &str) -> Vec<Finding> {
             .severity(Severity::Medium)
             .action(RecommendedAction::RequireApproval)
             .evidence_kind(EvidenceKind::Context)
-            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.clone(),
             })
+            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .match_value("trusted-host")
             .reason("pip configuration trusts a custom package host")
             .build(),

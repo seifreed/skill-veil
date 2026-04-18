@@ -6,7 +6,7 @@
 //! - `ScanFilterService`: Applies filters to scan findings
 
 mod artifact_analysis;
-mod file_discovery;
+pub(crate) mod file_discovery;
 mod scan_filter;
 
 pub use artifact_analysis::ArtifactAnalysisService;

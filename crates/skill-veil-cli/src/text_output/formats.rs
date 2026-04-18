@@ -2,16 +2,19 @@ use anyhow::{Context, Result};
 use skill_veil_core::ScanResult;
 
 pub(crate) fn format_json_output(results: &[ScanResult]) -> Result<String> {
-    let reports: Vec<_> = results.iter().map(|r| r.to_json_report()).collect();
+    let reports: Vec<_> = results
+        .iter()
+        .map(|r| r.policy_generator().generate_json())
+        .collect();
     serde_json::to_string_pretty(&reports).context("Failed to serialize JSON")
 }
 
 pub(crate) fn format_sarif_output(results: &[ScanResult]) -> Result<String> {
     if let Some(first) = results.first() {
-        let mut sarif = first.to_sarif_report();
+        let mut sarif = first.policy_generator().generate_sarif();
 
         for result in results.iter().skip(1) {
-            let other = result.to_sarif_report();
+            let other = result.policy_generator().generate_sarif();
             if let Some(run) = sarif.runs.first_mut() {
                 if let Some(other_run) = other.runs.first() {
                     run.results.extend(other_run.results.clone());
@@ -38,7 +41,7 @@ pub(crate) fn format_sarif_output(results: &[ScanResult]) -> Result<String> {
 pub(crate) fn format_shield_output(results: &[ScanResult]) -> String {
     let mut output = String::new();
     for result in results {
-        output.push_str(&result.to_shield_md());
+        output.push_str(&result.policy_generator().generate_shield_md());
         output.push_str("\n---\n\n");
     }
     output

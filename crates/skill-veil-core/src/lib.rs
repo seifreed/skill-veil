@@ -70,7 +70,7 @@ pub mod scanner;
 mod scanner_execution;
 mod scanner_graph;
 mod scanner_support;
-mod scanner_types;
+pub(crate) mod scanner_types;
 pub mod services;
 mod verdict;
 mod verdict_calibration;
@@ -90,11 +90,11 @@ pub use benchmark::{
     SampleLabel, ThresholdRecommendation,
 };
 pub use findings::{
-    artifact_scope_for_kind, deduplicate_findings, derive_package_verdict, signal_class_for,
-    ArtifactKind, ArtifactScope, BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission,
-    DeduplicationSummary, EvidenceKind, Finding, HygieneSummary, MatchTarget, OperationalContext,
-    PackageHealth, PackageVerdictReport, RecommendedAction, RootCauseGroup, Severity, SignalClass,
-    ThreatCategory, Verdict, VerdictReason,
+    artifact_scope_for_kind, signal_class_for, ActionTrigger, ArtifactKind, ArtifactScope,
+    BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission, DeduplicationSummary, EvidenceKind,
+    Finding, FindingSummary, HygieneSummary, MatchTarget, OperationalContext, PackageHealth,
+    PackageVerdictReport, RecommendedAction, RiskFactor, RootCauseGroup, Severity, SeverityCounts,
+    SignalClass, ThreatCategory, Verdict, VerdictReason,
 };
 pub use policy::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
@@ -103,7 +103,7 @@ pub use policy::{
     validate_policy, validate_waivers, AppliedPolicyOverride, BaselineEntry, BaselineFile,
     ConfiguredProfile, ContextActionOverride, ContextPolicy, DiffEntry, DiffReport, JsonReport,
     PolicyAudit, PolicyFile, PolicyGenerator, PolicyOverride, PolicyProfile, PolicyProfiles,
-    ShieldPolicy, SuppressionSummary, WaiverEntry, WaiverFile, POLICY_PRECEDENCE_ORDER,
+    ShieldPolicy, SuppressionSummary, WaiverEntry, WaiverFile, POLICY_AUDIT_PRECEDENCE,
     POLICY_SCHEMA_VERSION,
 };
 pub use rules::{

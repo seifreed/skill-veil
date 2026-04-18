@@ -2,16 +2,18 @@ use crate::analyzer::SkillDocument;
 use crate::findings::{
     deduplicate_findings, derive_package_verdict, Finding, FindingSummary, MatchTarget,
 };
-use crate::policy::PolicyAudit;
+use crate::policy::{
+    AppliedPolicyOverride, PolicyAudit, SuppressionSummary, POLICY_AUDIT_PRECEDENCE,
+};
 use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::scanner::{ScanError, ScanResult, Scanner};
 use crate::scanner_support::{
     artifact_parse_error_finding, decode_warning_finding, parse_warning_finding,
     read_text_file_lossy, structured_parse_warning,
 };
+use crate::services::file_discovery::{discover_lockfiles, discover_package_manifests};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
@@ -114,7 +116,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph);
     // Preserve findings that already have artifact context (e.g., from supporting artifact
     // analysis). Only tag uncontextualized findings with the primary artifact.
-    let mut findings = contextualize_findings(findings, artifact_kind, &artifact_path);
+    findings = contextualize_findings(findings, artifact_kind, &artifact_path);
     findings.extend(taint_findings);
     let (findings, deduplication_summary) = deduplicate_findings(findings);
 
@@ -163,20 +165,11 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         artifact_graph,
         profile: scanner.filter_service().profile(),
         policy: scanner.filter_service().policy().cloned(),
-        suppression_summary: crate::policy::SuppressionSummary {
+        suppression_summary: build_suppression_summary(
             inline_suppressed,
-            ..filter_outcome.suppression_summary
-        },
-        policy_audit: PolicyAudit {
-            precedence_order: vec![
-                "inline_suppressions".to_string(),
-                "waivers".to_string(),
-                "baseline".to_string(),
-                "policy_overrides".to_string(),
-            ],
-            effective_fail_on: scanner.filter_service().fail_on(),
-            applied_overrides: filter_outcome.applied_overrides,
-        },
+            filter_outcome.suppression_summary,
+        ),
+        policy_audit: build_policy_audit(scanner, filter_outcome.applied_overrides),
         should_fail,
     })
 }
@@ -198,6 +191,30 @@ fn collect_primary_doc_warnings<F: FileSystemProvider>(
         ));
     }
     warnings
+}
+
+fn build_suppression_summary(
+    inline_suppressed: usize,
+    base: SuppressionSummary,
+) -> SuppressionSummary {
+    SuppressionSummary {
+        inline_suppressed,
+        ..base
+    }
+}
+
+fn build_policy_audit<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    applied_overrides: Vec<AppliedPolicyOverride>,
+) -> PolicyAudit {
+    PolicyAudit {
+        precedence_order: POLICY_AUDIT_PRECEDENCE
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+        effective_fail_on: scanner.filter_service().fail_on(),
+        applied_overrides,
+    }
 }
 
 fn contextualize_findings(
@@ -270,87 +287,4 @@ pub(crate) fn discover_package_targets<F: FileSystemProvider, P: MarkdownParser>
     }
 
     Ok(targets.into_iter().collect())
-}
-
-/// Walk `root` and collect files whose lowercased name matches any entry in `names`.
-fn discover_files_by_name(root: &Path, names: &[&str]) -> Vec<PathBuf> {
-    WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| !should_skip_discovery_dir(root, entry))
-        .filter_map(|e| match e {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                tracing::warn!(
-                    "Skipping entry during package discovery in {}: {err}",
-                    root.display()
-                );
-                None
-            }
-        })
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(|entry| {
-            let file_name = entry.file_name().to_str()?.to_ascii_lowercase();
-            names
-                .contains(&file_name.as_str())
-                .then(|| entry.into_path())
-        })
-        .collect()
-}
-
-pub(crate) fn discover_package_manifests(path: &Path) -> Vec<PathBuf> {
-    const MANIFEST_NAMES: &[&str] = &[
-        "package.json",
-        "mcp.json",
-        "mcp.yaml",
-        "mcp.yml",
-        "requirements.txt",
-        "pyproject.toml",
-        "cargo.toml",
-        "dockerfile",
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "makefile",
-        ".npmrc",
-        "pip.conf",
-    ];
-    discover_files_by_name(path, MANIFEST_NAMES)
-}
-
-pub(crate) fn discover_lockfiles(path: &Path) -> Vec<PathBuf> {
-    const LOCKFILE_NAMES: &[&str] = &[
-        "package-lock.json",
-        "cargo.lock",
-        "poetry.lock",
-        "uv.lock",
-        "pipfile.lock",
-        "yarn.lock",
-        "pnpm-lock.yaml",
-        "npm-shrinkwrap.json",
-    ];
-    discover_files_by_name(path, LOCKFILE_NAMES)
-}
-
-fn should_skip_discovery_dir(_root: &Path, entry: &walkdir::DirEntry) -> bool {
-    if !entry.file_type().is_dir() {
-        return false;
-    }
-    entry.file_name().to_str().is_some_and(|name| {
-        matches!(
-            name,
-            "node_modules"
-                | "vendor"
-                | ".git"
-                | "dist"
-                | "build"
-                | "target"
-                | ".venv"
-                | "venv"
-                | "__pycache__"
-                | ".yarn"
-                | ".pnpm-store"
-                | ".next"
-                | ".turbo"
-                | "coverage"
-        )
-    })
 }

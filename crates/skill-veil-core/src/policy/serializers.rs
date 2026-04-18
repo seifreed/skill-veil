@@ -5,9 +5,11 @@ use super::{
     ShieldPolicy,
 };
 use crate::findings::{
-    derive_package_verdict, Finding, FindingSummary, RecommendedAction, Severity, Verdict,
+    derive_package_verdict, Finding, FindingSummary, PackageVerdictReport, RecommendedAction,
+    Severity, Verdict,
 };
 use std::collections::HashMap;
+use std::fmt::Write as FmtWrite;
 
 pub(crate) fn generate_shield_md(generator: &PolicyGenerator) -> String {
     let mut output = String::new();
@@ -50,9 +52,9 @@ pub(crate) fn generate_shield_md(generator: &PolicyGenerator) -> String {
     output
 }
 
-pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
-    let summary =
-        FindingSummary::from_findings_and_graph(generator.findings(), generator.artifact_graph());
+fn scope_findings_and_summaries(
+    generator: &PolicyGenerator,
+) -> (Vec<Finding>, Vec<Finding>, FindingSummary, FindingSummary) {
     let skill_path = std::path::Path::new(generator.skill_path());
     let (primary_findings, supporting_findings) = crate::findings::split_findings_by_scope(
         skill_path,
@@ -63,6 +65,19 @@ pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
         FindingSummary::from_findings_and_graph(&primary_findings, generator.artifact_graph());
     let supporting_summary =
         FindingSummary::from_findings_and_graph(&supporting_findings, generator.artifact_graph());
+    (
+        primary_findings,
+        supporting_findings,
+        primary_summary,
+        supporting_summary,
+    )
+}
+
+pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
+    let summary =
+        FindingSummary::from_findings_and_graph(generator.findings(), generator.artifact_graph());
+    let (primary_findings, supporting_findings, primary_summary, supporting_summary) =
+        scope_findings_and_summaries(generator);
     let verdict_report = generator.verdict_report().cloned().unwrap_or_else(|| {
         derive_package_verdict(
             generator.findings(),
@@ -102,183 +117,25 @@ pub(crate) fn generate_json(generator: &PolicyGenerator) -> JsonReport {
 }
 
 pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
-    let mut rules_map: HashMap<String, &Finding> = HashMap::new();
-    for finding in generator.findings() {
-        rules_map
-            .entry(finding.rule_id.clone())
-            .and_modify(|existing| {
-                if finding.severity > existing.severity {
-                    *existing = finding;
-                }
-            })
-            .or_insert(finding);
-    }
-
-    let mut rules: Vec<SarifRule> = rules_map
-        .iter()
-        .map(|(id, finding)| SarifRule {
-            id: id.clone(),
-            name: id.clone(),
-            short_description: SarifMessage {
-                text: finding.reason.clone(),
-            },
-            full_description: SarifMessage {
-                text: format!("{} (Category: {})", finding.reason, finding.category),
-            },
-            default_configuration: SarifConfiguration {
-                level: severity_to_sarif_level(finding.severity),
-            },
-        })
-        .collect();
-
     let summary =
         FindingSummary::from_findings_and_graph(generator.findings(), generator.artifact_graph());
-    if !summary.action_triggers.is_empty() {
-        rules.push(SarifRule {
-            id: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
-            name: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
-            short_description: SarifMessage {
-                text: "Contextual policy escalation".to_string(),
-            },
-            full_description: SarifMessage {
-                text:
-                    "Explains why contextual artifact capabilities escalated the recommended action"
-                        .to_string(),
-            },
-            default_configuration: SarifConfiguration {
-                level: severity_to_sarif_level(match summary.recommended_action {
-                    RecommendedAction::Block => Severity::High,
-                    RecommendedAction::RequireApproval => Severity::Medium,
-                    RecommendedAction::Log => Severity::Low,
-                }),
-            },
-        });
-    }
-
-    let verdict_report = generator.verdict_report().cloned().unwrap_or_else(|| {
-        let sarif_skill_path = std::path::Path::new(generator.skill_path());
-        let (primary_findings, supporting_findings) = crate::findings::split_findings_by_scope(
-            sarif_skill_path,
-            generator.primary_artifact_kind(),
-            generator.findings(),
-        );
-        let primary_summary =
-            FindingSummary::from_findings_and_graph(&primary_findings, generator.artifact_graph());
-        let supporting_summary = FindingSummary::from_findings_and_graph(
-            &supporting_findings,
-            generator.artifact_graph(),
-        );
-        derive_package_verdict(
-            generator.findings(),
-            &primary_summary,
-            &supporting_summary,
-            &summary,
-        )
-    });
-    rules.push(SarifRule {
-        id: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
-        name: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
-        short_description: SarifMessage {
-            text: "Final package verdict".to_string(),
-        },
-        full_description: SarifMessage {
-            text: "Explains the final benign/suspicious/malicious package judgment".to_string(),
-        },
-        default_configuration: SarifConfiguration {
-            level: severity_to_sarif_level(match verdict_report.verdict {
-                Verdict::Malicious => Severity::High,
-                Verdict::Suspicious => Severity::Medium,
-                Verdict::Benign => Severity::Low,
-            }),
-        },
-    });
-
-    let mut results: Vec<SarifResult> = generator
-        .findings()
-        .iter()
-        .map(|finding| SarifResult {
-            rule_id: finding.rule_id.clone(),
-            level: severity_to_sarif_level(finding.severity),
-            message: SarifMessage {
-                text: format!("{}: {}", finding.reason, finding.match_value),
-            },
-            locations: vec![SarifLocation {
-                physical_location: SarifPhysicalLocation {
-                    artifact_location: SarifArtifactLocation {
-                        uri: finding
-                            .artifact_path
-                            .clone()
-                            .unwrap_or_else(|| generator.skill_path().to_string()),
-                    },
-                    region: finding
-                        .line_number
-                        .map(|line| SarifRegion { start_line: line }),
-                },
-            }],
-            properties: Some(serde_json::json!({
-                "artifact_kind": finding.artifact_kind,
-                "artifact_scope": finding.artifact_scope,
-                "signal_class": finding.signal_class,
-                "evidence_kind": finding.evidence_kind,
-                "recommended_action": finding.recommended_action,
-                "package_verdict": verdict_report.verdict,
-            })),
-        })
-        .collect();
-
-    results.extend(summary.action_triggers.iter().map(|trigger| SarifResult {
-        rule_id: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
-        level: severity_to_sarif_level(match trigger.action {
-            RecommendedAction::Block => Severity::High,
-            RecommendedAction::RequireApproval => Severity::Medium,
-            RecommendedAction::Log => Severity::Low,
-        }),
-        message: SarifMessage {
-            text: trigger.rationale.clone(),
-        },
-        locations: vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: generator.skill_path().to_string(),
-                },
-                region: None,
-            },
-        }],
-        properties: Some(serde_json::json!({
-            "recommended_action": trigger.action,
-            "trigger_factor": trigger.factor,
-            "package_verdict": verdict_report.verdict,
-        })),
-    }));
-
-    results.push(SarifResult {
-        rule_id: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
-        level: severity_to_sarif_level(match verdict_report.verdict {
-            Verdict::Malicious => Severity::High,
-            Verdict::Suspicious => Severity::Medium,
-            Verdict::Benign => Severity::Low,
-        }),
-        message: SarifMessage {
-            text: format!("Final package verdict: {}", verdict_report.verdict),
-        },
-        locations: vec![SarifLocation {
-            physical_location: SarifPhysicalLocation {
-                artifact_location: SarifArtifactLocation {
-                    uri: generator.skill_path().to_string(),
-                },
-                region: None,
-            },
-        }],
-        properties: Some(serde_json::json!({
-            "verdict": verdict_report.verdict,
-            "verdict_reasons": verdict_report.verdict_reasons,
-            "root_cause_groups": verdict_report.root_cause_groups,
-            "top_risk_drivers": verdict_report.top_risk_drivers,
-            "heuristic_score": generator.heuristic_score(),
-            "artifact_scope": "package",
-        })),
-    });
-
+    let verdict_report = resolve_verdict_report(generator, &summary);
+    let rules = build_sarif_rules(generator.findings(), &summary, &verdict_report);
+    let mut results = build_sarif_finding_results(
+        generator.findings(),
+        generator.skill_path(),
+        &verdict_report,
+    );
+    results.extend(build_sarif_trigger_results(
+        &summary,
+        generator.skill_path(),
+        &verdict_report,
+    ));
+    results.push(build_sarif_verdict_result(
+        generator.skill_path(),
+        generator.heuristic_score(),
+        &verdict_report,
+    ));
     SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
@@ -296,33 +153,224 @@ pub(crate) fn generate_sarif(generator: &PolicyGenerator) -> SarifReport {
     }
 }
 
+fn resolve_verdict_report(
+    generator: &PolicyGenerator,
+    summary: &FindingSummary,
+) -> PackageVerdictReport {
+    generator.verdict_report().cloned().unwrap_or_else(|| {
+        let (_, _, primary_summary, supporting_summary) = scope_findings_and_summaries(generator);
+        derive_package_verdict(
+            generator.findings(),
+            &primary_summary,
+            &supporting_summary,
+            summary,
+        )
+    })
+}
+
+fn build_sarif_rules(
+    findings: &[Finding],
+    summary: &FindingSummary,
+    verdict_report: &PackageVerdictReport,
+) -> Vec<SarifRule> {
+    let mut rules_map: HashMap<String, &Finding> = HashMap::new();
+    for finding in findings {
+        rules_map
+            .entry(finding.rule_id.clone())
+            .and_modify(|existing| {
+                if finding.severity > existing.severity {
+                    *existing = finding;
+                }
+            })
+            .or_insert(finding);
+    }
+    let mut rules: Vec<SarifRule> = rules_map
+        .iter()
+        .map(|(id, finding)| SarifRule {
+            id: id.clone(),
+            name: id.clone(),
+            short_description: SarifMessage {
+                text: finding.reason.clone(),
+            },
+            full_description: SarifMessage {
+                text: format!("{} (Category: {})", finding.reason, finding.category),
+            },
+            default_configuration: SarifConfiguration {
+                level: severity_to_sarif_level(finding.severity).to_string(),
+            },
+        })
+        .collect();
+    if !summary.action_triggers.is_empty() {
+        rules.push(SarifRule {
+            id: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
+            name: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
+            short_description: SarifMessage {
+                text: "Contextual policy escalation".to_string(),
+            },
+            full_description: SarifMessage {
+                text:
+                    "Explains why contextual artifact capabilities escalated the recommended action"
+                        .to_string(),
+            },
+            default_configuration: SarifConfiguration {
+                level: severity_to_sarif_level(match summary.recommended_action {
+                    RecommendedAction::Block => Severity::High,
+                    RecommendedAction::RequireApproval => Severity::Medium,
+                    RecommendedAction::Log => Severity::Low,
+                })
+                .to_string(),
+            },
+        });
+    }
+    rules.push(SarifRule {
+        id: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
+        name: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
+        short_description: SarifMessage {
+            text: "Final package verdict".to_string(),
+        },
+        full_description: SarifMessage {
+            text: "Explains the final benign/suspicious/malicious package judgment".to_string(),
+        },
+        default_configuration: SarifConfiguration {
+            level: severity_to_sarif_level(match verdict_report.verdict {
+                Verdict::Malicious => Severity::High,
+                Verdict::Suspicious => Severity::Medium,
+                Verdict::Benign => Severity::Low,
+            })
+            .to_string(),
+        },
+    });
+    rules
+}
+
+fn sarif_location(uri: String, region: Option<SarifRegion>) -> SarifLocation {
+    SarifLocation {
+        physical_location: SarifPhysicalLocation {
+            artifact_location: SarifArtifactLocation { uri },
+            region,
+        },
+    }
+}
+
+fn build_sarif_finding_results(
+    findings: &[Finding],
+    skill_path: &str,
+    verdict_report: &PackageVerdictReport,
+) -> Vec<SarifResult> {
+    findings
+        .iter()
+        .map(|finding| SarifResult {
+            rule_id: finding.rule_id.clone(),
+            level: severity_to_sarif_level(finding.severity).to_string(),
+            message: SarifMessage {
+                text: format!("{}: {}", finding.reason, finding.match_value),
+            },
+            locations: vec![sarif_location(
+                finding
+                    .artifact_path
+                    .clone()
+                    .unwrap_or_else(|| skill_path.to_string()),
+                finding
+                    .line_number
+                    .map(|line| SarifRegion { start_line: line }),
+            )],
+            properties: Some(serde_json::json!({
+                "artifact_kind": finding.artifact_kind,
+                "artifact_scope": finding.artifact_scope,
+                "signal_class": finding.signal_class,
+                "evidence_kind": finding.evidence_kind,
+                "recommended_action": finding.recommended_action,
+                "package_verdict": verdict_report.verdict,
+            })),
+        })
+        .collect()
+}
+
+fn build_sarif_trigger_results(
+    summary: &FindingSummary,
+    skill_path: &str,
+    verdict_report: &PackageVerdictReport,
+) -> Vec<SarifResult> {
+    summary
+        .action_triggers
+        .iter()
+        .map(|trigger| SarifResult {
+            rule_id: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
+            level: severity_to_sarif_level(match trigger.action {
+                RecommendedAction::Block => Severity::High,
+                RecommendedAction::RequireApproval => Severity::Medium,
+                RecommendedAction::Log => Severity::Low,
+            })
+            .to_string(),
+            message: SarifMessage {
+                text: trigger.rationale.clone(),
+            },
+            locations: vec![sarif_location(skill_path.to_string(), None)],
+            properties: Some(serde_json::json!({
+                "recommended_action": trigger.action,
+                "trigger_factor": trigger.factor,
+                "package_verdict": verdict_report.verdict,
+            })),
+        })
+        .collect()
+}
+
+fn build_sarif_verdict_result(
+    skill_path: &str,
+    heuristic_score: u8,
+    verdict_report: &PackageVerdictReport,
+) -> SarifResult {
+    SarifResult {
+        rule_id: "SKILL_VEIL_PACKAGE_VERDICT".to_string(),
+        level: severity_to_sarif_level(match verdict_report.verdict {
+            Verdict::Malicious => Severity::High,
+            Verdict::Suspicious => Severity::Medium,
+            Verdict::Benign => Severity::Low,
+        })
+        .to_string(),
+        message: SarifMessage {
+            text: format!("Final package verdict: {}", verdict_report.verdict),
+        },
+        locations: vec![sarif_location(skill_path.to_string(), None)],
+        properties: Some(serde_json::json!({
+            "verdict": verdict_report.verdict,
+            "verdict_reasons": verdict_report.verdict_reasons,
+            "root_cause_groups": verdict_report.root_cause_groups,
+            "top_risk_drivers": verdict_report.top_risk_drivers,
+            "heuristic_score": heuristic_score,
+            "artifact_scope": "package",
+        })),
+    }
+}
+
 fn append_shield_policy(output: &mut String, policy: &ShieldPolicy) {
-    output.push_str(&format!("## {}\n\n", policy.id));
+    let _ = writeln!(output, "## {}\n", policy.id);
     output.push_str("```yaml\n");
-    output.push_str(&format!("id: {}\n", policy.id));
-    output.push_str(&format!("category: {}\n", policy.category));
-    output.push_str(&format!("severity: {}\n", policy.severity));
-    output.push_str(&format!("confidence: {:.2}\n", policy.confidence));
-    output.push_str(&format!("action: {}\n", policy.action));
+    let _ = writeln!(output, "id: {}", policy.id);
+    let _ = writeln!(output, "category: {}", policy.category);
+    let _ = writeln!(output, "severity: {}", policy.severity);
+    let _ = writeln!(output, "confidence: {:.2}", policy.confidence);
+    let _ = writeln!(output, "action: {}", policy.action);
     output.push_str("recommendation_agent:\n");
     for rec in &policy.recommendation_agent {
-        output.push_str(&format!("  - {}\n", rec));
+        let _ = writeln!(output, "  - {rec}");
     }
     if let Some(expires) = &policy.expires_at {
-        output.push_str(&format!("expires_at: {}\n", expires.format("%Y-%m-%d")));
+        let _ = writeln!(output, "expires_at: {}", expires.format("%Y-%m-%d"));
     }
-    output.push_str(&format!("revoked: {}\n", policy.revoked));
+    let _ = writeln!(output, "revoked: {}", policy.revoked);
     output.push_str("```\n\n");
 }
 
 fn append_context_policy(output: &mut String, policy: &ContextPolicy) {
-    output.push_str(&format!(
-        "- context: {}\n  action: {}\n",
+    let _ = writeln!(
+        output,
+        "- context: {}\n  action: {}",
         context_label(policy.context),
         policy.action
-    ));
+    );
     for rationale in &policy.rationale {
-        output.push_str(&format!("  rationale: {}\n", rationale));
+        let _ = writeln!(output, "  rationale: {rationale}");
     }
 }
 

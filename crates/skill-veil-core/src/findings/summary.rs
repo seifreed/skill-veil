@@ -67,48 +67,11 @@ impl FindingSummary {
     /// Calculate summary from findings plus graph-derived contextual risk.
     #[must_use]
     pub fn from_findings_and_graph(findings: &[Finding], artifact_graph: &ArtifactGraph) -> Self {
-        let mut by_severity = SeverityCounts::default();
-        let mut category_map = std::collections::HashMap::new();
-        let mut factor_map = std::collections::HashMap::<String, RiskFactor>::new();
-
-        let mut total_score: f32 = 0.0;
-
-        for finding in findings {
-            match finding.severity {
-                Severity::Low => by_severity.low += 1,
-                Severity::Medium => by_severity.medium += 1,
-                Severity::High => by_severity.high += 1,
-                Severity::Critical => by_severity.critical += 1,
-            }
-
-            *category_map.entry(finding.category).or_insert(0) += 1;
-            total_score += finding.weighted_score();
-
-            let evidence_factor = format!("evidence:{}", finding.evidence_kind);
-            let evidence_weight = finding.evidence_kind.weight();
-            factor_map
-                .entry(evidence_factor.clone())
-                .and_modify(|factor| factor.contribution += evidence_weight)
-                .or_insert(RiskFactor {
-                    factor: evidence_factor,
-                    contribution: evidence_weight,
-                    rationale: finding.evidence_kind.description().to_string(),
-                });
-
-            let artifact_factor = format!("artifact:{}", finding.artifact_kind);
-            factor_map
-                .entry(artifact_factor.clone())
-                .and_modify(|factor| factor.contribution += 1)
-                .or_insert(RiskFactor {
-                    factor: artifact_factor,
-                    contribution: 1,
-                    rationale: "Risk observed in this artifact class".to_string(),
-                });
-        }
+        let (by_severity, category_map, mut factor_map, findings_score) =
+            aggregate_findings(findings);
 
         let (graph_score, graph_action, graph_factors, mut action_triggers) =
             graph_risk_context(artifact_graph);
-        total_score += graph_score as f32;
 
         for factor in graph_factors {
             factor_map
@@ -117,20 +80,9 @@ impl FindingSummary {
                 .or_insert(factor);
         }
 
-        let risk_score = if total_score.is_finite() {
-            total_score.clamp(0.0, 100.0).round() as u32
-        } else {
-            100 // treat non-finite as max risk
-        };
-
-        let score_based_action = if risk_score >= RISK_THRESHOLD_BLOCK {
-            RecommendedAction::Block
-        } else if risk_score >= RISK_THRESHOLD_APPROVAL {
-            RecommendedAction::RequireApproval
-        } else {
-            RecommendedAction::Log
-        };
-
+        let total_score = findings_score + graph_score as f32;
+        let risk_score = normalize_score(total_score);
+        let score_based_action = score_to_action(risk_score);
         let finding_based_action = findings
             .iter()
             .fold(RecommendedAction::Log, |current, finding| {
@@ -144,6 +96,7 @@ impl FindingSummary {
         by_category.sort_by_key(|(category, _)| *category);
         let mut score_breakdown: Vec<_> = factor_map.into_values().collect();
         score_breakdown.sort_by(|left, right| right.contribution.cmp(&left.contribution));
+        action_triggers.sort_by(|left, right| right.action.cmp(&left.action));
 
         Self {
             total_findings: findings.len(),
@@ -152,17 +105,83 @@ impl FindingSummary {
             risk_score,
             recommended_action,
             score_breakdown,
-            action_triggers: {
-                action_triggers.sort_by(|left, right| right.action.cmp(&left.action));
-                action_triggers
-            },
+            action_triggers,
         }
+    }
+}
+
+type FactorMap = std::collections::HashMap<String, RiskFactor>;
+type CategoryMap = std::collections::HashMap<ThreatCategory, usize>;
+
+fn aggregate_findings(findings: &[Finding]) -> (SeverityCounts, CategoryMap, FactorMap, f32) {
+    let mut by_severity = SeverityCounts::default();
+    let mut category_map = CategoryMap::new();
+    let mut factor_map = FactorMap::new();
+    let mut total_score: f32 = 0.0;
+
+    for finding in findings {
+        match finding.severity {
+            Severity::Low => by_severity.low += 1,
+            Severity::Medium => by_severity.medium += 1,
+            Severity::High => by_severity.high += 1,
+            Severity::Critical => by_severity.critical += 1,
+        }
+        *category_map.entry(finding.category).or_insert(0) += 1;
+        total_score += finding.weighted_score();
+        accumulate_evidence_factor(&mut factor_map, finding);
+        accumulate_artifact_factor(&mut factor_map, finding);
+    }
+
+    (by_severity, category_map, factor_map, total_score)
+}
+
+fn accumulate_evidence_factor(factors: &mut FactorMap, finding: &Finding) {
+    let key = format!("evidence:{}", finding.evidence_kind);
+    let weight = finding.evidence_kind.weight();
+    factors
+        .entry(key.clone())
+        .and_modify(|f| f.contribution += weight)
+        .or_insert(RiskFactor {
+            factor: key,
+            contribution: weight,
+            rationale: finding.evidence_kind.description().to_string(),
+        });
+}
+
+fn accumulate_artifact_factor(factors: &mut FactorMap, finding: &Finding) {
+    let key = format!("artifact:{}", finding.artifact_kind);
+    factors
+        .entry(key.clone())
+        .and_modify(|f| f.contribution += 1)
+        .or_insert(RiskFactor {
+            factor: key,
+            contribution: 1,
+            rationale: "Risk observed in this artifact class".to_string(),
+        });
+}
+
+fn normalize_score(total: f32) -> u32 {
+    if total.is_finite() {
+        total.clamp(0.0, 100.0).round() as u32
+    } else {
+        100
+    }
+}
+
+fn score_to_action(risk_score: u32) -> RecommendedAction {
+    if risk_score >= RISK_THRESHOLD_BLOCK {
+        RecommendedAction::Block
+    } else if risk_score >= RISK_THRESHOLD_APPROVAL {
+        RecommendedAction::RequireApproval
+    } else {
+        RecommendedAction::Log
     }
 }
 
 /// Accumulates capability combination scores, risk factors, and action triggers.
 struct CapabilityScoreAccumulator {
     scored_combos: std::collections::HashSet<&'static str>,
+    scored_capabilities: std::collections::HashSet<String>,
     total_score: u32,
     action: RecommendedAction,
     factors: Vec<RiskFactor>,
@@ -173,10 +192,22 @@ impl CapabilityScoreAccumulator {
     fn new() -> Self {
         Self {
             scored_combos: std::collections::HashSet::new(),
+            scored_capabilities: std::collections::HashSet::new(),
             total_score: 0,
             action: RecommendedAction::Log,
             factors: Vec::new(),
             triggers: Vec::new(),
+        }
+    }
+
+    fn score_capability(&mut self, factor: String, contribution: u32, rationale: String) {
+        if self.scored_capabilities.insert(factor.clone()) {
+            self.total_score += contribution;
+            self.factors.push(RiskFactor {
+                factor,
+                contribution,
+                rationale,
+            });
         }
     }
 
@@ -210,6 +241,66 @@ impl CapabilityScoreAccumulator {
     }
 }
 
+struct CapabilityComboSpec {
+    key: &'static str,
+    cap_a: ArtifactCapability,
+    cap_b: ArtifactCapability,
+    action: RecommendedAction,
+    weight: u32,
+    description: &'static str,
+}
+
+static CAPABILITY_COMBOS: &[CapabilityComboSpec] = &[
+    CapabilityComboSpec {
+        key: "privileged_host_filesystem",
+        cap_a: ArtifactCapability::PrivilegedRuntime,
+        cap_b: ArtifactCapability::HostFilesystemAccess,
+        action: RecommendedAction::Block,
+        weight: CAPABILITY_COMBO_WEIGHT_PRIVILEGED_HOST,
+        description: "privileged runtime with host filesystem access",
+    },
+    CapabilityComboSpec {
+        key: "install_network",
+        cap_a: ArtifactCapability::InstallExecution,
+        cap_b: ArtifactCapability::NetworkAccess,
+        action: RecommendedAction::RequireApproval,
+        weight: CAPABILITY_COMBO_WEIGHT_INSTALL_NETWORK,
+        description: "install-time execution with network access",
+    },
+    CapabilityComboSpec {
+        key: "install_binary",
+        cap_a: ArtifactCapability::InstallExecution,
+        cap_b: ArtifactCapability::ExposesBinary,
+        action: RecommendedAction::RequireApproval,
+        weight: CAPABILITY_COMBO_WEIGHT_INSTALL_BINARY,
+        description: "install-time execution with exposed binaries",
+    },
+    CapabilityComboSpec {
+        key: "secret_access_network",
+        cap_a: ArtifactCapability::SecretAccess,
+        cap_b: ArtifactCapability::NetworkAccess,
+        action: RecommendedAction::RequireApproval,
+        weight: CAPABILITY_COMBO_WEIGHT_SECRET_NETWORK,
+        description: "secret access with network connectivity",
+    },
+    CapabilityComboSpec {
+        key: "persistence_network",
+        cap_a: ArtifactCapability::PersistenceSurface,
+        cap_b: ArtifactCapability::NetworkAccess,
+        action: RecommendedAction::RequireApproval,
+        weight: CAPABILITY_COMBO_WEIGHT_PERSISTENCE_NETWORK,
+        description: "persistence with network connectivity",
+    },
+    CapabilityComboSpec {
+        key: "browser_identity_scope",
+        cap_a: ArtifactCapability::BrowserAccess,
+        cap_b: ArtifactCapability::IdentityAccess,
+        action: RecommendedAction::RequireApproval,
+        weight: CAPABILITY_COMBO_WEIGHT_BROWSER_IDENTITY,
+        description: "broad browser automation with identity-linked access",
+    },
+];
+
 /// Detect and score capability combinations on a single artifact node.
 fn detect_node_capability_combos(
     node: &crate::artifact_graph::ArtifactNode,
@@ -218,116 +309,95 @@ fn detect_node_capability_combos(
     let has_cap = |cap: ArtifactCapability| -> bool {
         node.capabilities.iter().any(|fact| fact.capability == cap)
     };
-    let has_privileged = has_cap(ArtifactCapability::PrivilegedRuntime);
-    let has_host_fs = has_cap(ArtifactCapability::HostFilesystemAccess);
-    let has_install = has_cap(ArtifactCapability::InstallExecution);
-    let has_network = has_cap(ArtifactCapability::NetworkAccess);
-    let has_binary = has_cap(ArtifactCapability::ExposesBinary);
-    let has_secret_access = has_cap(ArtifactCapability::SecretAccess);
-    let has_persistence = has_cap(ArtifactCapability::PersistenceSurface);
-    let has_browser_access = has_cap(ArtifactCapability::BrowserAccess);
-    let has_identity_access = has_cap(ArtifactCapability::IdentityAccess);
-
-    if has_privileged && has_host_fs {
-        acc.score_combo(
-            "privileged_host_filesystem",
-            RecommendedAction::Block,
-            CAPABILITY_COMBO_WEIGHT_PRIVILEGED_HOST,
-            "capability_combo:privileged_host_filesystem",
-            &format!(
-                "Artifact combines privileged runtime with host filesystem access: {}",
-                node.path
-            ),
-            &format!(
-                "Block forced because {} combines privileged runtime with host filesystem access",
-                node.path
-            ),
-        );
+    for spec in CAPABILITY_COMBOS {
+        if has_cap(spec.cap_a) && has_cap(spec.cap_b) {
+            let verb = match spec.action {
+                RecommendedAction::Block => "Block",
+                _ => "Approval",
+            };
+            let factor = format!("capability_combo:{}", spec.key);
+            acc.score_combo(
+                spec.key,
+                spec.action,
+                spec.weight,
+                &factor,
+                &format!("Artifact combines {}: {}", spec.description, node.path),
+                &format!(
+                    "{verb} forced because {} combines {}",
+                    node.path, spec.description
+                ),
+            );
+        }
     }
+}
 
-    if has_install && has_network {
-        acc.score_combo(
-            "install_network",
-            RecommendedAction::RequireApproval,
-            CAPABILITY_COMBO_WEIGHT_INSTALL_NETWORK,
-            "capability_combo:install_network",
-            &format!(
-                "Artifact combines install-time execution with network access: {}",
-                node.path
+fn capability_score_params(
+    capability: ArtifactCapability,
+    source_label: &str,
+) -> (String, u32, String) {
+    match capability {
+        ArtifactCapability::InstallExecution => (
+            format!("capability:{source_label}:install_execution"),
+            CAPABILITY_WEIGHT_INSTALL_EXECUTION,
+            format!("Artifact can execute code during installation ({source_label})"),
+        ),
+        ArtifactCapability::BrowserAccess => (
+            format!("capability:{source_label}:browser_access"),
+            CAPABILITY_WEIGHT_BROWSER_ACCESS,
+            format!("Artifact requests broad browser automation access ({source_label})"),
+        ),
+        ArtifactCapability::NetworkAccess => (
+            format!("capability:{source_label}:network_access"),
+            CAPABILITY_WEIGHT_NETWORK_ACCESS,
+            format!("Artifact can expose or request network connectivity ({source_label})"),
+        ),
+        ArtifactCapability::ExposesBinary => (
+            format!("capability:{source_label}:exposes_binary"),
+            CAPABILITY_WEIGHT_EXPOSES_BINARY,
+            format!("Artifact exposes executable entrypoints ({source_label})"),
+        ),
+        ArtifactCapability::PrivilegedRuntime => (
+            format!("capability:{source_label}:privileged_runtime"),
+            CAPABILITY_WEIGHT_PRIVILEGED_RUNTIME,
+            format!("Artifact requests privileged runtime access ({source_label})"),
+        ),
+        ArtifactCapability::HostFilesystemAccess => (
+            format!("capability:{source_label}:host_filesystem_access"),
+            CAPABILITY_WEIGHT_HOST_FILESYSTEM_ACCESS,
+            format!("Artifact can access host filesystem paths ({source_label})"),
+        ),
+        ArtifactCapability::ProcessExecution => (
+            format!("capability:{source_label}:process_execution"),
+            CAPABILITY_WEIGHT_PROCESS_EXECUTION,
+            format!("Artifact can execute child processes ({source_label})"),
+        ),
+        ArtifactCapability::SecretAccess => (
+            format!("capability:{source_label}:secret_access"),
+            CAPABILITY_WEIGHT_SECRET_ACCESS,
+            format!("Artifact can access or expose secrets ({source_label})"),
+        ),
+        ArtifactCapability::PersistenceSurface => (
+            format!("capability:{source_label}:persistence_surface"),
+            CAPABILITY_WEIGHT_PERSISTENCE_SURFACE,
+            format!("Artifact can establish persistence ({source_label})"),
+        ),
+        ArtifactCapability::FilesystemWrite => (
+            format!("capability:{source_label}:filesystem_write"),
+            CAPABILITY_WEIGHT_FILESYSTEM_WRITE,
+            format!("Artifact can write to the filesystem ({source_label})"),
+        ),
+        ArtifactCapability::IdentityAccess => (
+            format!("capability:{source_label}:identity_access"),
+            CAPABILITY_WEIGHT_IDENTITY_ACCESS,
+            format!(
+                "Artifact requests access to OAuth or identity-linked resources ({source_label})"
             ),
-            &format!(
-                "Approval forced because {} combines install-time execution with network access",
-                node.path
-            ),
-        );
-    }
-
-    if has_install && has_binary {
-        acc.score_combo(
-            "install_binary",
-            RecommendedAction::RequireApproval,
-            CAPABILITY_COMBO_WEIGHT_INSTALL_BINARY,
-            "capability_combo:install_binary",
-            &format!(
-                "Artifact combines install-time execution with exposed binaries: {}",
-                node.path
-            ),
-            &format!(
-                "Approval forced because {} combines install-time execution with exposed binaries",
-                node.path
-            ),
-        );
-    }
-
-    if has_secret_access && has_network {
-        acc.score_combo(
-            "secret_access_network",
-            RecommendedAction::RequireApproval,
-            CAPABILITY_COMBO_WEIGHT_SECRET_NETWORK,
-            "capability_combo:secret_access_network",
-            &format!(
-                "Artifact combines secret access with network connectivity: {}",
-                node.path
-            ),
-            &format!(
-                "Approval forced because {} combines secret access with network connectivity",
-                node.path
-            ),
-        );
-    }
-
-    if has_persistence && has_network {
-        acc.score_combo(
-            "persistence_network",
-            RecommendedAction::RequireApproval,
-            CAPABILITY_COMBO_WEIGHT_PERSISTENCE_NETWORK,
-            "capability_combo:persistence_network",
-            &format!(
-                "Artifact combines persistence with network connectivity: {}",
-                node.path
-            ),
-            &format!(
-                "Approval forced because {} combines persistence with network connectivity",
-                node.path
-            ),
-        );
-    }
-
-    if has_browser_access && has_identity_access {
-        acc.score_combo(
-            "browser_identity_scope",
-            RecommendedAction::RequireApproval,
-            CAPABILITY_COMBO_WEIGHT_BROWSER_IDENTITY,
-            "capability_combo:browser_identity_scope",
-            &format!(
-                "Artifact combines broad browser automation with identity-linked access: {}",
-                node.path
-            ),
-            &format!(
-                "Approval forced because {} combines broad browser automation with identity-linked access",
-                node.path
-            ),
-        );
+        ),
+        ArtifactCapability::InboundNetworkSurface => (
+            format!("capability:{source_label}:inbound_network_surface"),
+            CAPABILITY_WEIGHT_INBOUND_SURFACE,
+            format!("Artifact exposes an inbound network or webhook surface ({source_label})"),
+        ),
     }
 }
 
@@ -335,9 +405,6 @@ fn graph_risk_context(
     artifact_graph: &ArtifactGraph,
 ) -> (u32, RecommendedAction, Vec<RiskFactor>, Vec<ActionTrigger>) {
     let mut acc = CapabilityScoreAccumulator::new();
-    // Track scored capability types to avoid double-counting
-    // the same capability across multiple nodes.
-    let mut scored_capabilities = std::collections::HashSet::<String>::new();
 
     for node in &artifact_graph.nodes {
         for capability in &node.capabilities {
@@ -345,79 +412,9 @@ fn graph_risk_context(
                 ArtifactCapabilitySource::Declared => "declared",
                 ArtifactCapabilitySource::Observed => "observed",
             };
-            let (factor, contribution, rationale) = match capability.capability {
-                ArtifactCapability::InstallExecution => (
-                    format!("capability:{source_label}:install_execution"),
-                    CAPABILITY_WEIGHT_INSTALL_EXECUTION,
-                    format!("Artifact can execute code during installation ({source_label})"),
-                ),
-                ArtifactCapability::BrowserAccess => (
-                    format!("capability:{source_label}:browser_access"),
-                    CAPABILITY_WEIGHT_BROWSER_ACCESS,
-                    format!("Artifact requests broad browser automation access ({source_label})"),
-                ),
-                ArtifactCapability::NetworkAccess => (
-                    format!("capability:{source_label}:network_access"),
-                    CAPABILITY_WEIGHT_NETWORK_ACCESS,
-                    format!("Artifact can expose or request network connectivity ({source_label})"),
-                ),
-                ArtifactCapability::ExposesBinary => (
-                    format!("capability:{source_label}:exposes_binary"),
-                    CAPABILITY_WEIGHT_EXPOSES_BINARY,
-                    format!("Artifact exposes executable entrypoints ({source_label})"),
-                ),
-                ArtifactCapability::PrivilegedRuntime => (
-                    format!("capability:{source_label}:privileged_runtime"),
-                    CAPABILITY_WEIGHT_PRIVILEGED_RUNTIME,
-                    format!("Artifact requests privileged runtime access ({source_label})"),
-                ),
-                ArtifactCapability::HostFilesystemAccess => (
-                    format!("capability:{source_label}:host_filesystem_access"),
-                    CAPABILITY_WEIGHT_HOST_FILESYSTEM_ACCESS,
-                    format!("Artifact can access host filesystem paths ({source_label})"),
-                ),
-                ArtifactCapability::ProcessExecution => (
-                    format!("capability:{source_label}:process_execution"),
-                    CAPABILITY_WEIGHT_PROCESS_EXECUTION,
-                    format!("Artifact can execute child processes ({source_label})"),
-                ),
-                ArtifactCapability::SecretAccess => (
-                    format!("capability:{source_label}:secret_access"),
-                    CAPABILITY_WEIGHT_SECRET_ACCESS,
-                    format!("Artifact can access or expose secrets ({source_label})"),
-                ),
-                ArtifactCapability::PersistenceSurface => (
-                    format!("capability:{source_label}:persistence_surface"),
-                    CAPABILITY_WEIGHT_PERSISTENCE_SURFACE,
-                    format!("Artifact can establish persistence ({source_label})"),
-                ),
-                ArtifactCapability::FilesystemWrite => (
-                    format!("capability:{source_label}:filesystem_write"),
-                    CAPABILITY_WEIGHT_FILESYSTEM_WRITE,
-                    format!("Artifact can write to the filesystem ({source_label})"),
-                ),
-                ArtifactCapability::IdentityAccess => (
-                    format!("capability:{source_label}:identity_access"),
-                    CAPABILITY_WEIGHT_IDENTITY_ACCESS,
-                    format!("Artifact requests access to OAuth or identity-linked resources ({source_label})"),
-                ),
-                ArtifactCapability::InboundNetworkSurface => (
-                    format!("capability:{source_label}:inbound_network_surface"),
-                    CAPABILITY_WEIGHT_INBOUND_SURFACE,
-                    format!("Artifact exposes an inbound network or webhook surface ({source_label})"),
-                ),
-            };
-
-            // Only count each capability type (by factor key) once across all nodes
-            // to prevent score inflation from duplicate capabilities on multiple artifacts.
-            if scored_capabilities.insert(factor.clone()) {
-                acc.total_score += contribution;
-                acc.factors.push(RiskFactor {
-                    factor,
-                    contribution,
-                    rationale: format!("{rationale}: {}", node.path),
-                });
-            }
+            let (factor, contribution, rationale) =
+                capability_score_params(capability.capability, source_label);
+            acc.score_capability(factor, contribution, format!("{rationale}: {}", node.path));
         }
 
         detect_node_capability_combos(node, &mut acc);

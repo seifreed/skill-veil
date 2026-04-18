@@ -52,7 +52,7 @@ impl PolicyGenerator {
         policies
     }
 
-    pub(crate) fn generate_context_policies(&self) -> Vec<ContextPolicy> {
+    pub fn generate_context_policies(&self) -> Vec<ContextPolicy> {
         let mut context_map: HashMap<OperationalContext, ContextPolicy> = HashMap::new();
 
         for finding in self.findings() {

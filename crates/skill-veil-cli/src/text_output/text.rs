@@ -260,7 +260,7 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         }
     }
 
-    let context_policies = result.context_policies();
+    let context_policies = result.policy_generator().generate_context_policies();
     if !context_policies.is_empty() {
         output.push_str("  Context policies:\n");
         for policy in &context_policies {
@@ -421,7 +421,7 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
 
     let mut context_counts = std::collections::BTreeMap::new();
     for result in results {
-        for policy in &result.context_policies() {
+        for policy in &result.policy_generator().generate_context_policies() {
             *context_counts
                 .entry(
                     serde_json::to_string(&policy.context)

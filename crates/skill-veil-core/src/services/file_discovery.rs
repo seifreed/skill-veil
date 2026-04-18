@@ -7,6 +7,7 @@ use crate::adapters::StdFileSystemProvider;
 use crate::analyzer::{assess_artifact_path, ArtifactClassification};
 use crate::ports::FileSystemProvider;
 use std::path::{Path, PathBuf};
+use walkdir::WalkDir;
 
 // Constants for skill file detection
 /// Primary skill file name (case-insensitive match)
@@ -182,6 +183,88 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             false
         }
     }
+}
+
+pub(crate) fn discover_package_manifests(path: &Path) -> Vec<PathBuf> {
+    const MANIFEST_NAMES: &[&str] = &[
+        "package.json",
+        "mcp.json",
+        "mcp.yaml",
+        "mcp.yml",
+        "requirements.txt",
+        "pyproject.toml",
+        "cargo.toml",
+        "dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "makefile",
+        ".npmrc",
+        "pip.conf",
+    ];
+    discover_files_by_name(path, MANIFEST_NAMES)
+}
+
+pub(crate) fn discover_lockfiles(path: &Path) -> Vec<PathBuf> {
+    const LOCKFILE_NAMES: &[&str] = &[
+        "package-lock.json",
+        "cargo.lock",
+        "poetry.lock",
+        "uv.lock",
+        "pipfile.lock",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "npm-shrinkwrap.json",
+    ];
+    discover_files_by_name(path, LOCKFILE_NAMES)
+}
+
+fn discover_files_by_name(root: &Path, names: &[&str]) -> Vec<PathBuf> {
+    WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| !should_skip_discovery_dir(entry))
+        .filter_map(|e| match e {
+            Ok(entry) => Some(entry),
+            Err(err) => {
+                tracing::warn!(
+                    "Skipping entry during package discovery in {}: {err}",
+                    root.display()
+                );
+                None
+            }
+        })
+        .filter(|entry| entry.file_type().is_file())
+        .filter_map(|entry| {
+            let file_name = entry.file_name().to_str()?.to_ascii_lowercase();
+            names
+                .contains(&file_name.as_str())
+                .then(|| entry.into_path())
+        })
+        .collect()
+}
+
+fn should_skip_discovery_dir(entry: &walkdir::DirEntry) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
+    entry.file_name().to_str().is_some_and(|name| {
+        matches!(
+            name,
+            "node_modules"
+                | "vendor"
+                | ".git"
+                | "dist"
+                | "build"
+                | "target"
+                | ".venv"
+                | "venv"
+                | "__pycache__"
+                | ".yarn"
+                | ".pnpm-store"
+                | ".next"
+                | ".turbo"
+                | "coverage"
+        )
+    })
 }
 
 #[cfg(test)]

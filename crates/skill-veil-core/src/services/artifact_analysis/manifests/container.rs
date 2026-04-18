@@ -17,10 +17,10 @@ pub(crate) fn analyze_dockerfile(path: &Path, content: &str) -> Vec<Finding> {
                     .severity(Severity::Low)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Context)
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
+                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .match_value(line)
                     .reason("Docker base image uses the mutable latest tag")
                     .build(),
@@ -62,10 +62,10 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
                     .severity(Severity::Low)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Context)
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
+                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .match_value(format!("{service_name}: {image}"))
                     .reason("docker-compose service uses a mutable latest image tag")
                     .build(),
@@ -144,10 +144,10 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
                     .severity(Severity::Medium)
                     .action(RecommendedAction::RequireApproval)
                     .evidence_kind(EvidenceKind::Behavior)
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.clone(),
                     })
+                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                     .match_value(format!("{service_name}: network_mode={network_mode}"))
                     .reason("docker-compose service shares the host network namespace")
                     .build(),

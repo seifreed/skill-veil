@@ -7,10 +7,7 @@ use crate::findings::{
     ArtifactKind, DeduplicationSummary, Finding, FindingSummary, PackageVerdictReport, Severity,
     Verdict,
 };
-use crate::policy::{
-    JsonReport, PolicyAudit, PolicyFile, PolicyGenerator, PolicyProfile, SarifReport,
-    SuppressionSummary,
-};
+use crate::policy::{PolicyAudit, PolicyFile, PolicyGenerator, PolicyProfile, SuppressionSummary};
 use crate::rules::RuleError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -159,8 +156,8 @@ impl ScanResult {
         crate::findings::split_findings_by_scope(path, primary_artifact_kind, findings)
     }
 
-    fn policy_generator(&self) -> PolicyGenerator {
-        let mut generator = PolicyGenerator::new(
+    pub fn policy_generator(&self) -> PolicyGenerator {
+        let base = PolicyGenerator::new(
             &self.name,
             self.path.to_string_lossy(),
             self.findings.clone(),
@@ -168,38 +165,21 @@ impl ScanResult {
         )
         .with_primary_artifact_kind(self.primary_artifact_kind)
         .with_extension_kind(self.extension_kind)
-        .with_artifact_classification(
-            self.classification,
-            self.package_id.clone(),
-            self.identity_source,
-            self.structural_validity,
-            self.heuristic_score,
-        );
-        if let Some(profile) = self.profile {
-            generator = generator.with_profile(profile);
-        }
-        if let Some(policy) = &self.policy {
-            generator = generator.with_policy(policy.clone());
-        }
-        generator
-            .with_suppression_summary(self.suppression_summary.clone())
+        .with_classification(self.classification)
+        .with_package_id(self.package_id.clone())
+        .with_identity_source(self.identity_source)
+        .with_structural_validity(self.structural_validity)
+        .with_heuristic_score(self.heuristic_score);
+        let base = match self.profile {
+            Some(p) => base.with_profile(p),
+            None => base,
+        };
+        let base = match &self.policy {
+            Some(p) => base.with_policy(p.clone()),
+            None => base,
+        };
+        base.with_suppression_summary(self.suppression_summary.clone())
             .with_policy_audit(self.policy_audit.clone())
             .with_verdict_report(self.verdict_report.clone())
-    }
-
-    pub fn to_shield_md(&self) -> String {
-        self.policy_generator().generate_shield_md()
-    }
-
-    pub fn to_json_report(&self) -> JsonReport {
-        self.policy_generator().generate_json()
-    }
-
-    pub fn to_sarif_report(&self) -> SarifReport {
-        self.policy_generator().generate_sarif()
-    }
-
-    pub fn context_policies(&self) -> Vec<crate::policy::ContextPolicy> {
-        self.policy_generator().generate_context_policies()
     }
 }

@@ -19,10 +19,10 @@ pub(crate) fn analyze_makefile(path: &Path, content: &str) -> Vec<Finding> {
                 .severity(Severity::Medium)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                 .matched_on(MatchTarget::ReferencedFile {
                     path: artifact_path.clone(),
                 })
+                .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
                 .match_value(line)
                 .reason("Makefile performs remote downloads")
                 .build(),
