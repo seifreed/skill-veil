@@ -4,11 +4,14 @@ use crate::cli_args::ColorChoiceArg;
 use crate::color::ColorMode;
 use crate::dataset::format_dataset_verdicts_text;
 use crate::dataset::DatasetPackageVerdictEntry;
+use crate::rule_tools::{
+    build_rule_pack_info, validate_fixture_case, validate_rules_directory, RuleFixtureCase,
+};
 use crate::text_output::{format_diff_ci_summary, format_text_output, TextOutputOptions};
 use skill_veil_core::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactGraph,
-    ArtifactKind, BenchmarkHistory, CorpusEvaluation, MatchTarget, RecommendedAction, ScanResult,
-    ThreatCategory,
+    ArtifactKind, ArtifactMetadata, BenchmarkHistory, CorpusEvaluation, MatchTarget,
+    RecommendedAction, ScanResult, ThreatCategory,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -54,15 +57,17 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
     let summary =
         skill_veil_core::findings::FindingSummary::from_findings_and_graph(&findings, &graph);
     let result = ScanResult {
-        path: PathBuf::from("SKILL.md"),
-        name: "skill".to_string(),
-        extension_kind: skill_veil_core::AgentExtensionKind::Skill,
-        classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
-        package_id: None,
-        identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
-        structural_validity: skill_veil_core::StructuralValidity::Confirmed,
-        heuristic_score: 0,
-        primary_artifact_kind: ArtifactKind::SkillDocument,
+        metadata: ArtifactMetadata {
+            path: PathBuf::from("SKILL.md"),
+            name: "skill".to_string(),
+            extension_kind: skill_veil_core::AgentExtensionKind::Skill,
+            classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
+            package_id: None,
+            identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
+            structural_validity: skill_veil_core::StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+        },
         findings: findings.clone(),
         suppressed_findings: vec![],
         primary_findings: findings,
@@ -113,15 +118,17 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
 
     let summary = skill_veil_core::findings::FindingSummary::from_findings(&findings);
     let result = ScanResult {
-        path: PathBuf::from("SKILL.md"),
-        name: "skill".to_string(),
-        extension_kind: skill_veil_core::AgentExtensionKind::Skill,
-        classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
-        package_id: None,
-        identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
-        structural_validity: skill_veil_core::StructuralValidity::Confirmed,
-        heuristic_score: 0,
-        primary_artifact_kind: ArtifactKind::SkillDocument,
+        metadata: ArtifactMetadata {
+            path: PathBuf::from("SKILL.md"),
+            name: "skill".to_string(),
+            extension_kind: skill_veil_core::AgentExtensionKind::Skill,
+            classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
+            package_id: None,
+            identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
+            structural_validity: skill_veil_core::StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+        },
         findings: findings.clone(),
         suppressed_findings: vec![],
         primary_findings: findings,
@@ -198,15 +205,17 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
     let summary =
         skill_veil_core::findings::FindingSummary::from_findings_and_graph(&findings, &graph);
     let result = ScanResult {
-        path: PathBuf::from("SKILL.md"),
-        name: "skill".to_string(),
-        extension_kind: skill_veil_core::AgentExtensionKind::Skill,
-        classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
-        package_id: None,
-        identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
-        structural_validity: skill_veil_core::StructuralValidity::Confirmed,
-        heuristic_score: 0,
-        primary_artifact_kind: ArtifactKind::SkillDocument,
+        metadata: ArtifactMetadata {
+            path: PathBuf::from("SKILL.md"),
+            name: "skill".to_string(),
+            extension_kind: skill_veil_core::AgentExtensionKind::Skill,
+            classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
+            package_id: None,
+            identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
+            structural_validity: skill_veil_core::StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+        },
         findings: findings.clone(),
         suppressed_findings: vec![],
         primary_findings: findings,

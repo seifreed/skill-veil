@@ -10,10 +10,10 @@ pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOpti
         output.push_str(&format!(
             "\n{} {} {}\n",
             options.color.heading("==="),
-            result.path.display(),
+            result.metadata.path.display(),
             options.color.heading("===")
         ));
-        if let Some(package_id) = &result.package_id {
+        if let Some(package_id) = &result.metadata.package_id {
             output.push_str(&format!("Package ID: {}\n", package_id));
         }
         output.push_str(&format!(
@@ -29,7 +29,10 @@ pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOpti
                 .color
                 .muted("(hygiene/posture, independent from verdict)")
         ));
-        output.push_str(&format!("Heuristic Score: {}\n", result.heuristic_score));
+        output.push_str(&format!(
+            "Heuristic Score: {}\n",
+            result.metadata.heuristic_score
+        ));
         output.push_str(&format!(
             "Package Risk: {} | Action: {}\n",
             result.summary.risk_score,

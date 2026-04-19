@@ -9,6 +9,9 @@ mod artifact_analysis;
 pub(crate) mod file_discovery;
 mod scan_filter;
 
+pub(crate) use artifact_analysis::dispatch::{
+    DOCKER_COMPOSE_NAMES, INSTRUCTION_NAMES, MCP_NAMES, TOML_ARTIFACT_NAMES,
+};
 pub use artifact_analysis::ArtifactAnalysisService;
 pub use file_discovery::FileDiscoveryService;
 pub use scan_filter::ScanFilterService;

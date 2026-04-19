@@ -7,6 +7,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 
 impl PolicyGenerator {
+    #[must_use]
     pub(crate) fn generate_policies(&self) -> Vec<ShieldPolicy> {
         let mut policy_map: HashMap<String, ShieldPolicy> = HashMap::new();
 
@@ -52,6 +53,7 @@ impl PolicyGenerator {
         policies
     }
 
+    #[must_use]
     pub fn generate_context_policies(&self) -> Vec<ContextPolicy> {
         let mut context_map: HashMap<OperationalContext, ContextPolicy> = HashMap::new();
 

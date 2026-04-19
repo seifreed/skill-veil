@@ -71,8 +71,9 @@ impl Default for ScanOptions {
     }
 }
 
+/// Identity and classification metadata for a scanned artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScanResult {
+pub struct ArtifactMetadata {
     pub path: PathBuf,
     pub name: String,
     pub extension_kind: AgentExtensionKind,
@@ -82,6 +83,11 @@ pub struct ScanResult {
     pub structural_validity: StructuralValidity,
     pub heuristic_score: u8,
     pub primary_artifact_kind: ArtifactKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanResult {
+    pub metadata: ArtifactMetadata,
     pub findings: Vec<Finding>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub suppressed_findings: Vec<Finding>,
@@ -157,19 +163,20 @@ impl ScanResult {
     }
 
     pub fn policy_generator(&self) -> PolicyGenerator {
+        let m = &self.metadata;
         let base = PolicyGenerator::new(
-            &self.name,
-            self.path.to_string_lossy(),
+            &m.name,
+            m.path.to_string_lossy(),
             self.findings.clone(),
             self.artifact_graph.clone(),
         )
-        .with_primary_artifact_kind(self.primary_artifact_kind)
-        .with_extension_kind(self.extension_kind)
-        .with_classification(self.classification)
-        .with_package_id(self.package_id.clone())
-        .with_identity_source(self.identity_source)
-        .with_structural_validity(self.structural_validity)
-        .with_heuristic_score(self.heuristic_score);
+        .with_primary_artifact_kind(m.primary_artifact_kind)
+        .with_extension_kind(m.extension_kind)
+        .with_classification(m.classification)
+        .with_package_id(m.package_id.clone())
+        .with_identity_source(m.identity_source)
+        .with_structural_validity(m.structural_validity)
+        .with_heuristic_score(m.heuristic_score);
         let base = match self.profile {
             Some(p) => base.with_profile(p),
             None => base,

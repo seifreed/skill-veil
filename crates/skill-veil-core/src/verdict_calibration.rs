@@ -136,60 +136,7 @@ pub(crate) fn calibrate_verdict_inputs(
     root_cause_groups: &[RootCauseGroup],
 ) -> VerdictCalibration {
     let mut groups = root_cause_groups.to_vec();
-    let mut notes = Vec::new();
-    let mut risk_adjustment = 0_i32;
-
-    let has_stronger_behavior = findings.iter().any(|finding| {
-        finding.recommended_action != RecommendedAction::Log
-            && !is_permission_model_rule(&finding.rule_id)
-            && finding.rule_id != "INTERNAL_NETWORK_ACCESS"
-            && !matches!(
-                finding.rule_id.as_str(),
-                "MCP_NO_AUTH_MODEL" | "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"
-            )
-            && matches!(
-                finding.signal_class,
-                SignalClass::SuspiciousPackageBehavior | SignalClass::MaliciousBehavior
-            )
-    });
-    let has_network_chain = findings.iter().any(|finding| {
-        let is_known_chain_rule = matches!(
-            finding.rule_id.as_str(),
-            "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"
-                | "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"
-                | "SSRF_LIKE_FETCH"
-                | "SKILL_REMOTE_EXEC_CURL_BASH"
-                | "SKILL_REMOTE_EXEC_POWERSHELL_IEX"
-                | "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"
-                | "OFFICIAL_SECRET_EXFIL_WEBHOOK"
-        );
-        let is_actionable_chain_category = matches!(
-            finding.category,
-            ThreatCategory::RemoteExec
-                | ThreatCategory::DataExfiltration
-                | ThreatCategory::CredentialExposure
-        ) && finding.recommended_action
-            != RecommendedAction::Log;
-        is_known_chain_rule || is_actionable_chain_category
-    });
-    let has_remote_mcp_exec_pair = findings.iter().any(|finding| {
-        matches!(
-            finding.rule_id.as_str(),
-            "MCP_REMOTE_EXEC_SURFACE"
-                | "MCP_TOOLING_TRANSPORT_DECLARED"
-                | "OFFICIAL_MCP_REMOTE_TUNNEL_WITH_EXEC"
-                | "OFFICIAL_MCP_REMOTE_BRIDGE_WITH_COMMAND"
-        )
-    });
-
-    // Gate conditions keyed to each pipeline entry's position.
-    // Order matches CALIBRATION_PIPELINE.
-    let gates = [
-        !has_stronger_behavior,
-        !has_stronger_behavior,
-        !has_network_chain,
-        !has_remote_mcp_exec_pair,
-    ];
+    let gates = compute_calibration_gates(findings);
 
     // Snapshot original actions and signal classes so each calibration rule checks pre-mutation state.
     // This makes rules independent: earlier downgrades don't prevent later rules from firing.
@@ -198,69 +145,8 @@ pub(crate) fn calibrate_verdict_inputs(
         .map(|group| (group.strongest_action, group.signal_class))
         .collect();
 
-    // Accumulate excluded rule IDs per group so successive calibration rules don't
-    // re-include findings that a previous rule already calibrated away.
-    let mut accumulated_exclusions: Vec<Vec<&str>> = vec![Vec::new(); groups.len()];
-    // Track the action before each calibration rule fires, so effect strings
-    // and risk_adjustment reflect what THIS rule actually changed (not cumulative
-    // delta from original).
-    let mut pre_rule_actions: Vec<RecommendedAction> =
-        groups.iter().map(|g| g.strongest_action).collect();
-
-    // Check findings directly instead of representative_rules (which is truncated to
-    // MAX_REPRESENTATIVE_RULES entries and could exclude calibration-relevant rules).
-    let group_has_matching_rule = |group: &RootCauseGroup,
-                                   original_signal_class: SignalClass,
-                                   trigger_rule_ids: &[&str]|
-     -> bool {
-        findings.iter().any(|f| {
-            f.artifact_scope == group.scope
-                && f.category == group.category
-                && f.signal_class == original_signal_class
-                && trigger_rule_ids.contains(&f.rule_id.as_str())
-        })
-    };
-
-    for (i, group) in groups.iter_mut().enumerate() {
-        let original_signal_class = original_snapshots[i].1;
-
-        for (rule, &gate) in CALIBRATION_PIPELINE.iter().zip(gates.iter()) {
-            if !gate
-                || !group_has_matching_rule(group, original_signal_class, rule.trigger_rule_ids)
-            {
-                continue;
-            }
-
-            accumulated_exclusions[i].extend_from_slice(rule.rule_ids);
-            let (new_action, remaining_count) = recalculate_group_action_excluding(
-                findings,
-                group,
-                original_signal_class,
-                &accumulated_exclusions[i],
-            );
-            group.strongest_action = new_action;
-            group.finding_count = remaining_count;
-            let changed_from_previous = group.strongest_action < pre_rule_actions[i];
-            if changed_from_previous {
-                risk_adjustment += rule.risk_delta;
-            }
-            if rule.reclassify_signal
-                && (changed_from_previous || group.strongest_action == RecommendedAction::Log)
-            {
-                group.signal_class = SignalClass::ReviewSignal;
-            }
-            pre_rule_actions[i] = group.strongest_action;
-            notes.push(VerdictCalibrationNote {
-                rule_id: rule.note_rule_id.to_string(),
-                effect: if changed_from_previous {
-                    rule.effect_downgraded.to_string()
-                } else {
-                    rule.effect_unchanged.to_string()
-                },
-                rationale: rule.rationale.to_string(),
-            });
-        }
-    }
+    let (risk_adjustment, mut notes) =
+        apply_calibration_rules(&mut groups, findings, &gates, &original_snapshots);
 
     // Remove groups that lost all their findings during calibration.
     // These phantom groups would otherwise inflate root_cause_groups counts
@@ -274,6 +160,166 @@ pub(crate) fn calibrate_verdict_inputs(
         risk_adjustment,
         notes,
     }
+}
+
+/// Compute the boolean gate conditions that guard each entry in `CALIBRATION_PIPELINE`.
+/// Order matches `CALIBRATION_PIPELINE` index positions.
+fn compute_calibration_gates(findings: &[Finding]) -> Vec<bool> {
+    let has_stronger_behavior = findings.iter().any(|f| {
+        f.recommended_action != RecommendedAction::Log
+            && !is_permission_model_rule(&f.rule_id)
+            && f.rule_id != "INTERNAL_NETWORK_ACCESS"
+            && !matches!(
+                f.rule_id.as_str(),
+                "MCP_NO_AUTH_MODEL" | "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"
+            )
+            && matches!(
+                f.signal_class,
+                SignalClass::SuspiciousPackageBehavior | SignalClass::MaliciousBehavior
+            )
+    });
+    let has_network_chain = findings.iter().any(|f| {
+        let is_known_chain_rule = matches!(
+            f.rule_id.as_str(),
+            "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"
+                | "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"
+                | "SSRF_LIKE_FETCH"
+                | "SKILL_REMOTE_EXEC_CURL_BASH"
+                | "SKILL_REMOTE_EXEC_POWERSHELL_IEX"
+                | "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"
+                | "OFFICIAL_SECRET_EXFIL_WEBHOOK"
+        );
+        let is_actionable_chain_category = matches!(
+            f.category,
+            ThreatCategory::RemoteExec
+                | ThreatCategory::DataExfiltration
+                | ThreatCategory::CredentialExposure
+        ) && f.recommended_action != RecommendedAction::Log;
+        is_known_chain_rule || is_actionable_chain_category
+    });
+    let has_remote_mcp_exec_pair = findings.iter().any(|f| {
+        matches!(
+            f.rule_id.as_str(),
+            "MCP_REMOTE_EXEC_SURFACE"
+                | "MCP_TOOLING_TRANSPORT_DECLARED"
+                | "OFFICIAL_MCP_REMOTE_TUNNEL_WITH_EXEC"
+                | "OFFICIAL_MCP_REMOTE_BRIDGE_WITH_COMMAND"
+        )
+    });
+    vec![
+        !has_stronger_behavior,
+        !has_stronger_behavior,
+        !has_network_chain,
+        !has_remote_mcp_exec_pair,
+    ]
+}
+
+/// Mutable per-group state threaded through each calibration rule application.
+struct GroupCalibrationState<'f> {
+    original_signal_class: SignalClass,
+    /// Rule IDs already excluded by earlier rules in this group's calibration pass.
+    accumulated_exclusions: Vec<&'f str>,
+    /// Group's strongest action before the current rule fires (updated after each rule).
+    pre_rule_action: RecommendedAction,
+}
+
+/// Apply all `CALIBRATION_PIPELINE` rules to each group and return the cumulative
+/// risk adjustment and calibration notes.
+///
+/// Uses `original_snapshots` to check pre-mutation signal class (rule independence) and
+/// accumulates excluded rule IDs per group so successive rules don't re-count already-calibrated findings.
+fn apply_calibration_rules<'f>(
+    groups: &mut [RootCauseGroup],
+    findings: &'f [Finding],
+    gates: &[bool],
+    original_snapshots: &[(RecommendedAction, SignalClass)],
+) -> (i32, Vec<VerdictCalibrationNote>) {
+    debug_assert_eq!(
+        CALIBRATION_PIPELINE.len(),
+        gates.len(),
+        "gate count must match pipeline length"
+    );
+    let mut risk_adjustment = 0_i32;
+    let mut notes = Vec::new();
+    let mut states: Vec<GroupCalibrationState<'f>> = groups
+        .iter()
+        .zip(original_snapshots.iter())
+        .map(|(g, &(_, original_signal_class))| GroupCalibrationState {
+            original_signal_class,
+            accumulated_exclusions: Vec::new(),
+            pre_rule_action: g.strongest_action,
+        })
+        .collect();
+
+    for (i, group) in groups.iter_mut().enumerate() {
+        for (rule, &gate) in CALIBRATION_PIPELINE.iter().zip(gates.iter()) {
+            let (delta, note) =
+                apply_single_rule_to_group(group, rule, gate, findings, &mut states[i]);
+            risk_adjustment += delta;
+            notes.extend(note);
+        }
+    }
+
+    (risk_adjustment, notes)
+}
+
+/// Apply one calibration rule to one group, updating group state in place.
+///
+/// Returns the risk delta (negative or zero) and an optional calibration note.
+/// `state.accumulated_exclusions` is extended when the rule fires, ensuring
+/// successive rules in the same group don't re-count already-calibrated findings.
+fn apply_single_rule_to_group<'f>(
+    group: &mut RootCauseGroup,
+    rule: &CalibrationRule,
+    gate: bool,
+    findings: &'f [Finding],
+    state: &mut GroupCalibrationState<'f>,
+) -> (i32, Option<VerdictCalibrationNote>) {
+    // Check findings directly instead of representative_rules (truncated to
+    // MAX_REPRESENTATIVE_RULES, which could exclude calibration-relevant rules).
+    let group_matches = findings.iter().any(|f| {
+        f.artifact_scope == group.scope
+            && f.category == group.category
+            && f.signal_class == state.original_signal_class
+            && rule.trigger_rule_ids.contains(&f.rule_id.as_str())
+    });
+    if !gate || !group_matches {
+        return (0, None);
+    }
+
+    state
+        .accumulated_exclusions
+        .extend_from_slice(rule.rule_ids);
+    let (new_action, remaining_count) = recalculate_group_action_excluding(
+        findings,
+        group,
+        state.original_signal_class,
+        &state.accumulated_exclusions,
+    );
+    group.strongest_action = new_action;
+    group.finding_count = remaining_count;
+    let changed_from_previous = group.strongest_action < state.pre_rule_action;
+    let risk_delta = if changed_from_previous {
+        rule.risk_delta
+    } else {
+        0
+    };
+    if rule.reclassify_signal
+        && (changed_from_previous || group.strongest_action == RecommendedAction::Log)
+    {
+        group.signal_class = SignalClass::ReviewSignal;
+    }
+    state.pre_rule_action = group.strongest_action;
+    let note = VerdictCalibrationNote {
+        rule_id: rule.note_rule_id.to_string(),
+        effect: if changed_from_previous {
+            rule.effect_downgraded.to_string()
+        } else {
+            rule.effect_unchanged.to_string()
+        },
+        rationale: rule.rationale.to_string(),
+    };
+    (risk_delta, Some(note))
 }
 
 /// Recalculate a group's strongest action and remaining finding count from findings
@@ -314,89 +360,5 @@ fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Ensure CALIBRATED_RULE_IDS stays in sync with the rules that
-    /// calibration actually checks. Every rule referenced by
-    /// `is_permission_model_rule` that has its own calibration branch,
-    /// `is_mcp_no_auth_rule`, and directly named rules must appear.
-    #[test]
-    fn calibrated_rule_ids_covers_all_calibration_targets() {
-        // Rules that have explicit calibration branches in calibrate_verdict_inputs
-        let expected: &[&str] = &[
-            "DECLARED_PERMISSION_NETWORK_ACCESS",
-            "CAPABILITY_PERMISSION_MISMATCH",
-            "INTERNAL_NETWORK_ACCESS",
-            "MCP_NO_AUTH_MODEL",
-            "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT",
-        ];
-
-        for rule_id in expected {
-            assert!(
-                CALIBRATED_RULE_IDS.contains(rule_id),
-                "Calibration target rule '{rule_id}' is missing from CALIBRATED_RULE_IDS. \
-                 Add it to the constant in verdict_calibration.rs."
-            );
-        }
-
-        for rule_id in CALIBRATED_RULE_IDS {
-            assert!(
-                expected.contains(rule_id),
-                "CALIBRATED_RULE_IDS contains '{rule_id}' which is not a known calibration target. \
-                 Either add a calibration branch or remove it from the constant."
-            );
-        }
-    }
-
-    #[test]
-    fn calibration_updates_finding_count_when_excluding_rules() {
-        use crate::findings::{
-            ArtifactScope, Finding, MatchTarget, RootCauseGroup, Severity, ThreatCategory,
-        };
-
-        // Two findings in the same group, both DECLARED_PERMISSION_NETWORK_ACCESS
-        let findings = vec![
-            Finding::builder(
-                "DECLARED_PERMISSION_NETWORK_ACCESS",
-                ThreatCategory::DataExfiltration,
-            )
-            .severity(Severity::Medium)
-            .action(RecommendedAction::RequireApproval)
-            .signal_class(SignalClass::SuspiciousPackageBehavior)
-            .matched_on(MatchTarget::Document)
-            .match_value("network access")
-            .reason("declared network")
-            .build(),
-            Finding::builder(
-                "DECLARED_PERMISSION_NETWORK_ACCESS",
-                ThreatCategory::DataExfiltration,
-            )
-            .severity(Severity::Low)
-            .action(RecommendedAction::Log)
-            .signal_class(SignalClass::SuspiciousPackageBehavior)
-            .matched_on(MatchTarget::Document)
-            .match_value("another network ref")
-            .reason("declared network 2")
-            .build(),
-        ];
-
-        let root_cause_groups = vec![RootCauseGroup {
-            scope: ArtifactScope::AgentEntrypoint,
-            category: ThreatCategory::DataExfiltration,
-            signal_class: SignalClass::SuspiciousPackageBehavior,
-            finding_count: 2,
-            strongest_action: RecommendedAction::RequireApproval,
-            representative_rules: vec!["DECLARED_PERMISSION_NETWORK_ACCESS".to_string()],
-        }];
-
-        let result = calibrate_verdict_inputs(&findings, &root_cause_groups);
-
-        // Both findings were excluded by the DECLARED_PERMISSION_NETWORK_ACCESS rule,
-        // so the group is removed entirely (phantom groups with 0 findings are pruned).
-        assert!(
-            result.root_cause_groups.is_empty(),
-            "Groups with 0 remaining findings should be pruned"
-        );
-    }
-}
+#[path = "verdict_calibration_tests.rs"]
+mod verdict_calibration_tests;

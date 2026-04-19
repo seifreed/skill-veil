@@ -44,6 +44,9 @@ static MCP_HEURISTIC_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new("(?i)(transport|command|url)").expect("MCP_HEURISTIC_REGEX is valid regex")
 });
 
+const MIN_STRUCTURAL_HEURISTIC_SCORE: u8 = 2;
+const MIN_STRUCTURAL_CONFIRMED_SCORE: u8 = 3;
+
 pub fn infer_extension_kind(path: &Path) -> AgentExtensionKind {
     infer_extension_identity(path).0
 }
@@ -108,11 +111,11 @@ fn infer_extension_identity(path: &Path) -> (AgentExtensionKind, ArtifactIdentit
             AgentExtensionKind::Skill,
             ArtifactIdentitySource::ExplicitName,
         ),
-        Some("agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md") => (
+        Some(name) if crate::services::INSTRUCTION_NAMES.contains(&name) => (
             AgentExtensionKind::AgentInstruction,
             ArtifactIdentitySource::ExplicitName,
         ),
-        Some("mcp.json" | "mcp.yaml" | "mcp.yml") => (
+        Some(name) if crate::services::MCP_NAMES.contains(&name) => (
             AgentExtensionKind::McpServer,
             ArtifactIdentitySource::ExplicitName,
         ),
@@ -248,17 +251,22 @@ fn structural_validity_for(
         AgentExtensionKind::AgentInstruction if signals.has_persistence_language => {
             StructuralValidity::Confirmed
         }
-        AgentExtensionKind::Skill if signals.score >= 3 => StructuralValidity::Confirmed,
-        AgentExtensionKind::Skill if signals.score >= 2 => StructuralValidity::Heuristic,
+        AgentExtensionKind::Skill if signals.score >= MIN_STRUCTURAL_CONFIRMED_SCORE => {
+            StructuralValidity::Confirmed
+        }
+        AgentExtensionKind::Skill if signals.score >= MIN_STRUCTURAL_HEURISTIC_SCORE => {
+            StructuralValidity::Heuristic
+        }
         AgentExtensionKind::PromptPack | AgentExtensionKind::AgentInstruction
-            if signals.score >= 2 || signals.has_reasonable_structure =>
+            if signals.score >= MIN_STRUCTURAL_HEURISTIC_SCORE
+                || signals.has_reasonable_structure =>
         {
             StructuralValidity::Heuristic
         }
         AgentExtensionKind::McpServer if MCP_HEURISTIC_REGEX.is_match(content) => {
             StructuralValidity::Heuristic
         }
-        _ if signals.score >= 2 => StructuralValidity::Heuristic,
+        _ if signals.score >= MIN_STRUCTURAL_HEURISTIC_SCORE => StructuralValidity::Heuristic,
         _ => StructuralValidity::Weak,
     }
 }

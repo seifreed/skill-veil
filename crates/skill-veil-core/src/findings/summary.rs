@@ -82,15 +82,7 @@ impl FindingSummary {
 
         let total_score = findings_score + graph_score as f32;
         let risk_score = normalize_score(total_score);
-        let score_based_action = score_to_action(risk_score);
-        let finding_based_action = findings
-            .iter()
-            .fold(RecommendedAction::Log, |current, finding| {
-                current.max(finding.recommended_action)
-            });
-        let recommended_action = score_based_action
-            .max(finding_based_action)
-            .max(graph_action);
+        let recommended_action = select_recommended_action(risk_score, findings, graph_action);
 
         let mut by_category: Vec<_> = category_map.into_iter().collect();
         by_category.sort_by_key(|(category, _)| *category);
@@ -133,6 +125,18 @@ fn aggregate_findings(findings: &[Finding]) -> (SeverityCounts, CategoryMap, Fac
     }
 
     (by_severity, category_map, factor_map, total_score)
+}
+
+fn select_recommended_action(
+    risk_score: u32,
+    findings: &[Finding],
+    graph_action: RecommendedAction,
+) -> RecommendedAction {
+    let score_based = score_to_action(risk_score);
+    let finding_based = findings.iter().fold(RecommendedAction::Log, |acc, f| {
+        acc.max(f.recommended_action)
+    });
+    score_based.max(finding_based).max(graph_action)
 }
 
 fn accumulate_evidence_factor(factors: &mut FactorMap, finding: &Finding) {

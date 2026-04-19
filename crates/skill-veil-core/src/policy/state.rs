@@ -107,6 +107,37 @@ pub fn apply_policy_overrides(findings: Vec<Finding>, policy: Option<&PolicyFile
     apply_policy_overrides_with_audit(findings, policy).0
 }
 
+fn match_override<'p>(
+    finding: &Finding,
+    overrides: &'p [PolicyOverride],
+    now: DateTime<Utc>,
+) -> Option<&'p PolicyOverride> {
+    overrides
+        .iter()
+        .enumerate()
+        .filter(|(_, po)| policy_override_matches(po, finding, now))
+        .max_by_key(|(index, po)| (policy_override_specificity(po), *index))
+        .map(|(_, po)| po)
+}
+
+fn build_audit_entry(
+    finding: &Finding,
+    po: &PolicyOverride,
+    original_action: crate::findings::RecommendedAction,
+) -> AppliedPolicyOverride {
+    AppliedPolicyOverride {
+        finding_fingerprint: finding_fingerprint(finding),
+        rule_id: finding.rule_id.clone(),
+        artifact_path: finding.artifact_path.clone(),
+        override_id: po.id.clone(),
+        original_action,
+        effective_action: po.action,
+        specificity: policy_override_specificity(po),
+        reason: po.reason.clone(),
+        matched_contexts: finding_contexts(finding),
+    }
+}
+
 #[must_use]
 pub fn apply_policy_overrides_with_audit(
     findings: Vec<Finding>,
@@ -121,39 +152,14 @@ pub fn apply_policy_overrides_with_audit(
     let findings = findings
         .into_iter()
         .map(|mut finding| {
-            let selected = policy
-                .overrides
-                .iter()
-                .enumerate()
-                .filter(|(_, policy_override)| {
-                    policy_override_matches(policy_override, &finding, now)
-                })
-                .max_by_key(|(index, policy_override)| {
-                    (policy_override_specificity(policy_override), *index)
-                })
-                .map(|(_, policy_override)| policy_override);
-
-            if let Some(policy_override) = selected {
+            if let Some(po) = match_override(&finding, &policy.overrides, now) {
                 let original_action = finding.recommended_action;
-                let fingerprint = finding_fingerprint(&finding);
                 // Policy overrides unconditionally replace the action, including
                 // escalation (e.g., Log → Block). This is intentional for enterprise
-                // use cases. The audit trail (AppliedPolicyOverride) records both
-                // original_action and effective_action for full visibility.
-                finding.recommended_action = policy_override.action;
-                audit.push(AppliedPolicyOverride {
-                    finding_fingerprint: fingerprint,
-                    rule_id: finding.rule_id.clone(),
-                    artifact_path: finding.artifact_path.clone(),
-                    override_id: policy_override.id.clone(),
-                    original_action,
-                    effective_action: policy_override.action,
-                    specificity: policy_override_specificity(policy_override),
-                    reason: policy_override.reason.clone(),
-                    matched_contexts: finding_contexts(&finding),
-                });
+                // use cases. The audit trail records both actions for full visibility.
+                finding.recommended_action = po.action;
+                audit.push(build_audit_entry(&finding, po, original_action));
             }
-
             finding
         })
         .collect();
@@ -306,47 +312,18 @@ pub fn diff_reports_with_policy_state(
         .map(|(_, entry)| entry.clone())
         .collect();
 
-    // Helper: check if a DiffEntry's logical identity (rule_id + category + artifact_path)
-    // matches any entry in a list. Uses suffix-based paths_match for consistency with
-    // waiver/baseline path matching.
-    let logical_id_matches =
-        |ids: &[(String, Option<String>, ThreatCategory)], entry: &DiffEntry| -> bool {
-            ids.iter().any(|id| {
-                id.0 == entry.rule_id
-                    && id.2 == entry.category
-                    && match (&id.1, &entry.artifact_path) {
-                        (Some(pa), Some(pb)) => paths_match(pa, pb),
-                        (None, None) => true,
-                        _ => false,
-                    }
-            })
-        };
-
     // Build logical IDs from current active findings to detect "text-changed"
     // findings that are still logically present under a new fingerprint.
-    let current_logical_ids: Vec<(String, Option<String>, ThreatCategory)> = active_current
-        .values()
-        .map(|entry| {
-            (
-                entry.rule_id.clone(),
-                entry.artifact_path.clone(),
-                entry.category,
-            )
-        })
-        .collect();
+    let current_logical_ids =
+        build_logical_ids(&active_current.values().cloned().collect::<Vec<_>>());
 
     // Logical IDs of findings suppressed by waivers or baselines.
-    let suppressed_logical_ids: Vec<(String, Option<String>, ThreatCategory)> = waived_findings
+    let suppressed_entries: Vec<DiffEntry> = waived_findings
         .iter()
         .chain(baselined_findings.iter())
-        .map(|entry| {
-            (
-                entry.rule_id.clone(),
-                entry.artifact_path.clone(),
-                entry.category,
-            )
-        })
+        .cloned()
         .collect();
+    let suppressed_logical_ids = build_logical_ids(&suppressed_entries);
 
     // A previous finding is "resolved" only if:
     // 1. Its exact fingerprint is NOT in current active (didn't survive unchanged)
@@ -371,6 +348,34 @@ pub fn diff_reports_with_policy_state(
         baselined_findings,
         unchanged_findings,
     }
+}
+
+/// Extracts logical identities (rule_id, artifact_path, category) from a slice of diff entries.
+fn build_logical_ids(entries: &[DiffEntry]) -> Vec<(String, Option<String>, ThreatCategory)> {
+    entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.rule_id.clone(),
+                entry.artifact_path.clone(),
+                entry.category,
+            )
+        })
+        .collect()
+}
+
+/// Checks whether a `DiffEntry`'s logical identity matches any entry in `ids`.
+/// Uses suffix-based `paths_match` for consistency with waiver/baseline path matching.
+fn logical_id_matches(ids: &[(String, Option<String>, ThreatCategory)], entry: &DiffEntry) -> bool {
+    ids.iter().any(|id| {
+        id.0 == entry.rule_id
+            && id.2 == entry.category
+            && match (&id.1, &entry.artifact_path) {
+                (Some(pa), Some(pb)) => paths_match(pa, pb),
+                (None, None) => true,
+                _ => false,
+            }
+    })
 }
 
 pub(crate) fn default_policy_schema_version() -> String {
@@ -484,6 +489,7 @@ pub(crate) fn policy_override_specificity(policy_override: &PolicyOverride) -> u
     specificity
 }
 
+#[must_use]
 pub(crate) fn finding_contexts(finding: &Finding) -> Vec<OperationalContext> {
     if finding.operational_contexts.is_empty() {
         default_operational_contexts(finding.category, finding.artifact_kind)

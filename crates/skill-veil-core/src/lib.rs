@@ -111,7 +111,10 @@ pub use rules::{
     RuleCondition, RuleEngine, RulePackFile, RulePackKind, RulePackMetadata,
     RULE_PACK_SCHEMA_VERSION,
 };
-pub use scanner::{PackageScanResult, ScanOptions, ScanResult, ScanTargetMode, Scanner};
+pub use scanner::{
+    ArtifactMetadata, DefaultScanner, PackageScanResult, ScanOptions, ScanResult, ScanTargetMode,
+    Scanner,
+};
 pub use scanner_graph::{artifact_kind_for_path, derive_package_id};
 
 // Port traits (interfaces for dependency injection)

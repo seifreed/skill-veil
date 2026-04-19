@@ -2,11 +2,27 @@ use crate::findings::{ArtifactKind, Finding, RecommendedAction, Severity};
 use crate::policy::{
     load_baseline, load_policy, load_waivers, BaselineFile, PolicyFile, WaiverFile,
 };
+use crate::ports::{FileSystemError, FileSystemProvider};
 use crate::scanner::ScanError;
+use crate::services::{DOCKER_COMPOSE_NAMES, MCP_NAMES, TOML_ARTIFACT_NAMES};
 use std::path::Path;
 
-pub(crate) fn read_text_file_lossy(path: &Path) -> Result<(String, bool), std::io::Error> {
-    let bytes = std::fs::read(path)?;
+const JSON_MANIFEST_NAMES: &[&str] = &["package.json", "package-lock.json"];
+
+pub(crate) fn read_text_file_lossy<F: FileSystemProvider>(
+    path: &Path,
+    fs: &F,
+) -> Result<(String, bool), std::io::Error> {
+    let bytes = fs
+        .read_file_bytes(path)
+        .map_err(|e| match e {
+            FileSystemError::IoError(io) => io,
+            FileSystemError::PathNotFound(p) => {
+                std::io::Error::new(std::io::ErrorKind::NotFound, p.display().to_string())
+            }
+        })?
+        .as_bytes()
+        .to_vec();
     let decode_warning = std::str::from_utf8(&bytes).is_err();
     Ok((String::from_utf8_lossy(&bytes).into_owned(), decode_warning))
 }
@@ -71,18 +87,21 @@ pub(crate) fn structured_parse_warning(
     artifact_kind: ArtifactKind,
 ) -> Option<Finding> {
     let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
-    let parse_failed = match file_name.as_str() {
-        "package.json" | "package-lock.json" | "mcp.json" => {
-            serde_json::from_str::<serde_json::Value>(content).is_err()
-        }
-        "docker-compose.yml"
-        | "docker-compose.yaml"
-        | "mcp.yaml"
-        | "mcp.yml"
-        | "pnpm-lock.yaml"
-        | "yarn.lock" => serde_yaml::from_str::<serde_yaml::Value>(content).is_err(),
-        "cargo.toml" | "pyproject.toml" => toml::from_str::<toml::Value>(content).is_err(),
-        _ => false,
+    let name = file_name.as_str();
+    const YAML_LOCKFILE_NAMES: &[&str] = &["pnpm-lock.yaml", "yarn.lock"];
+    let mcp_json = MCP_NAMES.contains(&name) && name.ends_with(".json");
+    let mcp_yaml = MCP_NAMES.contains(&name) && !name.ends_with(".json");
+    let is_json = JSON_MANIFEST_NAMES.contains(&name) || mcp_json;
+    let is_yaml =
+        DOCKER_COMPOSE_NAMES.contains(&name) || YAML_LOCKFILE_NAMES.contains(&name) || mcp_yaml;
+    let parse_failed = if is_json {
+        serde_json::from_str::<serde_json::Value>(content).is_err()
+    } else if is_yaml {
+        serde_yaml::from_str::<serde_yaml::Value>(content).is_err()
+    } else if TOML_ARTIFACT_NAMES.contains(&name) {
+        toml::from_str::<toml::Value>(content).is_err()
+    } else {
+        false
     };
 
     parse_failed.then(|| {

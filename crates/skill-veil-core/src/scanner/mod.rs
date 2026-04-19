@@ -8,7 +8,8 @@ use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::rules::RuleEngine;
 use crate::scanner_support::{load_optional_baseline, load_optional_policy, load_optional_waivers};
 pub use crate::scanner_types::{
-    PackageScanResult, ScanError, ScanErrorEntry, ScanOptions, ScanResult, ScanTargetMode,
+    ArtifactMetadata, PackageScanResult, ScanError, ScanErrorEntry, ScanOptions, ScanResult,
+    ScanTargetMode,
 };
 use crate::services::{ArtifactAnalysisService, FileDiscoveryService, ScanFilterService};
 use crate::{scanner_execution, scanner_graph};
@@ -47,6 +48,10 @@ pub struct Scanner<
     filter_service: ScanFilterService,
     parser: P,
 }
+
+/// Scanner using the default standard-library filesystem and Pulldown Markdown adapters.
+/// Use this in most application code. For injectable adapters, use [`Scanner`] directly.
+pub type DefaultScanner = Scanner<StdFileSystemProvider, PulldownMarkdownParser>;
 
 impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
     #[must_use = "Scanner::new() returns a Result that should be used"]
@@ -211,6 +216,9 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
     }
 }
 
-#[path = "scanner_tests.rs"]
 #[cfg(test)]
-mod scanner_tests;
+mod basic_tests;
+#[cfg(test)]
+mod capabilities_tests;
+#[cfg(test)]
+mod manifest_tests;

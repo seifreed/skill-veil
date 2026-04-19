@@ -1,6 +1,8 @@
 use crate::analyzer::SkillDocument;
+use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{
-    deduplicate_findings, derive_package_verdict, Finding, FindingSummary, MatchTarget,
+    deduplicate_findings, derive_package_verdict, ArtifactKind, Finding, FindingSummary,
+    MatchTarget,
 };
 use crate::policy::{
     AppliedPolicyOverride, PolicyAudit, SuppressionSummary, POLICY_AUDIT_PRECEDENCE,
@@ -19,6 +21,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
     scanner: &Scanner<F, P>,
     doc: &SkillDocument,
 ) -> Vec<Finding> {
+    let fs = scanner.file_discovery().fs_provider();
     let mut findings = Vec::new();
 
     for referenced_file in &doc.referenced_files {
@@ -30,7 +33,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
         let artifact_path = referenced_file.display().to_string();
 
         let artifact_doc =
-            match SkillDocument::from_file_with_parser(referenced_file, scanner.parser()) {
+            match SkillDocument::from_file_with_provider(referenced_file, scanner.parser(), fs) {
                 Ok(doc) => doc,
                 Err(err) => {
                     findings.push(artifact_parse_error_finding(
@@ -55,35 +58,30 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                 }),
         );
 
-        {
-            let content = artifact_doc.raw_content;
-            let decode_warning = artifact_doc.decode_warning;
-            if decode_warning {
-                findings.push(decode_warning_finding(referenced_file, artifact_kind));
-            }
-            if let Some(parse_warning) =
-                structured_parse_warning(referenced_file, &content, artifact_kind)
-            {
-                findings.push(parse_warning);
-            }
-            let sibling_files = crate::scanner_graph::sibling_files(
-                scanner.file_discovery().fs_provider(),
-                referenced_file,
-            );
-            findings.extend(
-                scanner
-                    .artifact_analysis()
-                    .analyze(referenced_file, &content, &sibling_files)
-                    .into_iter()
-                    .map(|f| {
-                        if f.artifact_path.is_some() {
-                            f
-                        } else {
-                            f.with_artifact(artifact_kind, artifact_path.as_str())
-                        }
-                    }),
-            );
+        let content = artifact_doc.raw_content;
+        let decode_warning = artifact_doc.decode_warning;
+        if decode_warning {
+            findings.push(decode_warning_finding(referenced_file, artifact_kind));
         }
+        if let Some(parse_warning) =
+            structured_parse_warning(referenced_file, &content, artifact_kind)
+        {
+            findings.push(parse_warning);
+        }
+        let sibling_files = crate::scanner_graph::sibling_files(fs, referenced_file);
+        findings.extend(
+            scanner
+                .artifact_analysis()
+                .analyze(referenced_file, &content, &sibling_files)
+                .into_iter()
+                .map(|f| {
+                    if f.artifact_path.is_some() {
+                        f
+                    } else {
+                        f.with_artifact(artifact_kind, artifact_path.as_str())
+                    }
+                }),
+        );
     }
 
     findings
@@ -93,35 +91,31 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     path: &Path,
 ) -> Result<ScanResult, ScanError> {
-    let doc = SkillDocument::from_file_with_parser(path, scanner.parser())?;
+    let doc = SkillDocument::from_file_with_provider(
+        path,
+        scanner.parser(),
+        scanner.file_discovery().fs_provider(),
+    )?;
     let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(path);
     let artifact_path = path.display().to_string();
     let primary_content = doc.raw_content.clone();
 
-    let mut findings = scanner.engine().evaluate(&doc);
-    findings.extend(collect_primary_doc_warnings::<F>(&doc, path));
-    findings.extend(scan_supporting_artifacts(scanner, &doc));
-    if let Some(w) = structured_parse_warning(path, &primary_content, artifact_kind) {
-        findings.push(w);
-    }
-    let sibling_files =
-        crate::scanner_graph::sibling_files(scanner.file_discovery().fs_provider(), path);
-    findings.extend(
-        scanner
-            .artifact_analysis()
-            .analyze(path, &primary_content, &sibling_files),
+    let (raw_findings, artifact_graph) = collect_raw_findings(
+        scanner,
+        &doc,
+        path,
+        artifact_kind,
+        &artifact_path,
+        &primary_content,
     );
-
-    let artifact_graph = scanner.build_artifact_graph(&doc);
-    let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph);
-    // Preserve findings that already have artifact context (e.g., from supporting artifact
-    // analysis). Only tag uncontextualized findings with the primary artifact.
-    findings = contextualize_findings(findings, artifact_kind, &artifact_path);
-    findings.extend(taint_findings);
-    let (findings, deduplication_summary) = deduplicate_findings(findings);
-
-    let (findings, suppressed_findings) =
-        collect_and_apply_suppressions(findings, path, &doc, &primary_content);
+    let (findings, deduplication_summary) = deduplicate_findings(raw_findings);
+    let (findings, suppressed_findings) = collect_and_apply_suppressions(
+        findings,
+        path,
+        &doc,
+        &primary_content,
+        scanner.file_discovery().fs_provider(),
+    );
     let inline_suppressed = suppressed_findings.len();
 
     let filter_outcome = scanner.filter_service().filter_with_summary(findings);
@@ -143,15 +137,17 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     let should_fail = scanner.filter_service().should_fail(&filtered_findings);
 
     Ok(ScanResult {
-        path: path.to_path_buf(),
-        name: doc.name,
-        extension_kind: doc.extension_kind,
-        classification: doc.classification,
-        package_id: crate::scanner_graph::derive_package_id(path),
-        identity_source: doc.identity_source,
-        structural_validity: doc.structural_validity,
-        heuristic_score: doc.structural_signals.score,
-        primary_artifact_kind: artifact_kind,
+        metadata: crate::scanner_types::ArtifactMetadata {
+            path: path.to_path_buf(),
+            name: doc.name,
+            extension_kind: doc.extension_kind,
+            classification: doc.classification,
+            package_id: crate::scanner_graph::derive_package_id(path),
+            identity_source: doc.identity_source,
+            structural_validity: doc.structural_validity,
+            heuristic_score: doc.structural_signals.score,
+            primary_artifact_kind: artifact_kind,
+        },
         findings: filtered_findings,
         suppressed_findings,
         primary_findings,
@@ -172,6 +168,36 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         policy_audit: build_policy_audit(scanner, filter_outcome.applied_overrides),
         should_fail,
     })
+}
+
+fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+    path: &Path,
+    artifact_kind: ArtifactKind,
+    artifact_path: &str,
+    primary_content: &str,
+) -> (Vec<Finding>, ArtifactGraph) {
+    let mut findings = scanner.engine().evaluate(doc);
+    findings.extend(collect_primary_doc_warnings::<F>(doc, path));
+    findings.extend(scan_supporting_artifacts(scanner, doc));
+    if let Some(w) = structured_parse_warning(path, primary_content, artifact_kind) {
+        findings.push(w);
+    }
+    let sibling_files =
+        crate::scanner_graph::sibling_files(scanner.file_discovery().fs_provider(), path);
+    findings.extend(
+        scanner
+            .artifact_analysis()
+            .analyze(path, primary_content, &sibling_files),
+    );
+    let artifact_graph = scanner.build_artifact_graph(doc);
+    let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph);
+    // Preserve findings that already have artifact context (e.g., from supporting artifact
+    // analysis). Only tag uncontextualized findings with the primary artifact.
+    findings = contextualize_findings(findings, artifact_kind, artifact_path);
+    findings.extend(taint_findings);
+    (findings, artifact_graph)
 }
 
 fn collect_primary_doc_warnings<F: FileSystemProvider>(
@@ -236,15 +262,16 @@ fn contextualize_findings(
 
 /// Collect inline suppression sources from the primary document and its referenced
 /// files, then apply suppressions to the deduplicated findings.
-fn collect_and_apply_suppressions(
+fn collect_and_apply_suppressions<F: FileSystemProvider>(
     findings: Vec<Finding>,
     path: &Path,
     doc: &SkillDocument,
     primary_content: &str,
+    fs: &F,
 ) -> (Vec<Finding>, Vec<Finding>) {
     let mut ref_contents: Vec<(PathBuf, String)> = Vec::new();
     for referenced_file in &doc.referenced_files {
-        if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file) {
+        if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file, fs) {
             ref_contents.push((referenced_file.clone(), ref_content));
         }
     }

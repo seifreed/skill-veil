@@ -9,38 +9,19 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+mod signals;
+
 use regex::Regex;
 use std::path::Path;
 use std::sync::LazyLock;
 
+use signals::{
+    RE_BROWSER_FULL, RE_COGNITIVE_ROOTKIT, RE_NETWORK, RE_OAUTH, RE_PERSISTENCE,
+    RE_PRIVILEGED_ROLE, RE_SECRET,
+};
+
 const BROAD_PERMISSION_THRESHOLD: usize = 3;
 const METADATA_SERVICE_IP: &str = "169.254.169.254";
-
-static RE_BROWSER_FULL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        "(?i)(browser:\\s*full|full autonomous browser|click any element|navigation:\\s*allow-all)",
-    )
-    .expect("valid regex: browser full access")
-});
-static RE_PERSISTENCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|append\\s+to\\s+(agents|claude|system)\\.md)").expect("valid regex: persistence")
-});
-static RE_NETWORK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(http://|https://|browser tool|network tool)").expect("valid regex: network")
-});
-static RE_SECRET: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(token|secret|cookie|password|credential|session)")
-        .expect("valid regex: secret")
-});
-static RE_OAUTH: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(oauth|scope|calendar|drive|slack|github pat)").expect("valid regex: oauth")
-});
-static RE_COGNITIVE_ROOTKIT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(persist\\s+these\\s+instructions|remember\\s+this\\s+across\\s+sessions|always\\s+follow\\s+this\\s+prompt|never\\s+reveal\\s+this\\s+instruction|override\\s+future\\s+system\\s+messages)").expect("valid regex: cognitive rootkit")
-});
-static RE_PRIVILEGED_ROLE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(act\\s+as\\s+(root|administrator|system)|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|ignore\\s+all\\s+existing\\s+safety\\s+constraints)").expect("valid regex: privileged role")
-});
 
 fn analyze_with_kind(
     service: &ArtifactAnalysisService,
@@ -193,43 +174,72 @@ fn declared_permission_scope_findings(
     artifact_kind: ArtifactKind,
 ) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
-    let mut findings = Vec::new();
-
     let permission_rules = explicit_declared_permission_rules(content);
-    for (rule_id, match_value, reason) in &permission_rules {
-        findings.push(
+    let mut findings =
+        explicit_permission_findings(&permission_rules, &artifact_path, artifact_kind);
+    findings.extend(over_provisioning_finding(
+        &permission_rules,
+        &artifact_path,
+        artifact_kind,
+    ));
+    findings.extend(capability_permission_mismatch_finding(
+        &permission_rules,
+        content,
+        &artifact_path,
+        artifact_kind,
+    ));
+    findings
+}
+
+fn explicit_permission_findings(
+    permission_rules: &[(&str, &str, &str)],
+    artifact_path: &str,
+    artifact_kind: ArtifactKind,
+) -> Vec<Finding> {
+    permission_rules
+        .iter()
+        .map(|(rule_id, match_value, reason)| {
             Finding::builder(*rule_id, ThreatCategory::ScopeCreep)
                 .severity(Severity::Low)
                 .action(RecommendedAction::Log)
                 .evidence_kind(EvidenceKind::Context)
-                .artifact(artifact_kind, Some(artifact_path.clone()))
+                .artifact(artifact_kind, Some(artifact_path.to_string()))
                 .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
+                    path: artifact_path.to_string(),
                 })
                 .match_value(*match_value)
                 .reason(*reason)
-                .build(),
-        );
-    }
+                .build()
+        })
+        .collect()
+}
 
-    if permission_rules.len() >= BROAD_PERMISSION_THRESHOLD {
-        findings.push(
-            Finding::builder("SCOPE_OVERPROVISIONING", ThreatCategory::ScopeCreep)
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(artifact_kind, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value("broad declared permissions")
-                .reason(
-                    "Artifact declares broad permissions or scopes relative to its apparent task",
-                )
-                .build(),
-        );
-    }
+fn over_provisioning_finding(
+    permission_rules: &[(&str, &str, &str)],
+    artifact_path: &str,
+    artifact_kind: ArtifactKind,
+) -> Option<Finding> {
+    (permission_rules.len() >= BROAD_PERMISSION_THRESHOLD).then(|| {
+        Finding::builder("SCOPE_OVERPROVISIONING", ThreatCategory::ScopeCreep)
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(artifact_kind, Some(artifact_path.to_string()))
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("broad declared permissions")
+            .reason("Artifact declares broad permissions or scopes relative to its apparent task")
+            .build()
+    })
+}
 
+fn capability_permission_mismatch_finding(
+    permission_rules: &[(&str, &str, &str)],
+    content: &str,
+    artifact_path: &str,
+    artifact_kind: ArtifactKind,
+) -> Option<Finding> {
     let (intent_kind, intent_strength) = infer_declared_intent(content);
     let has_dangerous_permission_combo = permission_rules.iter().any(|(rule_id, _, _)| {
         matches!(
@@ -239,23 +249,21 @@ fn declared_permission_scope_findings(
                 | "DECLARED_PERMISSION_SHELL_EXEC"
         )
     });
-    if intent_kind == "narrow" && intent_strength > 0 && has_dangerous_permission_combo {
-        findings.push(
-            Finding::builder("CAPABILITY_PERMISSION_MISMATCH", ThreatCategory::ScopeCreep)
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Intent)
-                .artifact(artifact_kind, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value("narrow intent with broad capability request")
-                .reason("Artifact intent appears narrower than the capabilities or permissions it requests")
-                .build(),
-        );
-    }
-
-    findings
+    (intent_kind == "narrow" && intent_strength > 0 && has_dangerous_permission_combo).then(|| {
+        Finding::builder("CAPABILITY_PERMISSION_MISMATCH", ThreatCategory::ScopeCreep)
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Intent)
+            .artifact(artifact_kind, Some(artifact_path.to_string()))
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("narrow intent with broad capability request")
+            .reason(
+                "Artifact intent appears narrower than the capabilities or permissions it requests",
+            )
+            .build()
+    })
 }
 
 fn check_internal_network_target(

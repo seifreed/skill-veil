@@ -1,4 +1,3 @@
-use crate::adapters::StdFileSystemProvider;
 use crate::analyzer::assessment::assess_artifact;
 use crate::analyzer::references::extract_references;
 use crate::analyzer::types::{AnalyzerError, CodeBlock, Section, SkillDocument};
@@ -23,14 +22,6 @@ impl SkillDocument {
             doc.decode_warning = decode_warning;
             doc
         })
-    }
-
-    pub fn from_file_with_parser<P: MarkdownParser>(
-        path: impl AsRef<Path>,
-        parser: &P,
-    ) -> Result<Self, AnalyzerError> {
-        let fs_provider = StdFileSystemProvider::new();
-        Self::from_file_with_provider(path, parser, &fs_provider)
     }
 
     pub fn parse_with_parser<P: MarkdownParser>(

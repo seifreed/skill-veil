@@ -1,6 +1,6 @@
 //! Artifact analysis service for manifests and referenced files.
 
-mod dispatch;
+pub(crate) mod dispatch;
 mod instructions;
 mod lockfiles;
 mod manifests;

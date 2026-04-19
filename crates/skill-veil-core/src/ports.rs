@@ -25,8 +25,26 @@
 //! [`RegexPatternMatcher`]: crate::adapters::RegexPatternMatcher
 //! [`StdFileSystemProvider`]: crate::adapters::StdFileSystemProvider
 
-use crate::analyzer::Section;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// A section parsed from a markdown document.
+///
+/// This is the output contract of the [`MarkdownParser`] port.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Section {
+    pub name: String,
+    pub level: u8,
+    pub content: String,
+    pub code_blocks: Vec<CodeBlock>,
+}
+
+/// A fenced code block within a [`Section`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeBlock {
+    pub language: Option<String>,
+    pub code: String,
+}
 
 /// Error type for parser operations
 ///

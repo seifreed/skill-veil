@@ -67,19 +67,7 @@ pub struct ArtifactAssessment {
     pub structural_signals: StructuralSignals,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Section {
-    pub name: String,
-    pub level: u8,
-    pub content: String,
-    pub code_blocks: Vec<CodeBlock>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodeBlock {
-    pub language: Option<String>,
-    pub code: String,
-}
+pub use crate::ports::{CodeBlock, Section};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillDocument {

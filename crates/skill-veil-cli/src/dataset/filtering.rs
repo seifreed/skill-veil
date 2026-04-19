@@ -11,10 +11,12 @@ pub(super) fn filter_dataset_results(
         .filter(|result| match view {
             DatasetViewArg::Full => true,
             DatasetViewArg::Entrypoints => {
-                result.classification != skill_veil_core::ArtifactClassification::GenericMarkdown
+                result.metadata.classification
+                    != skill_veil_core::ArtifactClassification::GenericMarkdown
             }
             DatasetViewArg::PackageRisk => {
-                result.classification != skill_veil_core::ArtifactClassification::GenericMarkdown
+                result.metadata.classification
+                    != skill_veil_core::ArtifactClassification::GenericMarkdown
                     && !result.supporting_findings.is_empty()
             }
             DatasetViewArg::Verdicts => result.verdict != Verdict::Benign,

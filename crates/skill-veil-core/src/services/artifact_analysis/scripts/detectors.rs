@@ -1,169 +1,12 @@
-use super::patterns::RE_SHELL_SOURCE;
-use super::ArtifactLink;
-use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
+use super::patterns::{
+    DEFERRED_PATTERNS, NODE_INJECTION_PATTERNS, POWERSHELL_INJECTION_PATTERNS,
+    PYTHON_INJECTION_PATTERNS, REMOTE_BINARY_PATTERNS, SHELL_INJECTION_PATTERNS,
+};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::ArtifactAnalysisService;
-use regex::Regex;
-use std::path::Path;
-use std::sync::LazyLock;
 
-static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "SCRIPT_REMOTE_BINARY_DOWNLOAD",
-            Regex::new(
-                "(?i)(curl|wget).*(\\.sh|\\.ps1|\\.py|\\.js|\\.exe|\\.pkg|\\.dmg|\\.deb|\\.rpm)",
-            )
-            .expect("valid regex: remote binary download"),
-        ),
-        (
-            "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
-            Regex::new("(?i)invoke-webrequest.+(\\.ps1|\\.exe|\\.zip)")
-                .expect("valid regex: powershell remote download"),
-        ),
-    ]
-});
-
-static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "SCRIPT_DEFERRED_EXECUTION",
-            Regex::new("(?i)(crontab|schtasks|at\\s+\\d|systemd-run|launchctl\\s+load)")
-                .expect("valid regex: deferred execution"),
-        ),
-        (
-            "SCRIPT_PERSISTENCE",
-            Regex::new("(?i)(/etc/cron|~/\\.config/autostart|launchagents|startup\\\\|runonce)")
-                .expect("valid regex: persistence"),
-        ),
-    ]
-});
-
-static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "COMMAND_INJECTION_SINK_SHELL",
-            Regex::new(r#"(?i)(bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*"#)
-                .expect("valid regex: shell command injection"),
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_SHELL",
-            Regex::new(r#"(?i)(curl|wget)[^\n]{0,180}(\$[1-9]|\$\{?[A-Za-z_]*(INPUT|USER_INPUT|CMD|COMMAND|ARGS?|REQUEST_URL|TARGET_URL)\}?)"#)
-                .expect("valid regex: shell unsafe user exec"),
-        ),
-    ]
-});
-
-static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "COMMAND_INJECTION_SINK_PYTHON",
-            Regex::new(r#"(?i)subprocess\.(run|popen|call)\([^)]*shell\s*=\s*true"#)
-                .expect("valid regex: python command injection"),
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_PYTHON",
-            Regex::new(r#"(?i)os\.system\(f?["'][^"']*\{[A-Za-z_][A-Za-z0-9_]*\}"#)
-                .expect("valid regex: python unsafe user exec"),
-        ),
-    ]
-});
-
-static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "COMMAND_INJECTION_SINK_NODE",
-            Regex::new(r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)"#)
-                .expect("valid regex: node command injection"),
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_NODE",
-            Regex::new(r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input)"#)
-                .expect("valid regex: node unsafe user exec"),
-        ),
-    ]
-});
-
-static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "COMMAND_INJECTION_SINK_POWERSHELL",
-            Regex::new(r#"(?i)invoke-expression\s+\$[A-Za-z_][A-Za-z0-9_]*"#)
-                .expect("valid regex: powershell command injection"),
-        ),
-        (
-            "UNSAFE_USER_CONTROLLED_EXEC_POWERSHELL",
-            Regex::new(r#"(?i)start-process\s+\$[A-Za-z_][A-Za-z0-9_]*"#)
-                .expect("valid regex: powershell unsafe user exec"),
-        ),
-    ]
-});
-
-pub(crate) fn analyze_script(
-    artifact_analysis: &ArtifactAnalysisService,
-    path: &Path,
-    content: &str,
-) -> Vec<Finding> {
-    let artifact_path = path.display().to_string();
-    let language = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
-    let lower = content.to_ascii_lowercase();
-    let mut findings = Vec::new();
-
-    findings.extend(detect_remote_binary_downloads(content, &artifact_path));
-    findings.extend(detect_deferred_execution(content, &artifact_path));
-    findings.extend(detect_node_process_exec(&lower, &language, &artifact_path));
-    findings.extend(detect_python_exec_network(
-        &lower,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(detect_python_secret_system_access(
-        &lower,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(detect_powershell_dynamic_exec(
-        &lower,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(detect_powershell_persistence(
-        &lower,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(detect_shell_side_effects(&lower, &language, &artifact_path));
-    findings.extend(detect_shell_persistence_write(
-        &lower,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(detect_node_secret_fs_access(
-        &lower,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(detect_injection_patterns(
-        content,
-        &language,
-        &artifact_path,
-    ));
-    findings.extend(artifact_analysis.permission_and_network_findings(
-        path,
-        content,
-        ArtifactKind::ReferencedArtifact,
-    ));
-
-    findings
-}
-
-fn detect_remote_binary_downloads(content: &str, artifact_path: &str) -> Vec<Finding> {
+pub(super) fn detect_remote_binary_downloads(content: &str, artifact_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (rule_id, regex) in REMOTE_BINARY_PATTERNS.iter() {
         for matched in regex.find_iter(content) {
@@ -188,7 +31,7 @@ fn detect_remote_binary_downloads(content: &str, artifact_path: &str) -> Vec<Fin
     findings
 }
 
-fn detect_deferred_execution(content: &str, artifact_path: &str) -> Vec<Finding> {
+pub(super) fn detect_deferred_execution(content: &str, artifact_path: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (rule_id, regex) in DEFERRED_PATTERNS.iter() {
         for matched in regex.find_iter(content) {
@@ -213,7 +56,7 @@ fn detect_deferred_execution(content: &str, artifact_path: &str) -> Vec<Finding>
     findings
 }
 
-fn detect_node_process_exec(
+pub(super) fn detect_node_process_exec(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -272,7 +115,7 @@ fn detect_node_process_exec(
     ]
 }
 
-fn detect_python_exec_network(
+pub(super) fn detect_python_exec_network(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -324,7 +167,7 @@ fn detect_python_exec_network(
     }
 }
 
-fn detect_python_secret_system_access(
+pub(super) fn detect_python_secret_system_access(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -357,7 +200,7 @@ fn detect_python_secret_system_access(
     .build()]
 }
 
-fn detect_powershell_dynamic_exec(
+pub(super) fn detect_powershell_dynamic_exec(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -387,7 +230,7 @@ fn detect_powershell_dynamic_exec(
     ]
 }
 
-fn detect_powershell_persistence(
+pub(super) fn detect_powershell_persistence(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -419,7 +262,7 @@ fn detect_powershell_persistence(
     .build()]
 }
 
-fn detect_shell_side_effects(
+pub(super) fn detect_shell_side_effects(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -450,7 +293,7 @@ fn detect_shell_side_effects(
     .build()]
 }
 
-fn detect_shell_persistence_write(
+pub(super) fn detect_shell_persistence_write(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -483,7 +326,7 @@ fn detect_shell_persistence_write(
     .build()]
 }
 
-fn detect_node_secret_fs_access(
+pub(super) fn detect_node_secret_fs_access(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -520,8 +363,12 @@ fn detect_node_secret_fs_access(
     .build()]
 }
 
-fn detect_injection_patterns(content: &str, language: &str, artifact_path: &str) -> Vec<Finding> {
-    let patterns: &[(&str, Regex)] = match language {
+pub(super) fn detect_injection_patterns(
+    content: &str,
+    language: &str,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let patterns: &[(&str, regex::Regex)] = match language {
         "sh" | "bash" | "zsh" => &SHELL_INJECTION_PATTERNS,
         "py" => &PYTHON_INJECTION_PATTERNS,
         "js" | "ts" | "mjs" | "cjs" | "mts" | "cts" => &NODE_INJECTION_PATTERNS,
@@ -547,168 +394,4 @@ fn detect_injection_patterns(content: &str, language: &str, artifact_path: &str)
         }
     }
     findings
-}
-
-pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
-    let lower = content.to_ascii_lowercase();
-    let mut capabilities = Vec::new();
-
-    if lower.contains("curl ")
-        || lower.contains("wget ")
-        || lower.contains("invoke-webrequest")
-        || lower.contains("http://")
-        || lower.contains("https://")
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
-            ArtifactCapability::NetworkAccess,
-        ));
-    }
-
-    if lower.contains("bash ")
-        || lower.contains(" sh ")
-        || lower.contains("node ")
-        || lower.contains("python ")
-        || lower.contains("npm install")
-        || lower.contains("pip install")
-        || lower.contains("cargo install")
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
-            ArtifactCapability::InstallExecution,
-        ));
-    }
-
-    if lower.contains("subprocess.")
-        || lower.contains("os.system(")
-        || lower.contains("exec(")
-        || lower.contains("spawn(")
-        || lower.contains("start-process")
-        || lower.contains("iex ")
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
-            ArtifactCapability::ProcessExecution,
-        ));
-    }
-
-    if lower.contains("process.env")
-        || lower.contains("os.environ")
-        || lower.contains("getenv(")
-        || lower.contains(".env")
-        || lower.contains("access_token")
-        || lower.contains("api_token")
-        || lower.contains("auth_token")
-        || lower.contains("bearer_token")
-        || lower.contains("secret_key")
-        || lower.contains("client_secret")
-        || lower.contains("_authtoken")
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
-            ArtifactCapability::SecretAccess,
-        ));
-    }
-
-    if lower.contains("crontab")
-        || lower.contains("schtasks")
-        || lower.contains("launchctl")
-        || lower.contains("runonce")
-        || lower.contains("autostart")
-        || lower.contains("register-scheduledtask")
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
-            ArtifactCapability::PersistenceSurface,
-        ));
-    }
-
-    if lower.contains("writefilesync(")
-        || lower.contains("tee ")
-        || lower.contains(">>")
-        || lower.contains("> /etc/")
-        || lower.contains("set-content")
-    {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
-            ArtifactCapability::FilesystemWrite,
-        ));
-    }
-
-    capabilities
-}
-
-pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
-    let lower = content.to_ascii_lowercase();
-    let mut links = Vec::new();
-    if lower.contains("curl ") || lower.contains("wget ") || lower.contains("invoke-webrequest") {
-        links.push(ArtifactLink {
-            target: "remote-resource".to_string(),
-            relation: ArtifactRelation::Downloads,
-        });
-    }
-    if lower.contains("bash ")
-        || lower.contains("sh ")
-        || lower.contains("python ")
-        || lower.contains("node ")
-        || lower.contains("start-process")
-        || lower.contains("subprocess.")
-        || lower.contains("child_process")
-    {
-        links.push(ArtifactLink {
-            target: "process".to_string(),
-            relation: ArtifactRelation::Executes,
-        });
-    }
-    if lower.contains("import ")
-        || lower.contains("require(")
-        || lower.contains("source ")
-        || RE_SHELL_SOURCE.is_match(&lower)
-    {
-        links.push(ArtifactLink {
-            target: "runtime-module".to_string(),
-            relation: ArtifactRelation::Loads,
-        });
-    }
-    if lower.contains("crontab")
-        || lower.contains("schtasks")
-        || lower.contains("launchctl")
-        || lower.contains("autostart")
-    {
-        links.push(ArtifactLink {
-            target: "persistence-surface".to_string(),
-            relation: ArtifactRelation::Persists,
-        });
-    }
-    if lower.contains("http://") || lower.contains("https://") || lower.contains("socket.") {
-        links.push(ArtifactLink {
-            target: "network".to_string(),
-            relation: ArtifactRelation::ConnectsTo,
-        });
-    }
-    if lower.contains("open(")
-        || lower.contains("readfilesync(")
-        || lower.contains("cat ")
-        || lower.contains("rg ")
-    {
-        links.push(ArtifactLink {
-            target: "filesystem".to_string(),
-            relation: ArtifactRelation::Reads,
-        });
-    }
-    if lower.contains("writefilesync(")
-        || lower.contains("tee ")
-        || lower.contains(">>")
-        || lower.contains("set-content")
-    {
-        links.push(ArtifactLink {
-            target: "filesystem".to_string(),
-            relation: ArtifactRelation::Writes,
-        });
-    }
-    if lower.contains("process.env")
-        || lower.contains("os.environ")
-        || lower.contains("getenv(")
-        || lower.contains(".env")
-    {
-        links.push(ArtifactLink {
-            target: "secrets".to_string(),
-            relation: ArtifactRelation::AccessesSecrets,
-        });
-    }
-    links
 }

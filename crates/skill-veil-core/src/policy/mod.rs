@@ -9,7 +9,9 @@ pub(crate) mod state;
 pub(crate) mod types;
 
 #[cfg(test)]
-mod tests;
+mod tests_filtering;
+#[cfg(test)]
+mod tests_generation;
 
 use crate::findings::{OperationalContext, RecommendedAction, Severity};
 
