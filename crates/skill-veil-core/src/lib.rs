@@ -61,8 +61,11 @@ pub mod analyzer;
 pub mod artifact_graph;
 mod artifact_taint;
 pub mod benchmark;
+mod deceptive_docs;
 pub mod findings;
 mod inline_suppressions;
+pub mod ioc_extraction;
+pub mod path_safety;
 pub mod policy;
 pub mod ports;
 pub mod rules;
@@ -118,7 +121,9 @@ pub use scanner::{
 pub use scanner_graph::{artifact_kind_for_path, derive_package_id};
 
 // Port traits (interfaces for dependency injection)
-pub use ports::{DecodedText, FileContent, FileSystemProvider, MarkdownParser, PatternMatcher};
+pub use ports::{
+    DecodedText, FileContent, FileMeta, FileSystemProvider, MarkdownParser, PatternMatcher,
+};
 
 // Default adapters (implementations of port traits)
 pub use adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};

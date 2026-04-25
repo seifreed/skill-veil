@@ -437,7 +437,14 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     }
     if !context_counts.is_empty() {
         output.push_str("Context coverage:\n");
-        for (context, count) in context_counts {
+        // Match the rendering of `factor_totals` and `trigger_counts` above:
+        // descending by count, alphabetical tie-breaker. Iterating the
+        // BTreeMap directly previously forced lexicographic order, burying
+        // the highest-frequency contexts.
+        let mut ranked_contexts: Vec<_> = context_counts.into_iter().collect();
+        ranked_contexts
+            .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+        for (context, count) in ranked_contexts {
             output.push_str(&format!("  - {} ({} file(s))\n", context, count));
         }
     }

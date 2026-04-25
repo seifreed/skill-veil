@@ -1,9 +1,8 @@
 use super::patterns::{
-    looks_like_external_sink, looks_like_identity_target, looks_like_registry_url,
-    looks_like_secret_target,
+    looks_like_external_sink, looks_like_identity_target, looks_like_secret_target,
 };
 use super::{TaintSinkKind, TaintSourceKind};
-use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation, EndpointKind};
+use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -57,10 +56,7 @@ pub(super) fn node_has_source(
                 })
         }
         TaintSourceKind::RemoteDownload => graph.edges.iter().any(|edge| {
-            edge.from == node_path
-                && matches!(edge.relation, ArtifactRelation::Downloads)
-                && edge.endpoint_kind != Some(EndpointKind::Registry)
-                && !looks_like_registry_url(&edge.to)
+            edge.from == node_path && super::summarization::is_external_download_edge(edge)
         }),
         TaintSourceKind::FilesystemWrite => {
             node_has_capability(graph, node_path, ArtifactCapability::FilesystemWrite)

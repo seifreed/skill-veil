@@ -6,9 +6,12 @@ mod benchmark_output;
 mod cli_args;
 mod color;
 mod commands;
+mod config;
 mod dataset;
+mod llm;
 mod rule_tools;
 mod text_output;
+mod vt;
 
 use crate::cli_args::{
     BaselineAction, Cli, Commands, PolicyAction, PolicyProfileArg, RecommendedActionArg,
@@ -89,7 +92,14 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::ScanDataset(args) => run_scan_dataset(args, cli.quiet, cli.color)?,
+        Commands::ScanDataset(args) => {
+            // Mirror the other scan commands: bubble the failure flag up to
+            // main so we exit cleanly *after* tracing/output is flushed.
+            if run_scan_dataset(args, cli.quiet, cli.color)? {
+                #[allow(clippy::exit)]
+                std::process::exit(1);
+            }
+        }
         Commands::Benchmark(args) => commands::run_benchmark(args)?,
         Commands::Baseline { action } => match action {
             BaselineAction::Create(args) => commands::run_baseline_create(args)?,
@@ -103,6 +113,7 @@ fn main() -> Result<()> {
             PolicyAction::Validate(args) => commands::run_policy_validate(args)?,
         },
         Commands::Rules { action } => commands::run_rules(action)?,
+        Commands::Vt { action } => commands::run_vt(action)?,
     }
 
     Ok(())

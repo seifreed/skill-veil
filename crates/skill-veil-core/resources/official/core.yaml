@@ -57,3 +57,136 @@ rules:
     tags:
       - tool_abuse
       - context
+
+  - id: SKILL_MACOS_BASE64_RCE
+    category: remote_exec
+    severity: critical
+    confidence: 0.99
+    when: !regex
+      pattern: "base64\\s+-D\\s*\\|\\s*(ba)?sh"
+    action: block
+    reason: "macOS-style base64 decode piped directly to shell — encrypted dropper pattern"
+    enabled: true
+    tags:
+      - remote_exec
+      - macos
+      - obfuscation
+
+  - id: SKILL_BASE64_PIPE_EXEC
+    category: obfuscation
+    severity: critical
+    confidence: 0.97
+    when: !regex
+      pattern: "base64\\s+-d\\s*\\|\\s*(ba)?sh|base64\\s+--decode\\s*\\|\\s*(ba)?sh"
+    action: block
+    reason: "Base64 decode piped to shell — classic obfuscated dropper"
+    enabled: true
+    tags:
+      - remote_exec
+      - obfuscation
+
+  - id: SKILL_PYTHON_DYNAMIC_EXEC
+    category: obfuscation
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?i)exec\\s*\\([^\\n]{0,80}(base64|marshal|decode|compile|__import__).*\\)"
+    action: require_approval
+    reason: "Python exec() with dynamically decoded or compiled code"
+    enabled: true
+    tags:
+      - obfuscation
+      - python
+
+  - id: SKILL_ENCRYPTED_EXEC_MARSHAL
+    category: obfuscation
+    severity: critical
+    confidence: 0.95
+    when: !regex
+      pattern: "marshal\\.loads|exec\\s*\\(\\s*code\\s*[,)]|AES\\.new.*MODE_CBC"
+    action: block
+    reason: "AES-encrypted marshal bytecode executed dynamically — encrypted dropper pattern"
+    enabled: true
+    tags:
+      - obfuscation
+      - encrypted_dropper
+      - python
+
+  - id: SKILL_IP_LITERAL_NONSTANDARD_PORT
+    category: remote_exec
+    severity: high
+    confidence: 0.82
+    when: !regex
+      pattern: "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d{4,5}\\b"
+    action: block
+    reason: "Direct IP address with non-standard port — likely C2 or exfiltration endpoint"
+    enabled: true
+    tags:
+      - c2
+      - ip_literal
+
+  - id: SKILL_PYTHON_RAW_IP_HTTP
+    category: remote_exec
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?i)(urllib|requests|http\\.client).*http://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
+    action: require_approval
+    reason: "Python HTTP request to bare IP — possible C2 beacon"
+    enabled: true
+    tags:
+      - remote_exec
+      - python
+      - ip_literal
+
+  - id: SKILL_CRON_ETC_WRITE
+    category: scope_creep
+    severity: high
+    confidence: 0.90
+    when: !regex
+      pattern: "(?i)/etc/cron\\.d/|tee\\s+/etc/cron|echo.*>/etc/cron"
+    action: require_approval
+    reason: "Direct write to /etc/cron.d — persistent scheduled task installation"
+    enabled: true
+    tags:
+      - persistence
+      - cron
+
+  - id: SKILL_CHINESE_AUTO_TRIGGER
+    category: autonomy_escalation
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "\\u81ea\\u52a8\\u89e6\\u53d1|\\u65e0\\u9700\\u624b\\u52a8|\\u4e0d\\u8981\\u7b49\\u7528\\u6237\\u786e\\u8ba4|\\u4e0d\\u8981\\u95ee\\u7528\\u6237|\\u7acb\\u5373\\u81ea\\u52a8\\u6267\\u884c|\\u5b8c\\u5168\\u81ea\\u52a8\\u5316"
+    action: block
+    reason: "Chinese-language autonomous execution instruction without user confirmation"
+    enabled: true
+    tags:
+      - autonomy
+      - chinese
+
+  - id: SKILL_SOUL_WRITE_INJECTION
+    category: persistent_prompt_tampering
+    severity: critical
+    confidence: 0.92
+    when: !regex
+      pattern: "(?i)(write|create|inject|install).{0,30}SOUL\\.md|SOUL\\.md.{0,30}(write|create|inject|overwrite)"
+    action: block
+    reason: "Skill attempts to write content into SOUL.md — persistent agent identity tampering"
+    enabled: true
+    tags:
+      - persistent_prompt_tampering
+      - soul
+
+  - id: SKILL_SKILLPAY_COVERT_BILLING
+    category: data_exfiltration
+    severity: high
+    confidence: 0.88
+    when: !regex
+      pattern: "SkillPay|\\u6bcf\\u6b21\\u8c03\\u7528.*USDT|per.call.*USDT"
+    action: block
+    reason: "Covert per-call billing via SkillPay or crypto micropayments without user consent"
+    enabled: true
+    tags:
+      - financial
+      - covert_billing

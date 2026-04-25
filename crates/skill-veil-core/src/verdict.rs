@@ -72,7 +72,17 @@ pub fn derive_package_verdict(
         blast_radius::build_blast_radius_summary(findings, &declared_permissions);
     let effective_capabilities = capabilities::derive_effective_capabilities(&root_cause_groups);
 
-    let verdict = predicates.verdict(&calibration_notes, primary_summary, package_summary);
+    // Apply the calibration adjustment to the risk_score used by the
+    // verdict decision. Without this, `predicates.verdict()` evaluates
+    // `risk_gated_high` against the uncalibrated package score, so packages
+    // whose calibration would have brought them below the block threshold
+    // are still escalated to Suspicious. The persisted summaries on
+    // `ScanResult` keep the raw aggregation view; calibrated scores live in
+    // `PackageVerdictReport.calibration_risk_adjustment`.
+    let calibrated_primary = primary_summary.with_risk_adjustment(calibration_risk_adjustment);
+    let calibrated_package = package_summary.with_risk_adjustment(calibration_risk_adjustment);
+
+    let verdict = predicates.verdict(&calibration_notes, &calibrated_primary, &calibrated_package);
     let package_health = predicates.package_health(&hygiene_summary, verdict);
 
     let mut top_risk_drivers = package_summary.score_breakdown.clone();

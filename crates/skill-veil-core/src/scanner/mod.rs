@@ -28,6 +28,10 @@ type EngineAndPolicy = (
 /// the engine + policy loading logic.
 fn build_engine_and_policy(options: &ScanOptions) -> Result<EngineAndPolicy, ScanError> {
     let mut engine = RuleEngine::with_defaults()?;
+    // Strict mode is only meaningful for external rule packs; built-ins
+    // already fail-fast on internal duplicates. Enable before loading the
+    // user-supplied rules_dir so collisions there are promoted to errors.
+    engine.set_strict_mode(options.strict_rules);
     if let Some(ref rules_dir) = options.rules_dir {
         engine.load_from_dir(rules_dir)?;
     }

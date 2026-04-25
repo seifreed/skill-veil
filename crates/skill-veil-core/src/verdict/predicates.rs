@@ -1,6 +1,7 @@
 use crate::findings::{
     ArtifactScope, Finding, FindingSummary, HygieneSummary, PackageHealth, RecommendedAction,
-    RootCauseGroup, SignalClass, Verdict, VerdictCalibrationNote, RISK_THRESHOLD_APPROVAL,
+    RootCauseGroup, SignalClass, ThreatCategory, Verdict, VerdictCalibrationNote,
+    RISK_THRESHOLD_APPROVAL, RISK_THRESHOLD_BLOCK,
 };
 
 pub(super) struct VerdictInputs<'a> {
@@ -23,6 +24,12 @@ pub(super) struct VerdictPredicates {
     pub(super) severe_hygiene_only: bool,
     pub(super) has_conclusive_supporting_malicious: bool,
     pub(super) isolated_weak_package_root_signal: bool,
+    pub(super) has_non_hygiene_primary_block: bool,
+    /// The (scope, category) of the isolated weak package-root group, when
+    /// `isolated_weak_package_root_signal` is true. Used to filter
+    /// `calibration_notes` so that a `downgraded_*` note from an unrelated
+    /// group does not block the Benign downgrade for this group.
+    pub(super) isolated_weak_signal_key: Option<(ArtifactScope, ThreatCategory)>,
 }
 
 impl VerdictPredicates {
@@ -97,8 +104,14 @@ impl VerdictPredicates {
         let has_conclusive_supporting_malicious = findings
             .iter()
             .any(Finding::is_conclusive_malicious_evidence);
-        let isolated_weak_package_root_signal =
-            is_isolated_weak_package_root_signal(root_cause_groups);
+        let isolated_weak_signal_key = isolated_weak_package_root_group(root_cause_groups)
+            .map(|group| (group.scope, group.category));
+        let isolated_weak_package_root_signal = isolated_weak_signal_key.is_some();
+        let has_non_hygiene_primary_block = root_cause_groups.iter().any(|group| {
+            group.scope == ArtifactScope::AgentEntrypoint
+                && group.strongest_action == RecommendedAction::Block
+                && group.signal_class != SignalClass::Hygiene
+        });
 
         Self {
             has_malicious_behavior,
@@ -111,6 +124,8 @@ impl VerdictPredicates {
             severe_hygiene_only,
             has_conclusive_supporting_malicious,
             isolated_weak_package_root_signal,
+            has_non_hygiene_primary_block,
+            isolated_weak_signal_key,
         }
     }
 
@@ -123,27 +138,57 @@ impl VerdictPredicates {
         if self.has_malicious_behavior
             || self.has_compound_malicious
             || (self.has_supporting_block && self.has_conclusive_supporting_malicious)
+            || self.has_non_hygiene_primary_block
         {
-            Verdict::Malicious
-        } else if self.isolated_weak_package_root_signal
+            return Verdict::Malicious;
+        }
+
+        // Risk-gated safety net: a package whose aggregated or primary risk
+        // already meets the block threshold must never be reported as Benign.
+        // This guards against silent downgrades when findings emit high weight
+        // but happen to route through Hygiene / ReviewSignal signal classes
+        // (e.g. misclassified rules) — the score is a better last-line signal
+        // than any single categorical predicate.
+        let risk_gated_high = primary_summary.risk_score >= RISK_THRESHOLD_BLOCK
+            || package_summary.risk_score >= RISK_THRESHOLD_BLOCK;
+
+        // Filter calibration notes to only those that apply to the isolated
+        // weak group's (scope, category). A `downgraded_*` note from any
+        // OTHER group is irrelevant to whether this specific isolated signal
+        // can be downgraded — using the unfiltered `all()` would let an
+        // unrelated downgrade block the Benign path here.
+        let calibration_left_isolated_group_intact = self
+            .isolated_weak_signal_key
+            .map(|(scope, category)| {
+                calibration_notes
+                    .iter()
+                    .filter(|n| n.scope == scope && n.category == category)
+                    .all(|n| n.effect.starts_with("remains_"))
+            })
+            .unwrap_or(true);
+
+        if self.isolated_weak_package_root_signal
             && !self.has_actionable_non_package_root
             && !self.has_primary_block
             && !self.calibration_weakened_non_hygiene
-            && !calibration_notes
-                .iter()
-                .any(|n| !n.effect.starts_with("remains_"))
+            && !risk_gated_high
+            && calibration_left_isolated_group_intact
             && package_summary.risk_score < RISK_THRESHOLD_APPROVAL
             && primary_summary.risk_score < RISK_THRESHOLD_APPROVAL
         {
             // Isolated weak package root signals are downgraded to Benign only when there
             // are no actionable signals in other artifacts and calibration did not actually
-            // change any actions. Notes with "remains_*" indicate calibration matched but
-            // did not modify anything and do not block downgrade.
-            Verdict::Benign
-        } else if self.has_non_hygiene_signal
+            // change any actions affecting THIS group. Notes with "remains_*" indicate
+            // calibration matched but did not modify anything and do not block downgrade;
+            // notes scoped to other groups are excluded by the filter above.
+            return Verdict::Benign;
+        }
+
+        if self.has_non_hygiene_signal
             || self.has_actionable_non_package_root
             || self.severe_hygiene_only
             || self.calibration_weakened_non_hygiene
+            || risk_gated_high
         {
             Verdict::Suspicious
         } else {
@@ -179,17 +224,24 @@ impl VerdictPredicates {
     }
 }
 
-fn is_isolated_weak_package_root_signal(root_cause_groups: &[RootCauseGroup]) -> bool {
-    let actionable_groups: Vec<_> = root_cause_groups
+fn isolated_weak_package_root_group(
+    root_cause_groups: &[RootCauseGroup],
+) -> Option<&RootCauseGroup> {
+    let actionable_groups: Vec<&RootCauseGroup> = root_cause_groups
         .iter()
         .filter(|group| group.strongest_action != RecommendedAction::Log)
         .collect();
 
-    actionable_groups.len() == 1
+    if actionable_groups.len() == 1
         && actionable_groups[0].scope == ArtifactScope::PackageRootArtifact
         && actionable_groups[0].strongest_action == RecommendedAction::RequireApproval
         && matches!(
             actionable_groups[0].signal_class,
             SignalClass::ReviewSignal | SignalClass::SuspiciousPackageBehavior
         )
+    {
+        Some(actionable_groups[0])
+    } else {
+        None
+    }
 }

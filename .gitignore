@@ -1,0 +1,29 @@
+# Cargo / Rust build artefacts
+target/
+**/*.rs.bk
+*.pdb
+Cargo.lock.bak
+
+# OS / editor cruft
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Local agent / IDE configuration — these are per-developer, not shared
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# Local working data: sample corpora, VT/extraction caches, ad-hoc dumps.
+# `data/` contains downloaded malicious samples, VT reports and the
+# extraction cache; it must never be pushed to a public remote.
+# The directory itself is ignored — even an empty marker like `.gitkeep`
+# under data/ would be tracked, so we ignore the whole tree.
+data/
+
+# Local cargo config (often used to point at vendored deps / private mirrors)
+.cargo/config.toml
+
+# Pre-commit local cache
+.pre-commit-cache/

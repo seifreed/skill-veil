@@ -28,8 +28,12 @@ pub(crate) fn analyze_script(
     let lower = content.to_ascii_lowercase();
     let mut findings = Vec::new();
 
-    findings.extend(detect_remote_binary_downloads(content, &artifact_path));
-    findings.extend(detect_deferred_execution(content, &artifact_path));
+    findings.extend(detect_remote_binary_downloads(
+        &lower,
+        content,
+        &artifact_path,
+    ));
+    findings.extend(detect_deferred_execution(&lower, content, &artifact_path));
     findings.extend(detect_node_process_exec(&lower, &language, &artifact_path));
     findings.extend(detect_python_exec_network(
         &lower,
@@ -63,6 +67,7 @@ pub(crate) fn analyze_script(
         &artifact_path,
     ));
     findings.extend(detect_injection_patterns(
+        &lower,
         content,
         &language,
         &artifact_path,

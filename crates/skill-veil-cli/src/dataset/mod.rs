@@ -19,6 +19,55 @@ use std::sync::Arc;
 #[allow(unused_imports)]
 pub(crate) use formatting::format_dataset_verdicts_text;
 
+/// Default `ScanOptions` for dataset-mode runs: package target, recursive,
+/// no policy/profile/baseline. Use this when the caller has no user flags
+/// to propagate (e.g. internal cross-check pipeline).
+#[must_use]
+pub(crate) fn default_dataset_scan_options() -> ScanOptions {
+    ScanOptions {
+        recursive: true,
+        target_mode: ScanTargetMode::Package,
+        ..Default::default()
+    }
+}
+
+/// Run the dataset preparation + scan pipeline and return raw
+/// `PackageScanResult`s without any aggregation, filtering, or output
+/// formatting. Used by the `vt cross-check` flow, which needs the
+/// per-artifact scan state to cross-reference with VT reports.
+///
+/// Accepts a `ScanOptions` so callers can propagate user-facing flags
+/// (`--strict-rules`, `--min-severity`, profile, policy, …) end-to-end.
+/// Pass `default_dataset_scan_options()` for the historical "package mode,
+/// recursive, no policy" behaviour.
+pub(crate) fn scan_dataset_to_results(
+    path: &std::path::Path,
+    options: ScanOptions,
+) -> Result<Vec<skill_veil_core::PackageScanResult>> {
+    let scanner =
+        Arc::new(Scanner::with_std_adapters(options).context("Failed to initialize scanner")?);
+    let prepared = preparation::prepare_dataset_packages(path)?;
+    if prepared.package_roots.is_empty() {
+        anyhow::bail!(
+            "No package roots with SKILL.md were found under {}",
+            path.display()
+        );
+    }
+    let results: Vec<_> = prepared
+        .package_roots
+        .par_iter()
+        .filter_map(|package_root| match scanner.scan(package_root) {
+            Ok(pkg_result) => Some(pkg_result),
+            Err(skill_veil_core::scanner::ScanError::NoSkillEntrypoints(_)) => None,
+            Err(err) => {
+                tracing::warn!("scan failed for {}: {}", package_root.display(), err);
+                None
+            }
+        })
+        .collect();
+    Ok(results)
+}
+
 #[derive(Debug, serde::Serialize)]
 pub(crate) struct DatasetJsonReport {
     root: String,
@@ -87,7 +136,7 @@ pub(crate) fn run_scan_dataset(
     args: ScanArgs,
     quiet: bool,
     color_choice: ColorChoiceArg,
-) -> Result<()> {
+) -> Result<bool> {
     let args = apply_scan_preset(args);
     let color = ColorMode::from_choice(
         color_choice,
@@ -109,6 +158,11 @@ pub(crate) fn run_scan_dataset(
         policy_path: args.policy.clone(),
         recursive: !args.no_recursive,
         target_mode: ScanTargetMode::Package,
+        // Propagate `--strict-rules` so dataset-mode CI runs honour the
+        // collision-detection contract documented in `ScanOptions`. The
+        // legacy `..Default::default()` left this at `false`, silently
+        // dropping the flag the user asked for.
+        strict_rules: args.strict_rules,
         ..Default::default()
     };
 
@@ -302,9 +356,6 @@ pub(crate) fn run_scan_dataset(
         print!("{}", output_content);
     }
 
-    if dataset_results.iter().any(|result| result.should_fail) {
-        std::process::exit(1);
-    }
-
-    Ok(())
+    let any_failed = dataset_results.iter().any(|result| result.should_fail);
+    Ok(any_failed)
 }

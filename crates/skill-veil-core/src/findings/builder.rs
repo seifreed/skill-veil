@@ -317,13 +317,12 @@ impl Finding {
             ThreatCategory::CredentialExposure => true,
             ThreatCategory::PrivilegeEscalation => true,
             ThreatCategory::SupplyChain => has_remote_indicator || has_transmit_verb,
+            ThreatCategory::Obfuscation | ThreatCategory::UnsafeBinary => true,
             ThreatCategory::ToolAbuse
             | ThreatCategory::AutonomyEscalation
             | ThreatCategory::PersuasiveLanguage
             | ThreatCategory::SocialManipulation
             | ThreatCategory::ScopeCreep
-            | ThreatCategory::Obfuscation
-            | ThreatCategory::UnsafeBinary
             | ThreatCategory::Generic => false,
         }
     }

@@ -24,9 +24,10 @@ pub fn signal_class_for(category: ThreatCategory) -> SignalClass {
         | ThreatCategory::DataExfiltration
         | ThreatCategory::PrivilegeEscalation
         | ThreatCategory::UnsafeBinary => SignalClass::MaliciousBehavior,
-        ThreatCategory::PersistentPromptTampering
-        | ThreatCategory::ToolAbuse
-        | ThreatCategory::AutonomyEscalation
+        ThreatCategory::PersistentPromptTampering | ThreatCategory::AutonomyEscalation => {
+            SignalClass::MaliciousBehavior
+        }
+        ThreatCategory::ToolAbuse
         | ThreatCategory::Obfuscation
         | ThreatCategory::SocialManipulation => SignalClass::SuspiciousPackageBehavior,
         ThreatCategory::PersuasiveLanguage | ThreatCategory::Generic => SignalClass::ReviewSignal,

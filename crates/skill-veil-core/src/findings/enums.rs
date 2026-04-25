@@ -193,6 +193,36 @@ pub enum ArtifactKind {
     GenericArtifact,
 }
 
+impl ArtifactKind {
+    /// Specificity score: higher = more specific classification.
+    ///
+    /// Used by `ArtifactGraph::add_node_with_capabilities` to track the
+    /// most specific kind observed across pipelines that touch the same
+    /// path. Pipeline ordering is not deterministic — a "first wins" rule
+    /// would let `AgentInstruction` shadow a later, more specific
+    /// `McpServerManifest` classification, silencing analysis branches
+    /// that key on the kind (e.g. `INTERNAL_NETWORK_ACCESS` checks limited
+    /// to `ReferencedArtifact | McpServerManifest`).
+    ///
+    /// Tie groups (same numeric score) are treated as compatible: the
+    /// first-seen kind sticks. Across tiers we always upgrade.
+    #[must_use]
+    pub fn specificity(self) -> u8 {
+        match self {
+            Self::GenericArtifact => 0,
+            Self::CodeSnippet => 1,
+            Self::ReferencedArtifact | Self::PromptPackDocument => 2,
+            // SkillDocument is the package's primary entrypoint, not a
+            // helper file. Promoting it to tier 3 means a later
+            // `SkillDocument` insertion correctly upgrades over an
+            // earlier `ReferencedArtifact` registration that happened
+            // because the script analyzer ran first.
+            Self::SkillDocument | Self::AgentInstruction => 3,
+            Self::PackageManifest | Self::McpServerManifest | Self::Lockfile => 4,
+        }
+    }
+}
+
 /// High-level scope of the artifact within the package.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Display,

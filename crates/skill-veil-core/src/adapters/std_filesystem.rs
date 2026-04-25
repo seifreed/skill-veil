@@ -1,6 +1,6 @@
 //! File system provider implementation using std::fs
 
-use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
+use crate::ports::{FileContent, FileMeta, FileSystemError, FileSystemProvider};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -90,6 +90,11 @@ impl FileSystemProvider for StdFileSystemProvider {
 
     fn exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+
+    fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
+        let meta = std::fs::metadata(path).map_err(FileSystemError::IoError)?;
+        Ok(FileMeta { len: meta.len() })
     }
 }
 

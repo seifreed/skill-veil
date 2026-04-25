@@ -12,6 +12,12 @@ pub enum YaraError {
     Compile(String),
     #[error("Failed to scan content with YARA: {0}")]
     Scan(String),
+    /// `scan()` was called before `compile()`. Distinct from `Compile`
+    /// (parse failure of source rules) so callers can react correctly:
+    /// `Compile` may warrant retry with a fixed source; `NotCompiled` is
+    /// always a programming-order error.
+    #[error("YARA rules have not been compiled yet")]
+    NotCompiled,
 }
 
 pub struct YaraEngine {
@@ -78,10 +84,7 @@ impl YaraEngine {
 
     /// Scan raw content and convert matching rules into generic findings.
     pub fn scan(&self, content: &[u8]) -> Result<Vec<Finding>, YaraError> {
-        let rules = self
-            .rules
-            .as_ref()
-            .ok_or_else(|| YaraError::Compile("rules have not been compiled".to_string()))?;
+        let rules = self.rules.as_ref().ok_or(YaraError::NotCompiled)?;
         let mut scanner = yara_x::Scanner::new(rules);
         let results = scanner
             .scan(content)

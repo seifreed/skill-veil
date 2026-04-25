@@ -91,6 +91,25 @@ pub struct VerdictCalibrationNote {
     pub rule_id: String,
     pub effect: String,
     pub rationale: String,
+    /// Scope of the root cause group this note applies to. Lets verdict
+    /// predicates filter notes by group when deciding whether calibration
+    /// affects a specific isolated weak signal — without this, an unrelated
+    /// `downgraded_*` note in another group blocks the Benign downgrade for
+    /// the isolated group.
+    #[serde(default = "default_calibration_note_scope")]
+    pub scope: ArtifactScope,
+    /// Category of the root cause group this note applies to. Paired with
+    /// `scope` for per-group note filtering in verdict predicates.
+    #[serde(default = "default_calibration_note_category")]
+    pub category: ThreatCategory,
+}
+
+fn default_calibration_note_scope() -> ArtifactScope {
+    ArtifactScope::PackageRootArtifact
+}
+
+fn default_calibration_note_category() -> ThreatCategory {
+    ThreatCategory::Generic
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -96,6 +96,7 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
         suppression_summary: Default::default(),
         policy_audit: Default::default(),
         should_fail: false,
+        extracted_iocs: Default::default(),
     };
 
     let output = format_text_output(&[result], TextOutputOptions::default());
@@ -157,6 +158,7 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
         suppression_summary: Default::default(),
         policy_audit: Default::default(),
         should_fail: false,
+        extracted_iocs: Default::default(),
     };
 
     let output = format_text_output(
@@ -244,6 +246,7 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
         suppression_summary: Default::default(),
         policy_audit: Default::default(),
         should_fail: false,
+        extracted_iocs: Default::default(),
     };
 
     let output = format_text_output(

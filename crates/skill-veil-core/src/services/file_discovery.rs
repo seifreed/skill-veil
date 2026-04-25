@@ -6,6 +6,7 @@
 use crate::adapters::StdFileSystemProvider;
 use crate::analyzer::{assess_artifact_path, ArtifactClassification};
 use crate::ports::FileSystemProvider;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -28,6 +29,60 @@ const MARKDOWN_GLOB_PATTERN: &str = "*.md";
 const JSON_GLOB_PATTERN: &str = "*.json";
 const YAML_GLOB_PATTERN: &str = "*.yaml";
 const YML_GLOB_PATTERN: &str = "*.yml";
+
+/// Glob patterns used to auto-discover executable/script supporting artifacts
+/// co-located with a skill entrypoint. Attackers frequently reference these
+/// files via absolute-looking paths (e.g. `~/.openclaw/skills/.../scripts/x.sh`)
+/// that do not resolve to the local package root, bypassing markdown-based
+/// reference extraction. Enumerating siblings closes that gap.
+const SCRIPT_GLOB_PATTERNS: &[&str] = &[
+    "*.sh", "*.bash", "*.py", "*.ps1", "*.js", "*.cjs", "*.mjs", "*.ts", "*.rb", "*.pl", "*.rs",
+    "*.go", "*.php",
+];
+
+/// Glob patterns for data-bearing files that are routinely abused as payload
+/// carriers (embedded endpoints, base64 blobs, `.pyc` bytecode, config-driven
+/// credential exfil). Scanned under the same directory rules as scripts.
+const DATA_FILE_GLOB_PATTERNS: &[&str] = &[
+    "*.json", "*.yaml", "*.yml", "*.toml", "*.txt", "*.env", "*.cfg", "*.ini",
+];
+
+/// Subdirectories underneath a skill package root that conventionally hold
+/// supporting artifacts. Script/data discovery only walks these, plus the
+/// package root itself at a depth of one, to avoid sweeping unrelated files
+/// when a caller points the scanner at a loose markdown document outside a
+/// real package layout. List derived from observed layouts in the malicious
+/// corpus (`references/`, `tools/`, `actions/`, `workflows/` are common hiding
+/// spots for scripts and config-embedded payloads).
+const SCRIPT_DISCOVERY_SUBDIRS: &[&str] = &[
+    "scripts",
+    "bin",
+    "hooks",
+    "src",
+    "lib",
+    "references",
+    "tools",
+    "actions",
+    "commands",
+    "workflows",
+    "deploy",
+    "config",
+    ".github",
+];
+
+/// Cap on auto-discovered supporting scripts per skill to bound analysis cost
+/// on pathological packages.
+const MAX_DISCOVERED_SCRIPTS: usize = 400;
+
+/// Cap on auto-discovered data files per skill. Lower than script cap because
+/// data files are more numerous in legitimate packages and more expensive to
+/// parse (YAML / JSON validators) than raw regex scanning.
+const MAX_DISCOVERED_DATA_FILES: usize = 100;
+
+/// Skip data files larger than this; eliminates large datasets / compressed
+/// blobs from the analysis window while retaining anything typical of
+/// credential/config exfiltration payloads.
+const MAX_DATA_FILE_BYTES: u64 = 512 * 1024;
 
 /// Service for discovering skill markdown files
 pub struct FileDiscoveryService<F: FileSystemProvider = StdFileSystemProvider> {
@@ -108,6 +163,110 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             .into_iter()
             .filter(|file_path| Self::is_explicit_skill_file(file_path))
             .collect()
+    }
+
+    /// Discover executable/script files co-located with a skill package.
+    ///
+    /// Surfaces supporting artifacts (shell / Python / etc.) that live inside
+    /// the package but are not explicitly referenced via resolvable relative
+    /// paths in the skill markdown — a common pattern in malicious skills that
+    /// use absolute-looking home paths like `~/.openclaw/skills/.../x.sh`.
+    ///
+    /// Scans only the package root itself (non-recursive) and a small set of
+    /// conventional subdirectories (see [`SCRIPT_DISCOVERY_SUBDIRS`]),
+    /// non-recursive. This avoids sweeping unrelated files when a caller
+    /// points the scanner at a loose markdown document sitting inside a
+    /// populated directory (e.g. a temp file under `/var/folders/`). Results
+    /// are capped at [`MAX_DISCOVERED_SCRIPTS`].
+    pub fn discover_package_scripts(&self, package_root: &Path) -> Vec<PathBuf> {
+        self.discover_by_patterns(
+            package_root,
+            SCRIPT_GLOB_PATTERNS,
+            MAX_DISCOVERED_SCRIPTS,
+            None,
+        )
+    }
+
+    /// Discover data-bearing files (`.json`, `.yaml`, `.txt`, …) co-located
+    /// with a skill package. These are frequently abused as payload carriers:
+    /// embedded credential-exfil URLs in config JSON, `.pyc` bytecode stashed
+    /// as `data.txt`, base64-encoded instruction blobs in YAML workflows, etc.
+    ///
+    /// Uses the same directory scope as [`discover_package_scripts`] and
+    /// additionally skips files exceeding [`MAX_DATA_FILE_BYTES`] to avoid
+    /// paying parse cost on legitimate bulk datasets.
+    pub fn discover_package_data_files(&self, package_root: &Path) -> Vec<PathBuf> {
+        self.discover_by_patterns(
+            package_root,
+            DATA_FILE_GLOB_PATTERNS,
+            MAX_DISCOVERED_DATA_FILES,
+            Some(MAX_DATA_FILE_BYTES),
+        )
+    }
+
+    fn discover_by_patterns(
+        &self,
+        package_root: &Path,
+        patterns: &[&str],
+        cap: usize,
+        max_bytes: Option<u64>,
+    ) -> Vec<PathBuf> {
+        let mut results = Vec::new();
+        let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+        // Each root has an associated `recursive` flag: the package root is
+        // scanned non-recursively (to avoid sweeping unrelated files when the
+        // caller pointed us at a loose markdown file), while the conventional
+        // subdirs (`scripts/`, `bin/`, …) are scanned recursively because
+        // malicious skills routinely hide payloads in nested folders like
+        // `scripts/备份文件/` ("backup files") or `tools/internal/`.
+        let mut roots: Vec<(PathBuf, bool)> =
+            Vec::with_capacity(1 + SCRIPT_DISCOVERY_SUBDIRS.len());
+        roots.push((package_root.to_path_buf(), false));
+        for subdir in SCRIPT_DISCOVERY_SUBDIRS {
+            let candidate = package_root.join(subdir);
+            if self.fs_provider.exists(&candidate) {
+                roots.push((candidate, true));
+            }
+        }
+        for (root, recursive) in &roots {
+            for pattern in patterns {
+                let Ok(files) = self.fs_provider.list_files(root, pattern, *recursive) else {
+                    continue;
+                };
+                for file in files {
+                    if results.len() >= cap {
+                        return results;
+                    }
+                    if let Some(limit) = max_bytes {
+                        // Fail-safe: when metadata is unavailable (permission
+                        // denied, symlink loop, file deleted between listing
+                        // and stat) we MUST skip the file rather than fall
+                        // through to the include path. Including it would let
+                        // an unreadable 50 MB blob bypass `max_bytes` and
+                        // pressure the analysis pipeline. Going through the
+                        // `fs_provider` port keeps test mocks consistent —
+                        // calling `std::fs::metadata` directly would always
+                        // miss virtual paths in unit tests.
+                        match self.fs_provider.metadata(&file) {
+                            Ok(meta) if meta.len > limit => continue,
+                            Ok(_) => {}
+                            Err(err) => {
+                                tracing::debug!(
+                                    file = %file.display(),
+                                    error = %err,
+                                    "file_discovery: skipping file with unavailable metadata"
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    if seen.insert(file.clone()) {
+                        results.push(file);
+                    }
+                }
+            }
+        }
+        results
     }
 
     /// Discover heuristic agent-extension candidates when no explicit entrypoint exists.
@@ -397,5 +556,81 @@ Run it!
         let service_recursive = FileDiscoveryService::new(true);
         let skills = service_recursive.discover_skills(dir.path());
         assert_eq!(skills.len(), 2);
+    }
+
+    /// In-memory `FileSystemProvider` that lists exactly one path but always
+    /// fails on `metadata`. Used to verify the fail-safe behaviour: when
+    /// metadata cannot be obtained the file MUST be skipped, not included.
+    /// Without the fix, the `if let Ok(meta) = ...` arm fell through and
+    /// the file silently bypassed the size guard.
+    struct MetadataFailingFs {
+        listed: Vec<PathBuf>,
+    }
+
+    impl FileSystemProvider for MetadataFailingFs {
+        fn read_file_bytes(
+            &self,
+            _path: &Path,
+        ) -> Result<crate::ports::FileContent, crate::ports::FileSystemError> {
+            Err(crate::ports::FileSystemError::PathNotFound(PathBuf::new()))
+        }
+        fn list_files(
+            &self,
+            _path: &Path,
+            _pattern: &str,
+            _recursive: bool,
+        ) -> Result<Vec<PathBuf>, crate::ports::FileSystemError> {
+            Ok(self.listed.clone())
+        }
+        fn exists(&self, _path: &Path) -> bool {
+            true
+        }
+        fn metadata(
+            &self,
+            _path: &Path,
+        ) -> Result<crate::ports::FileMeta, crate::ports::FileSystemError> {
+            Err(crate::ports::FileSystemError::PathNotFound(PathBuf::new()))
+        }
+    }
+
+    #[test]
+    fn discover_skips_file_when_metadata_unavailable() {
+        let listed = PathBuf::from("/virtual/big.yaml");
+        let fs = MetadataFailingFs {
+            listed: vec![listed.clone()],
+        };
+        let service = FileDiscoveryService::with_fs_provider(false, fs);
+        let results = service.discover_package_data_files(Path::new("/virtual"));
+        assert!(
+            !results.contains(&listed),
+            "file with unavailable metadata MUST be skipped, not included; got {results:?}"
+        );
+    }
+
+    /// Architectural contract: `discover_by_patterns` MUST go through the
+    /// `FileSystemProvider` port for metadata. Calling `std::fs::metadata`
+    /// directly breaks the hexagonal contract — test mocks would always
+    /// see `Err` and (combined with the previous fall-through bug) every
+    /// virtual file would bypass the size guard.
+    #[test]
+    fn file_discovery_does_not_call_std_fs_metadata_directly() {
+        let body = include_str!("file_discovery.rs");
+        // Scan production code only — stop at the test module.
+        let production = body.split("#[cfg(test)]").next().unwrap_or(body);
+        assert!(
+            production.contains("self.fs_provider.metadata("),
+            "file_discovery must route metadata through the fs_provider port"
+        );
+        for (idx, line) in production.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            assert!(
+                !trimmed.contains("std::fs::metadata("),
+                "production line {} still calls std::fs::metadata directly: {line}",
+                idx + 1
+            );
+        }
     }
 }

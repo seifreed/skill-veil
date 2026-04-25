@@ -1,16 +1,42 @@
+/// Build a context excerpt around any line that hints at permission or
+/// capability declarations.
+///
+/// # Dedup contract
+///
+/// A single line that satisfies multiple heuristics (e.g. `- permissions:
+/// capabilities: full` matches both the bullet prefix AND the substring
+/// keywords) MUST emit its surrounding window only ONCE. Without the
+/// `emitted_anchors` guard, downstream substring matching in
+/// `explicit_declared_permission_rules` counts the same permission keyword
+/// N times per anchor, which can falsely cross the
+/// `SCOPE_OVERPROVISIONING` threshold from a single source line.
 pub(super) fn permission_context(content: &str) -> String {
-    let mut buffer = String::new();
     let lines: Vec<_> = content.lines().collect();
+    let mut buffer = String::new();
+    // Dedup by EMITTED LINE INDEX, not by anchor index. Adjacent anchor
+    // lines (distance < window_size) produce overlapping windows where the
+    // shared lines would otherwise appear twice, double-counting any
+    // permission keyword in those overlap zones — the very inflation that
+    // could push `SCOPE_OVERPROVISIONING` past its threshold from a single
+    // multi-line block. Per-emitted-line dedup resolves both the multi-
+    // condition single anchor and the adjacent-anchor overlap cases.
+    let mut emitted_lines: std::collections::BTreeSet<usize> = Default::default();
     for (index, line) in lines.iter().enumerate() {
         let lower = line.to_ascii_lowercase();
-        if lower.contains("permission")
+        let trimmed = line.trim_start();
+        let is_anchor = lower.contains("permission")
             || lower.contains("capabilit")
-            || lower.starts_with("- ")
-            || lower.starts_with("* ")
-        {
-            let start = index.saturating_sub(1);
-            let end = (index + 3).min(lines.len());
-            for snippet in &lines[start..end] {
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ");
+        if !is_anchor {
+            continue;
+        }
+        const LINES_BEFORE: usize = 1;
+        const LINES_AFTER: usize = 2;
+        let start = index.saturating_sub(LINES_BEFORE);
+        let end = (index + 1 + LINES_AFTER).min(lines.len());
+        for (i, snippet) in lines.iter().enumerate().take(end).skip(start) {
+            if emitted_lines.insert(i) {
                 buffer.push_str(snippet);
                 buffer.push('\n');
             }
@@ -167,4 +193,62 @@ pub(super) fn explicit_declared_permission_rules(
     }
 
     rules
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: a single source line that satisfies multiple anchor
+    /// heuristics emits its context window exactly once. Without dedup, a
+    /// line like "- permissions: capabilities: full" appended its window 4
+    /// times (bullet prefix + "permission" + "capabilit" + asterisk
+    /// fallback), inflating the keyword count seen by downstream rules.
+    #[test]
+    fn permission_context_does_not_duplicate_window_for_multi_match_line() {
+        let content = "header\n- permissions: capabilities: full\nbody1\nbody2\nfooter\n";
+        let ctx = permission_context(content);
+        // Count how many times the multi-match line appears in the buffer.
+        let occurrences = ctx.matches("- permissions: capabilities: full").count();
+        assert_eq!(
+            occurrences, 1,
+            "Multi-condition line '{}' must appear exactly once in the context buffer; \
+             got {} occurrences. Buffer was:\n{}",
+            "- permissions: capabilities: full", occurrences, ctx
+        );
+    }
+
+    /// Distinct anchor lines still emit independent windows.
+    #[test]
+    fn permission_context_emits_distinct_windows_for_different_anchors() {
+        let content = "permission line one\nbody\ncapability line two\nbody\n";
+        let ctx = permission_context(content);
+        assert!(ctx.contains("permission line one"));
+        assert!(ctx.contains("capability line two"));
+    }
+
+    #[test]
+    fn permission_context_falls_back_to_full_content_when_no_anchor() {
+        let content = "no anchors here\njust prose\n";
+        let ctx = permission_context(content);
+        assert_eq!(ctx, content);
+    }
+
+    /// Contract: when two anchor lines sit close enough that their
+    /// emission windows overlap, the shared lines MUST appear only ONCE
+    /// in the buffer. Otherwise downstream substring matching would
+    /// double-count keywords on those lines, inflating
+    /// `SCOPE_OVERPROVISIONING` from a single multi-line block.
+    #[test]
+    fn permission_context_does_not_double_count_overlapping_window_lines() {
+        // Two anchor lines at indices 0 and 1; both emit windows that
+        // share line 1, line 2 (LINES_BEFORE=1, LINES_AFTER=2).
+        let content = "- permissions: A\n- capabilities: B\nshared line\nmore\n";
+        let ctx = permission_context(content);
+        let occurrences = ctx.matches("shared line").count();
+        assert_eq!(
+            occurrences, 1,
+            "Overlapping window line must appear exactly once; buffer:\n{ctx}"
+        );
+    }
 }

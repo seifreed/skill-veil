@@ -115,10 +115,14 @@ impl ArtifactGraph {
     ) {
         let path = path.into();
         if let Some(existing) = self.nodes.iter_mut().find(|node| node.path == path) {
-            // Only overwrite kind if the existing kind is GenericArtifact.
-            // This preserves the first specific classification and prevents
-            // a later call from silently changing e.g. SkillDocument to PackageManifest.
-            if existing.kind == ArtifactKind::GenericArtifact {
+            // Promote `kind` to the more specific classification. Pipeline
+            // ordering is not deterministic, so a "first wins" rule would
+            // silently lose more-specific kinds discovered later (e.g.
+            // `McpServerManifest` arriving after a generic `AgentInstruction`
+            // pre-classification). See `ArtifactKind::specificity` for the
+            // tier ordering and the tests in this module that pin the
+            // contract.
+            if kind.specificity() > existing.kind.specificity() {
                 existing.kind = kind;
             }
             for capability in capabilities {
@@ -172,5 +176,70 @@ impl ArtifactGraph {
         }
 
         self.edges.push(edge);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: re-inserting the same path with a more specific
+    /// `ArtifactKind` upgrades the recorded kind. Without this,
+    /// pipeline-ordering randomness silently shadowed
+    /// `McpServerManifest` (specificity 4) behind an earlier
+    /// `AgentInstruction` (specificity 3) classification.
+    #[test]
+    fn add_node_promotes_to_more_specific_kind() {
+        let mut g = ArtifactGraph::new();
+        g.add_node("/pkg/manifest", ArtifactKind::AgentInstruction);
+        g.add_node("/pkg/manifest", ArtifactKind::McpServerManifest);
+        let node = g
+            .nodes
+            .iter()
+            .find(|n| n.path == "/pkg/manifest")
+            .expect("node must exist");
+        assert_eq!(
+            node.kind,
+            ArtifactKind::McpServerManifest,
+            "More specific kind MUST replace less specific one"
+        );
+    }
+
+    /// Inverse direction: a less specific later insertion does NOT demote.
+    #[test]
+    fn add_node_does_not_demote_kind() {
+        let mut g = ArtifactGraph::new();
+        g.add_node("/pkg/manifest", ArtifactKind::McpServerManifest);
+        g.add_node("/pkg/manifest", ArtifactKind::GenericArtifact);
+        let node = g.nodes.iter().find(|n| n.path == "/pkg/manifest").unwrap();
+        assert_eq!(
+            node.kind,
+            ArtifactKind::McpServerManifest,
+            "Less specific kind MUST NOT demote a more specific one"
+        );
+    }
+
+    /// Idempotent: same kind twice doesn't change anything.
+    #[test]
+    fn add_node_is_idempotent_for_same_kind() {
+        let mut g = ArtifactGraph::new();
+        g.add_node("/pkg/x", ArtifactKind::PackageManifest);
+        g.add_node("/pkg/x", ArtifactKind::PackageManifest);
+        assert_eq!(
+            g.nodes.iter().filter(|n| n.path == "/pkg/x").count(),
+            1,
+            "Re-inserting the same path must NOT duplicate the node"
+        );
+    }
+
+    /// Equal-specificity insertions keep the first one (stable behaviour
+    /// within a tier; only cross-tier upgrades fire).
+    #[test]
+    fn add_node_keeps_first_within_same_specificity_tier() {
+        let mut g = ArtifactGraph::new();
+        g.add_node("/pkg/x", ArtifactKind::PackageManifest); // tier 4
+        g.add_node("/pkg/x", ArtifactKind::McpServerManifest); // tier 4
+        let node = g.nodes.iter().find(|n| n.path == "/pkg/x").unwrap();
+        assert_eq!(node.kind, ArtifactKind::PackageManifest);
     }
 }

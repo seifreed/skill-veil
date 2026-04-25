@@ -13,6 +13,7 @@ pub(super) fn detect_compound_verdict_reasons(
         detect_install_hook_with_exec_surface(findings, raw_root_cause_groups),
         detect_broad_permissions_with_autonomy(findings, raw_root_cause_groups),
         detect_mcp_remote_endpoint_with_exec(findings, raw_root_cause_groups),
+        detect_heartbeat_poll_with_credential_read(findings, raw_root_cause_groups),
     ]
     .into_iter()
     .flatten()
@@ -29,6 +30,28 @@ fn compound_has_category(
     raw_root_cause_groups
         .iter()
         .any(|group| group.category == category && group.strongest_action != RecommendedAction::Log)
+}
+
+/// Find the most actionable scope for attribution where any actionable
+/// group matching `category` appears.
+///
+/// `ArtifactScope`'s derived `Ord` ranks `AgentEntrypoint <
+/// PackageRootArtifact < SupportingArtifact`. We want the entrypoint
+/// scope when it's available because the entrypoint is the most
+/// user-visible attribution surface (and the most actionable for
+/// reviewers), so `.min()` is correct. The phrase "most specific" in
+/// older comments was misleading — `AgentEntrypoint` is structurally
+/// the broadest classification but the most actionable for compound
+/// verdict attribution. Returns `None` if no actionable group matches.
+fn most_specific_scope_for_category(
+    raw_root_cause_groups: &[RootCauseGroup],
+    category: ThreatCategory,
+) -> Option<ArtifactScope> {
+    raw_root_cause_groups
+        .iter()
+        .filter(|g| g.category == category && g.strongest_action != RecommendedAction::Log)
+        .map(|g| g.scope)
+        .min()
 }
 
 // Checks if a rule fired with an actionable recommendation (not Log).
@@ -105,20 +128,24 @@ fn detect_credential_exfil_chain(
     _findings: &[Finding],
     raw_root_cause_groups: &[RootCauseGroup],
 ) -> Option<VerdictReason> {
-    if compound_has_category(raw_root_cause_groups, ThreatCategory::CredentialExposure)
-        && compound_has_category(raw_root_cause_groups, ThreatCategory::DataExfiltration)
-    {
-        Some(VerdictReason {
-            scope: ArtifactScope::SupportingArtifact,
-            category: ThreatCategory::DataExfiltration,
-            signal_class: SignalClass::MaliciousBehavior,
-            rationale:
-                "Compound verdict: token or session access is paired with outbound transmission"
-                    .to_string(),
-        })
-    } else {
-        None
-    }
+    let cred_scope = most_specific_scope_for_category(
+        raw_root_cause_groups,
+        ThreatCategory::CredentialExposure,
+    )?;
+    let exfil_scope =
+        most_specific_scope_for_category(raw_root_cause_groups, ThreatCategory::DataExfiltration)?;
+    // Attribute the compound finding to the more specific (most actionable)
+    // of the two contributing scopes. Without this, evidence sitting in the
+    // primary entrypoint was previously labelled `SupportingArtifact`,
+    // confusing audit trails and scope-keyed suppressions.
+    let scope = cred_scope.min(exfil_scope);
+    Some(VerdictReason {
+        scope,
+        category: ThreatCategory::DataExfiltration,
+        signal_class: SignalClass::MaliciousBehavior,
+        rationale: "Compound verdict: token or session access is paired with outbound transmission"
+            .to_string(),
+    })
 }
 
 fn detect_install_hook_with_exec_surface(
@@ -168,6 +195,30 @@ fn detect_broad_permissions_with_autonomy(
             signal_class: SignalClass::MaliciousBehavior,
             rationale:
                 "Compound verdict: broad permissions are paired with autonomous execution semantics"
+                    .to_string(),
+        })
+    } else {
+        None
+    }
+}
+
+fn detect_heartbeat_poll_with_credential_read(
+    findings: &[Finding],
+    raw_root_cause_groups: &[RootCauseGroup],
+) -> Option<VerdictReason> {
+    // Long-poll / heartbeat fetch paired with any credential-read behaviour is
+    // classic agent-C2 architecture: the skill pulls instructions at a fixed
+    // cadence while already holding a token, giving the operator remote
+    // command-and-control without the skill ever matching an exec rule alone.
+    if compound_has_rule(findings, "SKILL_HEARTBEAT_REMOTE_POLL")
+        && compound_has_category(raw_root_cause_groups, ThreatCategory::CredentialExposure)
+    {
+        Some(VerdictReason {
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::AutonomyEscalation,
+            signal_class: SignalClass::MaliciousBehavior,
+            rationale:
+                "Compound verdict: heartbeat polling is paired with credential or token access"
                     .to_string(),
         })
     } else {

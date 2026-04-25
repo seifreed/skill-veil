@@ -63,6 +63,71 @@ pub enum Commands {
         #[command(subcommand)]
         action: RulesAction,
     },
+    /// VirusTotal corpus management and detection cross-check tooling.
+    Vt {
+        #[command(subcommand)]
+        action: VtAction,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum VtAction {
+    /// Run a VT Intelligence search and download matching files + reports.
+    Download(VtDownloadArgs),
+    /// Fetch a single file's VT report (codeinsight + analysis stats).
+    Report(VtReportArgs),
+    /// Scan a corpus directory and compare per-package verdicts against VT.
+    CrossCheck(VtCrossCheckArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct VtDownloadArgs {
+    /// VT Intelligence query string. Defaults to the OpenClaw skill malicious
+    /// corpus query.
+    #[arg(long)]
+    pub query: Option<String>,
+    /// Destination directory for the downloaded corpus. Reports are written
+    /// to `<dest>/.vt-reports/`.
+    #[arg(long, default_value = "data")]
+    pub dest: PathBuf,
+    /// Maximum number of files to download (soft cap; VT may return fewer).
+    #[arg(long, default_value_t = 500)]
+    pub limit: usize,
+    /// Only fetch report JSONs, skip binary downloads (useful without a
+    /// premium VT apikey).
+    #[arg(long, default_value_t = false)]
+    pub report_only: bool,
+}
+
+#[derive(Args, Clone)]
+pub struct VtReportArgs {
+    pub sha256: String,
+    /// Write the JSON report to this path instead of stdout.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+pub struct VtCrossCheckArgs {
+    /// Corpus directory previously populated via `skill-veil vt download`.
+    #[arg(long, default_value = "data")]
+    pub dir: PathBuf,
+    /// Output format for the cross-check report.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: VtCrossCheckFormat,
+    /// Optional output file. Defaults to stdout.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    /// Only list packages where skill-veil disagreed with VT.
+    #[arg(long, default_value_t = false)]
+    pub only_mismatches: bool,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum VtCrossCheckFormat {
+    Text,
+    Json,
+    Markdown,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -108,6 +173,27 @@ pub struct ScanArgs {
     pub dataset_view: DatasetViewArg,
     #[arg(long, default_value_t = false)]
     pub analyst_summary: bool,
+    /// Disable VT enrichment even when ~/.vt.toml is present. Enrichment
+    /// is otherwise auto-activated when the config file exists.
+    #[arg(long, default_value_t = false)]
+    pub no_vt_enrich: bool,
+    /// When an extracted URL or file hash is not yet indexed by VT, submit
+    /// it for scanning instead of skipping. Default is lookup-only.
+    #[arg(long, default_value_t = false)]
+    pub vt_submit_unknown: bool,
+    /// Disable LLM enrichment even when `~/.skill-veil.toml` has an `[llm]`
+    /// section. Enrichment is otherwise auto-activated when config exists.
+    #[arg(long, default_value_t = false)]
+    pub no_llm_enrich: bool,
+    /// Override the active LLM provider for this scan without touching the
+    /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
+    #[arg(long)]
+    pub llm_provider: Option<String>,
+    /// Fail the scan when any external rule pack declares a rule id that
+    /// collides with an already-loaded rule. Default is to warn and keep
+    /// the first-loaded version (preserves backwards-compat).
+    #[arg(long, default_value_t = false)]
+    pub strict_rules: bool,
 }
 
 #[derive(Args, Clone)]

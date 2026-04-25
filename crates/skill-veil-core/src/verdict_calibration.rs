@@ -228,6 +228,12 @@ struct GroupCalibrationState<'f> {
 ///
 /// Uses `original_snapshots` to check pre-mutation signal class (rule independence) and
 /// accumulates excluded rule IDs per group so successive rules don't re-count already-calibrated findings.
+///
+/// Each calibration rule contributes its `risk_delta` at most once per package
+/// (tracked via `counted_rules`), regardless of how many groups it matches.
+/// Without this, a rule matching N groups (e.g. `DECLARED_PERMISSION_NETWORK_ACCESS`
+/// in both `AgentEntrypoint` and `PackageRootArtifact`) would multiply its credit
+/// N×, doubling or tripling the calibration effect on the package risk score.
 fn apply_calibration_rules<'f>(
     groups: &mut [RootCauseGroup],
     findings: &'f [Finding],
@@ -241,6 +247,8 @@ fn apply_calibration_rules<'f>(
     );
     let mut risk_adjustment = 0_i32;
     let mut notes = Vec::new();
+    let mut counted_rules: std::collections::HashSet<&'static str> =
+        std::collections::HashSet::new();
     let mut states: Vec<GroupCalibrationState<'f>> = groups
         .iter()
         .zip(original_snapshots.iter())
@@ -255,7 +263,12 @@ fn apply_calibration_rules<'f>(
         for (rule, &gate) in CALIBRATION_PIPELINE.iter().zip(gates.iter()) {
             let (delta, note) =
                 apply_single_rule_to_group(group, rule, gate, findings, &mut states[i]);
-            risk_adjustment += delta;
+            // Only count each rule's risk delta once across all groups in a
+            // single calibration pass. Notes still emit per-group so the
+            // audit trail records every match.
+            if delta != 0 && counted_rules.insert(rule.note_rule_id) {
+                risk_adjustment += delta;
+            }
             notes.extend(note);
         }
     }
@@ -318,6 +331,14 @@ fn apply_single_rule_to_group<'f>(
             rule.effect_unchanged.to_string()
         },
         rationale: rule.rationale.to_string(),
+        // Tag the note with the group it applied to so verdict predicates
+        // can filter notes per-group (see `is_isolated_weak_package_root_signal`
+        // in `verdict/predicates.rs`). Without this, an unrelated `downgraded_*`
+        // note from another group blocks the Benign downgrade path for an
+        // isolated weak signal — even when calibration didn't actually
+        // touch that signal's group.
+        scope: group.scope,
+        category: group.category,
     };
     (risk_delta, Some(note))
 }
@@ -346,16 +367,32 @@ fn recalculate_group_action_excluding(
     (action, remaining.len())
 }
 
+/// Collapse identical calibration notes.
+///
+/// # Identity contract
+///
+/// Two notes are duplicates only when ALL FIVE fields match: `rule_id`, `effect`,
+/// `rationale`, **`scope`**, and **`category`**. The `scope`+`category` pair is
+/// load-bearing: `verdict::predicates::verdict()` filters notes by `(scope, category)`
+/// to decide whether calibration affects a specific isolated weak group. Collapsing
+/// per-group notes here would let an unrelated `downgraded_*` note in another group
+/// vacuously satisfy the Benign-path filter and silently downgrade `Suspicious` to
+/// `Benign`. See `dedup_notes_preserves_per_group_distinctions`.
 fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
     notes.sort_by(|a, b| {
-        a.rule_id
-            .cmp(&b.rule_id)
+        a.scope
+            .cmp(&b.scope)
+            .then_with(|| a.category.cmp(&b.category))
+            .then_with(|| a.rule_id.cmp(&b.rule_id))
             .then_with(|| a.effect.cmp(&b.effect))
             .then_with(|| a.rationale.cmp(&b.rationale))
     });
-    // The comparison is symmetric (field equality), so dedup_by parameter order is irrelevant.
     notes.dedup_by(|a, b| {
-        a.rule_id == b.rule_id && a.effect == b.effect && a.rationale == b.rationale
+        a.scope == b.scope
+            && a.category == b.category
+            && a.rule_id == b.rule_id
+            && a.effect == b.effect
+            && a.rationale == b.rationale
     });
 }
 

@@ -356,20 +356,22 @@ fn check_webhook_without_auth(
 ) -> Option<Finding> {
     let kind = looks_like_webhook_receiver_without_auth(content)?;
     let artifact_path = path.display().to_string();
-    let (rule_id, reason) = match kind {
+    let (rule_id, reason, action) = match kind {
         "webhook_auth_bypass" => (
             "WEBHOOK_AUTH_BYPASS",
             "Artifact appears to define a webhook or inbound endpoint without verification or signature checks",
+            RecommendedAction::Block,
         ),
         _ => (
             "PUBLIC_INBOUND_ENDPOINT",
             "Artifact appears to expose a public inbound endpoint without visible authentication controls",
+            RecommendedAction::RequireApproval,
         ),
     };
     Some(
         Finding::builder(rule_id, ThreatCategory::ToolAbuse)
             .severity(Severity::Medium)
-            .action(RecommendedAction::RequireApproval)
+            .action(action)
             .evidence_kind(EvidenceKind::Context)
             .artifact(artifact_kind, Some(artifact_path.clone()))
             .matched_on(MatchTarget::ReferencedFile {

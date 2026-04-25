@@ -13,7 +13,9 @@ use crate::scanner_support::{
     artifact_parse_error_finding, decode_warning_finding, parse_warning_finding,
     read_text_file_lossy, structured_parse_warning,
 };
-use crate::services::file_discovery::{discover_lockfiles, discover_package_manifests};
+use crate::services::file_discovery::{
+    discover_lockfiles, discover_package_manifests, FileDiscoveryService,
+};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -24,7 +26,9 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
     let fs = scanner.file_discovery().fs_provider();
     let mut findings = Vec::new();
 
-    for referenced_file in &doc.referenced_files {
+    let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
+
+    for referenced_file in &supporting_artifacts {
         if !referenced_file.exists() || referenced_file.is_dir() {
             continue;
         }
@@ -87,6 +91,53 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
     findings
 }
 
+/// Build the list of supporting-artifact paths to evaluate for a skill document.
+///
+/// Includes every path extracted from the markdown (`doc.referenced_files`) plus,
+/// when the document is an explicit skill entrypoint, any co-located scripts
+/// and data-bearing files under the package root. The latter catches payloads
+/// that malicious skills reference via absolute-looking paths (e.g.
+/// `~/.openclaw/skills/.../x.sh`) or hide inside config / `.txt` blobs that
+/// the markdown never mentions at all.
+fn collect_supporting_artifact_paths<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+) -> Vec<PathBuf> {
+    let mut artifacts = Vec::new();
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+
+    for referenced in &doc.referenced_files {
+        if seen.insert(referenced.clone()) {
+            artifacts.push(referenced.clone());
+        }
+    }
+
+    if !FileDiscoveryService::<F>::is_explicit_skill_file(&doc.path) {
+        return artifacts;
+    }
+    let Some(package_root) = doc.path.parent() else {
+        return artifacts;
+    };
+    let discovery = scanner.file_discovery();
+    for discovered in discovery.discover_package_scripts(package_root) {
+        if discovered == doc.path {
+            continue;
+        }
+        if seen.insert(discovered.clone()) {
+            artifacts.push(discovered);
+        }
+    }
+    for discovered in discovery.discover_package_data_files(package_root) {
+        if discovered == doc.path {
+            continue;
+        }
+        if seen.insert(discovered.clone()) {
+            artifacts.push(discovered);
+        }
+    }
+    artifacts
+}
+
 pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     path: &Path,
@@ -108,14 +159,18 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         &artifact_path,
         &primary_content,
     );
+    // Apply inline suppressions BEFORE deduplication. The dedup pass merges
+    // findings on `(rule_id, category, matched_on, match_value, kind, scope,
+    // path)` and only preserves the first non-`None` `line_number` it sees.
+    // If two emissions of the same rule reach scan_document_path with
+    // different line numbers (one carrying a `// skill-veil:disable` comment
+    // line, another path-less from artifact-graph taint), running suppressions
+    // afterwards would let the merged finding survive when its representative
+    // line happens to be the non-suppressed copy. Suppressing first ensures
+    // each emission is matched against its own original line number.
+    let (raw_findings, suppressed_findings) =
+        collect_and_apply_suppressions(scanner, raw_findings, path, &doc, &primary_content);
     let (findings, deduplication_summary) = deduplicate_findings(raw_findings);
-    let (findings, suppressed_findings) = collect_and_apply_suppressions(
-        findings,
-        path,
-        &doc,
-        &primary_content,
-        scanner.file_discovery().fs_provider(),
-    );
     let inline_suppressed = suppressed_findings.len();
 
     let filter_outcome = scanner.filter_service().filter_with_summary(findings);
@@ -135,6 +190,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         &summary,
     );
     let should_fail = scanner.filter_service().should_fail(&filtered_findings);
+    let extracted_iocs = collect_extracted_iocs(scanner, &doc, path, &primary_content);
 
     Ok(ScanResult {
         metadata: crate::scanner_types::ArtifactMetadata {
@@ -167,7 +223,30 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         ),
         policy_audit: build_policy_audit(scanner, filter_outcome.applied_overrides),
         should_fail,
+        extracted_iocs,
     })
+}
+
+/// Collect IOCs from the primary document and every supporting artifact. Runs
+/// offline (no network) and feeds downstream enrichment tooling.
+fn collect_extracted_iocs<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+    primary_path: &Path,
+    primary_content: &str,
+) -> crate::ioc_extraction::ExtractedIocs {
+    let mut iocs =
+        crate::ioc_extraction::extract_from_artifact(primary_path, primary_content.as_bytes());
+
+    let supporting = collect_supporting_artifact_paths(scanner, doc);
+    let fs = scanner.file_discovery().fs_provider();
+    for path in supporting {
+        if let Ok(file) = fs.read_file_bytes(&path) {
+            let bytes = file.as_bytes();
+            iocs.merge(crate::ioc_extraction::extract_from_artifact(&path, bytes));
+        }
+    }
+    iocs
 }
 
 fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
@@ -181,6 +260,7 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     let mut findings = scanner.engine().evaluate(doc);
     findings.extend(collect_primary_doc_warnings::<F>(doc, path));
     findings.extend(scan_supporting_artifacts(scanner, doc));
+    findings.extend(deceptive_docs_findings(scanner, doc));
     if let Some(w) = structured_parse_warning(path, primary_content, artifact_kind) {
         findings.push(w);
     }
@@ -198,6 +278,25 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     findings = contextualize_findings(findings, artifact_kind, artifact_path);
     findings.extend(taint_findings);
     (findings, artifact_graph)
+}
+
+/// Run the claim-vs-behavior detector. Reads each supporting artifact via the
+/// scanner's filesystem provider; failures are silently dropped (the artifact
+/// is just not contributing to deceptive-docs evaluation).
+fn deceptive_docs_findings<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+) -> Vec<Finding> {
+    let supporting = collect_supporting_artifact_paths(scanner, doc);
+    if supporting.is_empty() {
+        return Vec::new();
+    }
+    let fs = scanner.file_discovery().fs_provider();
+    let materialised: Vec<(PathBuf, String)> = supporting
+        .into_iter()
+        .filter_map(|p| read_text_file_lossy(&p, fs).ok().map(|(c, _)| (p, c)))
+        .collect();
+    crate::deceptive_docs::detect_deceptive_documentation(doc, &materialised)
 }
 
 fn collect_primary_doc_warnings<F: FileSystemProvider>(
@@ -262,15 +361,17 @@ fn contextualize_findings(
 
 /// Collect inline suppression sources from the primary document and its referenced
 /// files, then apply suppressions to the deduplicated findings.
-fn collect_and_apply_suppressions<F: FileSystemProvider>(
+fn collect_and_apply_suppressions<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
     findings: Vec<Finding>,
     path: &Path,
     doc: &SkillDocument,
     primary_content: &str,
-    fs: &F,
 ) -> (Vec<Finding>, Vec<Finding>) {
+    let fs = scanner.file_discovery().fs_provider();
+    let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
     let mut ref_contents: Vec<(PathBuf, String)> = Vec::new();
-    for referenced_file in &doc.referenced_files {
+    for referenced_file in &supporting_artifacts {
         if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file, fs) {
             ref_contents.push((referenced_file.clone(), ref_content));
         }

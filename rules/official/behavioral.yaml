@@ -375,7 +375,7 @@ rules:
     confidence: 0.86
     when: !regex
       pattern: "(?is)(mcp|model context protocol|transport).{0,220}(https?://|wss?://).{0,220}(stdio|command|spawn|exec|shell)"
-    action: require_approval
+    action: block
     reason: "MCP artifact combines a remote transport with command or stdio execution semantics"
     shield:
       scope: skill.runtime
@@ -390,9 +390,9 @@ rules:
     severity: high
     confidence: 0.88
     when: !regex
-      pattern: "(?is)(169\\.254\\.169\\.254|metadata|latest/meta-data).{0,220}(authorization|bearer|token|x-aws-ec2-metadata-token|header)"
-    action: require_approval
-    reason: "Artifact appears to access metadata services with credential or header semantics"
+      pattern: "(?is)(169\\.254\\.169\\.254).{0,220}(authorization|bearer|token|x-aws-ec2-metadata-token|header)"
+    action: block
+    reason: "Artifact fetches the IMDSv1/v2 metadata endpoint with credential or header semantics — SSRF/credential theft"
     shield:
       scope: skill.network
     enabled: true

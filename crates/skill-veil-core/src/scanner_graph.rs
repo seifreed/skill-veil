@@ -208,11 +208,29 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
         .collect()
 }
 
+/// Recover a SHA-256 package id from any ancestor directory name.
+///
+/// # Identity contract
+///
+/// SHA-256 hex digests in this codebase are always **lowercase**.
+/// `is_ascii_hexdigit()` accepts uppercase too, which would let a path
+/// segment like `AAAA...` (64 uppercase chars) qualify as a package id.
+/// Two copies of the same package whose path differs only in casing
+/// would then receive distinct ids and evade case-sensitive baseline /
+/// waiver matching. The check below is intentionally stricter than
+/// `is_ascii_hexdigit()` to keep ids canonical.
+///
+/// Kept in sync with `is_sha256_hex` in `crates/skill-veil-cli/src/vt/cross_check.rs`.
 pub fn derive_package_id(path: &Path) -> Option<String> {
     path.ancestors()
         .filter_map(|ancestor| ancestor.file_name().and_then(|name| name.to_str()))
-        .find(|segment| segment.len() == 64 && segment.chars().all(|c| c.is_ascii_hexdigit()))
+        .find(|segment| segment.len() == 64 && segment.bytes().all(is_lower_hex_byte))
         .map(ToOwned::to_owned)
+}
+
+#[inline]
+fn is_lower_hex_byte(b: u8) -> bool {
+    matches!(b, b'0'..=b'9' | b'a'..=b'f')
 }
 
 fn artifact_capabilities<F: FileSystemProvider>(
@@ -289,4 +307,44 @@ fn sibling_expected_lockfiles_for_manifest<F: FileSystemProvider>(
         .map(|name| parent_dir.join(name))
         .filter(|path| fs_provider.exists(path))
         .collect()
+}
+
+#[cfg(test)]
+mod derive_package_id_tests {
+    use super::derive_package_id;
+    use std::path::PathBuf;
+
+    #[test]
+    fn accepts_lowercase_hex_64() {
+        let sha = "a".repeat(64);
+        let p = PathBuf::from(format!("/tmp/{sha}/SKILL.md"));
+        assert_eq!(derive_package_id(&p), Some(sha));
+    }
+
+    /// Contract: uppercase hex MUST be rejected. SHA-256 outputs from the
+    /// project's hashing path are always lowercase; aborting on uppercase
+    /// keeps package_id values canonical and case-sensitive baseline
+    /// matching consistent.
+    #[test]
+    fn rejects_uppercase_hex_64() {
+        let upper = "A".repeat(64);
+        let p = PathBuf::from(format!("/tmp/{upper}/SKILL.md"));
+        assert!(derive_package_id(&p).is_none());
+    }
+
+    #[test]
+    fn rejects_mixed_case_hex_64() {
+        let mut s = String::with_capacity(64);
+        for i in 0..64 {
+            s.push(if i % 2 == 0 { 'a' } else { 'B' });
+        }
+        let p = PathBuf::from(format!("/tmp/{s}/SKILL.md"));
+        assert!(derive_package_id(&p).is_none());
+    }
+
+    #[test]
+    fn rejects_short_hex() {
+        let p = PathBuf::from("/tmp/abcdef/SKILL.md");
+        assert!(derive_package_id(&p).is_none());
+    }
 }

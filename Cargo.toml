@@ -33,6 +33,15 @@ walkdir = "2.5"
 rayon = "1.10"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tempfile = "3.27"
+dirs = "5"
+
+# HTTP (synchronous, used by VT integration tooling)
+ureq = { version = "2.10", default-features = false, features = ["json", "tls"] }
+url = "2.5"
+base64 = "0.22"
+
+# Compact LLM input format (token-efficient drop-in for JSON).
+toon-format = { version = "0.4", default-features = false }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "cargo"] }

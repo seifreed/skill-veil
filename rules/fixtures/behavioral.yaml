@@ -218,7 +218,7 @@ cases:
     expect_match: true
     expected_count: 1
     expected_severity: high
-    expected_action: require_approval
+    expected_action: block
     expected_category: remote_exec
   - id: metadata-fetch-with-credentials
     rule_id: OFFICIAL_METADATA_FETCH_WITH_CREDENTIALS
@@ -228,7 +228,7 @@ cases:
     expect_match: true
     expected_count: 1
     expected_severity: high
-    expected_action: require_approval
+    expected_action: block
     expected_category: data_exfiltration
   - id: internal-network-doc-negative
     rule_id: OFFICIAL_INTERNAL_NETWORK_TARGET

@@ -144,15 +144,18 @@ fn internal_network_reclassifies_to_review_signal() {
     );
 }
 
+/// Contract: dedup_notes collapses notes that match on the FULL identity
+/// tuple `(scope, category, rule_id, effect, rationale)`. Two groups that
+/// differ only in `category` produce DIFFERENT notes and MUST survive
+/// independently — the verdict predicate filters by `(scope, category)`
+/// to decide isolated-weak Benign downgrades, so collapsing them would
+/// silently widen the downgrade.
 #[test]
-fn note_deduplication_collapses_identical_notes() {
+fn note_deduplication_keeps_per_group_notes() {
     use crate::findings::{
         ArtifactScope, Finding, MatchTarget, RootCauseGroup, Severity, ThreatCategory,
     };
 
-    // Two separate groups (different categories) both matching
-    // DECLARED_PERMISSION_NETWORK_ACCESS produce identical notes; dedup_notes
-    // must collapse them to one.
     let findings = vec![
         Finding::builder(
             "DECLARED_PERMISSION_NETWORK_ACCESS",
@@ -199,11 +202,18 @@ fn note_deduplication_collapses_identical_notes() {
 
     let result = calibrate_verdict_inputs(&findings, &root_cause_groups);
 
+    // Two distinct (scope, category) pairs MUST surface two notes so
+    // verdict::predicates can filter per-group.
     assert_eq!(
         result.notes.len(),
-        1,
-        "duplicate calibration notes must be collapsed to one by dedup_notes"
+        2,
+        "Notes for groups with different (scope, category) MUST NOT collapse; \
+         the verdict predicate keys on those fields to decide Benign downgrades"
     );
+    let categories: std::collections::HashSet<_> =
+        result.notes.iter().map(|n| n.category).collect();
+    assert!(categories.contains(&ThreatCategory::DataExfiltration));
+    assert!(categories.contains(&ThreatCategory::SupplyChain));
 }
 
 #[test]
@@ -297,4 +307,77 @@ fn calibration_updates_finding_count_when_excluding_rules() {
         result.root_cause_groups.is_empty(),
         "Groups with 0 remaining findings should be pruned"
     );
+}
+
+/// Contract: `dedup_notes` must keep notes with the same `(rule_id, effect, rationale)`
+/// when their `(scope, category)` differ. Downstream verdict predicates filter notes
+/// by `(scope, category)` to decide isolated-weak Benign downgrades; collapsing them
+/// would let one group's `downgraded_*` note vacuously satisfy another group's
+/// predicate, silently turning `Suspicious` into `Benign`.
+///
+/// This test guards against re-introducing the round-1 `dedup_notes` regression.
+#[test]
+fn dedup_notes_preserves_per_group_distinctions() {
+    use crate::findings::{ArtifactScope, ThreatCategory, VerdictCalibrationNote};
+
+    let mut notes = vec![
+        VerdictCalibrationNote {
+            rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "shared rationale".to_string(),
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::ScopeCreep,
+        },
+        VerdictCalibrationNote {
+            rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "shared rationale".to_string(),
+            scope: ArtifactScope::PackageRootArtifact,
+            category: ThreatCategory::ScopeCreep,
+        },
+        // Exact duplicate of the first — must collapse.
+        VerdictCalibrationNote {
+            rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "shared rationale".to_string(),
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::ScopeCreep,
+        },
+    ];
+
+    dedup_notes(&mut notes);
+
+    assert_eq!(
+        notes.len(),
+        2,
+        "Notes differing only in scope/category MUST survive dedup; \
+         exact duplicates MUST collapse"
+    );
+    let scopes: Vec<_> = notes.iter().map(|n| n.scope).collect();
+    assert!(scopes.contains(&ArtifactScope::AgentEntrypoint));
+    assert!(scopes.contains(&ArtifactScope::PackageRootArtifact));
+}
+
+#[test]
+fn dedup_notes_collapses_per_group_duplicates_within_same_group() {
+    use crate::findings::{ArtifactScope, ThreatCategory, VerdictCalibrationNote};
+
+    let mut notes = vec![
+        VerdictCalibrationNote {
+            rule_id: "RULE_A".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "x".to_string(),
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::ScopeCreep,
+        },
+        VerdictCalibrationNote {
+            rule_id: "RULE_A".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "x".to_string(),
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::ScopeCreep,
+        },
+    ];
+    dedup_notes(&mut notes);
+    assert_eq!(notes.len(), 1);
 }

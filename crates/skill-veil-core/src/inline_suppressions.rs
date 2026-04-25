@@ -269,7 +269,12 @@ pub(crate) fn apply_inline_suppressions(
                     || (finding.artifact_path.is_none()
                         && primary_path.is_some_and(|pp| paths_match(pp, &suppression.path)))
             };
-            let rule_matches = suppression.rule_id == "*" || suppression.rule_id == finding.rule_id;
+            // Rule IDs are UPPERCASE by convention (e.g. `SKILL_REMOTE_EXEC`).
+            // We accept case-insensitive match in the user-facing directive
+            // so `# skill-veil: ignore[skill_remote_exec]` works as well as
+            // the canonical uppercase form users would copy from output.
+            let rule_matches = suppression.rule_id == "*"
+                || suppression.rule_id.eq_ignore_ascii_case(&finding.rule_id);
             // Line-specific suppressions (ignore-next-line, nosem) only match
             // findings that have a concrete line_number. Taint and artifact-graph
             // findings lack line context, so they can only be suppressed by
@@ -298,4 +303,79 @@ pub(crate) fn apply_inline_suppressions(
     }
 
     (active, suppressed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::findings::{
+        ArtifactKind, ArtifactScope, EvidenceKind, MatchTarget, RecommendedAction, Severity,
+        SignalClass, ThreatCategory,
+    };
+
+    fn make_finding(rule_id: &str, path: &str) -> Finding {
+        Finding::builder(rule_id, ThreatCategory::DataExfiltration)
+            .severity(Severity::High)
+            .action(RecommendedAction::Block)
+            .evidence_kind(EvidenceKind::Behavior)
+            .signal_class(SignalClass::MaliciousBehavior)
+            .artifact_scope(ArtifactScope::AgentEntrypoint)
+            .artifact(ArtifactKind::SkillDocument, Some(path.to_string()))
+            .matched_on(MatchTarget::Document)
+            .reason("test")
+            .match_value("x")
+            .build()
+    }
+
+    #[test]
+    fn inline_suppression_rule_id_is_case_insensitive() {
+        // User writes directive in lowercase; finding id is canonical UPPERCASE.
+        let suppression = InlineSuppression {
+            path: "/tmp/skill.md".to_string(),
+            rule_id: "skill_remote_exec".to_string(),
+            applies_to_line: None,
+            kind: "ignore".to_string(),
+            reason: None,
+            expires_at: None,
+        };
+        let finding = make_finding("SKILL_REMOTE_EXEC", "/tmp/skill.md");
+        let (active, suppressed) =
+            apply_inline_suppressions(vec![finding], &[suppression], Some("/tmp/skill.md"));
+        assert!(active.is_empty(), "finding should be suppressed");
+        assert_eq!(suppressed.len(), 1);
+    }
+
+    #[test]
+    fn inline_suppression_wildcard_still_matches() {
+        let suppression = InlineSuppression {
+            path: "/tmp/skill.md".to_string(),
+            rule_id: "*".to_string(),
+            applies_to_line: None,
+            kind: "ignore".to_string(),
+            reason: None,
+            expires_at: None,
+        };
+        let finding = make_finding("ANY_RULE", "/tmp/skill.md");
+        let (active, suppressed) =
+            apply_inline_suppressions(vec![finding], &[suppression], Some("/tmp/skill.md"));
+        assert!(active.is_empty());
+        assert_eq!(suppressed.len(), 1);
+    }
+
+    #[test]
+    fn inline_suppression_unrelated_rule_id_does_not_match() {
+        let suppression = InlineSuppression {
+            path: "/tmp/skill.md".to_string(),
+            rule_id: "OTHER_RULE".to_string(),
+            applies_to_line: None,
+            kind: "ignore".to_string(),
+            reason: None,
+            expires_at: None,
+        };
+        let finding = make_finding("SKILL_REMOTE_EXEC", "/tmp/skill.md");
+        let (active, suppressed) =
+            apply_inline_suppressions(vec![finding], &[suppression], Some("/tmp/skill.md"));
+        assert_eq!(active.len(), 1);
+        assert!(suppressed.is_empty());
+    }
 }

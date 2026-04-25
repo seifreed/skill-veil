@@ -24,6 +24,12 @@ struct FindingDedupKey {
 ///
 /// A finding is considered primary if it matches the primary path and artifact kind,
 /// or if it is a path-less finding whose artifact kind matches the primary kind.
+///
+/// Path matching uses `Path::ends_with` which compares **path components** (not raw
+/// string suffixes), so a relative artifact_path like `"skill.md"` correctly matches
+/// the primary path `/project/skill.md`, while `"other/skill.md"` does NOT match
+/// `/project/skill.md` because the parent components differ. Within a single
+/// document scan the primary path is fixed, so this is an unambiguous mapping.
 pub(crate) fn split_findings_by_scope(
     path: &std::path::Path,
     primary_artifact_kind: ArtifactKind,

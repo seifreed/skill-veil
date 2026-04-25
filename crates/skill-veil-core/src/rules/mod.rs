@@ -74,6 +74,25 @@ pub enum RuleError {
     /// I/O error during file operations
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+    /// Two embedded built-in rule packs define the same rule id with
+    /// divergent content. This is always a developer bug in the source YAML
+    /// and must not be silently deduplicated at runtime.
+    #[error(
+        "Duplicate built-in rule id `{id}` in `{first}` and `{second}` — \
+         remove or rename one of the definitions"
+    )]
+    DuplicateBuiltinRule {
+        id: String,
+        first: String,
+        second: String,
+    },
+    /// A user-supplied rule pack declared a rule id that collides with an
+    /// already-loaded rule. Only surfaced when strict mode is enabled.
+    #[error(
+        "Duplicate external rule id `{id}` in `{path}` — \
+         already loaded; rename or remove the duplicate (strict mode)"
+    )]
+    DuplicateUserRule { id: String, path: String },
 }
 
 /// Rule engine for loading and evaluating rules
@@ -94,6 +113,10 @@ pub struct RuleEngine<M: PatternMatcher = RegexPatternMatcher> {
     rules: Vec<CompiledRule>,
     rules_dir: Option<std::path::PathBuf>,
     matcher: Arc<M>,
+    /// When true, `load_rules_file` / `add_rule` return
+    /// `RuleError::DuplicateUserRule` on an id collision instead of logging
+    /// a `warn!()` and skipping. Default: false (backwards-compatible).
+    strict_mode: bool,
 }
 
 impl RuleEngine<RegexPatternMatcher> {
@@ -113,6 +136,7 @@ impl RuleEngine<RegexPatternMatcher> {
             rules: Vec::new(),
             rules_dir: None,
             matcher: Arc::new(RegexPatternMatcher::new()),
+            strict_mode: false,
         }
     }
 
@@ -129,12 +153,18 @@ impl RuleEngine<RegexPatternMatcher> {
     /// let engine = RuleEngine::with_defaults().unwrap();
     /// assert!(engine.rule_count() > 0);
     /// ```
+    /// # Load order contract
+    ///
+    /// Builtin rules MUST be loaded BEFORE runtime defaults (`rules/official/`).
+    /// Non-strict mode silently skips duplicates, so inverting the order would
+    /// cause the canonical embedded ruleset to be discarded whenever the dev
+    /// directory `rules/official/` exists with overlapping IDs. Tests in
+    /// `tests::with_defaults_loads_full_builtin_set` guard this contract.
     #[must_use = "RuleEngine::with_defaults() returns a Result that should be used"]
     pub fn with_defaults() -> Result<Self, RuleError> {
         let mut engine = Self::new();
-        if !engine.load_runtime_default_rules()? {
-            engine.load_builtin_rules()?;
-        }
+        engine.load_builtin_rules()?;
+        engine.load_runtime_default_rules()?;
         Ok(engine)
     }
 }
@@ -147,23 +177,34 @@ impl<M: PatternMatcher> RuleEngine<M> {
             rules: Vec::new(),
             rules_dir: None,
             matcher,
+            strict_mode: false,
         }
     }
 
+    /// Toggle strict mode. When enabled, loading an external pack with a
+    /// duplicate rule id returns `RuleError::DuplicateUserRule` instead of
+    /// emitting a `tracing::warn!()` and skipping.
+    pub fn set_strict_mode(&mut self, strict: bool) {
+        self.strict_mode = strict;
+    }
+
     /// Create a rule engine with default rules and a custom pattern matcher.
+    /// # Load order contract
+    ///
+    /// Same contract as `with_defaults`: builtin rules first, runtime
+    /// overrides second. The non-strict duplicate-skip means inverting the
+    /// order silently discards canonical detections.
     #[must_use = "RuleEngine::with_defaults_and_matcher() returns a Result that should be used"]
     pub fn with_defaults_and_matcher(matcher: Arc<M>) -> Result<Self, RuleError> {
         let mut engine = Self::with_matcher(matcher);
-        if !engine.load_runtime_default_rules()? {
-            engine.load_builtin_rules()?;
-        }
+        engine.load_builtin_rules()?;
+        engine.load_runtime_default_rules()?;
         Ok(engine)
     }
 
     fn load_builtin_rules(&mut self) -> Result<(), RuleError> {
-        let builtin_rules = builtin::get_builtin_rules()?;
-        for rule in builtin_rules {
-            self.rules.push(CompiledRule::compile(rule)?);
+        for rule in builtin::get_builtin_rules()? {
+            self.add_rule(rule)?;
         }
         Ok(())
     }
@@ -211,10 +252,16 @@ impl<M: PatternMatcher> RuleEngine<M> {
                 .iter()
                 .any(|existing| existing.rule.id == compiled.rule.id)
             {
+                if self.strict_mode {
+                    return Err(RuleError::DuplicateUserRule {
+                        id: compiled.rule.id.clone(),
+                        path: path.as_ref().display().to_string(),
+                    });
+                }
                 warn!(
                     rule_id = %compiled.rule.id,
                     path = %path.as_ref().display(),
-                    "skipping duplicate rule ID (builtin takes priority)"
+                    "skipping duplicate rule ID (existing rule takes priority)"
                 );
             } else {
                 self.rules.push(compiled);
@@ -234,6 +281,12 @@ impl<M: PatternMatcher> RuleEngine<M> {
             .iter()
             .any(|existing| existing.rule.id == compiled.rule.id)
         {
+            if self.strict_mode {
+                return Err(RuleError::DuplicateUserRule {
+                    id: compiled.rule.id.clone(),
+                    path: "<programmatic add_rule>".to_string(),
+                });
+            }
             warn!(
                 rule_id = %compiled.rule.id,
                 "skipping duplicate rule ID (existing rule takes priority)"

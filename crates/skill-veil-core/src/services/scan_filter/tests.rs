@@ -272,3 +272,31 @@ fn test_fingerprint_distinguishes_different_match_values() {
     );
     assert_eq!(outcome.findings[0].match_value, "different_value");
 }
+
+#[test]
+fn test_fingerprint_is_stable_when_only_reason_changes() {
+    // Regression guard: `reason` is a user-facing explanation that gets
+    // reworded across scanner versions. It must NOT participate in the
+    // baseline fingerprint, otherwise every wording refresh would
+    // invalidate every baseline entry silently.
+    let mut finding_a = create_finding("R1", Severity::High).with_artifact(
+        crate::findings::ArtifactKind::ReferencedArtifact,
+        "scripts/install.sh",
+    );
+    finding_a.reason = "old wording of the reason".to_string();
+    finding_a.match_value = "curl evil.sh".to_string();
+
+    let mut finding_b = create_finding("R1", Severity::High).with_artifact(
+        crate::findings::ArtifactKind::ReferencedArtifact,
+        "scripts/install.sh",
+    );
+    finding_b.reason = "a different, rephrased wording".to_string();
+    finding_b.match_value = "curl evil.sh".to_string();
+
+    let fp_a = crate::policy::finding_fingerprint(&finding_a);
+    let fp_b = crate::policy::finding_fingerprint(&finding_b);
+    assert_eq!(
+        fp_a, fp_b,
+        "Fingerprint must ignore reason — otherwise rule wording changes break baselines",
+    );
+}

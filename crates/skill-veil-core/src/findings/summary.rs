@@ -87,8 +87,22 @@ impl FindingSummary {
         let mut by_category: Vec<_> = category_map.into_iter().collect();
         by_category.sort_by_key(|(category, _)| *category);
         let mut score_breakdown: Vec<_> = factor_map.into_values().collect();
-        score_breakdown.sort_by(|left, right| right.contribution.cmp(&left.contribution));
-        action_triggers.sort_by(|left, right| right.action.cmp(&left.action));
+        // Tie-breaker by `factor` keeps the order deterministic when two
+        // entries share the same primary key (contribution / action).
+        // Without it, `HashMap` iteration randomness leaks into JSON/SARIF
+        // output and breaks reproducibility between runs.
+        score_breakdown.sort_by(|left, right| {
+            right
+                .contribution
+                .cmp(&left.contribution)
+                .then_with(|| left.factor.cmp(&right.factor))
+        });
+        action_triggers.sort_by(|left, right| {
+            right
+                .action
+                .cmp(&left.action)
+                .then_with(|| left.factor.cmp(&right.factor))
+        });
 
         Self {
             total_findings: findings.len(),
@@ -100,6 +114,46 @@ impl FindingSummary {
             action_triggers,
         }
     }
+
+    /// Return a clone with `risk_score` adjusted by `delta` (clamped to 0–100)
+    /// AND `recommended_action` recomputed so the two stay coherent.
+    ///
+    /// # Coherence contract
+    ///
+    /// After this call, `(risk_score, recommended_action)` always satisfy the
+    /// same threshold relationship that `from_findings_and_graph` produced
+    /// originally: `Block ↔ score ≥ RISK_THRESHOLD_BLOCK`,
+    /// `RequireApproval ↔ score ≥ RISK_THRESHOLD_APPROVAL`, else `Log`.
+    /// Calibration only ever LOWERS the score, so we monotonically downgrade
+    /// the action — never upgrade it past what the original aggregation
+    /// produced. Without this recomputation, callers that read
+    /// `recommended_action` on a calibrated clone would see the pre-
+    /// calibration verdict and contradict the score.
+    #[must_use]
+    pub fn with_risk_adjustment(&self, delta: i32) -> Self {
+        let mut adjusted = self.clone();
+        let new_score = i64::from(self.risk_score)
+            .saturating_add(i64::from(delta))
+            .clamp(0, 100) as u32;
+        adjusted.risk_score = new_score;
+        let new_action = downgraded_action_for_score(self.recommended_action, new_score);
+        adjusted.recommended_action = new_action;
+        // Drop triggers that asserted an action stronger than the
+        // post-calibration `recommended_action`. Otherwise the audit trail
+        // contradicts itself: the summary says `RequireApproval` while a
+        // trigger still claims "force Block because X". Triggers below or
+        // equal to the new action remain truthful and are preserved.
+        adjusted.action_triggers.retain(|t| t.action <= new_action);
+        adjusted
+    }
+}
+
+/// Compute the action that matches `score` AFTER calibration, never
+/// upgrading past `original`. Calibration only weakens evidence, so the
+/// post-adjustment action must be `<= original`.
+fn downgraded_action_for_score(original: RecommendedAction, score: u32) -> RecommendedAction {
+    let score_tier = score_to_action(score);
+    score_tier.min(original)
 }
 
 type FactorMap = std::collections::HashMap<String, RiskFactor>;
@@ -204,6 +258,20 @@ impl CapabilityScoreAccumulator {
         }
     }
 
+    /// Score a capability against the package's accumulated risk.
+    ///
+    /// # Per-package dedup contract
+    ///
+    /// Capabilities are deduplicated by `factor` (capability + source label),
+    /// **not by node**. A package where multiple nodes declare the same
+    /// capability (e.g. every script imports `requests`, so each node carries
+    /// `NetworkAccess (declared)`) contributes the capability weight ONCE per
+    /// package — not once per node. This prevents multi-file packages from
+    /// inflating their risk score for benign shared imports.
+    ///
+    /// `rationale` is allowed to vary per node (it is human-readable text)
+    /// without breaking the dedup invariant — the `factor` field is the
+    /// load-bearing key.
     fn score_capability(&mut self, factor: String, contribution: u32, rationale: String) {
         if self.scored_capabilities.insert(factor.clone()) {
             self.total_score += contribution;
@@ -425,4 +493,117 @@ fn graph_risk_context(
     }
 
     acc.into_parts()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn score_breakdown_and_action_triggers_use_factor_tie_breaker() {
+        // Build two RiskFactors with identical contribution; sort_by must
+        // resolve the tie via the `factor` field (alphabetical) instead of
+        // leaving it to HashMap iteration order.
+        let mut breakdown = [
+            RiskFactor {
+                factor: "z_factor".into(),
+                contribution: 10,
+                rationale: "x".into(),
+            },
+            RiskFactor {
+                factor: "a_factor".into(),
+                contribution: 10,
+                rationale: "x".into(),
+            },
+        ];
+        breakdown.sort_by(|left, right| {
+            right
+                .contribution
+                .cmp(&left.contribution)
+                .then_with(|| left.factor.cmp(&right.factor))
+        });
+        assert_eq!(breakdown[0].factor, "a_factor");
+        assert_eq!(breakdown[1].factor, "z_factor");
+
+        let mut triggers = [
+            ActionTrigger {
+                action: RecommendedAction::Block,
+                factor: "z_trig".into(),
+                rationale: "x".into(),
+            },
+            ActionTrigger {
+                action: RecommendedAction::Block,
+                factor: "a_trig".into(),
+                rationale: "x".into(),
+            },
+        ];
+        triggers.sort_by(|left, right| {
+            right
+                .action
+                .cmp(&left.action)
+                .then_with(|| left.factor.cmp(&right.factor))
+        });
+        assert_eq!(triggers[0].factor, "a_trig");
+        assert_eq!(triggers[1].factor, "z_trig");
+    }
+
+    fn summary_with(score: u32, action: RecommendedAction) -> FindingSummary {
+        FindingSummary {
+            total_findings: 0,
+            by_severity: SeverityCounts::default(),
+            by_category: Vec::new(),
+            risk_score: score,
+            recommended_action: action,
+            score_breakdown: Vec::new(),
+            action_triggers: Vec::new(),
+        }
+    }
+
+    /// Contract: `with_risk_adjustment` keeps `(risk_score, recommended_action)`
+    /// coherent. A calibration delta that drops the score below
+    /// `RISK_THRESHOLD_BLOCK` MUST also downgrade `Block` to `RequireApproval`
+    /// (or `Log`), never leave the action stuck at the pre-calibration tier.
+    #[test]
+    fn with_risk_adjustment_downgrades_action_when_score_crosses_threshold() {
+        let s = summary_with(55, RecommendedAction::Block);
+        let adjusted = s.with_risk_adjustment(-20); // 55 - 20 = 35
+        assert_eq!(adjusted.risk_score, 35);
+        assert_eq!(
+            adjusted.recommended_action,
+            RecommendedAction::RequireApproval,
+            "score below RISK_THRESHOLD_BLOCK must drop Block down to RequireApproval"
+        );
+    }
+
+    #[test]
+    fn with_risk_adjustment_drops_to_log_below_approval_threshold() {
+        let s = summary_with(25, RecommendedAction::RequireApproval);
+        let adjusted = s.with_risk_adjustment(-20); // 25 - 20 = 5
+        assert_eq!(adjusted.risk_score, 5);
+        assert_eq!(adjusted.recommended_action, RecommendedAction::Log);
+    }
+
+    /// Contract: calibration NEVER upgrades the action. A positive delta is
+    /// not used today by the calibration pipeline, but if a future change
+    /// passes a non-negative delta we still cap at the original action.
+    #[test]
+    fn with_risk_adjustment_never_upgrades_action() {
+        let s = summary_with(10, RecommendedAction::Log);
+        let adjusted = s.with_risk_adjustment(100); // clamps to 100, action would
+                                                    // be Block per score_to_action
+        assert_eq!(adjusted.risk_score, 100);
+        assert_eq!(
+            adjusted.recommended_action,
+            RecommendedAction::Log,
+            "calibration must not upgrade past the original action"
+        );
+    }
+
+    #[test]
+    fn with_risk_adjustment_clamps_score() {
+        let s = summary_with(5, RecommendedAction::Log);
+        let adjusted = s.with_risk_adjustment(-100);
+        assert_eq!(adjusted.risk_score, 0);
+        assert_eq!(adjusted.recommended_action, RecommendedAction::Log);
+    }
 }

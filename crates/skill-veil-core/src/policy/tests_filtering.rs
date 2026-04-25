@@ -393,12 +393,17 @@ fn test_diff_reports_waived_finding_with_fuzzy_path_is_not_resolved() {
         .build();
     let current_report = make_report("a", vec![current_finding], Verdict::Suspicious);
 
-    // Waiver uses a relative (shorter) path that matches via paths_match suffix logic
+    // Waiver uses a 3-component relative path: paths_match's
+    // cross-package safety contract requires ≥3 components for suffix
+    // matching (a 2-component "scripts/deploy.sh" would silently apply
+    // across unrelated packages in monorepo / dataset scans). This
+    // qualifying path mirrors `/repo/scripts/deploy.sh` for the suffix
+    // match while staying specific enough to avoid cross-package leakage.
     let waivers = WaiverFile {
         schema_version: POLICY_SCHEMA_VERSION.to_string(),
         waivers: vec![WaiverEntry {
             rule_id: Some("RULE_B".to_string()),
-            artifact_path: Some("scripts/deploy.sh".to_string()),
+            artifact_path: Some("repo/scripts/deploy.sh".to_string()),
             context: None,
             reason: "accepted risk".to_string(),
             expires_at: None,

@@ -91,6 +91,13 @@ pub(super) fn derive_cross_node_taint_findings(
                     let snk = sink_summary(graph, sink_node, group.sink);
                     let kind = artifact_kind_for_node(graph, source_node);
                     for rule in &group.rules {
+                        // Check budget *before* pushing each finding. Counting
+                        // post-push allowed the last (source, sink) pair to
+                        // emit `rules.len()` findings before breaking,
+                        // exceeding the cap by `rules.len() - 1` per group.
+                        if group_finding_count >= per_group_budget {
+                            break 'group;
+                        }
                         findings.push(
                             Finding::builder(rule.id.clone(), rule.category)
                                 .severity(rule.severity)
@@ -108,12 +115,7 @@ pub(super) fn derive_cross_node_taint_findings(
                                 .reason(rule.reason.clone())
                                 .build(),
                         );
-                    }
-                    // Count actual findings (rules per pair) against the budget,
-                    // not just pairs, to enforce the intended findings cap.
-                    group_finding_count += group.rules.len();
-                    if group_finding_count >= per_group_budget {
-                        break 'group;
+                        group_finding_count += 1;
                     }
                 }
             }

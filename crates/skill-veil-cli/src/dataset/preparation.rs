@@ -130,7 +130,20 @@ fn extract_zip_package(zip_path: &Path, output_dir: &Path) -> Result<()> {
         let Some(relative_path) = entry.enclosed_name().map(|path| path.to_path_buf()) else {
             continue;
         };
-        let destination = output_dir.join(relative_path);
+        let destination = output_dir.join(&relative_path);
+        // Zip-slip defence in depth: even when `enclosed_name` rejects the
+        // obvious `../` cases, a malicious archive built around symlinks or
+        // an exotic path encoding could still produce a destination outside
+        // `output_dir` after `Path::join`. Compare lexically so the check
+        // applies before the file is created.
+        if !skill_veil_core::path_safety::path_stays_within_base(&destination, output_dir) {
+            tracing::warn!(
+                zip = %zip_path.display(),
+                entry = %relative_path.display(),
+                "skipping zip entry that would escape output_dir (zip-slip)"
+            );
+            continue;
+        }
         if entry.is_dir() {
             fs::create_dir_all(&destination)
                 .with_context(|| format!("Failed to create {}", destination.display()))?;
@@ -199,19 +212,79 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
     Ok(())
 }
 
+/// Content-addressed signature: SHA-256 of the zip bytes. Stable across
+/// renames and identical-content copies at different paths, unlike the
+/// previous `path:len:mtime` triple which forced re-extraction whenever
+/// the file moved. Trade-off: one full read of the archive on every
+/// signature computation; the extraction cost would dominate this anyway.
 fn zip_source_signature(zip_path: &Path) -> Result<String> {
-    let metadata =
-        fs::metadata(zip_path).with_context(|| format!("Failed to stat {}", zip_path.display()))?;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    Ok(format!(
-        "{}:{}:{}",
-        zip_path.display(),
-        metadata.len(),
-        modified
-    ))
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(zip_path)
+        .with_context(|| format!("Failed to read {} for signature", zip_path.display()))?;
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    /// Contract: malicious ZIP entries that would escape `output_dir` MUST
+    /// be skipped, never written. Defence in depth on top of `zip` crate's
+    /// `enclosed_name` sanitisation. See `path_safety::path_stays_within_base`.
+    #[test]
+    fn extract_zip_package_rejects_zip_slip_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("evil.zip");
+        let output_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+        // The "outside" directory is a sibling of output_dir; if zip-slip
+        // succeeded, the entry would be written to escape.txt under it.
+        let outside_dir = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+
+        // Build a zip that intentionally tries to escape via `../`.
+        // `enclosed_name()` in modern `zip` crate filters obvious `../`
+        // entries, so we exercise the defence-in-depth path by injecting
+        // an absolute-style entry name. If the zip crate accepts it, our
+        // post-join `path_stays_within_base` check must reject it.
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            // Many zip crate versions accept this and `enclosed_name` filters
+            // the leading `..` — we still want the helper as the last guard.
+            writer
+                .start_file("../outside/escape.txt", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"OWNED").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let _ = extract_zip_package(&zip_path, &output_dir);
+
+        // The escape file MUST NOT exist anywhere outside `output_dir`.
+        let escape_target = outside_dir.join("escape.txt");
+        assert!(
+            !escape_target.exists(),
+            "zip-slip defence failed: {} was written outside output_dir",
+            escape_target.display()
+        );
+        // Sanity: nothing under the parent of output_dir got an `escape.txt`.
+        let walked: Vec<_> = walkdir::WalkDir::new(tmp.path())
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() == "escape.txt")
+            .collect();
+        assert!(
+            walked.is_empty() || walked.iter().all(|e| e.path().starts_with(&output_dir)),
+            "escape.txt must only ever live inside output_dir; found at: {:?}",
+            walked
+                .iter()
+                .map(|e| e.path().to_path_buf())
+                .collect::<Vec<_>>()
+        );
+    }
 }

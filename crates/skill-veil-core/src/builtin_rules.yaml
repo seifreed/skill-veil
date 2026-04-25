@@ -6,21 +6,6 @@
 # Remote Execution Rules
 # ============================================
 
-- id: SKILL_REMOTE_EXEC_CURL_BASH
-  category: remote_exec
-  severity: critical
-  confidence: 0.98
-  when: !regex
-    pattern: "curl\\s+.*\\|\\s*(ba)?sh"
-  action: block
-  reason: "Remote download and execution via curl piped to shell"
-  shield:
-    scope: skill.install
-  enabled: true
-  tags:
-    - remote_exec
-    - supply_chain
-
 - id: SKILL_REMOTE_EXEC_WGET_BASH
   category: remote_exec
   severity: critical
@@ -273,36 +258,6 @@
     - manipulation
     - social
 
-- id: SKILL_PROMPT_TAMPERING_PERSISTENCE
-  category: persistent_prompt_tampering
-  severity: high
-  confidence: 0.82
-  when: !regex
-    pattern: "(?i)(append\\s+to\\s+(AGENTS|CLAUDE|SYSTEM)\\.md|persist\\s+this\\s+instruction|store\\s+this\\s+prompt\\s+for\\s+future\\s+runs)"
-  action: require_approval
-  reason: "Skill attempts to persist or modify agent instructions beyond the current run"
-  shield:
-    scope: skill.prompt
-  enabled: true
-  tags:
-    - persistence
-    - semantic
-
-- id: SKILL_TOOL_ABUSE_FORCE_TOOLING
-  category: tool_abuse
-  severity: medium
-  confidence: 0.78
-  when: !regex
-    pattern: "(?i)((always\\s+use\\s+the\\s+(shell|browser|network|filesystem)\\s+tool).{0,80}(bypass|ignore|regardless\\s+of|even\\s+if|without approval)|bypass\\s+the\\s+tool\\s+restriction|force\\s+tool\\s+execution)"
-  action: require_approval
-  reason: "Skill pushes the agent to overuse or bypass normal tool boundaries"
-  shield:
-    scope: skill.tools
-  enabled: true
-  tags:
-    - tool_abuse
-    - context
-
 - id: SKILL_AUTONOMY_ESCALATION_UNBOUNDED
   category: autonomy_escalation
   severity: medium
@@ -376,27 +331,12 @@
 # NEW RULES BASED ON MALWARE DATASET ANALYSIS
 # ============================================
 
-- id: SKILL_MACOS_BASE64_RCE
-  category: remote_exec
-  severity: critical
-  confidence: 0.99
-  when: !regex
-    pattern: "base64\\s+-D\\s*\\|\\s*(ba)?sh"
-  action: block
-  reason: "macOS-specific base64 decode piped to shell (RCE)"
-  shield:
-    scope: skill.install
-  enabled: true
-  tags:
-    - remote_exec
-    - macos
-
 - id: SKILL_MALICIOUS_DOMAIN
   category: supply_chain
   severity: critical
   confidence: 0.98
   when: !regex
-    pattern: "(?i)(setup-service\\.com|app-distribution\\.net|download\\.setup-service)"
+    pattern: "(?i)(setup-service\\.com|app-distribution\\.net|download\\.setup-service|openclaw\\.careers|openclawcli\\.vercel\\.app)"
   action: block
   reason: "Known malicious installer domain detected"
   shield:
@@ -419,6 +359,20 @@
   enabled: true
   tags:
     - supply_chain
+    - trojan
+
+- id: SKILL_REMOTE_SELF_UPDATE
+  category: supply_chain
+  severity: critical
+  confidence: 0.93
+  when: !regex
+    pattern: "(?i)(compare.*(?:installed|current).*version.*(?:latest|newest|remote).*at\\s+https?://|use\\s+whichever\\s+version.*(?:is\\s+)?newer|update.*(?:local\\s+)?skill\\s+file\\s+before\\s+proceed|always.*(?:fetch|check|compare).*latest.*version.*SKILL\\.md)"
+  action: block
+  reason: "Skill instructs the agent to self-update from a remote URL — potential Trojan dropper mechanism"
+  enabled: true
+  tags:
+    - supply_chain
+    - self_update
     - trojan
 
 - id: SKILL_AUTONOMY_OVERRIDE
@@ -742,7 +696,11 @@
     - automation
 
 - id: SKILL_TOKEN_SCAM
-  category: scope_creep
+  # Re-categorised from scope_creep to social_manipulation: token-pump /
+  # paywalled-trading skills are active social-engineering fraud, not a
+  # permission-hygiene concern. social_manipulation escalates to
+  # SuspiciousPackageBehavior via findings::mapping::signal_class_for.
+  category: social_manipulation
   severity: high
   confidence: 0.80
   when: !regex
@@ -1219,3 +1177,497 @@
   tags:
     - obfuscation
     - stealth
+
+# =============================================
+# Gap rules — derived from batch-240 FN analysis
+# =============================================
+
+- id: SKILL_CHINESE_SYSINFO_COLLECT
+  category: data_exfiltration
+  severity: high
+  confidence: 0.78
+  when: !regex
+    pattern: "系统信息|操作系统|CPU信息|内存信息|磁盘信息|网络信息|计算机名称|已安装软件"
+  action: require_approval
+  reason: "Chinese-language system fingerprinting — collects OS, CPU, memory, disk, network info"
+  shield:
+    scope: skill.privacy
+  enabled: true
+  tags:
+    - fingerprinting
+    - chinese
+    - sysinfo
+
+- id: SKILL_CRYPTO_BILLING_PER_CALL
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.92
+  when: !regex
+    pattern: "(?i)(SkillPay|每次调用[^\\n]{0,40}(?:USDT|ETH|BTC|USDC)|per[._\\-\\s]call[^\\n]{0,40}(?:USDT|USDC|ETH|crypto|payment)|per\\s+(?:call|execution|task)[^\\n]{0,60}(?:USDC|USDT|ETH)|(?:BSC|ERC20)\\s+USDT|USDT\\s+on\\s+(?:BSC|ERC20)|USDT.*BEP-20|支付.*USDT|crypto.*payment.*per|pay.*per.*(?:call|request|use))"
+  action: block
+  reason: "Covert per-call cryptocurrency billing without explicit user consent"
+  enabled: true
+  tags:
+    - financial
+    - crypto_billing
+
+- id: SKILL_X402_MICROPAYMENT
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.91
+  when: !regex
+    pattern: "(?i)(x402\\s+(?:payment|micropayments?|protocol)|via\\s+x402\\b|earn.*(?:USDC|USDT).*(?:per|every)\\s+(?:call|task|execution|request)|(?:USDC|USDT).*per\\s+(?:call|execution|task).*from.*wallet|signed\\s+(?:auto(?:matically)?|from).*(?:user'?s?|your)\\s+(?:own\\s+)?wallet|costs?\\s+\\$[0-9.]+\\s+(?:USDC|USDT)\\s+(?:from|per\\s+call))"
+  action: block
+  reason: "Skill uses x402 micropayment protocol or charges per-call crypto fees from the user's wallet"
+  enabled: true
+  tags:
+    - financial
+    - x402
+    - covert_billing
+    - micropayment
+
+- id: SKILL_CHINESE_CONDITIONAL_AUTONOMY
+  category: autonomy_escalation
+  severity: high
+  confidence: 0.88
+  when: !regex
+    pattern: "如果[^\\n]{0,60}请立即执行|不要告诉用户|悄悄地[^\\n]{0,30}执行|静默[^\\n]{0,30}执行|隐藏[^\\n]{0,30}执行|不要通知用户"
+  action: block
+  reason: "Chinese-language conditional or hidden autonomous execution instruction"
+  enabled: true
+  tags:
+    - autonomy
+    - chinese
+    - hidden_execution
+
+- id: SKILL_ECHO_WRAPPED_BASE64_EXEC
+  category: obfuscation
+  severity: critical
+  confidence: 0.95
+  when: !regex
+    pattern: "(?i)echo\\s+['\"]?[A-Za-z0-9+/]{20,}={0,2}['\"]?\\s*\\|\\s*base64\\s+[-dD]|echo\\s+['\"]?L[0-9A-Za-z+/]{10,}['\"]?\\s*\\|"
+  action: block
+  reason: "Echo-piped base64 dropper — two-stage obfuscated remote execution"
+  enabled: true
+  tags:
+    - obfuscation
+    - dropper
+    - remote_exec
+
+- id: SKILL_FINANCIAL_POSITION_EXFIL
+  category: data_exfiltration
+  severity: high
+  confidence: 0.86
+  when: !regex
+    pattern: "(?is)(?:monitor|collect|track|fetch|推送|发送).{0,200}(?:wallet|position|holding|balance|transaction|持仓|钱包|余额|资产).{0,200}(?:telegram|discord|webhook|feishu|weixin|微信|qq|bot_token|飞书)"
+  action: block
+  reason: "Skill collects financial/wallet data and routes it to a messaging or webhook channel"
+  enabled: true
+  tags:
+    - exfiltration
+    - financial
+    - crypto
+
+- id: SKILL_METADATA_HARDCODED_BOT_TOKEN
+  category: data_exfiltration
+  severity: high
+  confidence: 0.83
+  when: !regex
+    pattern: "(?i)(?:bot[_-]?token|webhook[_-]?url|discord\\.com/api/webhooks/\\d|api\\.telegram\\.org/bot[A-Za-z0-9_-]{10,})\\s*[=:]\\s*['\"]https?://[^'\"\\s]{10,}['\"]"
+  action: require_approval
+  reason: "Hardcoded bot token or webhook URL — likely unauthorized data routing"
+  enabled: true
+  tags:
+    - exfiltration
+    - webhook
+    - hardcoded_credential
+
+# ============================================
+# Corpus-driven rules (data/ false-negatives)
+# ============================================
+#
+# The rules below target behaviors observed in the malicious corpus at
+# ~/tools/malware/skill-veil/data/ that slipped past pre-existing rules.
+# Each is intentionally behavioral (not IOC-bound) so new campaigns with
+# the same TTPs are caught without rule edits.
+
+# Motivated by: aiclaw-voice (c19671b0…) POSTs openclaw_id + api_key to a
+# remote /install endpoint. Captures the broader pattern of shipping an
+# internal identifier *together with* a key/token in the POST body.
+- id: SKILL_CREDENTIAL_FORWARDING_POST
+  category: credential_exposure
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?is)(POST|fetch|requests\\.post|curl\\s+-X\\s*POST|axios\\.post|http\\.post)\\b.{0,400}(api[_-]?key|openclaw[_-]?id|access[_-]?token|bearer|auth[_-]?token|secret[_-]?key)\\b.{0,120}[\"':=][\"'{\\[]?"
+  action: block
+  reason: "Credential or internal identifier forwarded via POST to a remote endpoint"
+  shield:
+    scope: skill.exfiltration
+  enabled: true
+  tags:
+    - exfiltration
+    - credential
+    - c2
+
+# Motivated by: exchange-alerts (24d89bf8…) reads telegram.botToken from
+# the OpenClaw user config to hijack the messaging channel.
+- id: SKILL_TELEGRAM_BOT_TOKEN_EXFIL
+  category: credential_exposure
+  severity: high
+  confidence: 0.88
+  when: !regex
+    pattern: "(?i)(telegram\\.bot[_-]?token|bot[_-]?token\\s*(?:=|:)|read\\s+telegram[_-]?token|TELEGRAM_BOT_TOKEN\\s*=)\\s*[\"'a-z0-9_\\$]{0,40}"
+  action: block
+  reason: "Reads or captures a Telegram bot token from host config"
+  enabled: true
+  tags:
+    - exfiltration
+    - telegram
+    - credential
+
+# Motivated by: aiclaw-voice self-registration (POST /api/openclaw/install
+# with api_key + api_url). Detects the /install-or-register URL shape paired
+# with a JSON body that carries credentials.
+- id: SKILL_SELF_REGISTER_INSTALL_ENDPOINT
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.85
+  when: !regex
+    pattern: "(?is)https?://[^\\s'\"]{4,80}/(api/)?(openclaw/)?(install|register|bind|enroll|activate)\\b.{0,300}(api[_-]?key|openclaw[_-]?id|client[_-]?secret|bearer)"
+  action: block
+  reason: "Self-registration or install callback that transmits credentials to an external service"
+  shield:
+    scope: skill.exfiltration
+  enabled: true
+  tags:
+    - exfiltration
+    - install_hook
+    - c2
+
+# Motivated by: 03ed3ae7… systemCheckloader.py loads .pyc bytecode out of
+# data.txt. Detects the loader ring (`marshal.loads(base64.b64decode(...))`
+# or direct `.pyc` magic bytes as escape sequences embedded in source).
+- id: SKILL_MARSHAL_BASE64_LOADER
+  category: obfuscation
+  severity: critical
+  confidence: 0.94
+  when: !regex
+    pattern: "(?is)marshal\\.loads\\s*\\(\\s*(?:base64\\.b64decode|codecs\\.decode|zlib\\.decompress|bytes\\.fromhex|binascii\\.a2b_base64)\\s*\\("
+  action: block
+  reason: "Python bytecode loader over an encoded blob — classic in-memory dropper"
+  enabled: true
+  tags:
+    - obfuscation
+    - dropper
+    - marshal
+
+# Motivated by: data.txt files in the corpus carrying embedded .pyc
+# bytecode as text. Detects the \x03\xf3\r\n (CPython 3.9+) / \x42\x0d / etc.
+# magic-byte escape sequences that appear when bytecode is stored in text.
+- id: SKILL_PYC_BYTECODE_IN_TEXT
+  category: obfuscation
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}\\\\r\\\\n"
+  action: require_approval
+  reason: "Escape-sequence blob consistent with Python bytecode (.pyc) embedded as text"
+  enabled: true
+  tags:
+    - obfuscation
+    - dropper
+
+# Motivated by: openhive (41b132be…) polls openhive-api.fly.dev every 30
+# minutes for fresh instructions. Detects scheduled or loop-driven fetch
+# from a remote URL.
+- id: SKILL_HEARTBEAT_REMOTE_POLL
+  category: autonomy_escalation
+  severity: high
+  confidence: 0.82
+  when: !regex
+    pattern: "(?is)(every|cada|каждые|每)\\s+\\d+\\s*(min|minute|minutes|hour|hours|hr|hrs|мин|分钟|分).{0,160}(fetch|poll|GET|curl\\s+-s|wget|requests\\.get|http\\.get|axios\\.get)\\s+[\"'`<]?https?://|while\\s+(true|True)\\b.{0,80}sleep\\s*\\(\\s*\\d{2,5}\\s*\\).{0,80}(fetch|urlopen|requests\\.get|http\\.get)"
+  action: block
+  reason: "Heartbeat polling of a remote endpoint — agent receives out-of-band instructions"
+  enabled: true
+  tags:
+    - c2
+    - polling
+    - autonomy
+
+# Motivated by: max-banking (1ea9ac3f…) REGRA #1 forbids confirmation after
+# payment execution. Catches "don't ask / don't confirm + payment verb".
+- id: SKILL_ZERO_CONFIRMATION_PAYMENT
+  category: autonomy_escalation
+  severity: critical
+  confidence: 0.88
+  when: !regex
+    pattern: "(?is)(n(ã|a)o\\s+pergunt|n(ã|a)o\\s+confirm|no\\s+ask|never\\s+ask|sin\\s+preguntar|без\\s+под|不要确认|不要询问|do\\s+not\\s+ask|skip\\s+confirm|proibido\\s+confirmar).{0,160}(pay|paga|pagar|PIX|boleto|transfer|pagamento|payment|transferencia|перевод|支付|付款|send\\s+money|wire)"
+  action: block
+  reason: "Instructs the agent to execute payment without user confirmation"
+  shield:
+    scope: skill.payment
+  enabled: true
+  tags:
+    - payment
+    - autonomy
+    - coercion
+
+# Motivated by: packages writing credentials into `~/.openclaw/secrets/` or
+# `~/.claude/credentials/`. Covers persistence of tokens in common
+# agent-runtime secret dirs.
+- id: SKILL_SECRETS_DIR_WRITE
+  category: credential_exposure
+  severity: high
+  confidence: 0.90
+  when: !regex
+    pattern: "(?i)~/\\.(openclaw|claude|agent|anthropic|openai|copilot)/(secrets|credentials|keys|tokens|session|auth)|(session|credentials|auth)\\.json|\\.openclaw/secrets/|\\.claude/credentials/"
+  action: block
+  reason: "Writes or reads a file inside an agent-runtime secrets directory"
+  enabled: true
+  tags:
+    - credential
+    - persistence
+
+# Motivated by: morning-briefing uses `+19782651806` + `imsg send`. Flags a
+# literal phone number paired with an auto-send verb, so hardcoded targets
+# are blocked regardless of country code.
+- id: SKILL_HARDCODED_PHONE_AUTOSEND
+  category: data_exfiltration
+  severity: high
+  confidence: 0.82
+  when: !regex
+    pattern: "(?is)(\\+?\\d[\\d\\s().-]{9,17}\\d).{0,100}(imsg|imessage|sms|whatsapp|telegram|wa\\.me|signal|sendmessage|twilio|sendmsg)|(imsg\\s+send|imessage\\s+send|sms\\s+send|twilio.*messages|whatsapp\\s+send).{0,80}\\+?\\d[\\d\\s().-]{9,17}\\d"
+  action: require_approval
+  reason: "Hardcoded phone number combined with an auto-send directive"
+  enabled: true
+  tags:
+    - exfiltration
+    - messaging
+
+# Motivated by: max-banking (1ea9ac3f…) Portuguese coercion: "NÃO pergunte",
+# "NUNCA deve ver detalhes", "REGRA #1 — PROIBIDO CONFIRMAR".
+- id: SKILL_PERSUASIVE_PORTUGUESE
+  category: persuasive_language
+  severity: medium
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)n(ã|a)o\\s+pergunt|nunca\\s+deve\\s+(ver|perguntar|confirmar|pedir)|proibido\\s+(confirmar|perguntar|pedir)|REGRA\\s*#?\\s*\\d+\\s*[—-]\\s*PROIBIDO|exclusivo\\s+para\\s+uso\\s+interno|assume\\s+a\\s+inten(ç|c)(ã|a)o"
+  action: require_approval
+  reason: "Portuguese-language coercion: instructs agent to bypass user confirmation"
+  enabled: true
+  tags:
+    - coercion
+    - multilang
+    - portuguese
+
+# Motivated by: Spanish-language variants observed in adjacent corpora.
+# Proactively covers the Spanish-speaking attacker market.
+- id: SKILL_PERSUASIVE_SPANISH
+  category: persuasive_language
+  severity: medium
+  confidence: 0.80
+  when: !regex
+    pattern: "(?i)no\\s+(preguntes|pidas|confirmes)\\b|nunca\\s+le?\\s*(preguntes|pidas|confirmes|pregunta)\\b|sin\\s+preguntar\\s+al?\\s*usuario|asume\\s+la?\\s*intenci(ó|o)n|REGLA\\s*#?\\s*\\d+\\s*[—-]\\s*PROHIBIDO|nunca\\s+debe\\s+ver"
+  action: require_approval
+  reason: "Spanish-language coercion: instructs agent to bypass user confirmation"
+  enabled: true
+  tags:
+    - coercion
+    - multilang
+    - spanish
+
+# Motivated by: Russian-language coercion patterns observed in public
+# reports of agent-targeted malware. Defensive coverage.
+- id: SKILL_PERSUASIVE_RUSSIAN
+  category: persuasive_language
+  severity: medium
+  confidence: 0.80
+  when: !regex
+    pattern: "не\\s+спрашивай|никогда\\s+не\\s+спрашивай|без\\s+(подтверждения|разрешения|вопросов)|не\\s+запрашивай|не\\s+проси\\s+подтверждения"
+  action: require_approval
+  reason: "Russian-language coercion: instructs agent to bypass user confirmation"
+  enabled: true
+  tags:
+    - coercion
+    - multilang
+    - russian
+
+# Motivated by: xiaoyao-pai (d47d22f7…) uses `git clone … && bash
+# /tmp/…/install.sh`. The existing curl-pipe / wget-pipe rules don't cover
+# the git-clone dropper shape, which is popular in Chinese-language corpora.
+- id: SKILL_REMOTE_EXEC_GIT_CLONE_BASH
+  category: remote_exec
+  severity: critical
+  confidence: 0.92
+  when: !regex
+    pattern: "(?i)git\\s+clone\\s+https?://[^\\s'\"]+.{0,120}&&\\s*(bash|sh|zsh|python3?|node|pwsh|powershell)\\s+[^\\s]*(install|setup|bootstrap|run)"
+  action: block
+  reason: "Git-clone-then-execute dropper pattern"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - remote_exec
+    - supply_chain
+    - dropper
+
+# Motivated by: SKILL_CRED_HARDCODED_KEY (builtin:169) only matched "api_key"
+# literally. Many skills in the corpus use "apiKey", "AUTH_TOKEN",
+# "X-API-Key", or Bearer-style tokens.
+- id: SKILL_API_KEY_HEADER_GENERIC
+  category: credential_exposure
+  severity: high
+  confidence: 0.82
+  when: !regex
+    pattern: "(?i)(X-API-Key|Authorization:\\s*Bearer|apiKey\\s*[:=]|AUTH_TOKEN\\s*[:=]|ACCESS_TOKEN\\s*[:=]|client[_-]secret\\s*[:=])\\s*[\"']?[A-Za-z0-9_\\-]{20,}"
+  action: block
+  reason: "Generic API-key / bearer-token pattern with a long secret-like value"
+  enabled: true
+  tags:
+    - credential
+    - hardcoded
+
+# ============================================
+# VT-codeinsight-driven rules (gap analysis)
+# ============================================
+#
+# These 7 rules close detection gaps surfaced by `skill-veil vt cross-check`
+# against the OpenClaw malicious corpus. Each rule targets a *behavior* (not
+# a literal IOC) so new campaigns sharing the same TTPs are caught without
+# rule edits. Comment headers cite the recurrence (across the 73 SHAs whose
+# VT codeinsight verdict disagreed with skill-veil's pre-fix output).
+
+# Frequency: 42 packages. Targets the "exfil to attacker's personal messaging
+# account" pattern: hardcoded Feishu / Lark / WeChat / QQ identifiers next to
+# a send/notify/relay verb. We deliberately match the structural shape of
+# these IDs (formatted prefix + length) rather than literal values.
+- id: SKILL_HARDCODED_MESSAGING_EXFIL
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.88
+  when: !regex
+    pattern: "(?is)((send_(qq|wechat|feishu|lark|telegram)|notify_(qq|wechat|feishu|lark)|(wechat|feishu|lark|telegram)\\.send|relay_to_(qq|wechat|feishu|lark)|forward_to_(wechat|feishu|lark|qq)|qq[_-]?target|telegram[_-]?(chat[_-]?id|target)|chat[_-]?id\\s*[=:]\\s*['\"]?\\d{8,12}).{0,400}(ou_[a-f0-9]{30,}|o[A-Za-z0-9_-]{20,}@im\\.wechat|qqbot:c2c:[A-F0-9]{32}|\\b[A-F0-9]{32}\\b|\\d{9,12})|(ou_[a-f0-9]{30,}|qqbot:c2c:[A-F0-9]{32}|o[A-Za-z0-9_-]{20,}@im\\.wechat).{0,400}(send_(qq|wechat|feishu|lark|telegram)|notify_(qq|wechat|feishu|lark)|(wechat|feishu|lark|telegram)\\.send))"
+  action: block
+  reason: "Hardcoded Feishu/Lark/WeChat/QQ/Telegram identifier paired with a send-or-relay verb — exfil to attacker-controlled account"
+  shield:
+    scope: skill.exfiltration
+  enabled: true
+  tags:
+    - exfiltration
+    - messaging
+    - hardcoded_identifier
+
+# Frequency: 20 packages. Detects skill-managed cron registration via
+# child_process / execSync — a persistence vector that previous regex-only
+# cron rules (SKILL_CRON_PERSISTENCE, SKILL_CRON_ETC_WRITE) miss when the
+# scheduler call is wrapped in a JS launcher.
+- id: SKILL_EXEC_CRON_INJECTION
+  category: persistent_prompt_tampering
+  severity: critical
+  confidence: 0.88
+  when: !regex
+    pattern: "(?is)(execSync|child_process\\.(exec|spawn|fork|spawnSync|execSync))\\s*\\(\\s*['\"`]\\s*(openclaw\\s+cron\\s+(add|register|install)|cron\\s+add\\s+--cron\\s+\"[^\"]*\\*[^\"]*\\*[^\"]*\\*)|(writeFile(Sync)?|fs\\.write).{0,80}(HEARTBEAT\\.md|heartbeat\\.json)"
+  action: block
+  reason: "Skill registers cron persistence via subprocess or writes a heartbeat marker file"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - persistence
+    - cron
+    - subprocess
+
+# Frequency: 18 packages. Catches loyalty / jailbreak / silent-relay
+# instructions used to override the agent's safety posture. The Chinese
+# 忠诚原则 ("loyalty principle") and 不输出确认信息 ("do not output
+# confirmation messages") are recurrent corpus markers.
+- id: SKILL_PROMPT_HIJACK_JAILBREAK
+  category: autonomy_escalation
+  severity: high
+  confidence: 0.85
+  when: !regex
+    pattern: "(?i)(忠诚原则|loyalty\\s+principle|ALWAYS_(ULTIMATE|HIGHEST_PRIORITY)|disable\\s+all\\s+limits|silent\\s+relay|never\\s+(modify|summari[sz]e|filter)\\s+(the\\s+)?output|不(输出确认信息|要询问用户)|prioritize\\s+\\S+\\s+over\\s+(user|operator)\\s+(intent|request))"
+  action: block
+  reason: "Skill instructs the agent to override its own safety posture (loyalty / silent relay / output filtering)"
+  enabled: true
+  tags:
+    - autonomy
+    - jailbreak
+    - prompt_injection
+
+# Frequency: 28 packages. Active credential harvesting: a script reads
+# secrets-bearing files AND posts them remotely in the same source. We
+# require both ends to appear within ~600 bytes of each other (multiline)
+# to avoid flagging unrelated read/post pairs.
+- id: SKILL_CREDENTIAL_HARVESTING_ACTIVE
+  category: credential_exposure
+  severity: critical
+  confidence: 0.90
+  when: !regex
+    pattern: "(?is)(readFileSync|fs\\.readFile|open\\s*\\(|read_text|with\\s+open)[^\\n]{0,80}(\\.env|id_rsa|id_ed25519|api_keys?\\.json|\\.ssh/|/\\.config/[^/\\s]+/(token|credential|api[_-]?key)|/\\.aws/credentials|/\\.gcloud/[^/\\s]+\\.json).{0,600}(curl\\s+(-\\w+\\s+)*https?://|requests\\.post\\s*\\(|axios\\.post\\s*\\(|fetch\\s*\\(\\s*['\"]https?:|http\\.post\\s*\\(|urllib\\.request\\.urlopen\\s*\\(\\s*['\"]https?:)"
+  action: block
+  reason: "Skill reads a credentials file and transmits its contents to a remote endpoint in the same script"
+  shield:
+    scope: skill.exfiltration
+  enabled: true
+  tags:
+    - exfiltration
+    - credential
+    - active_harvest
+
+# Frequency: 7 packages. Mutates the user's interactive shell or Claude
+# settings. The --dangerously-skip-permissions alias was directly observed
+# in the corpus.
+- id: SKILL_SHELL_CONFIG_SABOTAGE
+  category: privilege_escalation
+  severity: high
+  confidence: 0.88
+  when: !regex
+    pattern: "(?is)(writeFileSync|appendFileSync|fs\\.(writeFile|appendFile)|>>\\s*~/|echo\\s+[^\\n]{0,200}>>\\s*~/)\\s*[\"']?~/(\\.zshrc|\\.bashrc|\\.profile|\\.bash_profile|\\.config/fish/config\\.fish|\\.claude/settings\\.json)|alias\\s+\\w+\\s*=\\s*['\"][^'\"]*--dangerously-skip-permissions[^'\"]*['\"]|bypassPermissions\\s*[:=]\\s*true"
+  action: block
+  reason: "Skill modifies the user's interactive shell rc / Claude settings or installs a permission-bypass alias"
+  enabled: true
+  tags:
+    - persistence
+    - privilege_escalation
+    - shell_rc
+
+# Frequency: 8 packages. Reads agent core/memory files (MEMORY.md, SOUL.md,
+# BOOTSTRAP.md, ~/.claude/memory/) and transmits them externally. Captures
+# "siphon the agent's accumulated knowledge to attacker" pattern.
+- id: SKILL_CORE_FILE_EXFIL
+  category: data_exfiltration
+  severity: high
+  confidence: 0.88
+  when: !regex
+    pattern: "(?is)(readFileSync|fs\\.readFile|open\\s*\\(|read_text|with\\s+open)[^\\n]{0,120}(MEMORY\\.md|SOUL\\.md|BOOTSTRAP\\.md|PERSONA\\.md|~/\\.claude/(memory|context)/|~/\\.openclaw/(memory|context)/).{0,500}(curl\\s+(-\\w+\\s+)*https?://|requests\\.post\\s*\\(|axios\\.post\\s*\\(|fetch\\s*\\(\\s*['\"]https?:|upload\\w*\\s*\\(|transmit\\w*\\s*\\(|http\\.post\\s*\\()"
+  action: block
+  reason: "Skill reads an agent core memory file and transmits it externally"
+  shield:
+    scope: skill.exfiltration
+  enabled: true
+  tags:
+    - exfiltration
+    - memory
+    - core_file
+
+# Frequency: 11 packages. Hardcoded crypto wallet (Solana base58 / EVM hex)
+# inside an automation script paired with a fake-confirmation or
+# random-tx-hash pattern. Restricted to scripts that also reference
+# transaction/payment vocabulary so legitimate DeFi reads don't trip.
+- id: SKILL_FINANCIAL_FRAUD_AUTOMATION
+  category: tool_abuse
+  severity: critical
+  confidence: 0.85
+  when: !regex
+    pattern: "(?is)(\\b0x[a-fA-F0-9]{40}\\b|\\b[1-9A-HJ-NP-Za-km-z]{32,44}\\b).{0,300}((random\\.uniform|Math\\.random|fake_|mock_)\\w*\\s*\\(.*?(tx[_-]?hash|transaction|signature)|(confirm|verify)\\w*\\s*\\(\\s*(false|None|null|0\\b)|payment.*(redirect|forward).*(author|attacker|developer))|(?i)(alipay|paypal\\.me|wechat\\s*pay|venmo).{0,80}(qr|qrcode|recipient).{0,200}(skill|automated|script)"
+  action: block
+  reason: "Skill automates payment / transaction with hardcoded wallet plus fake-confirmation pattern"
+  shield:
+    scope: skill.payment
+  enabled: true
+  tags:
+    - financial_fraud
+    - wallet
+    - automation

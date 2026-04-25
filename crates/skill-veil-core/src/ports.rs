@@ -186,6 +186,15 @@ pub struct DecodedText {
     pub decode_warning: bool,
 }
 
+/// Subset of `std::fs::Metadata` exposed through the
+/// [`FileSystemProvider`] port. Keeping the surface minimal lets test
+/// adapters synthesize values without instantiating real OS metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct FileMeta {
+    /// Total size of the file in bytes.
+    pub len: u64,
+}
+
 /// Trait for file system operations - allows mocking in tests
 ///
 /// Implement this trait to provide custom file system access.
@@ -215,4 +224,25 @@ pub trait FileSystemProvider: Send + Sync {
 
     /// Check if a path exists
     fn exists(&self, path: &Path) -> bool;
+
+    /// Look up the size (and other minimal metadata) for a path.
+    ///
+    /// Adapters MUST resolve this through the same backing store as
+    /// `read_file_bytes` and `list_files` so test doubles see consistent
+    /// behaviour. The default implementation here delegates to
+    /// `read_file_bytes` and reports the resulting byte length, which lets
+    /// every existing adapter pick up the new method without code changes
+    /// while keeping the contract honoured. Adapters with cheaper metadata
+    /// access (real filesystem, mocks with explicit metadata) should
+    /// override this method.
+    ///
+    /// # Errors
+    /// Returns [`FileSystemError::PathNotFound`] when the path does not
+    /// exist, or [`FileSystemError::IoError`] for other I/O failures.
+    fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
+        let bytes = self.read_file_bytes(path)?;
+        Ok(FileMeta {
+            len: bytes.as_bytes().len() as u64,
+        })
+    }
 }

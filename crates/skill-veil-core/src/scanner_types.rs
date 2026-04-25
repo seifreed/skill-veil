@@ -51,6 +51,11 @@ pub struct ScanOptions {
     pub exclude_rules: Vec<String>,
     pub recursive: bool,
     pub target_mode: ScanTargetMode,
+    /// When true, a duplicate rule id encountered while loading an external
+    /// pack is promoted from a tracing warning to a hard error. Useful in CI
+    /// to catch pack-authoring mistakes early. Default: false (warn only).
+    #[serde(default)]
+    pub strict_rules: bool,
 }
 
 impl Default for ScanOptions {
@@ -67,6 +72,7 @@ impl Default for ScanOptions {
             exclude_rules: Vec::new(),
             recursive: true,
             target_mode: ScanTargetMode::Auto,
+            strict_rules: false,
         }
     }
 }
@@ -105,6 +111,14 @@ pub struct ScanResult {
     pub suppression_summary: SuppressionSummary,
     pub policy_audit: PolicyAudit,
     pub should_fail: bool,
+    /// Indicators of compromise extracted from the primary artifact and its
+    /// supporting artifacts. Populated offline by the scanner; downstream
+    /// enrichment tooling (e.g. `skill-veil vt enrich`) consumes it.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::ioc_extraction::ExtractedIocs::is_empty"
+    )]
+    pub extracted_iocs: crate::ioc_extraction::ExtractedIocs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
