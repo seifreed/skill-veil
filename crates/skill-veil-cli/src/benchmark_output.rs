@@ -87,7 +87,17 @@ pub fn render_benchmark_dashboard(
             ));
         }
         output.push('\n');
-        let mut weakest_families = evaluation.family_metrics.clone();
+        // Skip families with `sample_count == 0` before sorting / rendering.
+        // Without this guard, an empty family's precision/recall divisions
+        // produce NaN, which downstream sorters mask with `Ordering::Equal`
+        // but the markdown render emits literal `"NaN"` strings — breaking
+        // CI parsers that consume the dashboard. Round-5 audit Bug 2.4.
+        let mut weakest_families: Vec<_> = evaluation
+            .family_metrics
+            .iter()
+            .filter(|f| f.sample_count > 0)
+            .cloned()
+            .collect();
         weakest_families.sort_by(|left, right| {
             left.metrics
                 .exact_label_accuracy

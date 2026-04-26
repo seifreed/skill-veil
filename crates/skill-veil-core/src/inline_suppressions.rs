@@ -13,9 +13,21 @@ static STANDALONE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     .expect("valid standalone suppression regex")
 });
 
+/// Maximum characters retained from the `reason=` / `because=` payload
+/// of an inline suppression directive. The captured reason flows into
+/// `SuppressionRecord.reason`, then into JSON / SARIF output, then into
+/// every downstream consumer that re-serializes findings. Pre-cap, a
+/// malformed comment with megabytes of text after `reason=` would
+/// allocate a `String` that size and propagate it through every
+/// serializer — a single bad skill could exhaust memory or balloon the
+/// report file. The regex caps the capture at this length and the
+/// `chars().take(...)` post-truncate in `add_suppressions_from_capture`
+/// guards the contract even if the regex is later relaxed.
+const MAX_SUPPRESSION_REASON_CHARS: usize = 500;
+
 static INLINE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]+))?"#,
+        r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?"#,
     )
     .expect("valid inline suppression regex")
 });
@@ -79,7 +91,17 @@ fn add_suppressions_from_capture(
         return;
     };
     let rule_list = capture.get(2).map(|m| m.as_str()).unwrap_or("*");
-    let reason = capture.get(3).map(|m| m.as_str().trim().to_string());
+    // Defensive truncation in addition to the regex `{0,500}` cap. The
+    // doc-comment on `MAX_SUPPRESSION_REASON_CHARS` explains the contract;
+    // belt-and-braces here ensures the limit holds even if the regex is
+    // later relaxed during a routine refactor.
+    let reason = capture.get(3).map(|m| {
+        m.as_str()
+            .trim()
+            .chars()
+            .take(MAX_SUPPRESSION_REASON_CHARS)
+            .collect::<String>()
+    });
     // Standalone comments (on their own line) with "ignore" target the next significant
     // line — a standalone `<!-- ignore RULE -->` acts like `ignore-next-line`.
     // Standalone nosem/nosemgrep on their own line are no-ops (matching semgrep semantics:
@@ -360,6 +382,36 @@ mod tests {
             apply_inline_suppressions(vec![finding], &[suppression], Some("/tmp/skill.md"));
         assert!(active.is_empty());
         assert_eq!(suppressed.len(), 1);
+    }
+
+    /// Contract: a suppression directive whose `reason=` payload is
+    /// arbitrarily long MUST be capped at `MAX_SUPPRESSION_REASON_CHARS`
+    /// so a single malformed comment cannot exhaust memory or balloon
+    /// downstream JSON / SARIF reports. Regression for the round-5
+    /// audit's Bug 2.2 — the pre-fix regex used `[^#]+` (unbounded) and
+    /// the captured string flowed verbatim into `SuppressionRecord.reason`.
+    #[test]
+    fn inline_suppression_reason_is_capped_at_max_chars() {
+        let path = std::path::PathBuf::from("/tmp/skill.md");
+        let huge = "A".repeat(MAX_SUPPRESSION_REASON_CHARS * 20);
+        // Use the canonical inline form: comment marker, directive, rule
+        // list, `reason=` payload. `MY_RULE` matches the rule_list class
+        // `[A-Za-z0-9*_,.\-]+`; brackets like `[RULE]` are not part of
+        // that class and would not capture, so we keep the form simple.
+        let content = format!("payload # ignore MY_RULE reason={huge}\n");
+        let suppressions = collect_comment_suppressions(&path, &content);
+        assert!(
+            !suppressions.is_empty(),
+            "directive must parse; check that the regex still recognizes \
+             the canonical `# ignore RULE reason=...` form"
+        );
+        let reason = suppressions[0].reason.as_deref().expect("reason captured");
+        assert!(
+            reason.chars().count() <= MAX_SUPPRESSION_REASON_CHARS,
+            "reason MUST be capped at {} chars; got {}",
+            MAX_SUPPRESSION_REASON_CHARS,
+            reason.chars().count()
+        );
     }
 
     #[test]

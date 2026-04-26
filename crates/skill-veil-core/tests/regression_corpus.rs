@@ -12,11 +12,6 @@ fn labeled_corpus_meets_phase1_baseline() {
     let evaluation = evaluate_corpus(&scanner, &manifest_path).unwrap();
     let metrics = evaluation.metrics;
 
-    assert!(
-        evaluation.samples.len() >= 12,
-        "regression corpus unexpectedly shrank: {}",
-        evaluation.samples.len()
-    );
     let benign_count = evaluation
         .samples
         .iter()
@@ -32,17 +27,21 @@ fn labeled_corpus_meets_phase1_baseline() {
         .iter()
         .filter(|sample| sample.expected == skill_veil_core::SampleLabel::Malicious)
         .count();
+    // Validate the corpus shape against per-class minimums in a single
+    // assertion so a future relabeling cannot satisfy a generic
+    // `samples.len() >= N` while skewing the distribution. Round-5
+    // audit Bug 3.17 — the prior `samples.len() >= 12` could pass
+    // with all samples labeled Benign.
     assert!(
-        benign_count >= 7,
-        "benign coverage too small: {benign_count}"
-    );
-    assert!(
-        suspicious_count >= 3,
-        "suspicious coverage too small: {suspicious_count}"
-    );
-    assert!(
-        malicious_count >= 2,
-        "malicious coverage too small: {malicious_count}"
+        evaluation.samples.len() >= 12
+            && benign_count >= 7
+            && suspicious_count >= 3
+            && malicious_count >= 2,
+        "regression corpus shape regressed (must satisfy ≥12 samples and \
+         benign≥7 / suspicious≥3 / malicious≥2): \
+         total={}, benign={benign_count}, suspicious={suspicious_count}, \
+         malicious={malicious_count}",
+        evaluation.samples.len()
     );
     assert!(
         metrics.precision >= 0.66,

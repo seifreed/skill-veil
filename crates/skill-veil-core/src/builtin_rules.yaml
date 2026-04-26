@@ -366,7 +366,11 @@
   severity: critical
   confidence: 0.93
   when: !regex
-    pattern: "(?i)(compare.*(?:installed|current).*version.*(?:latest|newest|remote).*at\\s+https?://|use\\s+whichever\\s+version.*(?:is\\s+)?newer|update.*(?:local\\s+)?skill\\s+file\\s+before\\s+proceed|always.*(?:fetch|check|compare).*latest.*version.*SKILL\\.md)"
+    # Bounded quantifiers (`.{0,N}`) replace the previous `.*` chain so a
+    # document packed with the same trigger words cannot force the matcher
+    # into super-linear scanning. Each gap covers a realistic phrase span
+    # without permitting unbounded text between markers.
+    pattern: "(?i)(compare.{0,40}(?:installed|current).{0,40}version.{0,40}(?:latest|newest|remote).{0,40}at\\s+https?://|use\\s+whichever\\s+version.{0,40}(?:is\\s+)?newer|update.{0,40}(?:local\\s+)?skill\\s+file\\s+before\\s+proceed|always.{0,40}(?:fetch|check|compare).{0,40}latest.{0,40}version.{0,40}SKILL\\.md)"
   action: block
   reason: "Skill instructs the agent to self-update from a remote URL — potential Trojan dropper mechanism"
   enabled: true

@@ -241,8 +241,19 @@ fn artifact_capabilities<F: FileSystemProvider>(
     let Ok(fc) = fs_provider.read_file_bytes(path) else {
         return Vec::new();
     };
-    let content = fc.decode_utf8_lossy().text;
-    artifact_analysis.infer_capabilities(path, &content)
+    let decoded = fc.decode_utf8_lossy();
+    if decoded.decode_warning {
+        // The primary scanner pipeline emits a `decode_warning_finding`
+        // for the artifact itself; this trace is the audit trail for the
+        // graph-derived capability inference path, which would otherwise
+        // analyze a likely-binary file as though it were valid text and
+        // silently propagate noisy capabilities.
+        tracing::warn!(
+            path = %path.display(),
+            "graph capability inference using lossy UTF-8 decode (likely binary content)"
+        );
+    }
+    artifact_analysis.infer_capabilities(path, &decoded.text)
 }
 
 fn add_inferred_relations<F: FileSystemProvider>(
@@ -255,8 +266,14 @@ fn add_inferred_relations<F: FileSystemProvider>(
     let Ok(fc) = fs_provider.read_file_bytes(path) else {
         return;
     };
-    let content = fc.decode_utf8_lossy().text;
-    for link in artifact_analysis.infer_relations(path, &content) {
+    let decoded = fc.decode_utf8_lossy();
+    if decoded.decode_warning {
+        tracing::warn!(
+            path = %path.display(),
+            "graph relation inference using lossy UTF-8 decode (likely binary content)"
+        );
+    }
+    for link in artifact_analysis.infer_relations(path, &decoded.text) {
         graph.add_node(link.target.clone(), ArtifactKind::GenericArtifact);
         graph.add_edge(source_path.to_string(), link.target, link.relation);
     }

@@ -115,7 +115,30 @@ pub struct RuleEngine<M: PatternMatcher = RegexPatternMatcher> {
     matcher: Arc<M>,
     /// When true, `load_rules_file` / `add_rule` return
     /// `RuleError::DuplicateUserRule` on an id collision instead of logging
-    /// a `warn!()` and skipping. Default: false (backwards-compatible).
+    /// a `warn!()` and skipping. Default: **true** as of round-5 hardening.
+    ///
+    /// # Why strict by default
+    ///
+    /// The previous lenient default meant that an external pack with an ID
+    /// colliding with a built-in (or with another loaded pack) was silently
+    /// dropped with only a `tracing::warn!()` line. Maintainers writing
+    /// override packs in `rules/official/` would have no visible signal
+    /// that their rule was discarded — they had to grep logs at runtime.
+    /// Strict-by-default surfaces the collision at load time as a hard
+    /// error with file path context, matching how `cargo` treats duplicate
+    /// crate names and how `eslint` treats duplicate rule definitions.
+    ///
+    /// Pre-flight: `comm` of `rules/official/*.yaml` IDs against
+    /// `builtin_rules.yaml` IDs at the time of the flip showed 0
+    /// collisions, so flipping the default does not break the canonical
+    /// distribution.
+    ///
+    /// # Opt-out
+    ///
+    /// Callers who *intentionally* want the silent-skip behaviour (e.g.
+    /// experimental tooling that loads many overlapping packs) must call
+    /// `set_strict_mode(false)` explicitly. The opt-out is preserved so
+    /// no consumer is forced to rename rules unilaterally.
     strict_mode: bool,
 }
 
@@ -136,7 +159,7 @@ impl RuleEngine<RegexPatternMatcher> {
             rules: Vec::new(),
             rules_dir: None,
             matcher: Arc::new(RegexPatternMatcher::new()),
-            strict_mode: false,
+            strict_mode: true,
         }
     }
 
@@ -177,7 +200,7 @@ impl<M: PatternMatcher> RuleEngine<M> {
             rules: Vec::new(),
             rules_dir: None,
             matcher,
-            strict_mode: false,
+            strict_mode: true,
         }
     }
 
@@ -241,8 +264,16 @@ impl<M: PatternMatcher> RuleEngine<M> {
 
     /// Load rules from a YAML file.
     ///
-    /// Rules whose ID already exists in the engine are silently skipped,
-    /// giving builtins (loaded first) priority over external packs.
+    /// In **strict mode** (default — see `RuleEngine.strict_mode` doc-comment
+    /// for rationale), an ID that collides with an already-loaded rule
+    /// (built-in or earlier-loaded external) returns
+    /// `RuleError::DuplicateUserRule { id, path }`. The pre-flight at the
+    /// time of the round-5 strict-mode flip showed 0 collisions between
+    /// the embedded `builtin_rules.yaml` and the `rules/official/` packs.
+    ///
+    /// Callers that intentionally want the legacy "warn-and-skip" behaviour
+    /// (e.g. tooling that loads many overlapping experimental packs) must
+    /// opt out via `set_strict_mode(false)`.
     pub fn load_rules_file(&mut self, path: impl AsRef<Path>) -> Result<(), RuleError> {
         let content = std::fs::read_to_string(path.as_ref())?;
         for rule in parse_rules_file(&content)? {

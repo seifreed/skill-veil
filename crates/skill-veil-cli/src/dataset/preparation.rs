@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub(super) struct DatasetPreparation {
     pub(super) package_roots: Vec<PathBuf>,
@@ -161,6 +163,88 @@ fn extract_zip_package(zip_path: &Path, output_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Maximum time `extract_zip_package_cached` waits for a competing
+/// process to finish extracting the same zip before giving up. 60s
+/// covers reasonable archive sizes (hundreds of MB extracted to disk);
+/// beyond that the lock is treated as stale and the extraction proceeds
+/// after taking it over. Larger corpora that legitimately exceed this
+/// budget should be split into smaller datasets.
+const EXTRACTION_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Polling interval while waiting on a peer extraction to finish. Kept
+/// short enough that the second-arriver returns promptly when the first
+/// finishes, but not so short that contention burns CPU.
+const EXTRACTION_LOCK_POLL: Duration = Duration::from_millis(100);
+
+/// RAII lockfile sentinel: holds the lock for its lifetime and removes
+/// the path on drop. Used by `extract_zip_package_cached` to prevent two
+/// concurrent invocations (typically from parallel `scan-dataset` runs
+/// or rayon worker threads) from racing on the same `output_dir`.
+struct ExtractionLock {
+    path: PathBuf,
+}
+
+impl Drop for ExtractionLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Try to acquire the extraction lockfile via `O_EXCL` semantics
+/// (`create_new`). Returns the RAII guard on success, `None` on
+/// contention. Cross-platform safe — `OpenOptions::create_new` maps to
+/// `O_EXCL` on Unix and `CREATE_NEW` on Windows.
+fn try_acquire_extraction_lock(lock_path: &Path) -> Result<Option<ExtractionLock>> {
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(_file) => Ok(Some(ExtractionLock {
+            path: lock_path.to_path_buf(),
+        })),
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+        Err(err) => Err(err)
+            .with_context(|| format!("Failed to acquire extraction lock {}", lock_path.display())),
+    }
+}
+
+/// Wait for a competing extraction to finish or for the lock to be
+/// considered stale (`EXTRACTION_LOCK_TIMEOUT`). After acquiring the
+/// stale lock, the caller proceeds with extraction.
+fn wait_for_peer_or_take_lock(
+    lock_path: &Path,
+    output_dir: &Path,
+    marker_path: &Path,
+    source_signature: &str,
+) -> Result<Option<ExtractionLock>> {
+    let started = Instant::now();
+    while started.elapsed() < EXTRACTION_LOCK_TIMEOUT {
+        thread::sleep(EXTRACTION_LOCK_POLL);
+        // Peer may have completed: check cache hit conditions again.
+        if output_dir.is_dir()
+            && marker_path.exists()
+            && fs::read_to_string(marker_path).ok().as_deref() == Some(source_signature)
+        {
+            return Ok(None);
+        }
+        if let Some(lock) = try_acquire_extraction_lock(lock_path)? {
+            return Ok(Some(lock));
+        }
+    }
+    // Stale lock: forcibly remove and retry once.
+    let _ = fs::remove_file(lock_path);
+    try_acquire_extraction_lock(lock_path)?
+        .map(Some)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Extraction lock {} remained held beyond timeout {:?}",
+                lock_path.display(),
+                EXTRACTION_LOCK_TIMEOUT
+            )
+        })
+}
+
 fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> {
     let package_name = zip_path
         .file_stem()
@@ -170,6 +254,39 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
     let marker_path = output_dir.join(".skill-veil-source");
     let source_signature = zip_source_signature(zip_path)?;
 
+    if output_dir.is_dir()
+        && marker_path.exists()
+        && fs::read_to_string(&marker_path).ok().as_deref() == Some(source_signature.as_str())
+    {
+        return Ok(());
+    }
+
+    // Cross-process / cross-thread serialization: only one extractor
+    // operates on `output_dir` at a time. Without this, two parallel
+    // `scan-dataset` runs (or rayon workers within one run) could
+    // simultaneously `remove_dir_all(&output_dir)` and `rename(...)`,
+    // leaving the cache in a half-written state. Round-5 audit Bug 2.5.
+    let lock_path = cache_root.join(format!(".{}.lock", package_name));
+    let _lock = match try_acquire_extraction_lock(&lock_path)? {
+        Some(lock) => lock,
+        None => {
+            // Peer extracting: wait for it to publish the cache or take
+            // over after the timeout window.
+            match wait_for_peer_or_take_lock(
+                &lock_path,
+                &output_dir,
+                &marker_path,
+                &source_signature,
+            )? {
+                Some(lock) => lock,
+                // Peer published a valid cache while we waited.
+                None => return Ok(()),
+            }
+        }
+    };
+
+    // Re-check cache hit after acquiring the lock — the peer may have
+    // populated the cache between our pre-lock probe and the lock grab.
     if output_dir.is_dir()
         && marker_path.exists()
         && fs::read_to_string(&marker_path).ok().as_deref() == Some(source_signature.as_str())

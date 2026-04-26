@@ -5,6 +5,15 @@ use crate::analyzer::SkillDocument;
 use crate::findings::{ArtifactKind, EvidenceKind, Finding, MatchTarget, ThreatCategory};
 use crate::ports::PatternMatcher;
 
+/// Hard cap on the number of literal values a single `SectionContains`
+/// condition may declare. Each value is wrapped in `regex::escape` and
+/// or-joined into the matcher's pattern set; without a cap, a malicious
+/// pack could declare 100k+ values and force the matcher into worst-case
+/// memory and compile-time territory. 200 is well above any legitimate
+/// rule (the largest built-in `SectionContains` has fewer than 30
+/// values) while bounding the worst case.
+const MAX_SECTION_CONTAINS_VALUES: usize = 200;
+
 /// Compiled version of a rule for efficient matching
 ///
 /// Contains the original rule along with pre-extracted pattern strings
@@ -66,6 +75,7 @@ impl CompiledRule {
     /// This validates all regex patterns in the rule condition and returns an error
     /// if any pattern has invalid regex syntax.
     pub fn compile(rule: Rule) -> Result<Self, RuleError> {
+        Self::validate_value_caps(&rule.condition)?;
         let pattern_strings = Self::extract_pattern_strings(&rule.condition);
         // Validate all regex patterns at compile time to catch syntax errors early
         for pattern in &pattern_strings {
@@ -77,6 +87,33 @@ impl CompiledRule {
             rule,
             pattern_strings,
         })
+    }
+
+    /// Recursively walk the condition tree and reject `SectionContains`
+    /// nodes whose `values` list exceeds `MAX_SECTION_CONTAINS_VALUES`.
+    /// Pre-cap, an external pack could declare an arbitrarily large
+    /// alternation and force the matcher into pathological compile-time
+    /// memory use.
+    fn validate_value_caps(condition: &RuleCondition) -> Result<(), RuleError> {
+        match condition {
+            RuleCondition::SectionContains { values, .. } => {
+                if values.len() > MAX_SECTION_CONTAINS_VALUES {
+                    return Err(RuleError::InvalidRule(format!(
+                        "SectionContains has {} values; the per-rule cap is {} \
+                         (split the rule or use a single Regex condition instead)",
+                        values.len(),
+                        MAX_SECTION_CONTAINS_VALUES
+                    )));
+                }
+            }
+            RuleCondition::Any(conditions) | RuleCondition::All(conditions) => {
+                for cond in conditions {
+                    Self::validate_value_caps(cond)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn extract_pattern_strings(condition: &RuleCondition) -> Vec<String> {

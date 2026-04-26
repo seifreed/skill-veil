@@ -377,8 +377,18 @@ pub(crate) fn discover_lockfiles(path: &Path) -> Vec<PathBuf> {
     discover_files_by_name(path, LOCKFILE_NAMES)
 }
 
+/// Hard cap on discovery descent depth. Protects against adversarial
+/// or runaway directory trees that would otherwise force WalkDir into
+/// pathological recursion (the `should_skip_discovery_dir` exclude-list
+/// only catches well-known names like `node_modules`; an attacker can
+/// nest under custom names indefinitely). 20 levels comfortably covers
+/// every monorepo layout we have seen in benchmarks/corpus and leaves
+/// large headroom over typical skill packages (≤ 6 levels).
+const MAX_DISCOVERY_DEPTH: usize = 20;
+
 fn discover_files_by_name(root: &Path, names: &[&str]) -> Vec<PathBuf> {
     WalkDir::new(root)
+        .max_depth(MAX_DISCOVERY_DEPTH)
         .into_iter()
         .filter_entry(|entry| !should_skip_discovery_dir(entry))
         .filter_map(|e| match e {

@@ -29,8 +29,13 @@ pub enum PolicyProfileArg {
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
-    #[arg(short, long, global = true)]
+    /// Increase log verbosity. Mutually exclusive with `--quiet` —
+    /// passing both used to resolve silently to "quiet wins", which
+    /// hid an unintended user input. Round-5 audit Bug 3.19.
+    #[arg(short, long, global = true, conflicts_with = "quiet")]
     pub verbose: bool,
+    /// Suppress non-error output. Mutually exclusive with `--verbose`
+    /// (clap rejects the combination at parse time).
     #[arg(short, long, global = true)]
     pub quiet: bool,
     #[arg(long, global = true, value_enum, default_value = "auto")]

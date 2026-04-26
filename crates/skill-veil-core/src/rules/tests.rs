@@ -465,10 +465,15 @@ fn make_rule_with_id(id: &str) -> Rule {
     }
 }
 
+/// Contract: strict mode is the **default** as of round-5 hardening.
+/// A duplicate user rule MUST surface as `RuleError::DuplicateUserRule`
+/// at load time so override-pack authors can see the collision instead
+/// of grepping `tracing` logs at runtime. This test pins the default;
+/// flipping it back to lenient should be a deliberate breaking change
+/// with a corresponding pre-flight audit of all distributed packs.
 #[test]
-fn strict_mode_promotes_duplicate_user_rule_to_error() {
+fn default_strict_mode_promotes_duplicate_user_rule_to_error() {
     let mut engine = RuleEngine::new();
-    engine.set_strict_mode(true);
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
     let err = engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap_err();
     match err {
@@ -477,11 +482,15 @@ fn strict_mode_promotes_duplicate_user_rule_to_error() {
     }
 }
 
+/// Contract: callers can opt OUT of strict mode via `set_strict_mode(false)`
+/// to preserve the legacy "warn-and-skip" behaviour. The opt-out is kept
+/// for tooling that loads many overlapping experimental packs and would
+/// otherwise have to rename rules unilaterally.
 #[test]
-fn non_strict_mode_skips_duplicate_user_rule_silently() {
+fn explicit_lenient_mode_skips_duplicate_user_rule_silently() {
     let mut engine = RuleEngine::new();
+    engine.set_strict_mode(false);
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
-    // Default: strict_mode = false, second add is a no-op but not an Err.
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
     assert_eq!(engine.rule_count(), 1);
 }
