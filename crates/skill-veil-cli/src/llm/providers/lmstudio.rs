@@ -113,7 +113,14 @@ pub(crate) fn parse_lmstudio_context_length(body: &str, model: &str) -> Option<u
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
     let data = v.get("data")?.as_array()?;
     for entry in data {
-        let id = entry.get("id").and_then(|x| x.as_str()).unwrap_or("");
+        // An entry whose `id` is missing or non-string cannot match any model
+        // and must be skipped. The previous `unwrap_or("")` collapsed both
+        // cases to the empty string, which would silently match a request
+        // for `model = ""` and (more importantly) prevented the loop from
+        // continuing to a later valid entry whose id *did* match.
+        let Some(id) = entry.get("id").and_then(|x| x.as_str()) else {
+            continue;
+        };
         if id == model {
             // Prefer the actually-loaded ctx; fall back to max.
             if let Some(n) = entry.get("loaded_context_length").and_then(|x| x.as_u64()) {
@@ -167,6 +174,38 @@ mod tests {
     fn parse_lmstudio_ctx_returns_none_on_malformed_body() {
         assert_eq!(parse_lmstudio_context_length("{}", "m"), None);
         assert_eq!(parse_lmstudio_context_length("not-json", "m"), None);
+    }
+
+    /// Contract: an entry whose `id` is missing or non-string must be
+    /// skipped, never matched. The pre-fix code used `unwrap_or("")`,
+    /// which silently coerced a `null` or numeric `id` into the empty
+    /// string. Two fall-out symptoms are pinned here:
+    ///
+    /// 1. A query for `model = ""` would falsely match a typed-wrong entry.
+    /// 2. A bad early entry would mask a later, well-typed entry whose
+    ///    `id` actually equals the requested model — the loop must keep
+    ///    searching past the malformed entry rather than treating it as
+    ///    a non-match-with-empty-id.
+    #[test]
+    fn parse_lmstudio_ctx_skips_entries_with_non_string_id() {
+        let body = r#"{
+            "data": [
+                {"id": null, "loaded_context_length": 1},
+                {"id": 42, "loaded_context_length": 2},
+                {"id": "real-model", "loaded_context_length": 4096}
+            ]
+        }"#;
+        assert_eq!(
+            parse_lmstudio_context_length(body, "real-model"),
+            Some(4096),
+            "well-typed entry must be reachable past malformed siblings",
+        );
+        assert_eq!(
+            parse_lmstudio_context_length(body, ""),
+            None,
+            "empty-string model must NOT match an entry whose id was \
+             coerced from null/non-string",
+        );
     }
 
     fn provider_with_api_key(api_key: Option<&str>) -> LmStudioProvider {

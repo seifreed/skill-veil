@@ -554,3 +554,42 @@ fn with_defaults_loads_full_builtin_set() {
         );
     }
 }
+
+/// Contract: every builtin rule whose `action` is `Block` or `RequireApproval`
+/// MUST declare a non-null `shield` scope.
+///
+/// Why: the shield scope routes high-severity findings to the appropriate
+/// Anthropic Shield phase (install / runtime / network / etc.). A rule that
+/// blocks or escalates without a shield scope produces findings that cannot
+/// be wired into shield gating, silently degrading downstream integration.
+/// `action: log` rules are exempt — they are observability-only and may
+/// legitimately opt out via `shield: null`.
+///
+/// History: a previous batch of 7 rules shipped without shield scopes
+/// (memory #22455). A 2026-04 audit found 19 more in the same state — the
+/// regression keeps reappearing because authoring new rules is the only
+/// time `shield` is touched and YAML's optional fields make the omission
+/// invisible until shield integration is exercised.
+#[test]
+fn builtin_rules_with_blocking_action_declare_shield_scope() {
+    use crate::findings::RecommendedAction;
+    let rules = builtin::get_builtin_rules().expect("builtin rules must parse");
+    let missing: Vec<&str> = rules
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.action,
+                RecommendedAction::Block | RecommendedAction::RequireApproval
+            )
+        })
+        .filter(|r| r.shield.as_ref().is_none_or(|s| s.scope.trim().is_empty()))
+        .map(|r| r.id.as_str())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "Builtin rules with action Block / RequireApproval are missing a \
+         shield scope: {missing:?}. Add `shield: {{ scope: skill.<area> }}` \
+         to each rule. Use `shield: null` only for action: log observability \
+         rules.",
+    );
+}

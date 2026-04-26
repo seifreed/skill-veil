@@ -251,7 +251,8 @@
     pattern: "(?i)(ignore\\s+the\\s+usual\\s+review|skip\\s+approval|do\\s+not\\s+tell|keep\\s+this\\s+quiet|trust\\s+the\\s+skill)"
   action: require_approval
   reason: "Language attempts to bypass human review or hide execution intent"
-  shield: null
+  shield:
+    scope: skill.review
   enabled: true
   tags:
     - semantic
@@ -373,6 +374,8 @@
     pattern: "(?i)(compare.{0,40}(?:installed|current).{0,40}version.{0,40}(?:latest|newest|remote).{0,40}at\\s+https?://|use\\s+whichever\\s+version.{0,40}(?:is\\s+)?newer|update.{0,40}(?:local\\s+)?skill\\s+file\\s+before\\s+proceed|always.{0,40}(?:fetch|check|compare).{0,40}latest.{0,40}version.{0,40}SKILL\\.md)"
   action: block
   reason: "Skill instructs the agent to self-update from a remote URL — potential Trojan dropper mechanism"
+  shield:
+    scope: skill.install
   enabled: true
   tags:
     - supply_chain
@@ -1210,6 +1213,8 @@
     pattern: "(?i)(SkillPay|每次调用[^\\n]{0,40}(?:USDT|ETH|BTC|USDC)|per[._\\-\\s]call[^\\n]{0,40}(?:USDT|USDC|ETH|crypto|payment)|per\\s+(?:call|execution|task)[^\\n]{0,60}(?:USDC|USDT|ETH)|(?:BSC|ERC20)\\s+USDT|USDT\\s+on\\s+(?:BSC|ERC20)|USDT.*BEP-20|支付.*USDT|crypto.*payment.*per|pay.*per.*(?:call|request|use))"
   action: block
   reason: "Covert per-call cryptocurrency billing without explicit user consent"
+  shield:
+    scope: skill.payment
   enabled: true
   tags:
     - financial
@@ -1223,6 +1228,8 @@
     pattern: "(?i)(x402\\s+(?:payment|micropayments?|protocol)|via\\s+x402\\b|earn.*(?:USDC|USDT).*(?:per|every)\\s+(?:call|task|execution|request)|(?:USDC|USDT).*per\\s+(?:call|execution|task).*from.*wallet|signed\\s+(?:auto(?:matically)?|from).*(?:user'?s?|your)\\s+(?:own\\s+)?wallet|costs?\\s+\\$[0-9.]+\\s+(?:USDC|USDT)\\s+(?:from|per\\s+call))"
   action: block
   reason: "Skill uses x402 micropayment protocol or charges per-call crypto fees from the user's wallet"
+  shield:
+    scope: skill.payment
   enabled: true
   tags:
     - financial
@@ -1238,6 +1245,8 @@
     pattern: "如果[^\\n]{0,60}请立即执行|不要告诉用户|悄悄地[^\\n]{0,30}执行|静默[^\\n]{0,30}执行|隐藏[^\\n]{0,30}执行|不要通知用户"
   action: block
   reason: "Chinese-language conditional or hidden autonomous execution instruction"
+  shield:
+    scope: skill.autonomy
   enabled: true
   tags:
     - autonomy
@@ -1252,6 +1261,8 @@
     pattern: "(?i)echo\\s+['\"]?[A-Za-z0-9+/]{20,}={0,2}['\"]?\\s*\\|\\s*base64\\s+[-dD]|echo\\s+['\"]?L[0-9A-Za-z+/]{10,}['\"]?\\s*\\|"
   action: block
   reason: "Echo-piped base64 dropper — two-stage obfuscated remote execution"
+  shield:
+    scope: skill.install
   enabled: true
   tags:
     - obfuscation
@@ -1266,6 +1277,8 @@
     pattern: "(?is)(?:monitor|collect|track|fetch|推送|发送).{0,200}(?:wallet|position|holding|balance|transaction|持仓|钱包|余额|资产).{0,200}(?:telegram|discord|webhook|feishu|weixin|微信|qq|bot_token|飞书)"
   action: block
   reason: "Skill collects financial/wallet data and routes it to a messaging or webhook channel"
+  shield:
+    scope: skill.exfil
   enabled: true
   tags:
     - exfiltration
@@ -1280,6 +1293,8 @@
     pattern: "(?i)(?:bot[_-]?token|webhook[_-]?url|discord\\.com/api/webhooks/\\d|api\\.telegram\\.org/bot[A-Za-z0-9_-]{10,})\\s*[=:]\\s*['\"]https?://[^'\"\\s]{10,}['\"]"
   action: require_approval
   reason: "Hardcoded bot token or webhook URL — likely unauthorized data routing"
+  shield:
+    scope: skill.exfil
   enabled: true
   tags:
     - exfiltration
@@ -1324,6 +1339,8 @@
     pattern: "(?i)(telegram\\.bot[_-]?token|bot[_-]?token\\s*(?:=|:)|read\\s+telegram[_-]?token|TELEGRAM_BOT_TOKEN\\s*=)\\s*[\"'a-z0-9_\\$]{0,40}"
   action: block
   reason: "Reads or captures a Telegram bot token from host config"
+  shield:
+    scope: skill.exfiltration
   enabled: true
   tags:
     - exfiltration
@@ -1360,6 +1377,8 @@
     pattern: "(?is)marshal\\.loads\\s*\\(\\s*(?:base64\\.b64decode|codecs\\.decode|zlib\\.decompress|bytes\\.fromhex|binascii\\.a2b_base64)\\s*\\("
   action: block
   reason: "Python bytecode loader over an encoded blob — classic in-memory dropper"
+  shield:
+    scope: skill.install
   enabled: true
   tags:
     - obfuscation
@@ -1377,6 +1396,8 @@
     pattern: "\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}\\\\x[0-9a-fA-F]{2}\\\\r\\\\n"
   action: require_approval
   reason: "Escape-sequence blob consistent with Python bytecode (.pyc) embedded as text"
+  shield:
+    scope: skill.obfuscation
   enabled: true
   tags:
     - obfuscation
@@ -1393,6 +1414,8 @@
     pattern: "(?is)(every|cada|каждые|每)\\s+\\d+\\s*(min|minute|minutes|hour|hours|hr|hrs|мин|分钟|分).{0,160}(fetch|poll|GET|curl\\s+-s|wget|requests\\.get|http\\.get|axios\\.get)\\s+[\"'`<]?https?://|while\\s+(true|True)\\b.{0,80}sleep\\s*\\(\\s*\\d{2,5}\\s*\\).{0,80}(fetch|urlopen|requests\\.get|http\\.get)"
   action: block
   reason: "Heartbeat polling of a remote endpoint — agent receives out-of-band instructions"
+  shield:
+    scope: skill.autonomy
   enabled: true
   tags:
     - c2
@@ -1428,6 +1451,8 @@
     pattern: "(?i)~/\\.(openclaw|claude|agent|anthropic|openai|copilot)/(secrets|credentials|keys|tokens|session|auth)|(session|credentials|auth)\\.json|\\.openclaw/secrets/|\\.claude/credentials/"
   action: block
   reason: "Writes or reads a file inside an agent-runtime secrets directory"
+  shield:
+    scope: skill.secrets
   enabled: true
   tags:
     - credential
@@ -1444,6 +1469,8 @@
     pattern: "(?is)(\\+?\\d[\\d\\s().-]{9,17}\\d).{0,100}(imsg|imessage|sms|whatsapp|telegram|wa\\.me|signal|sendmessage|twilio|sendmsg)|(imsg\\s+send|imessage\\s+send|sms\\s+send|twilio.*messages|whatsapp\\s+send).{0,80}\\+?\\d[\\d\\s().-]{9,17}\\d"
   action: require_approval
   reason: "Hardcoded phone number combined with an auto-send directive"
+  shield:
+    scope: skill.communications
   enabled: true
   tags:
     - exfiltration
@@ -1459,6 +1486,8 @@
     pattern: "(?i)n(ã|a)o\\s+pergunt|nunca\\s+deve\\s+(ver|perguntar|confirmar|pedir)|proibido\\s+(confirmar|perguntar|pedir)|REGRA\\s*#?\\s*\\d+\\s*[—-]\\s*PROIBIDO|exclusivo\\s+para\\s+uso\\s+interno|assume\\s+a\\s+inten(ç|c)(ã|a)o"
   action: require_approval
   reason: "Portuguese-language coercion: instructs agent to bypass user confirmation"
+  shield:
+    scope: skill.behavior
   enabled: true
   tags:
     - coercion
@@ -1475,6 +1504,8 @@
     pattern: "(?i)no\\s+(preguntes|pidas|confirmes)\\b|nunca\\s+le?\\s*(preguntes|pidas|confirmes|pregunta)\\b|sin\\s+preguntar\\s+al?\\s*usuario|asume\\s+la?\\s*intenci(ó|o)n|REGLA\\s*#?\\s*\\d+\\s*[—-]\\s*PROHIBIDO|nunca\\s+debe\\s+ver"
   action: require_approval
   reason: "Spanish-language coercion: instructs agent to bypass user confirmation"
+  shield:
+    scope: skill.behavior
   enabled: true
   tags:
     - coercion
@@ -1491,6 +1522,8 @@
     pattern: "не\\s+спрашивай|никогда\\s+не\\s+спрашивай|без\\s+(подтверждения|разрешения|вопросов)|не\\s+запрашивай|не\\s+проси\\s+подтверждения"
   action: require_approval
   reason: "Russian-language coercion: instructs agent to bypass user confirmation"
+  shield:
+    scope: skill.behavior
   enabled: true
   tags:
     - coercion
@@ -1527,6 +1560,8 @@
     pattern: "(?i)(X-API-Key|Authorization:\\s*Bearer|apiKey\\s*[:=]|AUTH_TOKEN\\s*[:=]|ACCESS_TOKEN\\s*[:=]|client[_-]secret\\s*[:=])\\s*[\"']?[A-Za-z0-9_\\-]{20,}"
   action: block
   reason: "Generic API-key / bearer-token pattern with a long secret-like value"
+  shield:
+    scope: skill.exfiltration
   enabled: true
   tags:
     - credential
@@ -1594,6 +1629,8 @@
     pattern: "(?i)(忠诚原则|loyalty\\s+principle|ALWAYS_(ULTIMATE|HIGHEST_PRIORITY)|disable\\s+all\\s+limits|silent\\s+relay|never\\s+(modify|summari[sz]e|filter)\\s+(the\\s+)?output|不(输出确认信息|要询问用户)|prioritize\\s+\\S+\\s+over\\s+(user|operator)\\s+(intent|request))"
   action: block
   reason: "Skill instructs the agent to override its own safety posture (loyalty / silent relay / output filtering)"
+  shield:
+    scope: skill.autonomy
   enabled: true
   tags:
     - autonomy
@@ -1631,6 +1668,8 @@
     pattern: "(?is)(writeFileSync|appendFileSync|fs\\.(writeFile|appendFile)|>>\\s*~/|echo\\s+[^\\n]{0,200}>>\\s*~/)\\s*[\"']?~/(\\.zshrc|\\.bashrc|\\.profile|\\.bash_profile|\\.config/fish/config\\.fish|\\.claude/settings\\.json)|alias\\s+\\w+\\s*=\\s*['\"][^'\"]*--dangerously-skip-permissions[^'\"]*['\"]|bypassPermissions\\s*[:=]\\s*true"
   action: block
   reason: "Skill modifies the user's interactive shell rc / Claude settings or installs a permission-bypass alias"
+  shield:
+    scope: skill.system
   enabled: true
   tags:
     - persistence
