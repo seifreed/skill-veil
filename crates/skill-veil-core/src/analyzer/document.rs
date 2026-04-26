@@ -70,6 +70,15 @@ impl SkillDocument {
             .collect()
     }
 
+    /// Whether any code block in this document declares a fence language
+    /// equal to `lang`.
+    ///
+    /// Comparison is exact-match on lowercase strings. The parser
+    /// normalizes fence languages to ASCII lowercase at parse time (see
+    /// `adapters/pulldown_parser.rs` — the `Fenced(lang)` branch in the
+    /// code-block handler), so callers MUST pass `lang` in lowercase.
+    /// `kind: code_language` rule conditions in YAML rule packs use
+    /// lowercase tokens by convention, matching this contract.
     pub fn has_code_language(&self, lang: &str) -> bool {
         self.all_code_blocks()
             .iter()
@@ -83,5 +92,44 @@ fn file_system_error_to_io_error(error: FileSystemError) -> std::io::Error {
         FileSystemError::PathNotFound(path) => {
             std::io::Error::new(std::io::ErrorKind::NotFound, path.display().to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::adapters::PulldownMarkdownParser;
+    use crate::analyzer::types::SkillDocument;
+    use std::path::PathBuf;
+
+    fn parse_doc(content: &str) -> SkillDocument {
+        let parser = PulldownMarkdownParser::new();
+        SkillDocument::parse_with_parser(
+            PathBuf::from("/tmp/skill.md"),
+            content.to_string(),
+            &parser,
+        )
+        .expect("parse_with_parser must succeed for the inline fixture")
+    }
+
+    /// Contract: `has_code_language("python")` matches a `Python` (or
+    /// `PYTHON`) fence because the parser normalizes fence languages to
+    /// lowercase. Anchors the bug fix — turns a previously latent
+    /// case-insensitivity contract into a tested one.
+    #[test]
+    fn has_code_language_matches_uppercase_fence_when_caller_uses_lowercase() {
+        let upper = parse_doc("## Setup\n```Python\nprint('hi')\n```\n");
+        let screaming = parse_doc("## Setup\n```PYTHON\nprint('hi')\n```\n");
+        assert!(upper.has_code_language("python"));
+        assert!(screaming.has_code_language("python"));
+    }
+
+    /// Contract: `has_code_language` returns `false` when no code block
+    /// declares the requested language. Pins the negative case so the
+    /// case-insensitive-LHS contract doesn't accidentally widen to
+    /// "matches anything".
+    #[test]
+    fn has_code_language_returns_false_for_unknown_lang() {
+        let doc = parse_doc("## Setup\n```python\nprint('hi')\n```\n");
+        assert!(!doc.has_code_language("ruby"));
     }
 }

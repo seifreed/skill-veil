@@ -1,5 +1,7 @@
 use super::{ArtifactKind, ArtifactScope, Finding};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::path::Path;
 
 /// Summary of the scanner deduplication pass.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -20,34 +22,164 @@ struct FindingDedupKey {
     artifact_path: Option<String>,
 }
 
+/// Minimum component count for a relative artifact suffix to be allowed to match
+/// the primary path. Mirrors `crate::policy::state::MIN_RELATIVE_SUFFIX_COMPONENTS`
+/// (see `policy/state.rs:430`). Two-component paths like `"config/skill.md"` are
+/// rejected because they silently collide with sibling packages in monorepo or
+/// dataset scans (e.g. `/repo-a/config/skill.md` vs `/repo-b/config/skill.md`).
+///
+/// `split_findings_by_scope` deliberately diverges from `paths_match` by also
+/// allowing 1-component bare filenames (e.g. `"skill.md"`): within a single-document
+/// scan the primary path is fixed, so a bare filename matching the primary's
+/// filename unambiguously identifies the primary artifact.
+const MIN_RELATIVE_SUFFIX_COMPONENTS: usize = 3;
+
+/// Whether `artifact_path` should be considered to identify the same artifact as
+/// `primary` for scope-splitting purposes.
+///
+/// Contract:
+/// - Empty artifact paths never match.
+/// - Exact `Path` equality always matches.
+/// - One-component bare filenames match when `primary.ends_with(artifact_path)`
+///   (single-document scan invariant).
+/// - Multi-component relative suffixes match only when `>= 3` components, to
+///   prevent 2-component cross-package collisions (parallel to
+///   `crate::policy::state::paths_match`).
+/// - Other cases (including 2-component relatives, mixed absolute/relative
+///   non-equal pairs) do not match.
+fn primary_path_matches(primary: &Path, artifact_path: &str) -> bool {
+    if artifact_path.is_empty() {
+        return false;
+    }
+    let ap = Path::new(artifact_path);
+    if ap == primary {
+        return true;
+    }
+    let ap_components = ap.components().count();
+    let primary_components = primary.components().count();
+    if ap_components == 1 {
+        return primary.ends_with(ap);
+    }
+    // Mirror `policy::state::paths_match`: both directions of the suffix
+    // relation are valid when the shorter side has ≥ MIN_RELATIVE_SUFFIX_COMPONENTS
+    // components. Pre-fix only `primary.ends_with(ap)` was considered, so a
+    // primary captured at the relative end (`pkg/src/main.rs`) and an artifact
+    // path at the absolute end (`/repo/pkg/src/main.rs`) didn't dedup as the
+    // same artifact, even though `paths_match` (used for waiver matching) did
+    // treat them as equivalent. The asymmetry let scope-splitting and waiver
+    // suppression diverge.
+    if ap_components >= MIN_RELATIVE_SUFFIX_COMPONENTS && primary.ends_with(ap) {
+        return true;
+    }
+    if primary_components >= MIN_RELATIVE_SUFFIX_COMPONENTS && ap.ends_with(primary) {
+        return true;
+    }
+    false
+}
+
 /// Split findings into primary (entrypoint) and supporting (referenced artifacts) groups.
 ///
 /// A finding is considered primary if it matches the primary path and artifact kind,
 /// or if it is a path-less finding whose artifact kind matches the primary kind.
 ///
-/// Path matching uses `Path::ends_with` which compares **path components** (not raw
-/// string suffixes), so a relative artifact_path like `"skill.md"` correctly matches
-/// the primary path `/project/skill.md`, while `"other/skill.md"` does NOT match
-/// `/project/skill.md` because the parent components differ. Within a single
-/// document scan the primary path is fixed, so this is an unambiguous mapping.
+/// Path matching is performed by `primary_path_matches`, which compares whole path
+/// components and rejects 2-component relative suffixes (which would otherwise
+/// silently collide across sibling packages in monorepo or dataset scans). One-
+/// component bare filenames are still accepted because the primary path is fixed
+/// for the duration of a single-document scan.
 pub(crate) fn split_findings_by_scope(
-    path: &std::path::Path,
+    path: &Path,
     primary_artifact_kind: ArtifactKind,
     findings: &[Finding],
 ) -> (Vec<Finding>, Vec<Finding>) {
-    let primary_path = path.display().to_string();
     findings.iter().cloned().partition(|finding| {
         finding.artifact_kind == primary_artifact_kind
             && (finding.artifact_path.is_none()
                 || finding
                     .artifact_path
                     .as_deref()
-                    .is_some_and(|artifact_path| {
-                        let pp = std::path::Path::new(&primary_path);
-                        let ap = std::path::Path::new(artifact_path);
-                        ap == pp || pp.ends_with(artifact_path)
-                    }))
+                    .is_some_and(|artifact_path| primary_path_matches(path, artifact_path)))
     })
+}
+
+/// Lexicographic descending strength of a finding: `(action, severity, confidence)`.
+///
+/// `recommended_action` is the dominant axis because the rest of the codebase
+/// keys on it for verdict decisions (`select_recommended_action` in
+/// `findings/summary.rs`, `recalculate_group_action_excluding` in
+/// `verdict_calibration.rs`, and the joint `(action, signal_class)` reads in
+/// `verdict/predicates.rs` and `verdict/blast_radius.rs`). `confidence` is f32
+/// and uses `partial_cmp().unwrap_or(Equal)` (NaN treated as equal — finding
+/// confidences are bounded `[0, 1]` by the builder, so NaN shouldn't occur).
+fn cmp_finding_strength(candidate: &Finding, existing: &Finding) -> Ordering {
+    candidate
+        .recommended_action
+        .cmp(&existing.recommended_action)
+        .then_with(|| candidate.severity.cmp(&existing.severity))
+        .then_with(|| {
+            candidate
+                .confidence
+                .partial_cmp(&existing.confidence)
+                .unwrap_or(Ordering::Equal)
+        })
+}
+
+/// Merge `candidate` into `existing` for two findings sharing the same dedup key.
+///
+/// Qualitative fields (`recommended_action`, `signal_class`, `evidence_kind`,
+/// `reason`, `remediation`, `raw_confidence`, `confidence_rationale`) are taken
+/// **as a set** from the strength winner — the finding with the greater
+/// `(action, severity, confidence)` tuple. This eliminates the historical
+/// incoherence where `recommended_action` came from one finding while
+/// `signal_class` came from another, producing pairs like
+/// `(action=Block, signal_class=ReviewSignal)` that fool `verdict::predicates`
+/// and `verdict::blast_radius` into the wrong tier.
+///
+/// `severity` and `confidence` remain max-aggregated independently — they are
+/// scalar metrics and "worst severity wins" is a meaningful invariant.
+///
+/// On a total tie of `(action, severity, confidence)`, fall through to the
+/// stable "longer text wins" tiebreak for `reason` and `remediation`. The
+/// `line_number` field preserves first-non-None: duplicates by definition share
+/// `match_value`, so any non-None line number is co-located with the same site.
+fn merge_into(existing: &mut Finding, candidate: Finding) {
+    let order = cmp_finding_strength(&candidate, existing);
+    let candidate_is_stronger = order == Ordering::Greater;
+
+    existing.severity = existing.severity.max(candidate.severity);
+    // `confidence` is sanitized in the builder to be finite within `[0, 1]`,
+    // but `>` returns `false` for either side being NaN — a NaN candidate
+    // would silently fail to update `existing`. Guard the invariant in
+    // debug builds so any future path that bypasses the builder surfaces
+    // the bug loudly instead of producing wrong merge results.
+    debug_assert!(
+        !candidate.confidence.is_nan() && !existing.confidence.is_nan(),
+        "merge_into invariant: confidence must be finite (sanitized in builder)",
+    );
+    if candidate.confidence > existing.confidence {
+        existing.confidence = candidate.confidence;
+    }
+
+    if candidate_is_stronger {
+        existing.recommended_action = candidate.recommended_action;
+        existing.signal_class = candidate.signal_class;
+        existing.evidence_kind = candidate.evidence_kind;
+        existing.raw_confidence = candidate.raw_confidence;
+        existing.confidence_rationale = candidate.confidence_rationale;
+        existing.reason = candidate.reason;
+        existing.remediation = candidate.remediation;
+    } else if order == Ordering::Equal {
+        if candidate.reason.len() > existing.reason.len() {
+            existing.reason = candidate.reason;
+        }
+        if candidate.remediation.len() > existing.remediation.len() {
+            existing.remediation = candidate.remediation;
+        }
+    }
+
+    if existing.line_number.is_none() {
+        existing.line_number = candidate.line_number;
+    }
 }
 
 /// Deduplicate findings that match on the same rule, category, match target,
@@ -55,11 +187,24 @@ pub(crate) fn split_findings_by_scope(
 ///
 /// # Merge Semantics
 ///
-/// - **Severity**: Takes the maximum severity
-/// - **Confidence**: Takes the maximum confidence score
-/// - **RecommendedAction**: Takes the maximum action (Block > RequireApproval > Log)
-/// - **Reason/Remediation**: Preserves from the stronger finding
-/// - **Line number**: Preserves first non-None value encountered
+/// - **Severity**: max of the two findings (scalar aggregate).
+/// - **Confidence**: max of the two findings (scalar aggregate).
+/// - **RecommendedAction, SignalClass, EvidenceKind, Reason, Remediation,
+///   RawConfidence, ConfidenceRationale**: all taken from the strength winner —
+///   the finding with the greater `(action, severity, confidence)` tuple.
+///   Aligning these fields prevents incoherent pairs like
+///   `(action=Block, signal_class=ReviewSignal)` that would otherwise mislead
+///   `verdict::predicates` and `verdict::blast_radius`.
+/// - **Reason / Remediation tie-break**: when the strength tuple ties exactly,
+///   the longer text wins (stable preservation of the more informative entry).
+/// - **Line number**: first non-None value encountered. Duplicates share
+///   `match_value` (it's part of the dedup key), so any non-None line number
+///   is co-located with the same evidence site.
+///
+/// `signal_class` is intentionally NOT part of `FindingDedupKey`. Two findings
+/// emitted with the same rule on the same match value but different signal
+/// classes are correctly merged here; splitting them would silently inflate
+/// finding counts and risk score on emitter quirks.
 #[must_use]
 pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, DeduplicationSummary) {
     let original_findings = findings.len();
@@ -78,44 +223,7 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
 
         deduped
             .entry(key)
-            .and_modify(|existing| {
-                let finding_is_stronger = finding.severity > existing.severity
-                    || (finding.severity == existing.severity
-                        && finding.confidence > existing.confidence);
-                let confidence_from_new = finding.confidence > existing.confidence;
-
-                existing.severity = existing.severity.max(finding.severity);
-                existing.confidence = existing.confidence.max(finding.confidence);
-                existing.recommended_action =
-                    existing.recommended_action.max(finding.recommended_action);
-
-                if finding_is_stronger {
-                    existing.signal_class = finding.signal_class;
-                    existing.evidence_kind = finding.evidence_kind;
-                }
-                // Take raw_confidence and confidence_rationale from the finding that
-                // contributed the max calibrated confidence, keeping them aligned.
-                if confidence_from_new {
-                    existing.raw_confidence = finding.raw_confidence;
-                    existing.confidence_rationale = finding.confidence_rationale.clone();
-                }
-
-                if finding_is_stronger
-                    || (finding.severity == existing.severity
-                        && finding.reason.len() > existing.reason.len())
-                {
-                    existing.reason = finding.reason.clone();
-                }
-                if finding_is_stronger
-                    || (finding.severity == existing.severity
-                        && finding.remediation.len() > existing.remediation.len())
-                {
-                    existing.remediation = finding.remediation.clone();
-                }
-                if existing.line_number.is_none() {
-                    existing.line_number = finding.line_number;
-                }
-            })
+            .and_modify(|existing| merge_into(existing, finding.clone()))
             .or_insert(finding);
     }
 
@@ -137,4 +245,54 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
             duplicates_removed: original_findings.saturating_sub(unique_count),
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: `primary_path_matches` mirrors `policy::state::paths_match`
+    /// when the artifact path is a relative suffix (≥3 components) of the
+    /// primary. This is the case the pre-fix code already covered.
+    #[test]
+    fn primary_path_matches_artifact_suffix_of_primary() {
+        let primary = Path::new("/repo/pkg/src/main.rs");
+        assert!(primary_path_matches(primary, "pkg/src/main.rs"));
+    }
+
+    /// Contract: the inverse direction must also match — when the *primary*
+    /// is the relative suffix and the *artifact_path* is the longer absolute.
+    /// Pre-fix only `primary.ends_with(ap)` was checked, so this case
+    /// silently failed even though `policy::state::paths_match` (used for
+    /// waiver matching) treated them as equivalent. The mismatch produced
+    /// scope-splitting / waiver-suppression drift.
+    #[test]
+    fn primary_path_matches_primary_suffix_of_artifact() {
+        let primary = Path::new("pkg/src/main.rs");
+        assert!(primary_path_matches(primary, "/repo/pkg/src/main.rs"));
+    }
+
+    /// Contract: 1-component bare filenames still match by primary suffix
+    /// (single-document scan invariant). Negative-case regression guard for
+    /// the new inverse branch — it must NOT widen the 1-component rule.
+    #[test]
+    fn primary_path_matches_one_component_filename_still_matches() {
+        let primary = Path::new("/repo/skill.md");
+        assert!(primary_path_matches(primary, "skill.md"));
+    }
+
+    /// Contract: 2-component relative paths NEITHER direction must match.
+    /// Pre-fix this was honoured because of the unidirectional check; the
+    /// fix must keep this rejection in both directions to avoid the
+    /// monorepo cross-package collision the constant guards against.
+    #[test]
+    fn primary_path_matches_rejects_two_component_relative_in_either_direction() {
+        let primary_long = Path::new("/repo-a/config/skill.md");
+        assert!(!primary_path_matches(primary_long, "config/skill.md"));
+        let primary_short = Path::new("config/skill.md");
+        assert!(!primary_path_matches(
+            primary_short,
+            "/repo-a/config/skill.md"
+        ));
+    }
 }

@@ -226,6 +226,23 @@ pub fn classify_verdict(verdict: Verdict) -> SampleLabel {
     }
 }
 
+/// Compute precision/recall/FPR/accuracy from labelled corpus output.
+///
+/// # Empty-corpus contract
+///
+/// When `expected.is_empty()`, sample-level rates (`accuracy`,
+/// `exact_label_accuracy`) return `f32::NAN` to signal "nothing to
+/// evaluate" — distinguishable from `0.0` ("scanner got everything
+/// wrong on a real corpus"). The pre-fix `.max(1)` clamp on the
+/// total-sample denominator collapsed both cases to `0.0`, leaving
+/// callers unable to tell apart an empty input from a universally-failed
+/// scan.
+///
+/// Per-class rates (`precision`, `recall`, `false_positive_rate`) keep
+/// the `.max(1)` clamp and surface as `0.0` when their respective class
+/// has no examples, since callers compare these against thresholds and
+/// NaN comparisons (always `false` under `<` / `>`) would silently
+/// short-circuit threshold checks.
 pub fn compute_metrics(expected: &[SampleLabel], actual: &[SampleLabel]) -> RegressionMetrics {
     let mut true_positive = 0_u32;
     let mut false_positive = 0_u32;
@@ -248,17 +265,29 @@ pub fn compute_metrics(expected: &[SampleLabel], actual: &[SampleLabel]) -> Regr
     let recall_denominator = (true_positive + false_negative).max(1) as f32;
     let fpr_denominator = (false_positive + true_negative).max(1) as f32;
 
-    RegressionMetrics {
-        precision: true_positive as f32 / precision_denominator,
-        recall: true_positive as f32 / recall_denominator,
-        false_positive_rate: false_positive as f32 / fpr_denominator,
-        accuracy: (true_positive + true_negative) as f32 / (expected.len().max(1) as f32),
-        exact_label_accuracy: expected
+    let total = expected.len() as f32;
+    let accuracy = if expected.is_empty() {
+        f32::NAN
+    } else {
+        (true_positive + true_negative) as f32 / total
+    };
+    let exact_label_accuracy = if expected.is_empty() {
+        f32::NAN
+    } else {
+        expected
             .iter()
             .zip(actual.iter())
             .filter(|(expected_label, actual_label)| expected_label == actual_label)
             .count() as f32
-            / (expected.len().max(1) as f32),
+            / total
+    };
+
+    RegressionMetrics {
+        precision: true_positive as f32 / precision_denominator,
+        recall: true_positive as f32 / recall_denominator,
+        false_positive_rate: false_positive as f32 / fpr_denominator,
+        accuracy,
+        exact_label_accuracy,
         true_positive,
         false_positive,
         true_negative,
@@ -339,11 +368,24 @@ fn finalize_calibration_buckets(buckets: BTreeMap<String, Vec<bool>>) -> Vec<Cal
 }
 
 fn calibrate_confidence_value(observed_precision: f32, findings: u32) -> f32 {
-    let lower_bound = wilson_lower_bound(observed_precision, findings.max(1));
+    // An empty bucket (no labelled findings) carries no statistical
+    // signal; pre-fix the `findings.max(1)` coercion produced
+    // `recommended_confidence = 0.35` which downstream readers cannot
+    // distinguish from a real 0.35 calibration. NaN is the right
+    // sentinel — `f32::is_nan()` flips clean and serializes to JSON
+    // `null` via serde, so consumers can render "no data".
+    if findings == 0 {
+        return f32::NAN;
+    }
+    let lower_bound = wilson_lower_bound(observed_precision, findings);
     (0.35 + (lower_bound * 0.6)).clamp(0.1, 0.99)
 }
 
 fn wilson_lower_bound(observed_precision: f32, findings: u32) -> f32 {
+    debug_assert!(
+        findings > 0,
+        "wilson_lower_bound: callers must guard `findings == 0` themselves",
+    );
     let n = findings.max(1) as f32;
     let z = 1.96_f32;
     let z2 = z * z;
@@ -612,5 +654,95 @@ mod tests {
                 other => panic!("unexpected error: {other:?}"),
             }
         }
+    }
+
+    /// Contract: empty corpus yields NaN for sample-level rates so
+    /// callers can tell apart "no data" from "0% correct on real data".
+    #[test]
+    fn compute_metrics_returns_nan_accuracy_for_empty_corpus() {
+        let m = compute_metrics(&[], &[]);
+        assert!(
+            m.accuracy.is_nan(),
+            "empty corpus must yield NaN accuracy, got {}",
+            m.accuracy
+        );
+        assert!(
+            m.exact_label_accuracy.is_nan(),
+            "empty corpus must yield NaN exact_label_accuracy, got {}",
+            m.exact_label_accuracy
+        );
+    }
+
+    /// Contract: per-class rates stay at 0.0 on empty corpus. Callers
+    /// compare these against thresholds and NaN would silently
+    /// short-circuit those comparisons. Pins the deliberate split
+    /// between sample-level NaN and per-class 0.0.
+    #[test]
+    fn compute_metrics_keeps_zero_for_per_class_rates_on_empty_corpus() {
+        let m = compute_metrics(&[], &[]);
+        assert!(
+            !m.precision.is_nan() && m.precision.abs() < f32::EPSILON,
+            "precision must be 0.0 (not NaN) on empty corpus"
+        );
+        assert!(
+            !m.recall.is_nan() && m.recall.abs() < f32::EPSILON,
+            "recall must be 0.0 (not NaN) on empty corpus"
+        );
+        assert!(
+            !m.false_positive_rate.is_nan() && m.false_positive_rate.abs() < f32::EPSILON,
+            "false_positive_rate must be 0.0 (not NaN) on empty corpus"
+        );
+    }
+
+    /// Contract: non-empty input produces finite, predictable metrics —
+    /// pins the no-op case so the empty-input fix does not regress the
+    /// populated path.
+    #[test]
+    fn compute_metrics_unchanged_for_non_empty_input() {
+        // 3 samples: 2 risky/risky agreement (TP), 1 benign/benign agreement (TN).
+        let expected = &[
+            SampleLabel::Malicious,
+            SampleLabel::Suspicious,
+            SampleLabel::Benign,
+        ];
+        let actual = &[
+            SampleLabel::Malicious,
+            SampleLabel::Suspicious,
+            SampleLabel::Benign,
+        ];
+        let m = compute_metrics(expected, actual);
+        assert_eq!(m.true_positive, 2);
+        assert_eq!(m.false_positive, 0);
+        assert_eq!(m.true_negative, 1);
+        assert_eq!(m.false_negative, 0);
+        assert!((m.accuracy - 1.0).abs() < f32::EPSILON);
+        assert!((m.exact_label_accuracy - 1.0).abs() < f32::EPSILON);
+        assert!((m.precision - 1.0).abs() < f32::EPSILON);
+        assert!((m.recall - 1.0).abs() < f32::EPSILON);
+        assert!(m.false_positive_rate.abs() < f32::EPSILON);
+    }
+
+    /// Contract: `calibrate_confidence_value` returns NaN for an empty
+    /// bucket. Pre-fix `findings.max(1)` coerced the empty case to 1 and
+    /// returned `0.35` — a plausible-looking number that downstream
+    /// consumers couldn't distinguish from a real low-precision bucket.
+    /// NaN is the unambiguous "no data" sentinel.
+    #[test]
+    fn calibrate_confidence_value_returns_nan_for_empty_bucket() {
+        let result = calibrate_confidence_value(0.0, 0);
+        assert!(
+            result.is_nan(),
+            "empty bucket must produce NaN; got {result}",
+        );
+    }
+
+    /// Contract: a non-empty bucket produces a finite confidence in
+    /// `[0.1, 0.99]`. Positive-case regression guard so the NaN
+    /// early-return doesn't accidentally widen.
+    #[test]
+    fn calibrate_confidence_value_finite_for_non_empty_bucket() {
+        let result = calibrate_confidence_value(0.5, 10);
+        assert!(result.is_finite(), "non-empty bucket must be finite");
+        assert!((0.1..=0.99).contains(&result));
     }
 }

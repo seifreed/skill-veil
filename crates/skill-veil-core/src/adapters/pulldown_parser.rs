@@ -78,7 +78,14 @@ impl MarkdownParser for PulldownMarkdownParser {
                             if lang.is_empty() {
                                 None
                             } else {
-                                Some(lang)
+                                // Lowercase mirrors the section-name convention at line 69
+                                // (`section.name = ...to_lowercase()`). Markdown fence
+                                // langs (`python` / `Python` / `PYTHON`) all refer to the
+                                // same language; downstream `has_code_language` compares
+                                // with `==`, so normalizing here keeps that comparison
+                                // case-insensitive without scattering
+                                // `eq_ignore_ascii_case` calls across every caller.
+                                Some(lang.to_ascii_lowercase())
                             }
                         }
                         pulldown_cmark::CodeBlockKind::Indented => None,
@@ -161,6 +168,53 @@ echo "hello"
         let parser = PulldownMarkdownParser::new();
         let sections = parser.parse_sections("").unwrap();
         assert!(sections.is_empty());
+    }
+
+    /// Contract: a code-fence with an UPPERCASE language tag (`Python`)
+    /// is normalized to lowercase at the parser boundary, mirroring the
+    /// section-name convention. Without this, `has_code_language("python")`
+    /// would silently miss skills that use `Python` / `PYTHON` fences.
+    #[test]
+    fn test_parse_lowercases_uppercase_fence_language() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Setup\n```Python\nprint('hi')\n```\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+        assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
+    }
+
+    /// Contract: SCREAMING_CASE fence langs also normalize.
+    #[test]
+    fn test_parse_lowercases_screaming_fence_language() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Setup\n```PYTHON\nprint('hi')\n```\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+        assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
+    }
+
+    /// Contract: lowercase fence langs are unchanged (no-op case anchored
+    /// alongside the normalization tests so a future "preserve casing"
+    /// regression is caught).
+    #[test]
+    fn test_parse_preserves_lowercase_fence_language() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Setup\n```python\nprint('hi')\n```\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+        assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
+    }
+
+    /// Contract: a fence with no language tag still produces `None`, not
+    /// an empty-string `Some("")`. Pins existing behavior under the new
+    /// lowercase guard.
+    #[test]
+    fn test_parse_preserves_empty_fence_as_none() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Setup\n```\nprint('hi')\n```\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+        assert_eq!(setup.code_blocks[0].language, None);
     }
 
     /// Contract: code block contents live in `section.code_blocks` only,

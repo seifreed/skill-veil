@@ -465,6 +465,37 @@ pub(crate) fn waiver_matches_finding(
     rule_matches && path_matches && context_matches
 }
 
+/// Match a baseline entry against a finding by fingerprint equality only.
+///
+/// # Identity contract
+///
+/// Baselines are intentionally **stricter** than waivers and policy
+/// overrides. The fingerprint absorbs `rule_id + artifact_path +
+/// match_value + matched_on` (see `finding_fingerprint`), so two findings
+/// that differ in any of those fields produce different fingerprints and
+/// will NOT match the same baseline entry — even when their paths would
+/// be considered equivalent under `paths_match`'s suffix rules.
+///
+/// This is by design: baseline entries are auto-generated from a prior
+/// scan and are meant to pin "the exact set of findings observed at time
+/// T". Applying suffix matching here would let unrelated findings in
+/// other packages slip into the baseline (the same monorepo failure mode
+/// the `paths_match` cross-package safety contract documents), defeating
+/// the audit-trail value of `--baseline`.
+///
+/// Waivers and policy overrides, by contrast, are *human-authored* and
+/// use `paths_match` to allow expressive cross-package suppression. The
+/// asymmetry is intentional. Tests pin both directions:
+/// `baseline_matches_finding_requires_fingerprint_equality` (positive)
+/// and `baseline_matches_finding_does_not_apply_paths_match_suffix`
+/// (negative — guards against future refactors that try to "uniform"
+/// the API).
+///
+/// **CI pitfall**: a baseline generated with absolute paths in one
+/// working directory will not match the same logical finding scanned
+/// from a different absolute root, because `artifact_path` enters the
+/// fingerprint verbatim. Generate baselines from the same path layout
+/// they will be applied against, or normalize paths before scanning.
 pub(crate) fn baseline_matches_finding(entry: &BaselineEntry, finding: &Finding) -> bool {
     entry.fingerprint == finding_fingerprint(finding)
 }
@@ -641,5 +672,83 @@ mod validate_policy_tests {
             ov(Some("b"), Some("RULE_A"), RecommendedAction::Log),
         ];
         assert!(validate_policy(&policy).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod baseline_matches_tests {
+    use super::*;
+    use crate::findings::{ArtifactKind, Finding, ThreatCategory};
+
+    fn finding_for(rule_id: &str, artifact_path: Option<&str>) -> Finding {
+        Finding::builder(rule_id, ThreatCategory::Generic)
+            .match_value("payload")
+            .reason("test")
+            .artifact(
+                ArtifactKind::SkillDocument,
+                artifact_path.map(ToOwned::to_owned),
+            )
+            .build()
+    }
+
+    /// Contract: a baseline entry matches a finding ONLY when their
+    /// fingerprints (rule_id + artifact_path + match_value + matched_on)
+    /// are byte-equal. Pins the documented "fingerprint-exact" identity
+    /// contract on `baseline_matches_finding` so any future refactor that
+    /// loosens the comparison (e.g. switching to `paths_match` like
+    /// waivers) regresses this test instead of silently widening
+    /// suppression scope.
+    #[test]
+    fn baseline_matches_finding_requires_fingerprint_equality() {
+        let finding = finding_for("RULE_A", Some("pkg/src/main.rs"));
+        let entry = BaselineEntry {
+            fingerprint: finding_fingerprint(&finding),
+            rule_id: finding.rule_id.clone(),
+            artifact_path: finding.artifact_path.clone(),
+            reason: finding.reason.clone(),
+        };
+        assert!(
+            baseline_matches_finding(&entry, &finding),
+            "fingerprint-equal entry MUST match"
+        );
+    }
+
+    /// Contract (negative): a baseline entry whose `artifact_path` is a
+    /// path-suffix of the finding's `artifact_path` MUST NOT match. This
+    /// guards the asymmetry with `waiver_matches_finding` /
+    /// `policy_override_matches`, which DO use `paths_match` suffix
+    /// semantics. Auto-generated baselines must remain a pinned snapshot,
+    /// not a fuzzy filter — see the `# Identity contract` doc-comment on
+    /// `baseline_matches_finding`.
+    #[test]
+    fn baseline_matches_finding_does_not_apply_paths_match_suffix() {
+        let finding = finding_for("RULE_A", Some("/abs/repo/pkg/src/main.rs"));
+        let suffix_finding = finding_for("RULE_A", Some("pkg/src/main.rs"));
+        let entry = BaselineEntry {
+            fingerprint: finding_fingerprint(&suffix_finding),
+            rule_id: suffix_finding.rule_id.clone(),
+            artifact_path: suffix_finding.artifact_path.clone(),
+            reason: suffix_finding.reason.clone(),
+        };
+        assert!(
+            !baseline_matches_finding(&entry, &finding),
+            "suffix-equivalent paths must NOT match — baselines are fingerprint-exact"
+        );
+    }
+
+    /// Contract: a finding with a different `rule_id` cannot match an
+    /// entry, even when every other field (path, match_value, matched_on)
+    /// is identical. Confirms `rule_id` is part of the fingerprint.
+    #[test]
+    fn baseline_matches_finding_rejects_different_rule_id() {
+        let finding_a = finding_for("RULE_A", Some("pkg/src/main.rs"));
+        let finding_b = finding_for("RULE_B", Some("pkg/src/main.rs"));
+        let entry = BaselineEntry {
+            fingerprint: finding_fingerprint(&finding_a),
+            rule_id: finding_a.rule_id.clone(),
+            artifact_path: finding_a.artifact_path.clone(),
+            reason: finding_a.reason.clone(),
+        };
+        assert!(!baseline_matches_finding(&entry, &finding_b));
     }
 }

@@ -111,9 +111,21 @@ impl FindingBuilder {
         self
     }
 
-    /// Set the confidence score (0.0 - 1.0)
+    /// Set the confidence score (0.0 - 1.0).
+    ///
+    /// NaN inputs are silently ignored — the previous value (default 0.9
+    /// from `new()`, or whatever was set by an earlier `.confidence(…)`
+    /// call) is preserved. `dedup.rs::cmp_finding_strength` and the
+    /// merge-semantics doc-comment in `dedup.rs::deduplicate_findings`
+    /// document this as a load-bearing invariant: confidences are bounded
+    /// `[0, 1]` so that `partial_cmp` and `weighted_score` cannot encounter
+    /// NaN. Without this guard, a malformed external rule pack
+    /// (`confidence: .nan` is valid YAML 1.1) would propagate NaN through
+    /// `Finding.confidence`, `Finding.raw_confidence`, and risk scoring.
     pub fn confidence(mut self, confidence: f32) -> Self {
-        self.confidence = confidence.clamp(0.0, 1.0);
+        if !confidence.is_nan() {
+            self.confidence = confidence.clamp(0.0, 1.0);
+        }
         self
     }
 
@@ -325,5 +337,122 @@ impl Finding {
             | ThreatCategory::ScopeCreep
             | ThreatCategory::Generic => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: a NaN `confidence(...)` call is silently ignored — the
+    /// builder preserves whatever value was set previously (default
+    /// `DEFAULT_FINDING_CONFIDENCE = 0.9`). This guard is load-bearing for
+    /// `dedup.rs::cmp_finding_strength` and `weighted_score`, both of which
+    /// would propagate NaN through risk scoring if it slipped past the
+    /// builder. A malformed external rule pack (`confidence: .nan` is valid
+    /// YAML 1.1) is the realistic regression source.
+    #[test]
+    fn confidence_nan_is_silently_ignored_and_preserves_default() {
+        let finding = Finding::builder("TEST_NAN", ThreatCategory::RemoteExec)
+            .confidence(f32::NAN)
+            .reason("nan input")
+            .build();
+        assert!(
+            finding.raw_confidence.is_finite(),
+            "raw_confidence must remain finite after NaN input; got {}",
+            finding.raw_confidence,
+        );
+        assert!(
+            (finding.raw_confidence - DEFAULT_FINDING_CONFIDENCE).abs() < f32::EPSILON,
+            "NaN must preserve the default; got raw={}",
+            finding.raw_confidence,
+        );
+        assert!(
+            finding.confidence.is_finite(),
+            "calibrated confidence must remain finite; got {}",
+            finding.confidence,
+        );
+    }
+
+    /// Contract: a NaN call after a valid call MUST NOT overwrite the
+    /// previously-set value. Pre-fix this scenario would have wiped the
+    /// real confidence to NaN; the guard preserves the last good value.
+    #[test]
+    fn confidence_nan_does_not_overwrite_prior_valid_value() {
+        let finding = Finding::builder("TEST_NAN_AFTER", ThreatCategory::RemoteExec)
+            .confidence(0.42)
+            .confidence(f32::NAN)
+            .reason("nan after valid")
+            .build();
+        assert!(
+            (finding.raw_confidence - 0.42).abs() < f32::EPSILON,
+            "NaN must not clobber prior 0.42; got raw={}",
+            finding.raw_confidence,
+        );
+    }
+
+    /// Contract: confidences greater than 1.0 are clamped to exactly 1.0.
+    /// Pins the upper bound assumed by `weighted_score` and `partial_cmp`.
+    #[test]
+    fn confidence_clamps_above_one_to_one() {
+        let finding = Finding::builder("TEST_HIGH", ThreatCategory::RemoteExec)
+            .confidence(2.5)
+            .reason("above 1")
+            .build();
+        assert!(
+            (finding.raw_confidence - 1.0).abs() < f32::EPSILON,
+            "raw_confidence must clamp to 1.0; got {}",
+            finding.raw_confidence,
+        );
+    }
+
+    /// Contract: confidences less than 0.0 are clamped to exactly 0.0.
+    /// Pins the lower bound assumed by `weighted_score` (which multiplies by
+    /// confidence and would otherwise produce a negative risk contribution).
+    #[test]
+    fn confidence_clamps_below_zero_to_zero() {
+        let finding = Finding::builder("TEST_LOW", ThreatCategory::RemoteExec)
+            .confidence(-0.3)
+            .reason("below 0")
+            .build();
+        assert!(
+            (finding.raw_confidence - 0.0).abs() < f32::EPSILON,
+            "raw_confidence must clamp to 0.0; got {}",
+            finding.raw_confidence,
+        );
+    }
+
+    /// Contract: a finite, in-range confidence is preserved verbatim in
+    /// `raw_confidence`. The calibrated `confidence` is allowed to differ
+    /// (`calibrate_confidence` blends with a baseline), but the raw value
+    /// is the audit record of what the rule actually claimed.
+    #[test]
+    fn confidence_in_range_is_preserved_in_raw_confidence() {
+        let finding = Finding::builder("TEST_OK", ThreatCategory::RemoteExec)
+            .confidence(0.73)
+            .reason("valid")
+            .build();
+        assert!(
+            (finding.raw_confidence - 0.73).abs() < f32::EPSILON,
+            "raw_confidence must equal the input 0.73; got {}",
+            finding.raw_confidence,
+        );
+    }
+
+    /// Contract: positive infinity is treated like any out-of-range float —
+    /// clamped to the upper bound, NOT propagated. `f32::clamp(0.0, 1.0)`
+    /// on +inf returns 1.0; this test pins that the guard sequence
+    /// (NaN check, then clamp) handles infinities correctly.
+    #[test]
+    fn confidence_positive_infinity_clamps_to_one() {
+        let finding = Finding::builder("TEST_INF", ThreatCategory::RemoteExec)
+            .confidence(f32::INFINITY)
+            .reason("inf")
+            .build();
+        assert!(
+            (finding.raw_confidence - 1.0).abs() < f32::EPSILON,
+            "+inf must clamp to 1.0; got {}",
+            finding.raw_confidence,
+        );
     }
 }

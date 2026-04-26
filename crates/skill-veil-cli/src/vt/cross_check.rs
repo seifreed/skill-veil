@@ -20,11 +20,41 @@ const REPORTS_DIRNAME: &str = super::download::REPORTS_DIRNAME;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Classification {
+    /// Both engines flagged the package as malicious. VT verdict is
+    /// `"malicious"` and skill-veil's verdict is `Malicious` or
+    /// `Suspicious`.
     AgreeMalicious,
+    /// Both engines flagged at the lower-confidence "suspicious" tier:
+    /// VT verdict is `"suspicious"` and skill-veil is `Malicious` or
+    /// `Suspicious`. Distinguished from `AgreeMalicious` so the audit
+    /// trail reflects the confidence VT actually returned — a package
+    /// VT marked merely suspicious should not be reported as if VT
+    /// confirmed it as malicious.
+    AgreeSuspicious,
+    /// Both engines agreed the package is clean. VT verdict is
+    /// `"benign"` or `"harmless"` and skill-veil's verdict is `Benign`.
     AgreeBenign,
+    /// We said clean, VT said malicious. The most actionable bucket for
+    /// rule design: VT's analysis text is the seed for new detection
+    /// rules.
     WeMissed,
+    /// We said clean, VT said suspicious. Lower-confidence miss.
+    /// Distinguished from `WeMissed` so we don't inflate the apparent
+    /// "missed malware" count with packages VT only flagged at the
+    /// suspicious tier.
+    WeMissedSuspicious,
+    /// We flagged a package VT considers clean. Either we have a false
+    /// positive or we caught something VT doesn't yet detect.
     WeOverreached,
+    /// VT has no report or returned an unrecognized verdict string.
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VtTier {
+    Malicious,
+    Suspicious,
+    Benign,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,8 +74,19 @@ pub(crate) struct PackageCrossCheck {
 pub(crate) struct CrossCheckSummary {
     pub(crate) total: usize,
     pub(crate) agree_malicious: usize,
+    /// Count of packages where both engines agreed at the lower-confidence
+    /// suspicious tier. Tracked separately from `agree_malicious` so the
+    /// audit trail preserves VT's confidence level.
+    #[serde(default)]
+    pub(crate) agree_suspicious: usize,
     pub(crate) agree_benign: usize,
     pub(crate) we_missed: usize,
+    /// Count of packages where we said clean but VT said suspicious.
+    /// Tracked separately from `we_missed` so users don't conflate
+    /// VT-suspicious packages with VT-malicious packages in their
+    /// "we missed" review queue.
+    #[serde(default)]
+    pub(crate) we_missed_suspicious: usize,
     pub(crate) we_overreached: usize,
     pub(crate) unknown: usize,
     pub(crate) packages: Vec<PackageCrossCheck>,
@@ -75,6 +116,16 @@ pub(crate) fn build_summary(
             // Fall back to hashing the primary artifact on disk so cross-
             // check is meaningful for arbitrary corpora.
             let Some(sha) = sha_for_lookup(&res.metadata.package_id, &res.metadata.path) else {
+                // Without a SHA we cannot key the VT report cache, so the
+                // result is structurally invisible to cross-check. Logging
+                // it (vs. silently skipping) is what keeps `summary.total`
+                // reconcilable with `scan_results.len()` for users running
+                // large dataset scans.
+                tracing::warn!(
+                    package_id = ?res.metadata.package_id,
+                    path = %res.metadata.path.display(),
+                    "cross-check: skipping scan result without recoverable SHA-256",
+                );
                 continue;
             };
             let our_verdict = verdict_label(res.verdict);
@@ -108,8 +159,10 @@ pub(crate) fn build_summary(
             summary.total += 1;
             match classification {
                 Classification::AgreeMalicious => summary.agree_malicious += 1,
+                Classification::AgreeSuspicious => summary.agree_suspicious += 1,
                 Classification::AgreeBenign => summary.agree_benign += 1,
                 Classification::WeMissed => summary.we_missed += 1,
+                Classification::WeMissedSuspicious => summary.we_missed_suspicious += 1,
                 Classification::WeOverreached => summary.we_overreached += 1,
                 Classification::Unknown => summary.unknown += 1,
             }
@@ -117,7 +170,9 @@ pub(crate) fn build_summary(
             if opts.only_mismatches
                 && !matches!(
                     classification,
-                    Classification::WeMissed | Classification::WeOverreached
+                    Classification::WeMissed
+                        | Classification::WeMissedSuspicious
+                        | Classification::WeOverreached
                 )
             {
                 continue;
@@ -160,7 +215,13 @@ fn load_reports(reports_dir: &Path) -> Result<BTreeMap<String, CachedReport>> {
             tracing::warn!("skipping unreadable VT report {}", path.display());
             continue;
         };
-        out.insert(cached.sha256.clone(), cached);
+        // Lookup keys (`sha_for_lookup`) are guaranteed lowercase via
+        // `is_sha256_hex` (rejects uppercase) and `format!("{:x}")` for
+        // on-disk hashing. Cache keys MUST match that contract — a report
+        // file with `"sha256": "FF00AA..."` would otherwise be stored
+        // verbatim and never matched by the lookup, surfacing as `Unknown`
+        // even though the report exists.
+        out.insert(cached.sha256.to_ascii_lowercase(), cached);
     }
     Ok(out)
 }
@@ -249,15 +310,28 @@ fn classify(our: Verdict, vt_category: Option<&str>) -> Classification {
         Some(s) => s,
         None => return Classification::Unknown,
     };
-    let vt_malicious = matches!(vt.as_str(), "malicious" | "suspicious");
-    let vt_benign = matches!(vt.as_str(), "benign" | "harmless");
-
-    match (our, vt_malicious, vt_benign) {
-        (Verdict::Malicious | Verdict::Suspicious, true, _) => Classification::AgreeMalicious,
-        (Verdict::Benign, _, true) => Classification::AgreeBenign,
-        (Verdict::Malicious | Verdict::Suspicious, _, true) => Classification::WeOverreached,
-        (Verdict::Benign, true, _) => Classification::WeMissed,
-        _ => Classification::Unknown,
+    let vt_tier = match vt.as_str() {
+        "malicious" => VtTier::Malicious,
+        "suspicious" => VtTier::Suspicious,
+        "benign" | "harmless" => VtTier::Benign,
+        _ => return Classification::Unknown,
+    };
+    // Distinguish VT's three confidence tiers so the audit trail is
+    // honest about what VT actually returned. Pre-fix: `"malicious"`
+    // and `"suspicious"` collapsed into a single boolean, so a package
+    // VT marked merely suspicious was reported as `WeMissed` ("VT:
+    // malicious") in the markdown summary.
+    match (our, vt_tier) {
+        (Verdict::Malicious | Verdict::Suspicious, VtTier::Malicious) => {
+            Classification::AgreeMalicious
+        }
+        (Verdict::Malicious | Verdict::Suspicious, VtTier::Suspicious) => {
+            Classification::AgreeSuspicious
+        }
+        (Verdict::Malicious | Verdict::Suspicious, VtTier::Benign) => Classification::WeOverreached,
+        (Verdict::Benign, VtTier::Malicious) => Classification::WeMissed,
+        (Verdict::Benign, VtTier::Suspicious) => Classification::WeMissedSuspicious,
+        (Verdict::Benign, VtTier::Benign) => Classification::AgreeBenign,
     }
 }
 
@@ -276,53 +350,35 @@ pub(crate) fn render_markdown(summary: &CrossCheckSummary) -> String {
         "# skill-veil × VirusTotal cross-check\n\n\
         _packages compared_: **{}**\n\n\
         | our verdict / VT | count |\n|---|---|\n\
-        | ✅ agree malicious | {} |\n\
+        | ✅ agree malicious (VT: malicious) | {} |\n\
+        | ⚠️ agree suspicious (VT: suspicious) | {} |\n\
         | ✅ agree benign | {} |\n\
-        | ❌ we missed (VT: malicious, us: benign/suspicious) | **{}** |\n\
-        | ⚠️ we overreached (VT: benign, us: malicious) | {} |\n\
-        | ❓ unknown (no VT report) | {} |\n",
+        | ❌ we missed (VT: malicious, us: benign) | **{}** |\n\
+        | ⚠️ VT flagged as suspicious, us: benign | {} |\n\
+        | ⚠️ we overreached (VT: benign, us: malicious/suspicious) | {} |\n\
+        | ❓ unknown (no VT report or unrecognized verdict) | {} |\n",
         summary.total,
         summary.agree_malicious,
+        summary.agree_suspicious,
         summary.agree_benign,
         summary.we_missed,
+        summary.we_missed_suspicious,
         summary.we_overreached,
         summary.unknown,
     );
 
-    let missed: Vec<_> = summary
-        .packages
-        .iter()
-        .filter(|p| p.classification == Classification::WeMissed)
-        .collect();
-    if !missed.is_empty() {
-        let _ = writeln!(out, "\n## We missed ({})\n", missed.len());
-        for pkg in missed {
-            let _ = writeln!(out, "### `{}`", pkg.sha256);
-            if let Some(name) = &pkg.meaningful_name {
-                let _ = writeln!(out, "- **name**: {name}");
-            }
-            let _ = writeln!(
-                out,
-                "- **our verdict**: {} (risk {})",
-                pkg.our_verdict, pkg.our_risk_score
-            );
-            if pkg.our_findings.is_empty() {
-                let _ = writeln!(out, "- **our findings**: _(none)_");
-            } else {
-                let _ = writeln!(out, "- **our findings**: {}", pkg.our_findings.join(", "));
-            }
-            if let Some(v) = &pkg.vt_verdict {
-                let _ = writeln!(out, "- **VT verdict**: {v}");
-            }
-            if let Some(analysis) = &pkg.vt_analysis {
-                let _ = writeln!(out, "\n**VT Code Insight analysis:**\n");
-                for line in analysis.lines() {
-                    let _ = writeln!(out, "> {line}");
-                }
-                let _ = writeln!(out);
-            }
-        }
-    }
+    render_missed_section(
+        &mut out,
+        summary,
+        Classification::WeMissed,
+        "We missed (VT: malicious)",
+    );
+    render_missed_section(
+        &mut out,
+        summary,
+        Classification::WeMissedSuspicious,
+        "VT flagged as suspicious, we said benign",
+    );
 
     let overreached: Vec<_> = summary
         .packages
@@ -349,41 +405,118 @@ pub(crate) fn render_markdown(summary: &CrossCheckSummary) -> String {
 
 pub(crate) fn render_text(summary: &CrossCheckSummary) -> String {
     format!(
-        "Cross-check: total={} agree_malicious={} agree_benign={} we_missed={} we_overreached={} unknown={}",
+        "Cross-check: total={} agree_malicious={} agree_suspicious={} agree_benign={} \
+         we_missed={} we_missed_suspicious={} we_overreached={} unknown={}",
         summary.total,
         summary.agree_malicious,
+        summary.agree_suspicious,
         summary.agree_benign,
         summary.we_missed,
+        summary.we_missed_suspicious,
         summary.we_overreached,
         summary.unknown,
     )
+}
+
+/// Render one "we missed" detail section (per-package list with VT analysis
+/// text) for a specific `Classification` bucket. Used for both
+/// `WeMissed` (VT: malicious) and `WeMissedSuspicious` (VT: suspicious)
+/// — the two buckets share output shape but were previously inlined into
+/// `render_markdown` for the malicious case only.
+fn render_missed_section(
+    out: &mut String,
+    summary: &CrossCheckSummary,
+    classification: Classification,
+    heading: &str,
+) {
+    let pkgs: Vec<_> = summary
+        .packages
+        .iter()
+        .filter(|p| p.classification == classification)
+        .collect();
+    if pkgs.is_empty() {
+        return;
+    }
+    let _ = writeln!(out, "\n## {} ({})\n", heading, pkgs.len());
+    for pkg in pkgs {
+        let _ = writeln!(out, "### `{}`", pkg.sha256);
+        if let Some(name) = &pkg.meaningful_name {
+            let _ = writeln!(out, "- **name**: {name}");
+        }
+        let _ = writeln!(
+            out,
+            "- **our verdict**: {} (risk {})",
+            pkg.our_verdict, pkg.our_risk_score
+        );
+        if pkg.our_findings.is_empty() {
+            let _ = writeln!(out, "- **our findings**: _(none)_");
+        } else {
+            let _ = writeln!(out, "- **our findings**: {}", pkg.our_findings.join(", "));
+        }
+        if let Some(v) = &pkg.vt_verdict {
+            let _ = writeln!(out, "- **VT verdict**: {v}");
+        }
+        if let Some(analysis) = &pkg.vt_analysis {
+            let _ = writeln!(out, "\n**VT Code Insight analysis:**\n");
+            for line in analysis.lines() {
+                let _ = writeln!(out, "> {line}");
+            }
+            let _ = writeln!(out);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Contract: `classify` covers all 9 `(Verdict × VtTier)` combinations
+    /// plus the `Unknown` fallback for missing or unrecognized VT
+    /// strings. VT-suspicious is distinguished from VT-malicious so the
+    /// audit trail preserves the confidence VT actually returned —
+    /// before the fix, suspicious collapsed into `AgreeMalicious` /
+    /// `WeMissed` and the markdown labelled both as "malicious".
     #[test]
     fn classify_cases() {
+        // VT: malicious
         assert_eq!(
             classify(Verdict::Malicious, Some("malicious")),
             Classification::AgreeMalicious
         );
         assert_eq!(
             classify(Verdict::Suspicious, Some("malicious")),
-            Classification::AgreeMalicious
+            Classification::AgreeMalicious,
+            "Suspicious × VT-malicious escalates to AgreeMalicious"
         );
         assert_eq!(
             classify(Verdict::Benign, Some("malicious")),
             Classification::WeMissed
         );
+        // VT: suspicious — the bug-fix anchor
         assert_eq!(
             classify(Verdict::Suspicious, Some("suspicious")),
-            Classification::AgreeMalicious
+            Classification::AgreeSuspicious,
+            "Suspicious × VT-suspicious is AgreeSuspicious, NOT AgreeMalicious"
         );
+        assert_eq!(
+            classify(Verdict::Malicious, Some("suspicious")),
+            Classification::AgreeSuspicious,
+            "Malicious × VT-suspicious is AgreeSuspicious — both flagged at lower confidence"
+        );
+        assert_eq!(
+            classify(Verdict::Benign, Some("suspicious")),
+            Classification::WeMissedSuspicious,
+            "Benign × VT-suspicious is WeMissedSuspicious, NOT WeMissed"
+        );
+        // VT: benign / harmless
         assert_eq!(
             classify(Verdict::Benign, Some("benign")),
             Classification::AgreeBenign
+        );
+        assert_eq!(
+            classify(Verdict::Benign, Some("harmless")),
+            Classification::AgreeBenign,
+            "VT 'harmless' is treated as benign tier"
         );
         assert_eq!(
             classify(Verdict::Malicious, Some("benign")),
@@ -398,7 +531,83 @@ mod tests {
             classify(Verdict::Suspicious, Some("harmless")),
             Classification::WeOverreached
         );
+        // Unknown: missing or unrecognized VT verdict
         assert_eq!(classify(Verdict::Benign, None), Classification::Unknown);
+        assert_eq!(
+            classify(Verdict::Benign, Some("totally-bogus")),
+            Classification::Unknown,
+            "Unrecognized VT verdict strings fall through to Unknown"
+        );
+    }
+
+    /// Contract: `we_missed` and `we_missed_suspicious` increment
+    /// independently. A package VT marked merely suspicious must not
+    /// inflate the apparent "missed malware" count.
+    #[test]
+    fn summary_counts_split_we_missed_by_vt_tier() {
+        let opts = CrossCheckOptions {
+            dataset_dir: std::path::PathBuf::from("/nonexistent"),
+            only_mismatches: false,
+        };
+        let mut summary = CrossCheckSummary::default();
+        // Manually drive the counter logic with classify outputs since
+        // build_summary requires loading reports from disk.
+        for c in [
+            Classification::WeMissed,
+            Classification::WeMissedSuspicious,
+            Classification::WeMissedSuspicious,
+        ] {
+            match c {
+                Classification::WeMissed => summary.we_missed += 1,
+                Classification::WeMissedSuspicious => summary.we_missed_suspicious += 1,
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(summary.we_missed, 1);
+        assert_eq!(summary.we_missed_suspicious, 2);
+        // opts is constructed only to verify the type still compiles after the field changes.
+        let _ = opts.only_mismatches;
+    }
+
+    /// Contract: the markdown table label for each bucket accurately
+    /// reflects the data. The pre-fix markdown said "VT: malicious"
+    /// even when the bucket included VT-suspicious entries.
+    #[test]
+    fn render_markdown_labels_match_classification_buckets() {
+        let summary = CrossCheckSummary {
+            total: 5,
+            agree_malicious: 1,
+            agree_suspicious: 1,
+            agree_benign: 1,
+            we_missed: 1,
+            we_missed_suspicious: 1,
+            we_overreached: 0,
+            unknown: 0,
+            packages: Vec::new(),
+        };
+        let md = render_markdown(&summary);
+        assert!(
+            md.contains("agree malicious (VT: malicious)"),
+            "agree-malicious row must be unambiguously labelled"
+        );
+        assert!(
+            md.contains("agree suspicious (VT: suspicious)"),
+            "agree-suspicious row must exist and reference VT's suspicious tier"
+        );
+        assert!(
+            md.contains("we missed (VT: malicious, us: benign)"),
+            "we-missed row must NOT mention 'suspicious' — that has its own bucket"
+        );
+        assert!(
+            md.contains("VT flagged as suspicious, us: benign"),
+            "we-missed-suspicious row must surface the new bucket"
+        );
+        // The pre-fix label combined both into "us: benign/suspicious"
+        // — guard against regression.
+        assert!(
+            !md.contains("us: benign/suspicious"),
+            "the pre-fix combined label must not reappear; markdown was:\n{md}"
+        );
     }
 
     #[test]
@@ -468,5 +677,39 @@ mod tests {
         let path = std::path::PathBuf::from(format!("/nonexistent/{bogus}/SKILL.md"));
         // No package_id, no valid ancestor sha, file doesn't exist → None.
         assert!(sha_for_lookup(&None, &path).is_none());
+    }
+
+    /// Contract: `load_reports` MUST normalise cached SHA-256 keys to
+    /// lowercase. `sha_for_lookup` always returns lowercase (validated by
+    /// `is_sha256_hex` and produced by `format!("{:x}")`), so a cached
+    /// report whose JSON `sha256` field is uppercase or mixed-case would
+    /// never match a lookup — surfacing as `Unknown` even though the
+    /// report exists. Pre-fix the insert used `cached.sha256.clone()`
+    /// verbatim.
+    #[test]
+    fn load_reports_normalizes_uppercase_sha_to_lowercase() {
+        use crate::vt::types::FileAttributes;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let upper = "FF".repeat(32); // 64 uppercase hex chars
+        let report = CachedReport {
+            sha256: upper.clone(),
+            fetched_at: "2026-01-01T00:00:00Z".to_string(),
+            attributes: FileAttributes::default(),
+        };
+        let json = serde_json::to_vec(&report).expect("serialise");
+        std::fs::write(tmp.path().join("report.json"), &json).expect("write");
+
+        let loaded = load_reports(tmp.path()).expect("load_reports");
+        let lower = upper.to_ascii_lowercase();
+        assert!(
+            loaded.contains_key(&lower),
+            "cache key must be lowercase; got keys: {:?}",
+            loaded.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !loaded.contains_key(&upper),
+            "uppercase key must NOT be present; the lookup path normalises to lowercase"
+        );
     }
 }

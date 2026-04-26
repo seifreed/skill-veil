@@ -61,10 +61,20 @@ pub struct SarifResult {
     pub properties: Option<serde_json::Value>,
 }
 
+/// A SARIF `location` object.
+///
+/// `physical_location` is `Option`al because SARIF 2.1.0 explicitly allows
+/// `location` objects without one when the finding has no concrete file
+/// position to point at (e.g. a taint sink derived from cross-artifact
+/// graph traversal where no single file owns the signal). Pre-fix, the
+/// serializer fabricated a `physical_location` that pointed at the
+/// package's `SKILL.md` whenever the finding's `artifact_path` was
+/// `None`, which made SARIF-aware viewers (CodeQL UI, GitHub Code
+/// Scanning) attribute the finding to the wrong file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SarifLocation {
-    #[serde(rename = "physicalLocation")]
-    pub physical_location: SarifPhysicalLocation,
+    #[serde(rename = "physicalLocation", skip_serializing_if = "Option::is_none")]
+    pub physical_location: Option<SarifPhysicalLocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -245,11 +245,34 @@ fn build_sarif_rules(
 
 fn sarif_location(uri: String, region: Option<SarifRegion>) -> SarifLocation {
     SarifLocation {
-        physical_location: SarifPhysicalLocation {
+        physical_location: Some(SarifPhysicalLocation {
             artifact_location: SarifArtifactLocation { uri },
             region,
-        },
+        }),
     }
+}
+
+/// Build the SARIF `locations` array for a finding.
+///
+/// Returns an empty vector when the finding has no concrete `artifact_path`
+/// — SARIF 2.1.0 permits omitting locations on `result` objects, and that
+/// is more honest than the pre-fix behaviour of fabricating a location
+/// that pointed at the package's `SKILL.md`. Viewers that group results
+/// by file (CodeQL UI, GitHub Code Scanning) would otherwise attribute
+/// these "graph-derived" findings to the wrong file.
+fn sarif_locations_for_finding(finding: &Finding) -> Vec<SarifLocation> {
+    finding
+        .artifact_path
+        .as_ref()
+        .map(|path| {
+            vec![sarif_location(
+                path.clone(),
+                finding
+                    .line_number
+                    .map(|line| SarifRegion { start_line: line }),
+            )]
+        })
+        .unwrap_or_default()
 }
 
 fn build_sarif_finding_results(
@@ -257,6 +280,7 @@ fn build_sarif_finding_results(
     skill_path: &str,
     verdict_report: &PackageVerdictReport,
 ) -> Vec<SarifResult> {
+    let _ = skill_path; // kept for signature compatibility with sibling builders
     findings
         .iter()
         .map(|finding| SarifResult {
@@ -265,15 +289,7 @@ fn build_sarif_finding_results(
             message: SarifMessage {
                 text: format!("{}: {}", finding.reason, finding.match_value),
             },
-            locations: vec![sarif_location(
-                finding
-                    .artifact_path
-                    .clone()
-                    .unwrap_or_else(|| skill_path.to_string()),
-                finding
-                    .line_number
-                    .map(|line| SarifRegion { start_line: line }),
-            )],
+            locations: sarif_locations_for_finding(finding),
             properties: Some(serde_json::json!({
                 "artifact_kind": finding.artifact_kind,
                 "artifact_scope": finding.artifact_scope,
@@ -380,5 +396,81 @@ pub fn empty_sarif_report() -> SarifReport {
         schema: "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json".to_string(),
         version: "2.1.0".to_string(),
         runs: vec![],
+    }
+}
+
+#[cfg(test)]
+mod sarif_location_tests {
+    use super::*;
+    use crate::findings::{ArtifactKind, ThreatCategory};
+
+    fn finding_with_path(artifact_path: Option<&str>, line: Option<usize>) -> Finding {
+        let mut builder = Finding::builder("RULE_X", ThreatCategory::Generic)
+            .match_value("payload")
+            .reason("test")
+            .artifact(
+                ArtifactKind::SkillDocument,
+                artifact_path.map(ToOwned::to_owned),
+            );
+        if let Some(line) = line {
+            builder = builder.line(line);
+        }
+        builder.build()
+    }
+
+    /// Contract: when a finding has no concrete `artifact_path`, the
+    /// SARIF `result.locations` array MUST be empty rather than synthesise
+    /// a location pointing at the package's `SKILL.md`. Pre-fix the
+    /// serializer fell back to `skill_path`, which made viewers attribute
+    /// graph-derived findings to the wrong file.
+    #[test]
+    fn sarif_locations_for_finding_returns_empty_when_no_artifact_path() {
+        let finding = finding_with_path(None, None);
+        let locations = sarif_locations_for_finding(&finding);
+        assert!(
+            locations.is_empty(),
+            "findings without artifact_path must produce no SARIF locations; got {locations:?}"
+        );
+    }
+
+    /// Contract: when a finding has an `artifact_path`, the location is
+    /// emitted with a populated `physical_location.artifact_location.uri`
+    /// equal to that path, and the optional `region.start_line` reflects
+    /// `line_number`.
+    #[test]
+    fn sarif_locations_for_finding_emits_physical_location_when_path_present() {
+        let finding = finding_with_path(Some("pkg/src/main.rs"), Some(42));
+        let locations = sarif_locations_for_finding(&finding);
+        assert_eq!(locations.len(), 1, "exactly one location expected");
+        let phys = locations[0]
+            .physical_location
+            .as_ref()
+            .expect("physical_location must be populated when artifact_path is Some");
+        assert_eq!(phys.artifact_location.uri, "pkg/src/main.rs");
+        assert_eq!(
+            phys.region.as_ref().map(|r| r.start_line),
+            Some(42),
+            "line_number must propagate to region.startLine"
+        );
+    }
+
+    /// Contract: the JSON form omits `physicalLocation` entirely when it
+    /// is `None` (via `skip_serializing_if`). SARIF consumers that
+    /// distinguish "no location" from "empty physicalLocation" rely on
+    /// the field being absent, not present-but-empty.
+    #[test]
+    fn sarif_location_json_omits_physical_location_when_none() {
+        let location = SarifLocation {
+            physical_location: None,
+        };
+        let json = serde_json::to_string(&location).expect("serialize");
+        assert!(
+            !json.contains("physicalLocation"),
+            "physicalLocation must be omitted from JSON when None; got {json}"
+        );
+        assert_eq!(
+            json, "{}",
+            "an empty SarifLocation must round-trip to an empty JSON object"
+        );
     }
 }

@@ -33,14 +33,28 @@ pub(super) fn looks_like_secret_target(target: &str) -> bool {
 
 /// Check that `keyword` appears in `text` at a word boundary: preceded and
 /// followed by a non-alphanumeric character (or string start/end).
+///
+/// # Contract
+///
+/// Boundary checks must be Unicode-aware: a non-ASCII letter such as `ñ`
+/// preceding the keyword is part of the surrounding word, NOT a boundary.
+/// Pre-fix this used `text.as_bytes()[abs_pos - 1].is_ascii_alphanumeric()`
+/// which read a UTF-8 continuation byte (0x80–0xBF) and treated it as
+/// non-alphanumeric, so `"ñtoken"` was wrongly classified as a boundary
+/// match.
 pub(super) fn has_word_boundary(text: &str, keyword: &str) -> bool {
     let mut start = 0;
     while let Some(pos) = text[start..].find(keyword) {
         let abs_pos = start + pos;
-        let before_ok = abs_pos == 0 || !text.as_bytes()[abs_pos - 1].is_ascii_alphanumeric();
+        let before_ok = text[..abs_pos]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric());
         let after_pos = abs_pos + keyword.len();
-        let after_ok =
-            after_pos >= text.len() || !text.as_bytes()[after_pos].is_ascii_alphanumeric();
+        let after_ok = text[after_pos..]
+            .chars()
+            .next()
+            .is_none_or(|c| !c.is_alphanumeric());
         if before_ok && after_ok {
             return true;
         }
@@ -130,4 +144,50 @@ pub(super) fn looks_like_registry_url(url: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// # Contract
+    /// `has_word_boundary` must NOT treat a non-ASCII alphanumeric char
+    /// adjacent to the keyword as a word boundary. Pre-fix `as_bytes()`
+    /// indexing read a UTF-8 continuation byte (0x80–0xBF), which is not
+    /// `is_ascii_alphanumeric`, so the keyword falsely matched at a
+    /// word boundary inside `"ñtoken"` / `"tokenñ"`.
+    #[test]
+    fn has_word_boundary_rejects_adjacent_non_ascii_letter() {
+        assert!(
+            !has_word_boundary("ñtoken", "token"),
+            "non-ASCII letter before keyword must NOT be a word boundary",
+        );
+        assert!(
+            !has_word_boundary("tokenñ", "token"),
+            "non-ASCII letter after keyword must NOT be a word boundary",
+        );
+    }
+
+    /// # Contract
+    /// Positive: bare keyword and ASCII separators flanking the keyword
+    /// must still be treated as word boundaries (regression guard so the
+    /// Unicode-aware fix doesn't accidentally tighten the happy path).
+    #[test]
+    fn has_word_boundary_accepts_ascii_separators_and_bare_keyword() {
+        assert!(has_word_boundary("token", "token"));
+        assert!(has_word_boundary("/token=", "token"));
+        assert!(has_word_boundary("auth_token foo", "token"));
+        assert!(has_word_boundary("session.token", "token"));
+    }
+
+    /// # Contract
+    /// `has_word_boundary` must reject ASCII-alphanumeric flanks (this is
+    /// the ORIGINAL contract — the substring match is part of a larger
+    /// word like `tokenizer`).
+    #[test]
+    fn has_word_boundary_rejects_ascii_alphanumeric_flanks() {
+        assert!(!has_word_boundary("tokenizer", "token"));
+        assert!(!has_word_boundary("mytoken", "token"));
+        assert!(!has_word_boundary("token1", "token"));
+    }
 }

@@ -599,6 +599,327 @@ fn test_hygiene_with_non_log_action_prevents_isolated_weak_downgrade() {
     );
 }
 
+/// Contract: a 2-component relative artifact_path (e.g. `config/skill.md`) must
+/// NOT be classified as primary against a primary path that happens to share
+/// the same trailing components. This is the bug case where sibling packages
+/// in monorepo / dataset scans (`/repo-a/config/skill.md` vs
+/// `/repo-b/config/skill.md`) would otherwise silently collide.
+#[test]
+fn split_findings_by_scope_rejects_two_component_cross_package_suffix() {
+    let primary_path = std::path::Path::new("/repo-a/config/skill.md");
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .artifact(
+            ArtifactKind::SkillDocument,
+            Some("config/skill.md".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("x")
+        .reason("x")
+        .build();
+
+    let (primary, supporting) =
+        split_findings_by_scope(primary_path, ArtifactKind::SkillDocument, &[finding]);
+
+    assert!(
+        primary.is_empty(),
+        "2-component relative artifact_path must be rejected to avoid cross-package collision"
+    );
+    assert_eq!(supporting.len(), 1);
+}
+
+/// Contract: a 3+ component qualified relative suffix correctly identifies the
+/// primary artifact (mirrors `paths_match_accepts_three_component_specific_suffix`
+/// in `policy/state.rs`).
+#[test]
+fn split_findings_by_scope_accepts_three_component_qualified_suffix() {
+    let primary_path = std::path::Path::new("/wrk/repo-a/config/skill.md");
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .artifact(
+            ArtifactKind::SkillDocument,
+            Some("repo-a/config/skill.md".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("x")
+        .reason("x")
+        .build();
+
+    let (primary, supporting) =
+        split_findings_by_scope(primary_path, ArtifactKind::SkillDocument, &[finding]);
+
+    assert_eq!(primary.len(), 1);
+    assert!(supporting.is_empty());
+}
+
+/// Contract: an absolute artifact_path that doesn't equal the (relative or
+/// otherwise) primary path is supporting, never primary. Mixing absolute and
+/// relative paths via suffix-match would lose the explicit-path semantic.
+#[test]
+fn split_findings_by_scope_rejects_absolute_artifact_path_against_relative_primary() {
+    let primary_path = std::path::Path::new("skill.md");
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .artifact(
+            ArtifactKind::SkillDocument,
+            Some("/elsewhere/skill.md".to_string()),
+        )
+        .matched_on(MatchTarget::Document)
+        .match_value("x")
+        .reason("x")
+        .build();
+
+    let (primary, supporting) =
+        split_findings_by_scope(primary_path, ArtifactKind::SkillDocument, &[finding]);
+
+    assert!(primary.is_empty());
+    assert_eq!(supporting.len(), 1);
+}
+
+/// Contract: an empty artifact_path string is treated as "explicit but unknown",
+/// not as "matches everything". It must classify as supporting.
+#[test]
+fn split_findings_by_scope_rejects_empty_artifact_path() {
+    let primary_path = std::path::Path::new("/project/skill.md");
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .artifact(ArtifactKind::SkillDocument, Some(String::new()))
+        .matched_on(MatchTarget::Document)
+        .match_value("x")
+        .reason("x")
+        .build();
+
+    let (primary, supporting) =
+        split_findings_by_scope(primary_path, ArtifactKind::SkillDocument, &[finding]);
+
+    assert!(primary.is_empty());
+    assert_eq!(supporting.len(), 1);
+}
+
+/// Contract: when two dedupe-key-equal findings are merged, `signal_class`,
+/// `evidence_kind`, and `recommended_action` must come from the same finding —
+/// the strength winner by `(action, severity, confidence)` tuple. Without this,
+/// `verdict::predicates` and `verdict::blast_radius` (which read these fields
+/// jointly) can be fooled into the wrong tier or blast-radius level.
+#[test]
+fn deduplicate_findings_aligns_signal_class_with_action_winner() {
+    let high_severity_log = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::High)
+        .confidence(0.5)
+        .action(RecommendedAction::Log)
+        .signal_class(SignalClass::Hygiene)
+        .evidence_kind(EvidenceKind::Behavior)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("weak by action, strong by severity")
+        .build();
+    let medium_severity_block = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::Medium)
+        .confidence(0.9)
+        .action(RecommendedAction::Block)
+        .signal_class(SignalClass::MaliciousBehavior)
+        .evidence_kind(EvidenceKind::Ioc)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("strong by action, weaker by severity")
+        .build();
+
+    let (findings, _) = deduplicate_findings(vec![high_severity_log, medium_severity_block]);
+
+    assert_eq!(findings.len(), 1);
+    let merged = &findings[0];
+    assert_eq!(
+        merged.severity,
+        Severity::High,
+        "severity is max-aggregated"
+    );
+    assert!(
+        merged.confidence >= 0.85,
+        "confidence is max-aggregated (got {})",
+        merged.confidence
+    );
+    assert_eq!(
+        merged.recommended_action,
+        RecommendedAction::Block,
+        "action winner: Block"
+    );
+    assert_eq!(
+        merged.signal_class,
+        SignalClass::MaliciousBehavior,
+        "signal_class must align with action winner, not severity winner"
+    );
+    assert_eq!(
+        merged.evidence_kind,
+        EvidenceKind::Ioc,
+        "evidence_kind must align with action winner, not severity winner"
+    );
+    assert_eq!(merged.reason, "strong by action, weaker by severity");
+}
+
+/// Contract: findings that share a dedup key but differ in `signal_class` are
+/// MERGED (not kept as separate findings). Splitting them on signal_class would
+/// silently inflate finding counts and risk score on emitter quirks.
+#[test]
+fn deduplicate_findings_does_not_split_on_signal_class_mismatch() {
+    let hygiene = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .signal_class(SignalClass::Hygiene)
+        .matched_on(MatchTarget::Document)
+        .match_value("identical match value")
+        .reason("hygiene variant")
+        .build();
+    let malicious = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .signal_class(SignalClass::MaliciousBehavior)
+        .matched_on(MatchTarget::Document)
+        .match_value("identical match value")
+        .reason("malicious variant")
+        .build();
+
+    let (findings, summary) = deduplicate_findings(vec![hygiene, malicious]);
+
+    assert_eq!(
+        findings.len(),
+        1,
+        "differing signal_class with identical dedup key must merge, not split"
+    );
+    assert_eq!(summary.duplicates_removed, 1);
+}
+
+/// Contract: when severities tie, the action winner determines the qualitative
+/// fields (signal_class, evidence_kind, reason, remediation).
+#[test]
+fn deduplicate_findings_keeps_strongest_action_when_severities_tie() {
+    let high_log = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::High)
+        .action(RecommendedAction::Log)
+        .signal_class(SignalClass::Hygiene)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("log variant")
+        .build();
+    let high_block = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::High)
+        .action(RecommendedAction::Block)
+        .signal_class(SignalClass::MaliciousBehavior)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("block variant")
+        .build();
+
+    let (findings, _) = deduplicate_findings(vec![high_log, high_block]);
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+    assert_eq!(findings[0].signal_class, SignalClass::MaliciousBehavior);
+    assert_eq!(findings[0].reason, "block variant");
+}
+
+/// Contract: when actions tie, the tuple ordering falls through to severity.
+/// The severity winner's qualitative fields are taken.
+#[test]
+fn deduplicate_findings_keeps_strongest_severity_when_actions_tie() {
+    let medium_block = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::Medium)
+        .action(RecommendedAction::Block)
+        .signal_class(SignalClass::SuspiciousPackageBehavior)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("medium severity variant")
+        .build();
+    let high_block = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::High)
+        .action(RecommendedAction::Block)
+        .signal_class(SignalClass::MaliciousBehavior)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("high severity variant")
+        .build();
+
+    let (findings, _) = deduplicate_findings(vec![medium_block, high_block]);
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0].severity, Severity::High);
+    assert_eq!(findings[0].signal_class, SignalClass::MaliciousBehavior);
+    assert_eq!(findings[0].reason, "high severity variant");
+}
+
+/// Contract: `raw_confidence` and `confidence_rationale` follow the strength
+/// winner — NOT the max-confidence finding. This pins the deliberate decision
+/// to keep the audit trail aligned with the qualitative-field source even when
+/// a different finding happens to carry a higher calibrated confidence.
+#[test]
+fn deduplicate_findings_aligns_raw_confidence_with_strength_winner() {
+    let high_log_high_conf = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::High)
+        .confidence(0.95)
+        .action(RecommendedAction::Log)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("high severity but log action")
+        .build();
+    let medium_block_low_conf = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::Medium)
+        .confidence(0.55)
+        .action(RecommendedAction::Block)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("medium severity but block action")
+        .build();
+    // Capture pre-merge values so the assertion stays correct under any future
+    // change to confidence calibration in the builder.
+    let max_calibrated = high_log_high_conf
+        .confidence
+        .max(medium_block_low_conf.confidence);
+    let strength_winner_raw = medium_block_low_conf.raw_confidence;
+    let strength_winner_rationale = medium_block_low_conf.confidence_rationale.clone();
+    assert!(
+        high_log_high_conf.confidence > medium_block_low_conf.confidence,
+        "test precondition: high-severity-log finding must carry the higher calibrated confidence"
+    );
+
+    let (findings, _) = deduplicate_findings(vec![high_log_high_conf, medium_block_low_conf]);
+
+    assert_eq!(findings.len(), 1);
+    let merged = &findings[0];
+    assert!(
+        (merged.confidence - max_calibrated).abs() < f32::EPSILON,
+        "calibrated confidence is max-aggregated (got {}, expected {})",
+        merged.confidence,
+        max_calibrated
+    );
+    assert!(
+        (merged.raw_confidence - strength_winner_raw).abs() < f32::EPSILON,
+        "raw_confidence must come from the strength winner (Block action), not from the max-confidence finding"
+    );
+    assert_eq!(merged.confidence_rationale, strength_winner_rationale);
+}
+
+/// Contract: when `(action, severity, confidence)` tie exactly, the longer
+/// `reason` text wins (preserves stable audit-trail behavior so that the most
+/// informative entry survives merge).
+#[test]
+fn deduplicate_findings_prefers_longer_reason_on_total_tuple_tie() {
+    let short_reason = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::Medium)
+        .confidence(0.7)
+        .action(RecommendedAction::RequireApproval)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("short")
+        .build();
+    let long_reason = Finding::builder("RULE_DUP", ThreatCategory::Generic)
+        .severity(Severity::Medium)
+        .confidence(0.7)
+        .action(RecommendedAction::RequireApproval)
+        .matched_on(MatchTarget::Document)
+        .match_value("same match site")
+        .reason("a much longer and more informative reason text for the audit trail")
+        .build();
+
+    let (findings, _) = deduplicate_findings(vec![short_reason, long_reason]);
+
+    assert_eq!(findings.len(), 1);
+    assert_eq!(
+        findings[0].reason,
+        "a much longer and more informative reason text for the audit trail"
+    );
+}
+
 #[test]
 fn test_empty_findings_produce_benign_healthy_verdict() {
     // Issue #8: Empty input should produce Benign verdict and Healthy package status
@@ -620,4 +941,78 @@ fn test_empty_findings_produce_benign_healthy_verdict() {
     assert!(verdict.effective_capabilities.is_empty());
     // Empty findings produce Low blast radius (no risk factors)
     assert_eq!(verdict.blast_radius_summary.level, BlastRadiusLevel::Low);
+}
+
+/// Contract: a NaN passed to `.confidence(...)` after a finite value must
+/// preserve the finite value — the merge-semantics docs in
+/// `findings/dedup.rs:100-101` rely on `Finding.confidence` being finite.
+#[test]
+fn confidence_builder_rejects_nan_keeps_previous_value() {
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .confidence(0.5)
+        .confidence(f32::NAN)
+        .build();
+    assert!(
+        !finding.confidence.is_nan(),
+        "NaN must not propagate to Finding.confidence"
+    );
+    assert!(
+        !finding.raw_confidence.is_nan(),
+        "NaN must not propagate to Finding.raw_confidence"
+    );
+    assert!((finding.raw_confidence - 0.5).abs() < f32::EPSILON);
+}
+
+/// Contract: a NaN passed to `.confidence(...)` with no prior call falls
+/// back to the constructor default (0.9), not NaN.
+#[test]
+fn confidence_builder_rejects_nan_with_no_prior_value() {
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .confidence(f32::NAN)
+        .build();
+    assert!(!finding.confidence.is_nan());
+    assert!(!finding.raw_confidence.is_nan());
+    assert!((finding.raw_confidence - 0.9).abs() < 0.01);
+}
+
+/// Contract: confidence values above 1.0 clamp to 1.0 (existing behavior,
+/// pinned alongside the NaN guard so future readers see the contract
+/// together).
+#[test]
+fn confidence_builder_clamps_above_one() {
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .confidence(2.5)
+        .build();
+    assert!((finding.raw_confidence - 1.0).abs() < f32::EPSILON);
+}
+
+/// Contract: confidence values below 0.0 clamp to 0.0.
+#[test]
+fn confidence_builder_clamps_below_zero() {
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .confidence(-0.3)
+        .build();
+    assert!(finding.raw_confidence.abs() < f32::EPSILON);
+}
+
+/// Contract: positive infinity clamps to 1.0 (Rust's `f32::clamp` handles
+/// finite-but-overflowing values correctly; pinned to anchor the behavior
+/// distinction between Inf and NaN).
+#[test]
+fn confidence_builder_handles_positive_infinity() {
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .confidence(f32::INFINITY)
+        .build();
+    assert!(!finding.raw_confidence.is_nan());
+    assert!((finding.raw_confidence - 1.0).abs() < f32::EPSILON);
+}
+
+/// Contract: negative infinity clamps to 0.0.
+#[test]
+fn confidence_builder_handles_negative_infinity() {
+    let finding = Finding::builder("RULE", ThreatCategory::Generic)
+        .confidence(f32::NEG_INFINITY)
+        .build();
+    assert!(!finding.raw_confidence.is_nan());
+    assert!(finding.raw_confidence.abs() < f32::EPSILON);
 }

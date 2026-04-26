@@ -4,7 +4,7 @@ use crate::findings::ArtifactKind;
 use serde::{Deserialize, Serialize};
 
 /// Capability exposed or requested by an artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactCapability {
     BrowserAccess,

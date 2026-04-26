@@ -280,6 +280,34 @@ fn llm_cache_root_for(scan_path: &Path) -> PathBuf {
     }
 }
 
+/// Reads each path's contents, propagating any I/O failure with context.
+///
+/// # Contract
+///
+/// Returns `Err` on the first read failure — the caller MUST NOT substitute
+/// an empty string for missing primary content. The LLM enrichment treats
+/// `SKILL.md` as canonical evidence; a silent default would let the model
+/// produce a verdict from findings only and violate the invariant in
+/// `llm/prompt.rs`.
+fn read_primary_contents_for_paths<I, P>(paths: I) -> Result<Vec<String>>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    paths
+        .into_iter()
+        .map(|p| {
+            let path = p.as_ref();
+            std::fs::read_to_string(path).with_context(|| {
+                format!(
+                    "Failed to read primary SKILL.md for LLM enrichment: {}",
+                    path.display()
+                )
+            })
+        })
+        .collect()
+}
+
 fn try_enrich_with_llm(
     scan_result: &PackageScanResult,
     scan_path: &Path,
@@ -297,11 +325,26 @@ fn try_enrich_with_llm(
     // from disk here (scanner already did; but keeping this in CLI avoids a
     // core-crate API change to expose cached contents).
     let mut bundles: Vec<PreparedBundle<'_>> = Vec::new();
-    let mut primary_contents: Vec<String> = Vec::with_capacity(scan_result.results.len());
-    // First pass: read primary contents and keep them alive for the prompt build.
-    for res in &scan_result.results {
-        primary_contents.push(std::fs::read_to_string(&res.metadata.path).unwrap_or_default());
-    }
+    // The primary SKILL.md content is the LLM's core evidence (see the
+    // invariant doc-comment in `llm/prompt.rs`). A silent
+    // `unwrap_or_default()` here would hand the LLM an empty string and
+    // let it issue a verdict on findings alone — defeating the third-engine
+    // purpose. Read fallibly and skip enrichment with a clear warning if any
+    // primary cannot be read (TOCTOU between scan and enrich, permissions, etc).
+    let primary_contents = match read_primary_contents_for_paths(
+        scan_result
+            .results
+            .iter()
+            .map(|r| r.metadata.path.as_path()),
+    ) {
+        Ok(c) => c,
+        Err(err) => {
+            if !quiet {
+                eprintln!("LLM enrichment skipped: {err:#}");
+            }
+            return Ok(None);
+        }
+    };
     for (res, primary) in scan_result.results.iter().zip(primary_contents.iter()) {
         let mut supporting: Vec<(PathBuf, String)> = Vec::new();
         if let Some(parent) = res.metadata.path.parent() {
@@ -618,6 +661,37 @@ mod tests {
         let primary = std::path::PathBuf::from("/tmp/pkg/SKILL.md");
         let candidate = primary.clone();
         assert!(super::is_primary_artifact_path(&candidate, &primary, None));
+    }
+
+    /// Contract: a missing primary `SKILL.md` MUST surface as an error so
+    /// the caller can skip LLM enrichment. Returning an empty string would
+    /// let the LLM produce a verdict on findings alone, violating the
+    /// "core evidence" invariant.
+    #[test]
+    fn read_primary_contents_for_paths_propagates_io_error_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does_not_exist.md");
+        let err = super::read_primary_contents_for_paths(std::iter::once(missing.as_path()))
+            .expect_err("missing file must produce error, not empty string");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Failed to read primary SKILL.md for LLM enrichment"),
+            "error must mention LLM enrichment context: {msg}",
+        );
+    }
+
+    /// Contract: existing files round-trip their contents in iteration order.
+    #[test]
+    fn read_primary_contents_for_paths_returns_contents_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.md");
+        let b = dir.path().join("b.md");
+        std::fs::write(&a, b"first").unwrap();
+        std::fs::write(&b, b"second").unwrap();
+        let contents =
+            super::read_primary_contents_for_paths([a.as_path(), b.as_path()].iter().copied())
+                .expect("both files exist");
+        assert_eq!(contents, vec!["first".to_string(), "second".to_string()]);
     }
 
     #[test]

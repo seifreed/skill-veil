@@ -3,7 +3,7 @@
 
 use crate::config::ProviderParams;
 use crate::llm::client::{
-    build_agent, openai_compatible_messages_json, post_json_with_retry, LlmProvider,
+    build_agent, openai_compatible_messages_value, post_json_with_retry, LlmProvider,
 };
 use crate::llm::types::{LlmError, LlmPrompt, LlmRawResponse};
 
@@ -12,6 +12,7 @@ const DEFAULT_MODEL: &str = "local-model";
 
 pub(crate) struct LmStudioProvider {
     agent: ureq::Agent,
+    api_key: Option<String>,
     base_url: String,
     model: String,
     max_tokens: u32,
@@ -27,11 +28,28 @@ impl LmStudioProvider {
         let model = super::resolve_model(&params, DEFAULT_MODEL);
         Ok(Self {
             agent: build_agent(timeout_secs),
+            api_key: params.api_key.clone(),
             base_url,
             model,
             max_tokens: params.max_tokens.unwrap_or(1024),
             temperature: params.temperature.unwrap_or(0.1),
         })
+    }
+
+    /// Build the request headers used by `analyze`.
+    ///
+    /// LMStudio in its default local configuration needs no auth, but if
+    /// the user fronted it with a proxy and set `api_key` in
+    /// `~/.skill-veil.toml`, we forward that as a Bearer token. Mirrors
+    /// `super::ollama::OllamaProvider`'s pattern. Extracted as a method so
+    /// tests can verify the contract without spinning up a mock HTTP
+    /// server.
+    fn build_headers(&self) -> Vec<(&'static str, String)> {
+        let mut headers = Vec::new();
+        if let Some(ref k) = self.api_key {
+            headers.push(("authorization", format!("Bearer {k}")));
+        }
+        headers
     }
 }
 
@@ -43,9 +61,7 @@ impl LlmProvider for LmStudioProvider {
         // `parse_verdict_json` tolerates ```json fences and whitespace.
         let body = serde_json::json!({
             "model": self.model,
-            "messages": serde_json::from_str::<serde_json::Value>(
-                &openai_compatible_messages_json(prompt)
-            ).unwrap_or(serde_json::json!([])),
+            "messages": openai_compatible_messages_value(prompt),
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         })
@@ -53,8 +69,14 @@ impl LlmProvider for LmStudioProvider {
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         // LMStudio usually needs no auth, but if the user set one (e.g. they
-        // fronted it with a proxy), we honour it as Bearer.
-        let headers: Vec<(&str, &str)> = Vec::new();
+        // fronted it with a proxy), we honour it as Bearer. Header values
+        // are owned `String`s so they outlive the slice borrowed by
+        // `post_json_with_retry`.
+        let owned_headers = self.build_headers();
+        let headers: Vec<(&str, &str)> = owned_headers
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
         let text = post_json_with_retry(&self.agent, &url, &headers, &body)?;
         super::openai::parse_chat_completion(&text, "lmstudio", &self.model)
     }
@@ -145,5 +167,44 @@ mod tests {
     fn parse_lmstudio_ctx_returns_none_on_malformed_body() {
         assert_eq!(parse_lmstudio_context_length("{}", "m"), None);
         assert_eq!(parse_lmstudio_context_length("not-json", "m"), None);
+    }
+
+    fn provider_with_api_key(api_key: Option<&str>) -> LmStudioProvider {
+        LmStudioProvider::new(
+            ProviderParams {
+                model: "test-model".to_string(),
+                api_key: api_key.map(ToString::to_string),
+                ..Default::default()
+            },
+            5,
+        )
+        .expect("LmStudioProvider::new must accept default params")
+    }
+
+    /// Contract: when `params.api_key` is set, the request carries an
+    /// `Authorization: Bearer <key>` header. Anchors the bug fix — the
+    /// pre-fix code dropped the configured key silently.
+    #[test]
+    fn lmstudio_request_includes_bearer_when_api_key_set() {
+        let provider = provider_with_api_key(Some("secret-key"));
+        let headers = provider.build_headers();
+        assert_eq!(
+            headers.iter().find(|(k, _)| *k == "authorization"),
+            Some(&("authorization", "Bearer secret-key".to_string())),
+            "Bearer header MUST be present when api_key is configured; got {headers:?}"
+        );
+    }
+
+    /// Contract: when `params.api_key` is absent, no Authorization header
+    /// is sent. LMStudio in its default local configuration rejects
+    /// unexpected auth headers, so omitting the header is the safe path.
+    #[test]
+    fn lmstudio_request_omits_bearer_when_api_key_unset() {
+        let provider = provider_with_api_key(None);
+        let headers = provider.build_headers();
+        assert!(
+            headers.iter().all(|(k, _)| *k != "authorization"),
+            "Authorization header MUST NOT be present when api_key is unset; got {headers:?}"
+        );
     }
 }

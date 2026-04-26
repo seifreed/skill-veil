@@ -9,7 +9,7 @@
 
 use crate::config::ProviderParams;
 use crate::llm::client::{
-    build_agent, openai_compatible_messages_json, post_json_with_retry, LlmProvider,
+    build_agent, openai_compatible_messages_value, post_json_with_retry, LlmProvider,
 };
 use crate::llm::types::{LlmError, LlmPrompt, LlmRawResponse};
 
@@ -52,9 +52,7 @@ impl LlmProvider for PerplexityProvider {
         // tolerant `parse_verdict_json` strips fences if the model adds them.
         let body = serde_json::json!({
             "model": self.model,
-            "messages": serde_json::from_str::<serde_json::Value>(
-                &openai_compatible_messages_json(prompt)
-            ).unwrap_or(serde_json::json!([])),
+            "messages": openai_compatible_messages_value(prompt),
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
         })

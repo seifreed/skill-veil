@@ -87,7 +87,25 @@ const MAX_IOCS_PER_TYPE: usize = 10;
 
 /// Average TOON row size for a `SerialisedFinding` (rule_id,severity,
 /// reason,artifact,line). Derived from measured bundles.
-const FINDING_ROW_AVG_CHARS: usize = 180;
+///
+/// Worst-case sizing: `reason` is truncated to `FINDING_REASON_MAX_CHARS`
+/// in `serialise_finding`, and the surrounding fields contribute roughly
+/// `rule_id` ≈ 20-40, `severity` ≈ 8, `artifact` ≈ 0-50, `line` ≈ 0-5,
+/// plus four commas and a row terminator. The pre-fix value of 180 was
+/// the *typical* row, but a corpus packed with high-`reason` findings
+/// (close to the 240-char ceiling) could blow the bundle budget by
+/// ~25 × (real - 180) chars and trigger LLM context overflow without
+/// any visible signal in the estimator. 280 absorbs the worst case
+/// conservatively while staying well under the per-bundle budget.
+const FINDING_ROW_AVG_CHARS: usize = 280;
+
+/// Maximum characters retained from a `Finding.reason` when serialising
+/// into the LLM bundle. Mirrored in `serialise_finding`. The estimator
+/// (`FINDING_ROW_AVG_CHARS`) MUST stay >= this value plus the overhead
+/// of the surrounding TOON fields, otherwise the bundle can overrun the
+/// budget without warning. The pair is checked in
+/// `finding_row_estimate_covers_truncated_reason_plus_overhead`.
+const FINDING_REASON_MAX_CHARS: usize = 240;
 
 /// Average TOON row size for a single IOC entry (url/domain/ipv4 line).
 const IOC_ENTRY_CHARS: usize = 48;
@@ -168,7 +186,6 @@ pub(crate) fn build_prompt(input: SkillBundleInput<'_>, max_chars: usize) -> Llm
     // we drop heavy blobs before small config files.
     supporting_input.sort_by(|a, b| a.1.len().cmp(&b.1.len()));
 
-    let base_overhead_chars = primary_content.len() + SYSTEM_PROMPT.len() + 4_096;
     let mut dropped = 0usize;
     while estimate_size(primary_content, &supporting_input, dropped) > max_chars
         && !supporting_input.is_empty()
@@ -201,9 +218,15 @@ pub(crate) fn build_prompt(input: SkillBundleInput<'_>, max_chars: usize) -> Llm
 
     let user_json = encode_bundle(&bundle);
 
-    // Last-resort hard cap: if the primary_content alone is still over the
-    // budget, we include a warning marker rather than silently truncating.
-    let user_json = if user_json.len() > max_chars.saturating_add(base_overhead_chars) {
+    // Last-resort hard cap: if the bundle is still over the budget after
+    // dropping every supporting artifact (typically because primary_content
+    // alone exceeds max_chars), wrap it with a warning marker rather than
+    // silently shipping the over-budget payload to the model. The pre-fix
+    // condition `> max_chars + base_overhead_chars` (where
+    // `base_overhead_chars = primary_content.len() + SYSTEM_PROMPT.len() + 4096`)
+    // double-counted `primary_content.len()` — it's already inside `user_json`
+    // — leaving an inflated allowance in which the warning rarely fired.
+    let user_json = if user_json.len() > max_chars {
         format!(
             "{{\"warning\":\"primary_content exceeds max_prompt_chars; sent as-is\",\"bundle\":{}}}",
             user_json
@@ -247,7 +270,7 @@ fn serialise_finding(f: &Finding) -> SerialisedFinding {
     SerialisedFinding {
         rule_id: f.rule_id.clone(),
         severity: format!("{:?}", f.severity),
-        reason: f.reason.chars().take(240).collect(),
+        reason: f.reason.chars().take(FINDING_REASON_MAX_CHARS).collect(),
         artifact: f.artifact_path.clone(),
         line: f.line_number,
     }
@@ -497,9 +520,33 @@ fn cap_iocs(iocs: &ExtractedIocs) -> (ExtractedIocs, usize) {
 
 /// Parse the assistant's response into a structured verdict. Tolerant of
 /// responses that wrap JSON in code fences (`\`\`\`json ... \`\`\``).
+///
+/// Sanitizes the `confidence` field after deserialization: NaN maps to
+/// `0.0` (worst-case — LLM input is untrusted, so a malformed value
+/// should not be optimistically interpreted) and finite out-of-range
+/// values clamp into `[0.0, 1.0]`. Mirrors `FindingBuilder::confidence`
+/// (`crates/skill-veil-core/src/findings/builder.rs`), which guards the
+/// rule-side input boundary.
 pub(crate) fn parse_verdict_json(raw: &str) -> Result<LlmVerdict, String> {
     let cleaned = strip_json_fences(raw);
-    serde_json::from_str::<LlmVerdict>(&cleaned).map_err(|e| e.to_string())
+    let mut verdict = serde_json::from_str::<LlmVerdict>(&cleaned).map_err(|e| e.to_string())?;
+    sanitize_llm_confidence(&mut verdict);
+    Ok(verdict)
+}
+
+/// Clamp `verdict.confidence` into `[0.0, 1.0]` and replace NaN with
+/// `0.0`. Extracted as a private helper so unit tests can verify the
+/// clamping behavior directly without round-tripping through serde
+/// (strict JSON rejects `NaN` at parse time, so the only way to hit the
+/// NaN branch in production is via a serde feature flag or via a
+/// provider that pre-deserializes — defending here is pure-Rust
+/// defense-in-depth).
+fn sanitize_llm_confidence(verdict: &mut LlmVerdict) {
+    if verdict.confidence.is_nan() {
+        verdict.confidence = 0.0;
+    } else {
+        verdict.confidence = verdict.confidence.clamp(0.0, 1.0);
+    }
 }
 
 fn strip_json_fences(raw: &str) -> String {
@@ -574,6 +621,37 @@ mod tests {
         assert!(prompt
             .user_json
             .contains("important skill content that MUST be preserved"));
+    }
+
+    /// Contract: when the bundle (primary + everything else) cannot fit
+    /// inside `max_chars`, the last-resort hard cap wraps the JSON in a
+    /// `"warning":"primary_content exceeds max_prompt_chars; sent as-is"`
+    /// envelope so callers can detect the over-budget state. The pre-fix
+    /// comparison `> max_chars + base_overhead_chars` double-counted
+    /// `primary_content.len()` (which is already inside `user_json`),
+    /// inflating the allowance by ~primary-size + 4 KB and effectively
+    /// disabling the warning for every realistic primary.
+    #[test]
+    fn build_prompt_marks_oversized_bundle_with_warning_envelope() {
+        let huge_primary: String = "x".repeat(200_000);
+        let input = SkillBundleInput {
+            primary_path: Path::new("/tmp/SKILL.md"),
+            primary_content: &huge_primary,
+            supporting: Vec::new(),
+            our_verdict: Verdict::Benign,
+            our_risk_score: 0,
+            our_findings: &[],
+            extracted_iocs: &sample_iocs(),
+        };
+        let prompt = build_prompt(input, 10_000);
+        assert!(
+            prompt
+                .user_json
+                .contains("primary_content exceeds max_prompt_chars"),
+            "oversized bundle must be wrapped in the warning envelope; \
+             user_json prefix: {}",
+            &prompt.user_json[..prompt.user_json.len().min(200)],
+        );
     }
 
     #[test]
@@ -810,5 +888,103 @@ mod tests {
         // owned structs. The "{}" literal is only reachable if both fail,
         // which serde_json guarantees doesn't happen for our bundle shapes.
         assert_ne!(encode_bundle(&empty), "{}");
+    }
+
+    fn verdict_with_confidence(confidence: f32) -> LlmVerdict {
+        LlmVerdict {
+            verdict: "benign".to_string(),
+            confidence,
+            analysis: String::new(),
+            key_signals: Vec::new(),
+            agreement_with_scanner: None,
+            insufficient_context: Vec::new(),
+        }
+    }
+
+    /// Contract: confidence values above 1.0 clamp to 1.0. Mirrors the
+    /// rule-side guard in `FindingBuilder::confidence`.
+    #[test]
+    fn parse_verdict_json_clamps_above_one() {
+        let raw = r#"{"verdict":"benign","confidence":1.5,"analysis":""}"#;
+        let v = parse_verdict_json(raw).expect("parse must succeed");
+        assert!((v.confidence - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// Contract: confidence values below 0.0 clamp to 0.0.
+    #[test]
+    fn parse_verdict_json_clamps_below_zero() {
+        let raw = r#"{"verdict":"benign","confidence":-0.1,"analysis":""}"#;
+        let v = parse_verdict_json(raw).expect("parse must succeed");
+        assert!(v.confidence.abs() < f32::EPSILON);
+    }
+
+    /// Contract: NaN confidence maps to 0.0 (worst-case — LLM input is
+    /// untrusted, so a malformed value must not be optimistically
+    /// interpreted). Strict JSON rejects literal `NaN` at parse time, so
+    /// we test the sanitizer directly.
+    #[test]
+    fn sanitize_llm_confidence_replaces_nan_with_zero() {
+        let mut v = verdict_with_confidence(f32::NAN);
+        sanitize_llm_confidence(&mut v);
+        assert!(!v.confidence.is_nan());
+        assert!(v.confidence.abs() < f32::EPSILON);
+    }
+
+    /// Contract: positive infinity clamps to 1.0; negative infinity to 0.0.
+    #[test]
+    fn sanitize_llm_confidence_handles_infinities() {
+        let mut pos = verdict_with_confidence(f32::INFINITY);
+        sanitize_llm_confidence(&mut pos);
+        assert!((pos.confidence - 1.0).abs() < f32::EPSILON);
+
+        let mut neg = verdict_with_confidence(f32::NEG_INFINITY);
+        sanitize_llm_confidence(&mut neg);
+        assert!(neg.confidence.abs() < f32::EPSILON);
+    }
+
+    /// Contract: in-range confidence is preserved bit-for-bit. Pins the
+    /// no-op case so the sanitizer doesn't accidentally widen.
+    #[test]
+    fn parse_verdict_json_preserves_in_range_value() {
+        let raw = r#"{"verdict":"benign","confidence":0.7,"analysis":""}"#;
+        let v = parse_verdict_json(raw).expect("parse must succeed");
+        assert!((v.confidence - 0.7).abs() < 1e-5);
+    }
+
+    /// Contract: `FINDING_ROW_AVG_CHARS` MUST cover the truncated `reason`
+    /// (`FINDING_REASON_MAX_CHARS`) plus a small overhead for the other
+    /// TOON fields (`rule_id`, `severity`, `artifact`, `line`, separators).
+    /// Pre-fix the estimator used 180, well below the 240-char `reason`
+    /// ceiling — packing 25 high-`reason` findings into a bundle could
+    /// overrun the prompt budget by ~1.5 k chars and trigger LLM context
+    /// overflow without any signal in the estimator. This compile-time
+    /// assertion pins the relationship so future tweaks don't silently
+    /// regress it.
+    #[test]
+    fn finding_row_estimate_covers_truncated_reason_plus_overhead() {
+        // Compile-time assertion: any future tweak that drops the estimator
+        // below the truncated `reason` ceiling fails to build, not at runtime.
+        const _: () = assert!(FINDING_ROW_AVG_CHARS >= FINDING_REASON_MAX_CHARS);
+    }
+
+    /// Contract: a serialised finding's `reason` length never exceeds
+    /// `FINDING_REASON_MAX_CHARS`. Pins the truncation so future edits
+    /// to `serialise_finding` cannot silently widen the per-row budget
+    /// past what `FINDING_ROW_AVG_CHARS` was sized for.
+    #[test]
+    fn serialise_finding_truncates_reason_to_max_chars() {
+        use skill_veil_core::findings::{Severity, ThreatCategory};
+        let long_reason = "x".repeat(FINDING_REASON_MAX_CHARS * 3);
+        let f = Finding::builder("R001", ThreatCategory::DataExfiltration)
+            .severity(Severity::High)
+            .reason(long_reason)
+            .build();
+        let s = serialise_finding(&f);
+        assert!(
+            s.reason.chars().count() <= FINDING_REASON_MAX_CHARS,
+            "reason must be truncated to <= {FINDING_REASON_MAX_CHARS} chars; \
+             got {} chars",
+            s.reason.chars().count()
+        );
     }
 }

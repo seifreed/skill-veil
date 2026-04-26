@@ -29,7 +29,18 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
     let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
 
     for referenced_file in &supporting_artifacts {
-        if !referenced_file.exists() || referenced_file.is_dir() {
+        // Existence is checked through the same `FileSystemProvider` that
+        // performs the subsequent `from_file_with_provider` read. Using
+        // `PathBuf::exists` here would consult `std::fs` directly, opening
+        // a TOCTOU window between the check and the read AND letting test
+        // doubles disagree with production behaviour (a `MockFileSystemProvider`
+        // can report a path as missing while `std::fs::exists` says yes,
+        // or vice versa). The `is_dir` check stays on `std::fs` because
+        // the port intentionally exposes only file-bytes / metadata; a
+        // directory passed here would surface as a read error from the
+        // provider and become an `artifact_parse_error_finding`, but
+        // skipping it explicitly keeps the noise floor low.
+        if !fs.exists(referenced_file) || referenced_file.is_dir() {
             continue;
         }
 
@@ -415,4 +426,43 @@ pub(crate) fn discover_package_targets<F: FileSystemProvider, P: MarkdownParser>
     }
 
     Ok(targets.into_iter().collect())
+}
+
+#[cfg(test)]
+mod scan_supporting_artifacts_tests {
+    /// Architectural contract: `scan_supporting_artifacts` MUST consult
+    /// the `FileSystemProvider` port for existence, not `Path::exists`
+    /// directly. Mixing the two backends opens a TOCTOU window between
+    /// the existence check and the subsequent `from_file_with_provider`
+    /// read, AND lets test doubles disagree with production behaviour
+    /// (a `MockFileSystemProvider` can report a path as missing while
+    /// `std::fs::exists` says yes, or vice versa).
+    ///
+    /// Mirrors the sibling contract test
+    /// `file_discovery_does_not_call_std_fs_metadata_directly` in
+    /// `services::file_discovery`. The `is_dir` check on `std::fs` is
+    /// intentionally allowed: the port exposes only file-bytes / metadata,
+    /// and a directory passed to `from_file_with_provider` already surfaces
+    /// as a read error — the explicit skip just keeps the noise floor low.
+    #[test]
+    fn scan_supporting_artifacts_uses_fs_provider_for_existence_check() {
+        let body = include_str!("scanner_execution.rs");
+        let production = body.split("#[cfg(test)]").next().unwrap_or(body);
+        let in_function = production
+            .split("fn scan_supporting_artifacts<")
+            .nth(1)
+            .and_then(|after_sig| after_sig.split("\nfn ").next())
+            .expect("scan_supporting_artifacts must be present in production code");
+        assert!(
+            !in_function.contains("referenced_file.exists()"),
+            "scan_supporting_artifacts must not call Path::exists directly; \
+             route existence checks through the FileSystemProvider port to \
+             keep test doubles consistent with production behaviour"
+        );
+        assert!(
+            in_function.contains("fs.exists(referenced_file)"),
+            "scan_supporting_artifacts must use fs.exists(referenced_file) so \
+             that mock providers and production share the same code path"
+        );
+    }
 }

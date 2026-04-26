@@ -49,8 +49,12 @@ pub(super) fn count_warning_rule(reports: &[JsonReport], rule_id: &str) -> usize
 }
 
 pub(super) fn extract_package_id_from_skill_path(skill_path: &str) -> Option<String> {
+    // Split on both `/` and `\` so the SHA-256 segment is recovered on
+    // Windows (paths produced by `Path::display()` use `\`) and on tools
+    // that emit mixed separators. Mirrors the platform-aware ancestor
+    // walk in `crate::scanner_graph::derive_package_id`.
     skill_path
-        .split('/')
+        .split(['/', '\\'])
         .find(|segment| segment.len() == 64 && segment.chars().all(|c| c.is_ascii_hexdigit()))
         .map(ToOwned::to_owned)
 }
@@ -86,4 +90,62 @@ pub(super) fn top_malicious_reasons(reports: &[JsonReport]) -> Vec<DatasetMalici
             .then_with(|| left.category.cmp(&right.category))
     });
     reasons
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: a Unix-style path with a 64-hex segment yields the SHA.
+    /// Pins the no-op case so the cross-platform fix doesn't accidentally
+    /// regress Unix behavior.
+    #[test]
+    fn extract_package_id_handles_unix_path() {
+        let sha = "a".repeat(64);
+        let path = format!("/data/{sha}/SKILL.md");
+        assert_eq!(extract_package_id_from_skill_path(&path), Some(sha));
+    }
+
+    /// Contract: a Windows-style path (backslash separators) yields the
+    /// SHA. The pre-fix `split('/')` returned `None` on Windows because
+    /// the entire path was treated as a single segment.
+    #[test]
+    fn extract_package_id_handles_windows_path() {
+        let sha = "b".repeat(64);
+        let path = format!("C:\\data\\{sha}\\SKILL.md");
+        assert_eq!(extract_package_id_from_skill_path(&path), Some(sha));
+    }
+
+    /// Contract: paths that mix `/` and `\` are tolerated. Real-world
+    /// tools (e.g. some IDEs, log aggregators) emit mixed separators.
+    #[test]
+    fn extract_package_id_handles_mixed_separators() {
+        let sha = "c".repeat(64);
+        let path = format!("C:/data\\{sha}/SKILL.md");
+        assert_eq!(extract_package_id_from_skill_path(&path), Some(sha));
+    }
+
+    /// Contract: a path with no 64-hex segment returns `None`.
+    #[test]
+    fn extract_package_id_returns_none_when_no_hex_segment() {
+        let path = "/data/skills/my-pkg/SKILL.md";
+        assert_eq!(extract_package_id_from_skill_path(path), None);
+    }
+
+    /// Contract: a 63-char or non-hex 64-char segment is rejected.
+    /// Keeps the SHA-256 specificity contract intact under the
+    /// cross-platform fix.
+    #[test]
+    fn extract_package_id_rejects_short_or_non_hex_segments() {
+        let short = "a".repeat(63);
+        let non_hex = "g".repeat(64);
+        let unix_short = format!("/data/{short}/SKILL.md");
+        let unix_non_hex = format!("/data/{non_hex}/SKILL.md");
+        let win_short = format!("C:\\data\\{short}\\SKILL.md");
+        let win_non_hex = format!("C:\\data\\{non_hex}\\SKILL.md");
+        assert_eq!(extract_package_id_from_skill_path(&unix_short), None);
+        assert_eq!(extract_package_id_from_skill_path(&unix_non_hex), None);
+        assert_eq!(extract_package_id_from_skill_path(&win_short), None);
+        assert_eq!(extract_package_id_from_skill_path(&win_non_hex), None);
+    }
 }

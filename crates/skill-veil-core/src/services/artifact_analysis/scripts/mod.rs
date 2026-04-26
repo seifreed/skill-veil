@@ -1,7 +1,7 @@
 mod detectors;
 mod patterns;
 
-use super::patterns::RE_SHELL_SOURCE;
+use super::patterns::{line_invokes_shell_or_interpreter, RE_SHELL_SOURCE};
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::ArtifactKind;
@@ -96,10 +96,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         ));
     }
 
-    if lower.contains("bash ")
-        || lower.contains(" sh ")
-        || lower.contains("node ")
-        || lower.contains("python ")
+    if lower.lines().any(line_invokes_shell_or_interpreter)
         || lower.contains("npm install")
         || lower.contains("pip install")
         || lower.contains("cargo install")
@@ -173,13 +170,17 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
             relation: ArtifactRelation::Downloads,
         });
     }
-    if lower.contains("bash ")
-        || lower.contains("sh ")
-        || lower.contains("python ")
-        || lower.contains("node ")
+    // Mirror `script_capabilities`: `iex ` is the PowerShell alias for
+    // `Invoke-Expression` and is treated as `ProcessExecution` there
+    // (mod.rs:114). Pre-fix `script_relations` omitted it, so a script
+    // calling `iex $payload` declared the capability without producing
+    // the matching `Executes` edge — composite capabilities downstream
+    // (`ShellDownloadExec`, taint chains) silently lost the link.
+    if lower.lines().any(line_invokes_shell_or_interpreter)
         || lower.contains("start-process")
         || lower.contains("subprocess.")
         || lower.contains("child_process")
+        || lower.contains("iex ")
     {
         links.push(ArtifactLink {
             target: "process".to_string(),
@@ -243,4 +244,124 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         });
     }
     links
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn capability_present(caps: &[ArtifactCapabilityFact], target: ArtifactCapability) -> bool {
+        caps.iter().any(|fact| fact.capability == target)
+    }
+
+    fn relation_target_present(links: &[ArtifactLink], target: &str) -> bool {
+        links.iter().any(|link| link.target == target)
+    }
+
+    /// Contract: a script invoking `bash install.sh` produces InstallExecution.
+    #[test]
+    fn script_capabilities_detects_bash_token() {
+        let content = "bash install.sh\n";
+        let caps = script_capabilities(content);
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::InstallExecution
+        ));
+    }
+
+    /// Contract: a script that begins with bare `sh install.sh` (column 0,
+    /// no leading space) produces InstallExecution. Anchors the column-0
+    /// false-negative fix from the prior conservative `" sh "` pattern.
+    #[test]
+    fn script_capabilities_detects_sh_at_column_zero() {
+        let content = "sh install.sh\n";
+        let caps = script_capabilities(content);
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::InstallExecution
+        ));
+    }
+
+    /// Contract: an `npm run publish` script must NOT produce
+    /// InstallExecution via the shell-token detector — `publish` is an
+    /// English word, not a shell invocation.
+    #[test]
+    fn script_capabilities_skips_publish_word() {
+        let content = "npm run publish\n";
+        let caps = script_capabilities(content);
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::InstallExecution
+        ));
+    }
+
+    /// Contract: the multi-word phrase `npm install` still produces
+    /// InstallExecution via the dedicated phrase clause, separate from
+    /// the shell-token helper. Pins the separation so a future refactor
+    /// doesn't accidentally fold install phrases into the helper.
+    #[test]
+    fn script_capabilities_keeps_npm_install_phrase() {
+        let content = "npm install foo\n";
+        let caps = script_capabilities(content);
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::InstallExecution
+        ));
+    }
+
+    /// Contract: a script invoking `bash` produces an Executes relation.
+    #[test]
+    fn script_relations_detects_bash_token() {
+        let content = "bash install.sh\n";
+        let links = script_relations(content);
+        assert!(relation_target_present(&links, "process"));
+    }
+
+    /// Contract: an `npm run publish` script must NOT produce an Executes
+    /// relation. Anchors the false-positive fix on the relations side.
+    #[test]
+    fn script_relations_skips_publish_word() {
+        let content = "npm run publish\n";
+        let links = script_relations(content);
+        assert!(!relation_target_present(&links, "process"));
+    }
+
+    /// Contract: text mentioning `make finish` (English usage) must NOT
+    /// produce an Executes relation.
+    #[test]
+    fn script_relations_skips_finish_step() {
+        let content = "echo \"please finish setup\"\n";
+        let links = script_relations(content);
+        assert!(!relation_target_present(&links, "process"));
+    }
+
+    /// Contract: a script invoking `iex $cmd` (PowerShell alias for
+    /// `Invoke-Expression`) MUST produce an `Executes` relation, paralleling
+    /// the `ProcessExecution` capability flag in `script_capabilities`.
+    /// Pre-fix the relations omitted `iex `, so a script declared the
+    /// capability without the matching graph edge — composite capabilities
+    /// (e.g. `ShellDownloadExec`) silently lost the chain.
+    #[test]
+    fn script_relations_records_executes_for_iex_alias() {
+        let content = "iex $payload\n";
+        let links = script_relations(content);
+        assert!(
+            relation_target_present(&links, "process"),
+            "`iex $payload` must produce an Executes edge; got {links:?}",
+        );
+    }
+
+    /// Contract: capability and relation paths agree on `iex `. Positive
+    /// pin so a future refactor cannot silently drop one but keep the
+    /// other.
+    #[test]
+    fn iex_flips_both_capability_and_relation() {
+        let content = "iex $payload\n";
+        let caps = script_capabilities(content);
+        let links = script_relations(content);
+        assert!(caps
+            .iter()
+            .any(|c| c.capability == ArtifactCapability::ProcessExecution));
+        assert!(relation_target_present(&links, "process"));
+    }
 }

@@ -486,6 +486,41 @@ fn non_strict_mode_skips_duplicate_user_rule_silently() {
     assert_eq!(engine.rule_count(), 1);
 }
 
+/// Contract: a rule pack YAML that omits the `shield` field on its rules
+/// MUST parse successfully — `shield` is metadata used only by SHIELD.md
+/// generation downstream and is `Option<ShieldHint>` on the Rust side.
+/// Pre-fix, an audit flagged external packs in `rules/official/*.yaml` for
+/// "missing shield field"; this test pins that the schema's `#[serde(default)]`
+/// is the canonical contract and external packs are not required to declare
+/// it.
+#[test]
+fn rule_pack_loads_when_shield_field_is_omitted() {
+    let yaml = "schema_version: skill-veil.dev/rules/v1alpha1\n\
+                metadata:\n  \
+                  name: test-pack\n  \
+                  kind: official\n\
+                rules:\n  \
+                  - id: TEST_NO_SHIELD\n    \
+                    category: remote_exec\n    \
+                    severity: high\n    \
+                    when: !regex\n      \
+                      pattern: \"placeholder-xyzzy\"\n    \
+                    action: require_approval\n    \
+                    reason: external pack without shield\n    \
+                    enabled: true\n    \
+                    tags:\n      \
+                      - test\n";
+    let rules = super::parser::parse_rules_file(yaml).expect("rule pack without shield must parse");
+    assert_eq!(rules.len(), 1);
+    let rule = &rules[0];
+    assert_eq!(rule.id, "TEST_NO_SHIELD");
+    assert!(
+        rule.shield.is_none(),
+        "missing shield field must deserialize to None, got {:?}",
+        rule.shield,
+    );
+}
+
 /// Contract: `with_defaults()` MUST contain every rule id from the embedded
 /// builtin set, even when `rules/official/` exists alongside the binary and
 /// re-declares overlapping ids. Builtins load first, runtime overrides

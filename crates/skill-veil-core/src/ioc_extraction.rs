@@ -199,9 +199,12 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
 
     for m in p.ipv6.find_iter(text) {
         let ip = m.as_str().to_string();
-        // Crude filter: require at least one colon group boundary so plain
-        // hashes don't register.
-        if ip.matches(':').count() >= 2 {
+        // Mirror `is_ipv6`: require colon-group boundary AND a plausible
+        // IPv6 shape. Without `is_plausible_ipv6` the extractor silently
+        // accepted hex-colon tokens (e.g. 4-group session IDs without `::`
+        // and without 8 groups) that `is_ipv6` would reject — leaking
+        // false-positive IOCs into VT lookups and finding evidence.
+        if ip.matches(':').count() >= 2 && is_plausible_ipv6(&ip) {
             ipv6.insert(ip);
         }
     }
@@ -389,6 +392,23 @@ mod tests {
         );
     }
 
+    /// Contract: extraction MUST run `is_plausible_ipv6` to reject
+    /// hex-colon tokens that match the regex but aren't real IPv6.
+    /// A 4-group token like `abc1:def2:1234:5678` (no `::`, fewer than
+    /// 8 groups) passes both the regex and the `colons >= 2` heuristic;
+    /// without the plausibility gate it leaked into IOC output and was
+    /// shipped to VT as a false positive. Mirrors `is_ipv6` (line 283).
+    #[test]
+    fn ipv6_extraction_rejects_short_hex_token_lacking_double_colon() {
+        let text = "session = abc1:def2:1234:5678 next";
+        let iocs = extract_from_text(text);
+        assert!(
+            iocs.ipv6.is_empty(),
+            "4-group hex-colon token without `::` must NOT extract as IPv6; got {:?}",
+            iocs.ipv6
+        );
+    }
+
     /// Sanity: legitimate IPv6 still extracts.
     #[test]
     fn ipv6_extraction_keeps_valid_addresses() {
@@ -407,7 +427,9 @@ mod tests {
     #[test]
     fn is_plausible_ipv6_rejects_overlong_groups() {
         // 5-char group is invalid in IPv6.
-        assert!(!is_plausible_ipv6("aaaaa:bbbb:cccc:dddd:eeee:ffff:1111:2222"));
+        assert!(!is_plausible_ipv6(
+            "aaaaa:bbbb:cccc:dddd:eeee:ffff:1111:2222"
+        ));
     }
 
     #[test]
@@ -418,9 +440,7 @@ mod tests {
 
     #[test]
     fn is_plausible_ipv6_accepts_full_8_group_form() {
-        assert!(is_plausible_ipv6(
-            "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
-        ));
+        assert!(is_plausible_ipv6("2001:0db8:85a3:0000:0000:8a2e:0370:7334"));
     }
 
     #[test]

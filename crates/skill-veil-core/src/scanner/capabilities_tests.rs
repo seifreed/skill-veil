@@ -29,7 +29,7 @@ fn test_artifact_graph_exposes_manifest_capabilities() {
     ports:
       - "8080:80"
     volumes:
-      - "./data:/data"
+      - "/var/run/docker.sock:/var/run/docker.sock"
 "#,
     )
     .unwrap();

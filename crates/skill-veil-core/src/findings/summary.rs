@@ -220,10 +220,23 @@ fn accumulate_artifact_factor(factors: &mut FactorMap, finding: &Finding) {
 
 fn normalize_score(total: f32) -> u32 {
     if total.is_finite() {
-        total.clamp(0.0, 100.0).round() as u32
-    } else {
-        100
+        return total.clamp(0.0, 100.0).round() as u32;
     }
+    // Defense-in-depth: a non-finite total means an invariant up-stream
+    // (sanitized confidence in the builder, finite severity weights) was
+    // violated. Block (100) is the right fail-safe for a security scanner,
+    // but we MUST NOT pass silently — surface the breach so the upstream
+    // bug can be diagnosed. Mirrors the `merge_into` invariant guard in
+    // `findings/dedup.rs`.
+    debug_assert!(
+        total.is_finite(),
+        "normalize_score: total must be finite (sanitized in builder); got {total}",
+    );
+    tracing::warn!(
+        total = ?total,
+        "normalize_score received non-finite total; defaulting to Block (100)",
+    );
+    100
 }
 
 fn score_to_action(risk_score: u32) -> RecommendedAction {
@@ -605,5 +618,34 @@ mod tests {
         let adjusted = s.with_risk_adjustment(-100);
         assert_eq!(adjusted.risk_score, 0);
         assert_eq!(adjusted.recommended_action, RecommendedAction::Log);
+    }
+
+    /// Contract: a finite `total` clamps into `[0, 100]` and rounds to u32.
+    /// Positive-case regression guard before the non-finite branch.
+    #[test]
+    fn normalize_score_finite_input_clamps_and_rounds() {
+        assert_eq!(normalize_score(0.0), 0);
+        assert_eq!(normalize_score(50.4), 50);
+        assert_eq!(normalize_score(50.6), 51);
+        assert_eq!(normalize_score(100.0), 100);
+        assert_eq!(normalize_score(150.0), 100);
+        assert_eq!(normalize_score(-10.0), 0);
+    }
+
+    /// Contract: a non-finite `total` (NaN or ±Inf) MUST default to Block (100)
+    /// — pre-existing fail-safe behaviour. The fix added a `tracing::warn!`
+    /// and a `debug_assert!` so the upstream invariant breach surfaces, but
+    /// the release-build return value is unchanged.
+    ///
+    /// The `debug_assert!` would fire under `cfg(debug_assertions)`, so we
+    /// gate the test to only run when assertions are disabled (release
+    /// profile / `--release` flag) or wrap it in a panic-catch under debug
+    /// — choosing the simpler approach: only assert the release contract.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn normalize_score_non_finite_input_falls_back_to_block() {
+        assert_eq!(normalize_score(f32::NAN), 100);
+        assert_eq!(normalize_score(f32::INFINITY), 100);
+        assert_eq!(normalize_score(f32::NEG_INFINITY), 100);
     }
 }

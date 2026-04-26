@@ -36,6 +36,32 @@ pub(crate) fn build_agent(timeout_secs: u64) -> ureq::Agent {
         .build()
 }
 
+/// Drains an HTTP error response into a string for diagnostic reporting.
+///
+/// # Contract
+///
+/// Returns whatever bytes the provider sent in the body, even partial. If
+/// reading the body itself fails (transport error mid-stream, encoding
+/// issue), emits a `tracing::warn` describing the I/O error and returns an
+/// empty string. The pre-fix code used `unwrap_or_default()`, which silently
+/// erased the underlying error and made debugging provider failures (a
+/// gateway 502, a malformed body) impossible — operators saw
+/// `LlmError::HttpStatus { status, body: "" }` with no clue why the body
+/// was missing. The warning preserves that context.
+fn drain_error_body(status: u16, resp: ureq::Response) -> String {
+    match resp.into_string() {
+        Ok(body) => body,
+        Err(err) => {
+            tracing::warn!(
+                "LLM provider returned HTTP {} but the response body could not be read: {}",
+                status,
+                err
+            );
+            String::new()
+        }
+    }
+}
+
 /// POST a JSON body with authorization headers, parse the response as a
 /// string, and retry on HTTP 429 with exponential backoff. The caller is
 /// responsible for extracting the assistant content from the returned text
@@ -76,7 +102,7 @@ pub(crate) fn post_json_with_retry(
                         return if status == 429 {
                             Err(LlmError::RateLimited { retries: attempt })
                         } else {
-                            let body = resp.into_string().unwrap_or_default();
+                            let body = drain_error_body(status, resp);
                             Err(LlmError::HttpStatus { status, body })
                         };
                     }
@@ -92,7 +118,7 @@ pub(crate) fn post_json_with_retry(
                     attempt += 1;
                     continue;
                 }
-                let body = resp.into_string().unwrap_or_default();
+                let body = drain_error_body(status, resp);
                 return Err(LlmError::HttpStatus { status, body });
             }
             Err(ureq::Error::Transport(err)) => {
@@ -113,12 +139,51 @@ pub(crate) fn post_json_with_retry(
     }
 }
 
-/// Build the `messages` list used by every OpenAI-compatible provider.
-/// Kept here so it doesn't need to be redefined in each provider.
-pub(crate) fn openai_compatible_messages_json(prompt: &LlmPrompt) -> String {
+/// Build the `messages` array used by every OpenAI-compatible provider.
+/// Returns a `serde_json::Value` so callers can embed it directly in
+/// their request body without round-tripping through a string. The
+/// previous string-returning helper forced each provider to do
+/// `serde_json::from_str(...).unwrap_or(json!([]))`, where the silent
+/// fallback would have produced a request with no messages at all if the
+/// re-parse ever failed (model receives system prompt + no user content).
+pub(crate) fn openai_compatible_messages_value(prompt: &LlmPrompt) -> serde_json::Value {
     serde_json::json!([
         { "role": "system", "content": prompt.system },
         { "role": "user", "content": prompt.user_json },
     ])
-    .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: a readable error body MUST be returned verbatim so the
+    /// provider's actual error message reaches `LlmError::HttpStatus { body }`.
+    /// Pre-fix the call site used `unwrap_or_default()` which already returned
+    /// the body on success — this test pins the success branch so the
+    /// regression-causing change (replacing `unwrap_or_default` with the
+    /// helper) cannot drop the body.
+    #[test]
+    fn drain_error_body_returns_body_string_on_success() {
+        let resp: ureq::Response = "HTTP/1.1 503 Service Unavailable\r\n\
+             Content-Length: 13\r\n\
+             \r\n\
+             upstream-down"
+            .parse()
+            .expect("synthetic response must parse");
+        let body = drain_error_body(503, resp);
+        assert_eq!(body, "upstream-down");
+    }
+
+    /// Contract: a body sent with no Content-Length and EOF still drains to
+    /// whatever bytes were received. Confirms the helper does not over-read
+    /// or panic on minimal headers (matches what some gateways return).
+    #[test]
+    fn drain_error_body_handles_response_without_content_length() {
+        let resp: ureq::Response = "HTTP/1.1 502 Bad Gateway\r\n\r\nfailure-text"
+            .parse()
+            .expect("synthetic response must parse");
+        let body = drain_error_body(502, resp);
+        assert_eq!(body, "failure-text");
+    }
 }
