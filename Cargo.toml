@@ -30,6 +30,7 @@ regex = "1.10"
 
 # File system
 walkdir = "2.5"
+globset = "0.4"
 rayon = "1.10"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 tempfile = "3.27"

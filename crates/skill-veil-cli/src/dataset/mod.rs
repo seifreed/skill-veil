@@ -145,7 +145,7 @@ pub(crate) fn run_scan_dataset(
     let text_options = TextOutputOptions {
         quiet_summary: args.quiet_summary,
         explain_policy: args.explain_policy,
-        finding_limit: args.finding_limit,
+        finding_limit: args.finding_limit.map(std::num::NonZeroUsize::get),
         color,
     };
     let options = ScanOptions {

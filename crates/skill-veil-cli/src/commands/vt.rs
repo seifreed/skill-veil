@@ -25,7 +25,7 @@ fn run_download(args: VtDownloadArgs) -> Result<()> {
             .query
             .unwrap_or_else(|| download::DEFAULT_QUERY.to_string()),
         dest: args.dest,
-        limit: args.limit,
+        limit: args.limit.get(),
         report_only: args.report_only,
     };
     let summary = download::run_download(&client, opts)?;

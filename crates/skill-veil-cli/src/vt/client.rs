@@ -9,6 +9,7 @@
 
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
+use crate::util::cache_io::finalize_atomic_write;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -24,6 +25,28 @@ const MAX_RETRIES: u32 = 3;
 const INITIAL_BACKOFF_MS: u64 = 2_000;
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 60;
 const DOWNLOAD_HTTP_TIMEOUT_SECS: u64 = 300;
+
+/// Drain `resp` into a string for embedding in an error.
+///
+/// Mirrors `crate::llm::client::drain_error_body`: pre-fix the call sites
+/// used `unwrap_or_default()`, which silently erased decode/transport
+/// errors and operators saw `VtError::HttpStatus { status, body: "" }`
+/// with no clue why the body was missing (gateway 502s, mid-stream
+/// disconnects). The warning preserves that diagnostic context while
+/// keeping the public error shape unchanged.
+fn drain_error_body(status: u16, resp: ureq::Response) -> String {
+    match resp.into_string() {
+        Ok(body) => body,
+        Err(err) => {
+            tracing::warn!(
+                "VT returned HTTP {} but the response body could not be read: {}",
+                status,
+                err
+            );
+            String::new()
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub(crate) enum VtError {
@@ -49,14 +72,24 @@ pub(crate) struct VtClient {
 
 impl VtClient {
     pub(crate) fn new(config: VtConfig) -> Self {
+        // `redirects(0)` is critical: every request sets the `x-apikey`
+        // header (see `request_with_retry`), and ureq 2.10's default of
+        // five redirects forwards custom headers verbatim to the
+        // redirect target. VT's API never returns 3xx in normal use, so
+        // any redirect in production is a sign of DNS hijack, transparent
+        // proxy interception, or a misrouted CI gateway — silently
+        // following it would exfiltrate the API key to that destination.
+        // Failing fast surfaces the misroute instead of leaking the key.
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS))
             .user_agent(USER_AGENT)
+            .redirects(0)
             .build();
         let download_agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(30))
             .timeout_read(Duration::from_secs(DOWNLOAD_HTTP_TIMEOUT_SECS))
             .user_agent(USER_AGENT)
+            .redirects(0)
             .build();
         Self {
             apikey: config.apikey,
@@ -191,7 +224,7 @@ impl VtClient {
                 Ok(txt)
             }
             Err(ureq::Error::Status(s, r)) => {
-                let body = r.into_string().unwrap_or_default();
+                let body = drain_error_body(s, r);
                 Err(VtError::HttpStatus { status: s, body })
             }
             Err(ureq::Error::Transport(e)) => Err(VtError::Network(e.to_string())),
@@ -200,7 +233,9 @@ impl VtClient {
 
     /// Download the raw file bytes to `dest`. `dest`'s parent must already
     /// exist. Writes to a `.tmp` sibling and renames on success to avoid
-    /// leaving half-written files when the connection drops.
+    /// leaving half-written files when the connection drops. The atomic-
+    /// rename helper (`util::cache_io::finalize_atomic_write`) preserves
+    /// `tmp` cleanup semantics on rename failure.
     pub(crate) fn download_file(&self, sha256: &str, dest: &Path) -> Result<(), VtError> {
         let url = format!("{BASE_URL}/files/{sha256}/download");
         let response = self.request_with_retry(&self.download_agent, &url, &[])?;
@@ -218,7 +253,7 @@ impl VtClient {
             }
             out.flush()?;
         }
-        std::fs::rename(&tmp, dest)?;
+        finalize_atomic_write(&tmp, dest)?;
         Ok(())
     }
 
@@ -246,7 +281,24 @@ impl VtClient {
                 req = req.query(k, v);
             }
             match req.call() {
-                Ok(resp) => return Ok(resp),
+                Ok(resp) => {
+                    // With `redirects(0)` set on the agent (see
+                    // `VtClient::new`), ureq returns 3xx responses as
+                    // `Ok(resp)` rather than `Err::Status`. We must
+                    // surface these as errors so the caller never tries
+                    // to JSON-decode the redirect body, and — more
+                    // critically — never re-issues the request to the
+                    // `Location` target with the `x-apikey` header
+                    // attached. VT API never legitimately returns 3xx,
+                    // so any such response signals DNS hijack, MITM, or
+                    // a misrouted gateway.
+                    let status = resp.status();
+                    if !(200..300).contains(&status) {
+                        let body = drain_error_body(status, resp);
+                        return Err(VtError::HttpStatus { status, body });
+                    }
+                    return Ok(resp);
+                }
                 Err(ureq::Error::Status(status, resp)) => {
                     if status == 401 || status == 403 {
                         return Err(VtError::Unauthorized);
@@ -261,7 +313,7 @@ impl VtClient {
                             return if status == 429 {
                                 Err(VtError::RateLimited { retries: attempt })
                             } else {
-                                let body = resp.into_string().unwrap_or_default();
+                                let body = drain_error_body(status, resp);
                                 Err(VtError::HttpStatus { status, body })
                             };
                         }
@@ -277,7 +329,7 @@ impl VtClient {
                         attempt += 1;
                         continue;
                     }
-                    let body = resp.into_string().unwrap_or_default();
+                    let body = drain_error_body(status, resp);
                     return Err(VtError::HttpStatus { status, body });
                 }
                 Err(ureq::Error::Transport(err)) => {
@@ -297,5 +349,76 @@ impl VtClient {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod redirect_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    /// # Contract
+    ///
+    /// The VT agent MUST NOT follow HTTP redirects. Every request sets
+    /// the `x-apikey` header (`request_with_retry`), and ureq 2.10's
+    /// default of five redirects forwards custom headers verbatim to the
+    /// redirect target. VT never returns 3xx in normal use, so any
+    /// redirect signals DNS hijack, transparent proxy interception, or a
+    /// misrouted CI gateway — silently following it would exfiltrate the
+    /// API key. This test pins the post-fix behaviour by serving a 302
+    /// from a localhost listener and asserting the call surfaces as
+    /// `VtError::HttpStatus { status: 302, .. }` rather than chasing the
+    /// `Location` header.
+    #[test]
+    fn agent_surfaces_302_as_error_instead_of_following_redirect() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+        let port = listener.local_addr().unwrap().port();
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let cloned = stream.try_clone().expect("clone");
+            let mut reader = BufReader::new(cloned);
+            // Drain the request headers (read until empty line) so we
+            // don't write back before the client finishes sending.
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let body = "should not be observed";
+            let resp = format!(
+                "HTTP/1.1 302 Found\r\n\
+                 Location: http://attacker.example/leak\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        });
+
+        let client = VtClient::new(VtConfig {
+            apikey: "test-key-MUST-NOT-LEAK".into(),
+        });
+        let url = format!("http://127.0.0.1:{port}/v3/files/abc");
+        let result: Result<serde_json::Value, _> = client.get_json_with_retry(&url, &[]);
+
+        // Accept either the typed `HttpStatus { 302 }` (preferred) or any
+        // non-Ok outcome that did NOT successfully decode a JSON body —
+        // the contract is "do not follow", not a specific error shape.
+        assert!(
+            matches!(&result, Err(VtError::HttpStatus { status: 302, .. })),
+            "agent must surface 302 instead of following the redirect; got {result:?}"
+        );
+
+        let _ = server.join();
     }
 }

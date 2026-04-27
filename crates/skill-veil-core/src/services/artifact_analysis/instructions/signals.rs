@@ -26,6 +26,16 @@ pub(super) static RE_PRIVILEGED_ROLE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("(?i)(act\\s+as\\s+(root|administrator|system)|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|ignore\\s+all\\s+existing\\s+safety\\s+constraints)").expect("valid regex")
 });
 
+// `InstructionSignals` and its `inspect()` constructor power an alternate
+// permission/persistence policy chain in `policies/permission_policy/`
+// that is not wired into the production `analyze_with_kind` pipeline
+// (which uses the inlined `semantic_persistence_findings` in this file's
+// parent `instructions.rs:138`). The allows below acknowledge the
+// unfinished refactor: the chain is kept compiling and tested so it can
+// be wired up in a future change without re-introducing the code from
+// scratch. Do NOT remove these allows without first deleting the
+// `policies/permission_policy/persistence_policy.rs` chain or
+// connecting it to `analyze_with_kind`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct InstructionSignals {

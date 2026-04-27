@@ -208,8 +208,17 @@ fn load_reports(reports_dir: &Path) -> Result<BTreeMap<String, CachedReport>> {
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
+        let bytes = match crate::util::cache_io::read_cache_file_bounded(&path) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue, // missing or over-cap → treat as no report
+            Err(err) => {
+                tracing::warn!(
+                    "skipping VT report {} (read failed: {})",
+                    path.display(),
+                    err
+                );
+                continue;
+            }
         };
         let Ok(cached) = serde_json::from_slice::<CachedReport>(&bytes) else {
             tracing::warn!("skipping unreadable VT report {}", path.display());

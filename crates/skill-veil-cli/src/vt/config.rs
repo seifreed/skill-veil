@@ -7,8 +7,10 @@
 //! The key is never logged, never surfaced in error messages, and never
 //! accepted via a CLI flag (to keep it out of shell history / `ps` output).
 
+use crate::util::secure_fs::warn_if_file_world_readable;
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
+use std::io;
 use std::path::PathBuf;
 
 const CONFIG_FILE_NAME: &str = ".vt.toml";
@@ -36,18 +38,36 @@ impl VtConfig {
         }
 
         let path = Self::config_path()?;
-        if !path.exists() {
-            return Err(anyhow!(
-                "VirusTotal API key not found.\n  \
-                Set the {env} environment variable, or create {path}\n  \
-                with contents: apikey = \"<your-vt-apikey>\"",
-                env = API_KEY_ENV_VAR,
-                path = path.display(),
-            ));
-        }
 
-        let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
+        // Surface the world-readable warning before materialising the
+        // secret in process memory: if the file is group/other-readable
+        // the user should see the warning even when a downstream parse
+        // error aborts the load. `warn_if_file_world_readable` is a
+        // no-op on missing paths, so calling it before the read is safe.
+        warn_if_file_world_readable(&path);
+
+        // Read directly instead of `path.exists()` then `read_to_string`:
+        // the prior pattern opened a tiny TOCTOU window where a
+        // concurrent symlink swap between the existence check and the
+        // open could change the file under us. Mapping `NotFound` here
+        // also lets us preserve the helpful "set VT_APIKEY or create
+        // ~/.vt.toml" guidance message users rely on for first-run
+        // onboarding without introducing the race.
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(anyhow!(
+                    "VirusTotal API key not found.\n  \
+                    Set the {env} environment variable, or create {path}\n  \
+                    with contents: apikey = \"<your-vt-apikey>\"",
+                    env = API_KEY_ENV_VAR,
+                    path = path.display(),
+                ));
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("failed to read {}", path.display()));
+            }
+        };
         let parsed: FileFormat = toml::from_str(&contents)
             .with_context(|| format!("failed to parse {} as TOML", path.display()))?;
         let apikey = parsed
@@ -58,7 +78,6 @@ impl VtConfig {
         if apikey.is_empty() {
             return Err(anyhow!("{} has an empty `apikey` value", path.display()));
         }
-        warn_if_world_readable(&path);
         Ok(Self { apikey })
     }
 
@@ -69,27 +88,6 @@ impl VtConfig {
         Ok(home.join(CONFIG_FILE_NAME))
     }
 }
-
-/// On Unix, warn when the config file is readable by other users. The apikey
-/// grants premium VT access; world-readable storage is a common leak vector.
-#[cfg(unix)]
-fn warn_if_world_readable(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mode = meta.permissions().mode() & 0o777;
-        if mode & 0o077 != 0 {
-            tracing::warn!(
-                "{} is world- or group-readable (mode {:o}); recommend `chmod 600 {}`",
-                path.display(),
-                mode,
-                path.display(),
-            );
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn warn_if_world_readable(_path: &std::path::Path) {}
 
 #[cfg(test)]
 mod tests {

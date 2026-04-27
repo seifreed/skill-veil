@@ -155,7 +155,7 @@ pub(crate) fn enrich_iocs(
     iocs: &ExtractedIocs,
     opts: &EnrichOptions,
 ) -> Result<VtEnrichment> {
-    std::fs::create_dir_all(&opts.cache_root)
+    crate::util::secure_fs::create_dir_secure(&opts.cache_root)
         .with_context(|| format!("creating {}", opts.cache_root.display()))?;
 
     let mut out = VtEnrichment::default();
@@ -322,14 +322,26 @@ fn build_error_indicator(indicator: &str, cache_path: &Path, err: &VtError) -> E
     }
 }
 
+/// Persist an indicator atomically: serialise to a `.tmp` sibling, fsync,
+/// then `rename(2)` into place. Pre-fix this function called
+/// `std::fs::write` directly, which truncates the destination and only
+/// then writes the new bytes — a crash, kill, or concurrent run between
+/// truncate and write left an empty or partial JSON envelope at
+/// `cache_path`. `load_fresh` masks the corrupted file as a cache miss
+/// (`Ok(None)`), so the symptom is silent: VT enrichment hits the API
+/// every run for that indicator until a successful fetch overwrites the
+/// poisoned file. The atomic rename guarantees readers see either the
+/// old or the complete new bytes — never the in-between state.
 fn persist_indicator(ind: &EnrichedIndicator) -> Result<()> {
     if let Some(parent) = ind.cache_path.parent() {
-        std::fs::create_dir_all(parent)
+        crate::util::secure_fs::create_dir_secure(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(ind).context("serialising indicator")?;
-    std::fs::write(&ind.cache_path, json)
-        .with_context(|| format!("writing {}", ind.cache_path.display()))?;
+    let tmp = ind.cache_path.with_extension("tmp");
+    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
+    crate::util::cache_io::finalize_atomic_write(&tmp, &ind.cache_path)
+        .with_context(|| format!("renaming {} to {}", tmp.display(), ind.cache_path.display()))?;
     Ok(())
 }
 
@@ -342,11 +354,9 @@ fn persist_indicator(ind: &EnrichedIndicator) -> Result<()> {
 pub(crate) const ERROR_CACHE_TTL: Duration = Duration::minutes(5);
 
 fn load_fresh(path: &Path, ttl: Duration) -> Result<Option<EnrichedIndicator>> {
-    if !path.exists() {
+    let Some(bytes) = crate::util::cache_io::read_cache_file_bounded(path)? else {
         return Ok(None);
-    }
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading cached enrichment {}", path.display()))?;
+    };
     let Ok(record) = serde_json::from_slice::<EnrichedIndicator>(&bytes) else {
         return Ok(None);
     };
@@ -497,6 +507,76 @@ mod tests {
         assert!(
             load_fresh(&path, Duration::days(7)).unwrap().is_some(),
             "Error records younger than ERROR_CACHE_TTL must hit the cache"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `persist_indicator` MUST succeed end-to-end on the happy path and
+    /// leave the cache file at `cache_path` containing the serialised
+    /// indicator — never at the `.tmp` sibling. Pin the post-fix
+    /// behaviour (atomic rename) so a future refactor that swaps back to
+    /// `std::fs::write` regresses here.
+    #[test]
+    fn persist_indicator_writes_to_dest_path_atomically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_path = tmp.path().join("ips").join("1_2_3_4.json");
+        let ind = EnrichedIndicator {
+            indicator: "1.2.3.4".into(),
+            cache_path: cache_path.clone(),
+            fetched_at: Utc::now(),
+            status: EnrichmentStatus::NotFound,
+            summary: None,
+        };
+
+        persist_indicator(&ind).expect("happy-path write must succeed");
+
+        let tmp_sibling = cache_path.with_extension("tmp");
+        assert!(
+            !tmp_sibling.exists(),
+            "tmp sibling must NOT remain after a successful persist"
+        );
+        assert!(cache_path.exists(), "dest cache file MUST exist");
+        let round_tripped: EnrichedIndicator =
+            serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+        assert_eq!(round_tripped.indicator, "1.2.3.4");
+    }
+
+    /// # Contract
+    ///
+    /// `persist_indicator` MUST NOT corrupt an existing cache entry when
+    /// the new content fails to land. Pre-fix `std::fs::write` truncated
+    /// the destination before writing, so any failure (interrupt, ENOSPC)
+    /// left a zero-byte file at `cache_path`. The atomic rename pattern
+    /// guarantees that if we observe a file at `cache_path`, it is a
+    /// complete prior or current write — never the in-between state.
+    /// Verified here by seeding a valid file then overwriting via
+    /// persist_indicator and asserting the tmp sibling never coexists
+    /// with the dest at the end of the call.
+    #[test]
+    fn persist_indicator_overwrite_leaves_no_tmp_residue() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_path = tmp.path().join("urls").join("abc.json");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        std::fs::write(&cache_path, b"{\"old\":true}").unwrap();
+
+        let ind = EnrichedIndicator {
+            indicator: "https://example.test/x".into(),
+            cache_path: cache_path.clone(),
+            fetched_at: Utc::now(),
+            status: EnrichmentStatus::NotFound,
+            summary: None,
+        };
+        persist_indicator(&ind).expect("overwrite must succeed");
+
+        assert!(
+            !cache_path.with_extension("tmp").exists(),
+            "tmp sibling must NOT remain after overwrite"
+        );
+        let payload = std::fs::read_to_string(&cache_path).unwrap();
+        assert!(
+            payload.contains("https://example.test/x"),
+            "dest must contain the new payload, got: {payload}"
         );
     }
 }

@@ -1,0 +1,15 @@
+# Advisories that cannot be fixed because they are transitive dependencies
+# of yara-x which pins rsa 0.9.x, bincode 2.x, and rand 0.8.x.
+# These will be resolved when yara-x upgrades its upstream dependencies.
+
+[advisories]
+ignore = [
+    # rsa 0.9.10 (transitive via yara-x) — no fixed version available
+    "RUSTSEC-2023-0071",  # Marvin Attack: timing sidechannel key recovery
+
+    # bincode 2.0.1 (transitive via yara-x) — unmaintained, no alternative in yara-x
+    "RUSTSEC-2025-0141",  # Bincode is unmaintained
+
+    # rand 0.8.5 (transitive via yara-x → num-bigint-dig) — unsound with custom logger
+    "RUSTSEC-2026-0097",  # Rand is unsound with a custom logger using rand::rng()
+]

@@ -309,23 +309,74 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
         fs::remove_dir_all(&output_dir)
             .with_context(|| format!("Failed to replace {}", output_dir.display()))?;
     }
-    fs::rename(&staging_dir, &output_dir)
-        .or_else(|_| {
-            fs::create_dir_all(&output_dir)?;
-            for entry in fs::read_dir(&staging_dir)? {
-                let entry = entry?;
-                let source = entry.path();
-                let destination = output_dir.join(entry.file_name());
-                fs::rename(source, destination)?;
-            }
-            fs::remove_dir_all(&staging_dir)
-        })
-        .with_context(|| {
+    finalize_extraction(&staging_dir, &output_dir).with_context(|| {
+        format!(
+            "Failed to finalize cached extraction for {}",
+            zip_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+/// Best-effort cleanup guard: drops `staging_dir` whenever the guard goes
+/// out of scope, including on early-return via `?`. Pre-fix the cleanup
+/// was a trailing `fs::remove_dir_all(&staging_dir)` after the per-entry
+/// rename loop, so any inner `?` failure (cross-mount partial failure,
+/// permission error mid-loop) bypassed cleanup and left the staging
+/// directory on disk indefinitely.
+struct StagingGuard<'a> {
+    path: &'a Path,
+    armed: bool,
+}
+
+impl<'a> StagingGuard<'a> {
+    fn arm(path: &'a Path) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StagingGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed && self.path.exists() {
+            let _ = fs::remove_dir_all(self.path);
+        }
+    }
+}
+
+/// Promote `staging_dir` to `output_dir`, falling back to per-entry rename
+/// when the source and destination live on different filesystems (`rename`
+/// returns `EXDEV`). The `StagingGuard` ensures `staging_dir` is removed
+/// even when the fallback loop errors midway.
+fn finalize_extraction(staging_dir: &Path, output_dir: &Path) -> Result<()> {
+    let guard = StagingGuard::arm(staging_dir);
+    if fs::rename(staging_dir, output_dir).is_ok() {
+        // `rename` consumed the source; nothing left to clean.
+        guard.disarm();
+        return Ok(());
+    }
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("Failed to create {}", output_dir.display()))?;
+    for entry in fs::read_dir(staging_dir)
+        .with_context(|| format!("Failed to read {}", staging_dir.display()))?
+    {
+        let entry = entry?;
+        let source = entry.path();
+        let destination = output_dir.join(entry.file_name());
+        fs::rename(&source, &destination).with_context(|| {
             format!(
-                "Failed to finalize cached extraction for {}",
-                zip_path.display()
+                "Failed to move {} to {}",
+                source.display(),
+                destination.display()
             )
         })?;
+    }
+    fs::remove_dir_all(staging_dir)
+        .with_context(|| format!("Failed to remove {}", staging_dir.display()))?;
+    guard.disarm();
     Ok(())
 }
 
@@ -402,6 +453,70 @@ mod tests {
                 .iter()
                 .map(|e| e.path().to_path_buf())
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `finalize_extraction` MUST remove `staging_dir` even when the
+    /// per-entry fallback fails midway. Pre-fix the cleanup lived as a
+    /// trailing statement after the `for` loop; any inner `?` (cross-mount
+    /// rename failing partway, EACCES, etc.) bypassed it and left a stale
+    /// `.<pkg>.tmp/` on disk indefinitely. The `StagingGuard` now drops
+    /// the directory on every failure path.
+    #[test]
+    fn cross_mount_fallback_cleans_staging_on_inner_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging_dir = tmp.path().join(".pkg.tmp");
+        let output_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&staging_dir).unwrap();
+        std::fs::write(staging_dir.join("a.txt"), b"a").unwrap();
+        std::fs::write(staging_dir.join("b.txt"), b"b").unwrap();
+
+        // Force the primary `fs::rename` path to fail by making `output_dir`
+        // an existing non-empty directory. On most platforms this still
+        // succeeds for `rename(dir, dir)` when target is empty but errors
+        // when the target dir contains entries. We pre-populate it to make
+        // the primary rename fail and steer execution into the fallback.
+        std::fs::create_dir_all(&output_dir).unwrap();
+        std::fs::write(output_dir.join("placeholder"), b"x").unwrap();
+        // Then sabotage the per-entry fallback: pre-create a read-only
+        // directory at the destination of `a.txt` so `fs::rename(source,
+        // destination)` fails inside the loop.
+        let conflict = output_dir.join("a.txt");
+        std::fs::create_dir_all(&conflict).unwrap();
+        std::fs::write(conflict.join("blocker"), b"blocker").unwrap();
+
+        let result = finalize_extraction(&staging_dir, &output_dir);
+        assert!(
+            result.is_err(),
+            "fallback must propagate the inner rename failure"
+        );
+        assert!(
+            !staging_dir.exists(),
+            "staging_dir must be removed by StagingGuard even on inner failure"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// On the happy path, `finalize_extraction` consumes `staging_dir` and
+    /// publishes its contents under `output_dir`. The guard must NOT
+    /// double-remove an already-renamed directory; observing this
+    /// behaviour pins the `disarm()` call on the success path.
+    #[test]
+    fn finalize_extraction_publishes_then_clears_staging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staging_dir = tmp.path().join(".pkg.tmp");
+        let output_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&staging_dir).unwrap();
+        std::fs::write(staging_dir.join("file.txt"), b"hello").unwrap();
+
+        finalize_extraction(&staging_dir, &output_dir).unwrap();
+        assert!(!staging_dir.exists(), "staging_dir must be gone");
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("file.txt")).unwrap(),
+            "hello"
         );
     }
 }

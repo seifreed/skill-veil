@@ -58,8 +58,15 @@
   category: supply_chain
   severity: medium
   confidence: 0.70
+  # Anchor the extension so `wget myfile.sh.txt` / `curl test.sh.backup`
+  # don't trigger. `\\S+` consumes the URL/filename without crossing
+  # whitespace, and the trailing class requires the executable extension
+  # to be the LAST extension before a delimiter (space, quote, paren,
+  # semicolon, end-of-line). Pre-fix `.*\\.(sh|...)` matched any
+  # substring `.sh` mid-token, so changelog/README mentions of e.g.
+  # `wget archive.sh.gz` lifted benign skills to `require_approval`.
   when: !regex
-    pattern: "(curl|wget|Invoke-WebRequest)\\s+.*\\.(sh|ps1|exe|bin)"
+    pattern: "(curl|wget|Invoke-WebRequest)\\s+\\S+\\.(sh|ps1|exe|bin)(?:[\\s\"'`)\\];]|$)"
   action: require_approval
   reason: "Downloading executable without hash verification"
   shield:
@@ -177,7 +184,6 @@
     pattern: "(?i)(just\\s+once|trust\\s+me|safe|don'?t\\s+worry|urgent|immediately|right\\s+now)"
   action: log
   reason: "Persuasive or urgency language detected"
-  shield: null
   enabled: true
   tags:
     - semantic

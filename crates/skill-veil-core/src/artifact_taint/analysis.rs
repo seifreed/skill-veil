@@ -98,6 +98,14 @@ pub(super) fn derive_cross_node_taint_findings(
                         if group_finding_count >= per_group_budget {
                             break 'group;
                         }
+                        // `artifact_path` and `matched_on` BOTH point at the
+                        // source node. Pre-fix the artifact was attributed to
+                        // the source while `matched_on` pointed at the sink,
+                        // so a single finding referenced two distinct files —
+                        // confusing for auditors and breaking suppression
+                        // path-matching (which keys on `artifact_path`). The
+                        // source/sink relationship is preserved verbatim in
+                        // `match_value` (`source={src} sink={snk}`).
                         findings.push(
                             Finding::builder(rule.id.clone(), rule.category)
                                 .severity(rule.severity)
@@ -106,7 +114,7 @@ pub(super) fn derive_cross_node_taint_findings(
                                 .evidence_kind(EvidenceKind::Behavior)
                                 .artifact(kind, Some((*source_node).clone()))
                                 .matched_on(MatchTarget::ReferencedFile {
-                                    path: (*sink_node).clone(),
+                                    path: (*source_node).clone(),
                                 })
                                 .match_value(format!(
                                     "family={} source={} sink={}",

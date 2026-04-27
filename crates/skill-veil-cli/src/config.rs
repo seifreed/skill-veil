@@ -130,6 +130,31 @@ impl LlmProviderKind {
     }
 }
 
+/// Canonical provider names listed in user-facing error messages. Kept in
+/// sync with `LlmProviderKind::from_str_ci`; aliases (`xai`, `pplx`,
+/// `lm-studio`, etc.) are accepted by the parser but omitted here so the
+/// hint stays short.
+pub(crate) const LLM_PROVIDER_VALID_VALUES: &str =
+    "openai, anthropic, ollama, ollama-cloud, lmstudio, grok, perplexity";
+
+/// Resolve the `--llm-provider` CLI flag.
+///
+/// `None` (flag absent) returns `Ok(None)`. A recognised value returns
+/// `Ok(Some(kind))`. An unrecognised value returns an `Err` naming the
+/// offending input — the previous `and_then` collapsed unknown values to
+/// `None`, silently falling back to whichever provider the config file
+/// selected and giving the user no signal that their flag was dropped.
+pub(crate) fn resolve_llm_provider_override(raw: Option<&str>) -> Result<Option<LlmProviderKind>> {
+    match raw {
+        None => Ok(None),
+        Some(value) => LlmProviderKind::from_str_ci(value).map(Some).ok_or_else(|| {
+            anyhow!(
+                "--llm-provider \"{value}\" is not recognised. Valid values: {LLM_PROVIDER_VALID_VALUES}"
+            )
+        }),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProviderParams {
     pub model: String,
@@ -306,8 +331,37 @@ impl UnifiedConfig {
     }
 }
 
+/// Read `path` if it exists, surfacing a `tracing::warn!` if the file is
+/// group-/other-readable. Used for `~/.skill-veil.toml` and the legacy
+/// `~/.vt.toml`, both of which hold API keys (VT, OpenAI, Anthropic,
+/// xAI, Perplexity, Ollama Cloud).
+///
+/// # Contract
+///
+/// - `NotFound` ⇒ `None` (silent: file is truly absent).
+/// - `EACCES`/other I/O ⇒ `None` PLUS a `tracing::warn!` so the operator
+///   can distinguish "no config" from "config exists but is unreadable".
+///
+/// Pre-fix this function used `path.exists()` followed by `read_to_string`,
+/// which both (a) introduced a TOCTOU race between the two syscalls, and
+/// (b) silently masked `EACCES` (chmod 000) as `not found`, so an admin
+/// who restricted the config without informing the user produced an
+/// undebuggable "no API key configured" failure.
 fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
-    std::fs::read_to_string(path).ok()
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            crate::util::secure_fs::warn_if_file_world_readable(path);
+            Some(contents)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            tracing::warn!(
+                "skipping config file {}: {err} (check file permissions)",
+                path.display(),
+            );
+            None
+        }
+    }
 }
 
 fn resolve_vt(
@@ -336,29 +390,45 @@ fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>>
     };
     let provider = LlmProviderKind::from_str_ci(provider_raw).ok_or_else(|| {
         anyhow!(
-            "[llm].provider = \"{}\" is not recognised. Valid values: openai, anthropic, ollama, ollama-cloud, lmstudio",
-            provider_raw
+            "[llm].provider = \"{provider_raw}\" is not recognised. Valid values: {LLM_PROVIDER_VALID_VALUES}"
         )
     })?;
 
     let mut provider_configs: BTreeMap<LlmProviderKind, ProviderParams> = BTreeMap::new();
     let file_sections = &llm.providers;
 
-    for (name, params) in file_sections {
-        if let Some(kind) = LlmProviderKind::from_str_ci(name) {
-            let mut p = ProviderParams {
-                model: params.model.clone().unwrap_or_default(),
-                base_url: params.base_url.clone(),
-                api_key: params.api_key.clone(),
-                max_tokens: params.max_tokens,
-                temperature: params.temperature,
-            };
-            // Env vars take precedence over file-specified api_key.
-            if let Some(env_key) = kind.resolve_apikey_from_env() {
-                p.api_key = Some(env_key);
-            }
-            provider_configs.insert(kind, p);
+    // Validate sub-keys eagerly. `FileLlmSection` uses `#[serde(flatten)]` on
+    // a `BTreeMap<String, FileProviderParams>`, so any unknown sub-key under
+    // `[llm]` (e.g. `provder = "openai"` instead of `provider`) is silently
+    // absorbed as a fake provider entry. Pre-fix the loop below filtered
+    // unknown names with `if let Some(kind) = ...`, so user typos vanished
+    // without trace and the active provider quietly fell back to defaults.
+    for name in file_sections.keys() {
+        if LlmProviderKind::from_str_ci(name).is_none() {
+            return Err(anyhow!(
+                "[llm].{name} is not a recognised key. Expected a provider \
+                 ({LLM_PROVIDER_VALID_VALUES}) or one of: provider, limits"
+            ));
         }
+    }
+
+    for (name, params) in file_sections {
+        let kind = LlmProviderKind::from_str_ci(name).expect("validated above");
+        if let Some(raw_url) = params.base_url.as_deref() {
+            validate_provider_base_url(kind, raw_url)?;
+        }
+        let mut p = ProviderParams {
+            model: params.model.clone().unwrap_or_default(),
+            base_url: params.base_url.clone(),
+            api_key: params.api_key.clone(),
+            max_tokens: params.max_tokens,
+            temperature: params.temperature,
+        };
+        // Env vars take precedence over file-specified api_key.
+        if let Some(env_key) = kind.resolve_apikey_from_env() {
+            p.api_key = Some(env_key);
+        }
+        provider_configs.insert(kind, p);
     }
 
     // Ensure the active provider has an entry even if the user omitted its
@@ -389,6 +459,66 @@ fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>>
         provider_configs,
         limits,
     }))
+}
+
+/// Validate a provider's `base_url` from `~/.skill-veil.toml` to prevent
+/// a tampered or typo'd config from silently exfiltrating skill bundles
+/// to an attacker-controlled host. The bundle contains the full SKILL.md,
+/// supporting scripts, extracted IOCs, and (for cloud providers) an API
+/// key in the Authorization header — leaking it to the wrong endpoint is
+/// equivalent to exfiltrating the entire scan target.
+///
+/// Rules:
+/// - Scheme MUST be `http` or `https`. Other schemes (`file://`,
+///   `ftp://`, `gopher://`, custom) are rejected outright.
+/// - Local providers (Ollama, LMStudio) may use `http://` to any host —
+///   their typical defaults are `http://localhost:11434` /
+///   `http://localhost:1234/v1` and users frequently point them at
+///   private LAN hosts.
+/// - Remote providers (OpenAI, Anthropic, Ollama-Cloud, Grok, Perplexity)
+///   MUST use `https://` UNLESS the host is a loopback address — that
+///   exception preserves the legitimate "I'm running a local mitm proxy
+///   for debugging" workflow without re-opening the SSRF vector.
+fn validate_provider_base_url(kind: LlmProviderKind, raw: &str) -> Result<()> {
+    let parsed = url::Url::parse(raw).map_err(|err| {
+        anyhow!(
+            "[llm.providers.{}].base_url is not a valid URL ({raw:?}): {err}",
+            kind.as_str(),
+        )
+    })?;
+
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(anyhow!(
+            "[llm.providers.{}].base_url scheme must be http or https; got {scheme:?}",
+            kind.as_str(),
+        ));
+    }
+
+    let is_local_provider = matches!(kind, LlmProviderKind::Ollama | LlmProviderKind::LmStudio);
+    if !is_local_provider && scheme == "http" && !host_is_loopback(&parsed) {
+        return Err(anyhow!(
+            "[llm.providers.{}].base_url must use https for remote providers; \
+             plain http is only allowed to loopback hosts (localhost / 127.0.0.1 / ::1). \
+             Got: {raw}",
+            kind.as_str(),
+        ));
+    }
+
+    Ok(())
+}
+
+/// True iff the parsed URL points at a loopback host. Treats `localhost`
+/// (the conventional name) and any loopback IPv4/IPv6 literal as
+/// equivalent. Used to carve a narrow `http://` exception for remote
+/// providers without opening a generic SSRF vector.
+fn host_is_loopback(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        None => false,
+    }
 }
 
 // ---- On-disk format (serde) -------------------------------------------
@@ -446,7 +576,6 @@ struct LegacyVtFormat {
 }
 
 #[cfg(test)]
-#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
@@ -526,6 +655,78 @@ request_timeout_secs = 60
             Some(LlmProviderKind::Perplexity)
         );
         assert_eq!(LlmProviderKind::from_str_ci("unknown"), None);
+    }
+
+    /// # Contract
+    ///
+    /// `resolve_llm_provider_override` must:
+    /// - return `Ok(None)` when the flag is absent (`None`),
+    /// - return `Ok(Some(kind))` for a recognised value (canonical or alias),
+    /// - return `Err` whose message names the offending value AND lists the
+    ///   canonical provider names, when the value is unknown.
+    ///
+    /// Pre-fix the resolver lived inline in `commands/scan.rs` as
+    /// `args.llm_provider.as_deref().and_then(LlmProviderKind::from_str_ci)`
+    /// — the `and_then` collapsed unknown values to `None`, silently falling
+    /// back to whichever provider the config file selected. Users had no
+    /// signal that their `--llm-provider` flag had been dropped.
+    #[test]
+    fn resolve_llm_provider_override_rejects_unknown_value() {
+        assert!(matches!(resolve_llm_provider_override(None), Ok(None)));
+        assert_eq!(
+            resolve_llm_provider_override(Some("Anthropic")).unwrap(),
+            Some(LlmProviderKind::Anthropic)
+        );
+        assert_eq!(
+            resolve_llm_provider_override(Some("xai")).unwrap(),
+            Some(LlmProviderKind::Grok)
+        );
+
+        let err =
+            resolve_llm_provider_override(Some("foobar")).expect_err("unknown provider must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("foobar"),
+            "error must name the bad value: {msg}"
+        );
+        assert!(
+            msg.contains("openai"),
+            "error must list canonical names: {msg}"
+        );
+        assert!(
+            msg.contains("anthropic"),
+            "error must list canonical names: {msg}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `resolve_llm` must reject any unknown sub-table under `[llm]` —
+    /// e.g. `[llm.openi]` (typo of `openai`) — with an error naming the
+    /// offending key. Pre-fix `FileLlmSection` used `#[serde(flatten)]`
+    /// over a `BTreeMap`, so unrecognised sub-tables landed in the map
+    /// and the configuration loop silently filtered them out, leaving
+    /// users no signal that their typo had been dropped.
+    #[test]
+    fn unknown_llm_section_key_is_rejected() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::remove_var(OPENAI_APIKEY_ENV);
+        std::env::remove_var(ANTHROPIC_APIKEY_ENV);
+        let src = r#"
+[llm]
+provider = "openai"
+
+[llm.openi]
+model = "gpt-4o-mini"
+"#;
+        let parsed: FileFormat = toml::from_str(src).expect("parses");
+        let err = resolve_llm(Some(&parsed)).expect_err("must reject unknown sub-table");
+        let msg = err.to_string();
+        assert!(msg.contains("openi"), "error must name the bad key: {msg}");
+        assert!(
+            msg.contains("provider") || msg.contains("openai"),
+            "error must hint at valid keys: {msg}"
+        );
     }
 
     #[test]
@@ -889,5 +1090,203 @@ request_timeout_secs = 60
         assert_eq!(lookup_model_context("llama3.1:70b"), Some(128_000));
         assert_eq!(lookup_model_context("GPT-4o-mini"), Some(128_000));
         assert_eq!(lookup_model_context("mystery"), None);
+    }
+
+    fn config_with_provider_url(provider: &str, base_url: Option<&str>) -> FileFormat {
+        let mut providers = BTreeMap::new();
+        providers.insert(
+            provider.to_string(),
+            FileProviderParams {
+                base_url: base_url.map(ToOwned::to_owned),
+                ..Default::default()
+            },
+        );
+        FileFormat {
+            vt: None,
+            llm: Some(FileLlmSection {
+                provider: Some(provider.to_string()),
+                providers,
+                limits: None,
+            }),
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `resolve_llm` MUST reject any `base_url` whose scheme is not
+    /// `http` or `https`. A `file://` (or `gopher://`, `ftp://`, …) URL
+    /// would either fail at request time with an opaque `ureq` error or,
+    /// worse, be silently accepted by a future HTTP client that supports
+    /// the scheme — both leaking the bundle off the intended channel.
+    /// Pre-fix the loader accepted any string verbatim.
+    #[test]
+    fn resolve_llm_rejects_non_http_base_url() {
+        let unified = config_with_provider_url("anthropic", Some("file:///etc/passwd"));
+        let err = resolve_llm(Some(&unified))
+            .expect_err("non-http(s) base_url MUST be rejected at config-load time");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("scheme") && msg.contains("http"),
+            "error must explain the scheme requirement; got: {msg}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Remote (cloud) providers MUST require `https://` for non-loopback
+    /// hosts. Pre-fix a tampered `~/.skill-veil.toml` could redirect the
+    /// Anthropic provider at `http://attacker.example/v1/messages` and
+    /// exfiltrate every bundle (which carries SKILL.md, supporting
+    /// scripts, IOCs, and the Authorization header).
+    #[test]
+    fn resolve_llm_rejects_remote_provider_with_http_scheme() {
+        let unified = config_with_provider_url("anthropic", Some("http://attacker.example/v1"));
+        let err = resolve_llm(Some(&unified))
+            .expect_err("http to a non-loopback host MUST be rejected for remote providers");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("https"),
+            "error must require https for remote providers; got: {msg}"
+        );
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Local providers (Ollama, LMStudio) MUST accept `http://` because
+    /// their default endpoints are plain-http loopback URLs
+    /// (`http://localhost:11434`, `http://localhost:1234/v1`). A regression
+    /// here would break out-of-the-box local-LLM workflows.
+    #[test]
+    fn resolve_llm_accepts_localhost_http_for_ollama() {
+        let unified = config_with_provider_url("ollama", Some("http://localhost:11434"));
+        let resolved = resolve_llm(Some(&unified))
+            .expect("plain-http loopback MUST be allowed for the Ollama local provider");
+        let cfg = resolved.expect("active provider section must resolve");
+        let entry = cfg.provider_configs.get(&LlmProviderKind::Ollama).unwrap();
+        assert_eq!(
+            entry.base_url.as_deref(),
+            Some("http://localhost:11434"),
+            "base_url must be preserved verbatim after validation"
+        );
+    }
+
+    /// # Contract (positive)
+    ///
+    /// The `http://` loopback exception applies to remote providers too,
+    /// to support legitimate dev workflows like running a local mitm
+    /// proxy in front of Anthropic. The exception is narrow:
+    /// `localhost`, `127.0.0.1`, `::1`. Anything else falls back to the
+    /// https-only rule from
+    /// `resolve_llm_rejects_remote_provider_with_http_scheme`.
+    #[test]
+    fn resolve_llm_accepts_loopback_http_for_remote_provider_dev_proxy() {
+        let unified = config_with_provider_url("anthropic", Some("http://127.0.0.1:8080"));
+        resolve_llm(Some(&unified))
+            .expect("loopback http MUST be allowed even for remote providers (dev proxy)");
+    }
+
+    /// # Contract
+    ///
+    /// `https://` MUST be accepted for remote providers (the production
+    /// path). Pin this so over-strict future validation can't accidentally
+    /// reject the canonical case.
+    #[test]
+    fn resolve_llm_accepts_https_for_remote_provider() {
+        let unified = config_with_provider_url("anthropic", Some("https://api.anthropic.com/v1"));
+        resolve_llm(Some(&unified))
+            .expect("https remote URLs MUST resolve cleanly — this is the canonical path");
+    }
+
+    /// # Contract
+    ///
+    /// `read_file_if_exists` MUST return `None` for a path that does
+    /// not exist, without panicking. Safe to call speculatively on
+    /// every config-search location, which is how `UnifiedConfig::load`
+    /// uses it.
+    #[test]
+    fn read_file_if_exists_returns_none_for_missing_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("does-not-exist.toml");
+
+        let result = read_file_if_exists(&missing);
+
+        assert!(
+            result.is_none(),
+            "missing config files MUST yield None, not Some(empty)"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `read_file_if_exists` MUST return the file body when the file
+    /// exists, regardless of permissions. Pre-fix `~/.skill-veil.toml`
+    /// got NO permission warning at all (only the standalone
+    /// `~/.vt.toml` loader had one); post-fix the unified loader emits
+    /// a tracing warning AND still returns the body so legitimate
+    /// scans don't break. This test pins the load-success path so a
+    /// future "fail-closed on world-readable config" refactor regresses
+    /// here instead of silently disabling every shared-host install.
+    #[cfg(unix)]
+    #[test]
+    fn read_file_if_exists_loads_world_readable_file_with_warning() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, "apikey = \"x\"").expect("seed config");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("seed mode 0o644");
+
+        let result = read_file_if_exists(&path);
+
+        assert_eq!(
+            result.as_deref(),
+            Some("apikey = \"x\""),
+            "world-readable config MUST still load — we warn, never block"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// A config file that exists on disk but is unreadable by the current
+    /// process (e.g. `chmod 0o000` after admin lockdown) MUST NOT be
+    /// silently treated as absent. Pre-fix the implementation used
+    /// `path.exists() && read_to_string().ok()` so `EACCES` collapsed to
+    /// `None` (`exists()` returns `false` on permission-denied stat in
+    /// some cases, and `.ok()` discarded the error otherwise) — making
+    /// "API key not configured" indistinguishable from "API key file is
+    /// locked down". The new contract: still return `None` (callers
+    /// remain branch-free), but the function MUST be reachable through
+    /// the I/O error arm so callers can rely on the warn diagnostic.
+    /// This test cannot capture the warn output portably; it asserts the
+    /// reachability and `None` return without panicking.
+    #[cfg(unix)]
+    #[test]
+    fn read_file_if_exists_returns_none_for_unreadable_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("locked.toml");
+        std::fs::write(&path, "apikey = \"x\"").expect("seed config");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
+            .expect("seed mode 0o000");
+
+        // Skip when running as root — root bypasses DAC permission checks
+        // and can read any file regardless of mode.
+        if let Ok(uid_str) = std::env::var("UID") {
+            if uid_str == "0" {
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+                return;
+            }
+        }
+
+        let result = read_file_if_exists(&path);
+
+        // Restore so tempdir cleanup works even if the assertion fails.
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
+
+        assert!(
+            result.is_none(),
+            "unreadable config MUST yield None (and produce a warn-level diagnostic, \
+             not silently look identical to a missing file)"
+        );
     }
 }

@@ -11,7 +11,15 @@ pub struct DeduplicationSummary {
     pub duplicates_removed: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// `Ord`/`PartialOrd` lets `deduplicate_findings` store entries in a
+/// `BTreeMap` keyed on this struct. The motivation is defence-in-depth
+/// rather than a current bug: Rust's `HashMap` uses `RandomState` by
+/// default, randomising bucket layout across processes. Today the final
+/// `unique_findings` Vec is fully sorted before return, so the output
+/// is already deterministic; switching to `BTreeMap` removes the
+/// HashMap dependency on `RandomState` entirely and protects future
+/// refactors that might iterate the map before sorting.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 struct FindingDedupKey {
     rule_id: String,
     category: super::ThreatCategory,
@@ -208,7 +216,13 @@ fn merge_into(existing: &mut Finding, candidate: Finding) {
 #[must_use]
 pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, DeduplicationSummary) {
     let original_findings = findings.len();
-    let mut deduped = std::collections::HashMap::<FindingDedupKey, Finding>::new();
+    // `BTreeMap` (not HashMap) — deterministic iteration order so the
+    // post-merge `Finding` for an equal-strength tie no longer depends
+    // on HashMap's run-to-run iteration permutation. Tie-break in
+    // `merge_into` falls back to "longer text wins" but only the
+    // first-encountered finding hits `or_insert`; with BTreeMap the
+    // "first encountered" key is deterministic.
+    let mut deduped = std::collections::BTreeMap::<FindingDedupKey, Finding>::new();
 
     for finding in findings {
         let key = FindingDedupKey {
@@ -294,5 +308,61 @@ mod tests {
             primary_short,
             "/repo-a/config/skill.md"
         ));
+    }
+
+    /// # Contract
+    ///
+    /// `deduplicate_findings` MUST be deterministic across repeated
+    /// invocations on byte-identical input. Pre-fix the implementation
+    /// used `std::collections::HashMap` whose bucket layout depends on
+    /// `RandomState`; the final sort kept the output Vec stable in
+    /// practice, but any future refactor that iterates the map before
+    /// the sort would expose the randomness. Switching to `BTreeMap`
+    /// makes the iteration order a function of the dedup key only, so
+    /// determinism is a property of the data, not of `RandomState`.
+    /// This test also pins the longer-text tie-break: regardless of
+    /// input order, the merged finding's `reason` is the longer of the
+    /// two equal-strength inputs.
+    #[test]
+    fn deduplicate_findings_is_deterministic_on_equal_strength_ties() {
+        use crate::findings::{
+            EvidenceKind, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+        };
+
+        let make = |reason: &str| {
+            Finding::builder("DUP_RULE", ThreatCategory::ToolAbuse)
+                .severity(Severity::Medium)
+                .confidence(0.5)
+                .action(RecommendedAction::RequireApproval)
+                .evidence_kind(EvidenceKind::Behavior)
+                .matched_on(MatchTarget::Document)
+                .match_value("same-value")
+                .reason(reason.to_string())
+                .build()
+        };
+        let short = make("short reason");
+        let long = make("a substantially longer reason — chosen by the tie-break");
+
+        let (out_a, _) = deduplicate_findings(vec![short.clone(), long.clone()]);
+        let (out_b, _) = deduplicate_findings(vec![long.clone(), short.clone()]);
+        let (out_c, _) = deduplicate_findings(vec![short.clone(), long.clone()]);
+
+        assert_eq!(out_a.len(), 1, "duplicates must collapse to one");
+        assert_eq!(out_b.len(), 1);
+        assert_eq!(
+            out_a[0].reason, out_b[0].reason,
+            "merged reason MUST be order-independent for equal-strength findings; \
+             got {:?} vs {:?}",
+            out_a[0].reason, out_b[0].reason
+        );
+        assert_eq!(
+            out_a[0].reason, out_c[0].reason,
+            "running deduplicate_findings twice on the same input MUST yield the same merged finding",
+        );
+        assert!(
+            out_a[0].reason.contains("substantially longer"),
+            "tie-break MUST pick the longer reason; got {:?}",
+            out_a[0].reason
+        );
     }
 }

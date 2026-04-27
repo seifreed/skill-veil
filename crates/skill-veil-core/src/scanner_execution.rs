@@ -1,3 +1,32 @@
+//! Canonical scanner pipeline. Per-document orchestration that other
+//! modules rely on to preserve their guarantees.
+//!
+//! # Pipeline ordering (load-bearing)
+//!
+//! `scan_one_skill` and the package-level entrypoints execute these
+//! stages in this exact order:
+//!
+//! 1. Parse markdown → evaluate rules → scan supporting artifacts.
+//! 2. Run artifact analysis on every artifact reachable from the entry.
+//! 3. Derive taint findings from the artifact graph.
+//! 4. **Deduplicate** findings (`findings::deduplicate_findings`).
+//! 5. **Apply inline suppressions** (`# skill-veil:ignore` markers).
+//! 6. **Apply policy filters** (baseline, waivers, overrides).
+//! 7. Build the verdict (`PackageAssessmentPipeline`).
+//! 8. Compute the CI gating signal (`should_fail`).
+//!
+//! The order matters: dedup runs **before** suppressions so a single
+//! ignored finding does not leave duplicates behind from other call
+//! sites; suppressions run **before** policy so baselines fingerprint
+//! against the canonical (post-dedup, non-suppressed) view; and the
+//! verdict consumes the filtered set so calibration sees the same
+//! findings the user will. Reordering any pair changes guarantees other
+//! modules pin via tests (e.g. `dedup_notes_preserves_per_group_distinctions`,
+//! `baseline_matches_finding_does_not_apply_paths_match_suffix`).
+//! When you touch this file, update the rationale here and re-run
+//! `cargo test -p skill-veil-core labeled_corpus_meets_phase1_baseline`
+//! to confirm the corpus precision/recall stays within bounds.
+
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{

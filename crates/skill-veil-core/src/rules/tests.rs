@@ -593,3 +593,86 @@ fn builtin_rules_with_blocking_action_declare_shield_scope() {
          rules.",
     );
 }
+
+/// Contract: `SKILL_SUPPLY_CHAIN_NO_HASH` MUST fire when a fetch verb
+/// (`curl` / `wget` / `Invoke-WebRequest`) downloads a file whose
+/// extension `.sh` / `.ps1` / `.exe` / `.bin` is the LAST extension on
+/// the URL/filename — i.e. terminated by whitespace, a closing
+/// quote/paren, or end-of-line.
+///
+/// Why: rule keys the supply-chain "downloaded executable without
+/// hash" guardrail; raising `require_approval` here is the desired
+/// behaviour for the canonical install pattern.
+#[test]
+fn supply_chain_no_hash_matches_install_sh_at_end_of_line() {
+    let engine = RuleEngine::with_defaults().unwrap();
+    let doc = parse_test_doc("# Install\n```bash\nwget https://example.com/install.sh\n```");
+
+    let findings = engine.evaluate(&doc);
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "SKILL_SUPPLY_CHAIN_NO_HASH"),
+        "SKILL_SUPPLY_CHAIN_NO_HASH must fire on `wget …/install.sh`"
+    );
+}
+
+/// Contract: `SKILL_SUPPLY_CHAIN_NO_HASH` MUST NOT fire when the
+/// executable extension is followed by *another* extension
+/// (`install.sh.txt`, `script.sh.backup`, `archive.sh.gz`).
+///
+/// Why: the pre-fix pattern `(curl|wget|…)\\s+.*\\.(sh|…)` was greedy
+/// and unanchored, so any line beginning with `wget` that mentioned
+/// `.sh` *anywhere* — including legitimate `.sh.txt` archives or
+/// changelog/README mentions of `.sh.gz` — escalated benign skills to
+/// `require_approval`. Anchoring the extension to a delimiter
+/// (whitespace / quote / paren / EOL) restores precision.
+#[test]
+fn supply_chain_no_hash_rejects_sh_with_secondary_extension() {
+    let engine = RuleEngine::with_defaults().unwrap();
+    let doc = parse_test_doc(
+        "# Notes\n```bash\nwget myfile.sh.txt\ncurl test.sh.backup\nwget archive.sh.gz\n```",
+    );
+
+    let findings = engine.evaluate(&doc);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.rule_id == "SKILL_SUPPLY_CHAIN_NO_HASH"),
+        "SKILL_SUPPLY_CHAIN_NO_HASH must NOT fire on `.sh.<ext>` filenames; got {:?}",
+        findings
+            .iter()
+            .filter(|f| f.rule_id == "SKILL_SUPPLY_CHAIN_NO_HASH")
+            .map(|f| &f.match_value)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Contract: `SKILL_SUPPLY_CHAIN_NO_HASH` MUST NOT fire on prose that
+/// mentions a fetch verb followed *eventually* by an executable
+/// extension that is not the trailing extension of the URL/filename.
+///
+/// Why: documentation that says e.g. "Run `wget` for `backup.sh.gz`
+/// files" was previously matched because the pattern `.*\\.sh` accepts
+/// any substring `.sh` between the verb and the next non-extension
+/// character. The fix anchors the executable extension to a delimiter,
+/// so the trailing `.gz` (or `.txt`, `.backup`, …) breaks the match.
+#[test]
+fn supply_chain_no_hash_rejects_sh_in_running_text() {
+    let engine = RuleEngine::with_defaults().unwrap();
+    let doc =
+        parse_test_doc("# Troubleshooting\n\nRun wget to fetch backup.sh.gz files from mirror.\n");
+
+    let findings = engine.evaluate(&doc);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.rule_id == "SKILL_SUPPLY_CHAIN_NO_HASH"),
+        "SKILL_SUPPLY_CHAIN_NO_HASH must NOT fire on prose mentions of `.sh.<ext>`; got {:?}",
+        findings
+            .iter()
+            .filter(|f| f.rule_id == "SKILL_SUPPLY_CHAIN_NO_HASH")
+            .map(|f| &f.match_value)
+            .collect::<Vec<_>>()
+    );
+}

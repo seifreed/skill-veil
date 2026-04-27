@@ -1,5 +1,14 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
+
+/// Default soft cap for `vt download --limit`. Encoded as `NonZeroUsize`
+/// so the type system rejects `--limit 0` at clap parse time instead of
+/// silently allowing a zero-file download.
+const DEFAULT_VT_DOWNLOAD_LIMIT: NonZeroUsize = match NonZeroUsize::new(500) {
+    Some(n) => n,
+    None => unreachable!(),
+};
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 pub enum ColorChoiceArg {
@@ -96,8 +105,9 @@ pub struct VtDownloadArgs {
     #[arg(long, default_value = "data")]
     pub dest: PathBuf,
     /// Maximum number of files to download (soft cap; VT may return fewer).
-    #[arg(long, default_value_t = 500)]
-    pub limit: usize,
+    /// Must be ≥ 1; clap rejects `--limit 0` at parse time.
+    #[arg(long, default_value_t = DEFAULT_VT_DOWNLOAD_LIMIT)]
+    pub limit: NonZeroUsize,
     /// Only fetch report JSONs, skip binary downloads (useful without a
     /// premium VT apikey).
     #[arg(long, default_value_t = false)]
@@ -170,8 +180,10 @@ pub struct ScanArgs {
     pub quiet_summary: bool,
     #[arg(long, default_value_t = false)]
     pub explain_policy: bool,
+    /// Cap how many findings appear in text output. Must be ≥ 1; clap
+    /// rejects `--finding-limit 0` at parse time.
     #[arg(long)]
-    pub finding_limit: Option<usize>,
+    pub finding_limit: Option<NonZeroUsize>,
     #[arg(long, value_enum)]
     pub preset: Option<ScanPresetArg>,
     #[arg(long, value_enum, default_value = "full")]
@@ -199,6 +211,15 @@ pub struct ScanArgs {
     /// the first-loaded version (preserves backwards-compat).
     #[arg(long, default_value_t = false)]
     pub strict_rules: bool,
+    /// Override the base directory for VT and LLM enrichment caches.
+    /// Default: `dirs::cache_dir()/skill-veil/<scan-path-key>/`. Caches
+    /// are NEVER placed inside the scanned package — a malicious skill
+    /// could otherwise ship a forged cache entry to suppress real VT
+    /// or LLM lookups for the cache TTL window. Use this flag in CI or
+    /// sandboxed runs where the default user cache directory is not
+    /// suitable.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Clone)]
@@ -352,4 +373,64 @@ pub enum RecommendedActionArg {
     Log,
     RequireApproval,
     Block,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// # Contract
+    ///
+    /// `vt download --limit 0` and `scan --finding-limit 0` MUST be rejected
+    /// at clap parse time. Pre-fix both fields were `usize` / `Option<usize>`
+    /// with no value-parser bound, so `--limit 0` was accepted and the VT
+    /// download path silently fetched zero files (similarly the text output
+    /// emitted zero findings). Switching to `NonZeroUsize` lets the type
+    /// system carry the invariant — clap's built-in `FromStr` rejects `0`.
+    #[test]
+    fn vt_download_limit_zero_is_rejected() {
+        let err = match Cli::try_parse_from(["skill-veil", "vt", "download", "--limit", "0"]) {
+            Ok(_) => panic!("--limit 0 must be rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().to_lowercase().contains("limit"),
+            "error must mention --limit: {err}"
+        );
+
+        // Sanity: a positive value parses cleanly.
+        Cli::try_parse_from(["skill-veil", "vt", "download", "--limit", "1"])
+            .expect("--limit 1 must be accepted");
+    }
+
+    #[test]
+    fn scan_finding_limit_zero_is_rejected() {
+        let err = match Cli::try_parse_from(["skill-veil", "scan", "./pkg", "--finding-limit", "0"])
+        {
+            Ok(_) => panic!("--finding-limit 0 must be rejected"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().to_lowercase().contains("finding-limit"),
+            "error must mention --finding-limit: {err}"
+        );
+
+        Cli::try_parse_from(["skill-veil", "scan", "./pkg", "--finding-limit", "5"])
+            .expect("--finding-limit 5 must be accepted");
+    }
+
+    /// Pin the default at 500 — both as documentation and to catch
+    /// accidental edits to `DEFAULT_VT_DOWNLOAD_LIMIT`.
+    #[test]
+    fn vt_download_limit_default_is_500() {
+        let cli = Cli::try_parse_from(["skill-veil", "vt", "download"]).unwrap();
+        let Commands::Vt {
+            action: VtAction::Download(args),
+        } = cli.command
+        else {
+            panic!("expected vt download subcommand");
+        };
+        assert_eq!(args.limit.get(), 500);
+    }
 }

@@ -125,6 +125,53 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// A cross-node taint finding's `artifact_path` and `matched_on`
+    /// MUST point at the same source node. Pre-fix `artifact_path`
+    /// was the source while `matched_on` was the sink, so a single
+    /// finding referenced two different files in its evidence trail
+    /// — confusing for auditors and breaking suppression
+    /// path-matching (`policy::state::paths_match` keys on
+    /// `artifact_path`). The source/sink relationship is preserved
+    /// verbatim in `match_value` so no information is lost.
+    #[test]
+    fn cross_node_taint_finding_attributes_artifact_and_match_to_source() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_node("deploy.sh", ArtifactKind::ReferencedArtifact);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge("skill.md", "deploy.sh", ArtifactRelation::References);
+        graph.add_edge(
+            "deploy.sh",
+            "https://attacker.example.com/exfil",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph);
+        let cross = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("expected cross-node SECRET_TO_EXTERNAL_NETWORK finding");
+
+        let matched_path = match &cross.matched_on {
+            crate::findings::MatchTarget::ReferencedFile { path } => path.as_str(),
+            other => panic!("cross-node taint finding must use ReferencedFile, got {other:?}"),
+        };
+        assert_eq!(
+            cross.artifact_path.as_deref(),
+            Some(matched_path),
+            "artifact_path and matched_on MUST point at the same node; \
+             got artifact_path={:?}, matched_on={matched_path:?}",
+            cross.artifact_path
+        );
+        assert!(
+            cross.match_value.contains("source=") && cross.match_value.contains("sink="),
+            "source/sink detail MUST be preserved in match_value; got {:?}",
+            cross.match_value
+        );
+    }
+
     #[test]
     fn taint_requires_observed_external_network_sink() {
         let mut graph = ArtifactGraph::new();
