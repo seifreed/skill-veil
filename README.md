@@ -47,6 +47,10 @@ malware engine.
 | **CI-Friendly Output** | Text, JSON, SARIF, SHIELD, diff mode, compact CI summary, and PR gating support |
 | **External Rule Packs** | Versioned `official` and `community` rule packs with fixtures and validation |
 | **Benchmarking** | Labeled corpus, confidence calibration, threshold tuning, and release history dashboard |
+| **VirusTotal Integration** | Bulk download, report caching, and cross-check between skill-veil verdicts and VT Code Insight |
+| **LLM Enrichment** | Optional third scoring engine across Ollama, LM Studio, OpenAI, Anthropic, and Ollama Cloud |
+| **Inline Suppressions** | `# skill-veil:ignore`, `nosem`, and `nosemgrep` markers with optional rule-id and reason |
+| **Unified Config** | Single `~/.skill-veil.toml` for VT and LLM providers; per-flag overrides on the CLI |
 
 ### What It Detects
 
@@ -137,6 +141,9 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `rules test-pack` | Run pack fixtures |
 | `rules pack-info` | Summarize external rule packs |
 | `policy validate` | Validate a policy file |
+| `vt download` | Bulk-download a corpus from VirusTotal Intelligence with cached reports |
+| `vt report` | Fetch and cache the VT report for a single hash |
+| `vt cross-check` | Compare skill-veil verdicts against VT Code Insight on a downloaded corpus |
 
 ### Useful Options
 
@@ -152,6 +159,10 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--ci-summary` | Compact diff summary for CI |
 | `--fail-on <mode>` | CI diff failure mode (`new-active` or `new-blocking`) |
 | `--dashboard-output` | Write benchmark history dashboard |
+| `--no-vt-enrich` | Skip VT enrichment even when `~/.skill-veil.toml` provides an apikey |
+| `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
+| `--llm-provider <name>` | Override the active LLM provider for one scan (`ollama`, `lmstudio`, `openai`, `anthropic`, `ollama-cloud`) |
+| `--cache-dir` | Override the base directory for VT and LLM enrichment caches |
 
 ---
 
@@ -195,6 +206,63 @@ skill-veil rules validate --rules-dir rules/official
 skill-veil rules test-pack --rules-dir rules/official --fixtures rules/fixtures/behavioral.yaml
 skill-veil rules pack-info --rules-dir rules/official
 ```
+
+### VirusTotal corpus and cross-check
+
+```bash
+# One-time setup: ~/.skill-veil.toml
+# [vt]
+# apikey = "..."
+
+# Download a labeled corpus from VT Intelligence (reports + samples).
+skill-veil vt download \
+  --query 'entity:file has:codeinsight codeinsight_verdict:malicious' \
+  --dest data --limit 200
+
+# Pull a single VT report into the cache.
+skill-veil vt report deadbeef0123...0123
+
+# Compare skill-veil verdicts against VT Code Insight for a downloaded corpus.
+skill-veil vt cross-check --dir data --format markdown --only-mismatches
+```
+
+### LLM enrichment as a third scoring engine
+
+```bash
+# Add to ~/.skill-veil.toml:
+# [llm]
+# provider = "ollama"
+#
+# [llm.ollama]
+# model = "llama3.1:8b"
+# # base_url = "http://127.0.0.1:11434"   # optional
+
+# Enrichment runs automatically alongside the rule + verdict engines.
+skill-veil scan-package examples/manifest-package --format json --output current.json
+
+# Override provider for a single run without touching the config.
+skill-veil scan-package . --llm-provider openai
+
+# Skip enrichment entirely (CI runs that should not depend on a network model).
+skill-veil scan-package . --no-vt-enrich --no-llm-enrich
+```
+
+Supported providers out of the box: **Ollama**, **LM Studio**, **OpenAI**,
+**Anthropic**, and **Ollama Cloud**. Each provider exposes its own section in
+`~/.skill-veil.toml` (`[llm.ollama]`, `[llm.openai]`, etc.) for model name,
+optional base URL, and provider-specific parameters.
+
+### Inline suppressions in scanned content
+
+```markdown
+# skill-veil:ignore SKILL_REMOTE_EXEC_CURL_BASH because: vendor install script reviewed manually
+curl -sSL https://example.com/install.sh | bash
+```
+
+skill-veil also recognises `nosem`, `nosem-next-line`, `nosemgrep`, and
+`nosemgrep-next-line` for compatibility with existing toolchains. An optional
+`because:` / `reason:` clause is captured in the finding metadata so reviewers
+can audit waivers later.
 
 ### Optional YARA support
 
@@ -411,7 +479,6 @@ Rule pack docs:
 - [docs/rule-authoring.md](docs/rule-authoring.md)
 - [rules/official/README.md](rules/official/README.md)
 - [rules/community/README.md](rules/community/README.md)
-- [rules/CHANGELOG.md](rules/CHANGELOG.md)
 
 ---
 
@@ -441,7 +508,6 @@ Contributions are welcome.
 
 Start here:
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)
 - [docs/maintainers.md](docs/maintainers.md)
 - [docs/governance.md](docs/governance.md)
 - [docs/versioning.md](docs/versioning.md)
