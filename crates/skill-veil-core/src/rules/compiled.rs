@@ -96,15 +96,15 @@ impl CompiledRule {
     /// memory use.
     fn validate_value_caps(condition: &RuleCondition) -> Result<(), RuleError> {
         match condition {
-            RuleCondition::SectionContains { values, .. } => {
-                if values.len() > MAX_SECTION_CONTAINS_VALUES {
-                    return Err(RuleError::InvalidRule(format!(
-                        "SectionContains has {} values; the per-rule cap is {} \
-                         (split the rule or use a single Regex condition instead)",
-                        values.len(),
-                        MAX_SECTION_CONTAINS_VALUES
-                    )));
-                }
+            RuleCondition::SectionContains { values, .. }
+                if values.len() > MAX_SECTION_CONTAINS_VALUES =>
+            {
+                return Err(RuleError::InvalidRule(format!(
+                    "SectionContains has {} values; the per-rule cap is {} \
+                     (split the rule or use a single Regex condition instead)",
+                    values.len(),
+                    MAX_SECTION_CONTAINS_VALUES
+                )));
             }
             RuleCondition::Any(conditions) | RuleCondition::All(conditions) => {
                 for cond in conditions {

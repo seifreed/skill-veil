@@ -374,14 +374,33 @@ impl<M: PatternMatcher> RuleEngine<M> {
         Ok(findings)
     }
 
+    /// Load `rules/official/` overlays from the current working directory.
+    ///
+    /// The runtime overlay is a *development* copy of the embedded packs at
+    /// `crates/skill-veil-core/resources/official/`. When the binary runs from
+    /// the repo root (CI, `cargo run`, local dev) the overlay paths happen to
+    /// resolve and re-introduce IDs already loaded from the embedded packs.
+    /// Strict mode would surface those overlaps as `DuplicateUserRule` and
+    /// abort startup. The intent of the runtime overlay is "skip duplicates;
+    /// the embedded canonical version wins" (see `with_defaults` doc-comment),
+    /// so we run this stage with strict mode forced off and restore the
+    /// caller's preference afterwards. Callers passing `--rules-dir` go
+    /// through `load_from_dir` directly and keep whatever strict setting
+    /// `set_strict_mode` last applied.
     fn load_runtime_default_rules(&mut self) -> Result<bool, RuleError> {
         let mut loaded = false;
-        for dir in default_external_rule_dirs() {
-            if dir.exists() {
-                self.load_from_dir(&dir)?;
-                loaded = true;
+        let prev_strict = std::mem::replace(&mut self.strict_mode, false);
+        let result: Result<(), RuleError> = (|| {
+            for dir in default_external_rule_dirs() {
+                if dir.exists() {
+                    self.load_from_dir(&dir)?;
+                    loaded = true;
+                }
             }
-        }
+            Ok(())
+        })();
+        self.strict_mode = prev_strict;
+        result?;
         Ok(loaded)
     }
 }

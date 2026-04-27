@@ -512,7 +512,14 @@ fn category_key(category: ThreatCategory) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The `Scanner`/`ScanOptions`/`ScanTargetMode` and `tempdir` imports are
+    // only consumed by the unix-gated permission-denied test below. On
+    // Windows the bracketed `#[cfg(unix)]` block compiles to nothing, so
+    // unused-import would fire under `-D warnings`. Mirror the gate on the
+    // imports themselves to keep the cross-platform build clean.
+    #[cfg(unix)]
     use crate::{ScanOptions, ScanTargetMode, Scanner};
+    #[cfg(unix)]
     use tempfile::tempdir;
 
     #[test]
