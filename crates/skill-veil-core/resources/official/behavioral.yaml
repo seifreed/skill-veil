@@ -112,6 +112,38 @@ rules:
       - exfiltration
       - official_pack
 
+  - id: OFFICIAL_EXFIL_FILE_READ_TO_NETWORK
+    category: data_exfiltration
+    severity: critical
+    confidence: 0.85
+    when: !regex
+      pattern: "(?is)(\\bcat\\s|\\bread\\s|\\bopen\\(|fs::read|fs\\.readFile|readFileSync|load_dotenv|os\\.environ|process\\.env|\\$\\(\\s*cat\\s|Get-Content)[^\\n]{0,40}(\\.env(\\.local)?|\\.zsh_history|\\.bash_history|~/\\.ssh|~/\\.aws|cookies?\\.json|localStorage|secrets?\\.json|credentials\\.json|\\.npmrc).{0,160}(curl\\b|fetch\\(|requests\\.|axios|Invoke-WebRequest|webhook|telegram|discord|paste\\.|ngrok|moltpad|bore\\.pub)"
+    action: block
+    reason: "Artifact reads files containing secrets and forwards them to a network endpoint — credential exfiltration"
+    shield:
+      scope: skill.secrets
+    enabled: true
+    tags:
+      - exfiltration
+      - secrets
+      - official_pack
+
+  - id: OFFICIAL_PROMPT_INJECT_REMOTE_INSTRUCTION_FETCH
+    category: persistent_prompt_tampering
+    severity: critical
+    confidence: 0.90
+    when: !regex
+      pattern: "(?is)(fetch|read|follow|execute|run|curl|wget|download).{0,80}(https?://|raw\\.githubusercontent|pastebin|gist\\.github|moltpad).{0,120}(instruction|prompt|readme|\\.md\\b|command|heartbeat|next.?step|playbook)"
+    action: block
+    reason: "Skill instructs the agent to fetch and execute remote instructions — remote control vector"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_injection
+      - remote_exec
+      - official_pack
+
   - id: OFFICIAL_FORCED_APPROVAL_BYPASS
     category: autonomy_escalation
     severity: high
