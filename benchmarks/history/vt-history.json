@@ -1,0 +1,847 @@
+{
+  "schema_version": "skill-veil.dev/v1alpha1",
+  "releases": [
+    {
+      "release_id": "vt-after-p1-1744",
+      "generated_at": "2026-04-27T15:58:03.294024Z",
+      "metrics": {
+        "precision": 1.0,
+        "recall": 0.91498655,
+        "false_positive_rate": 0.0,
+        "accuracy": 0.91498655,
+        "exact_label_accuracy": 0.56182796,
+        "true_positive": 2723,
+        "false_positive": 0,
+        "true_negative": 0,
+        "false_negative": 253
+      },
+      "coverage": {
+        "total_samples": 2976,
+        "by_label": [
+          {
+            "key": "malicious",
+            "samples": 2976
+          }
+        ],
+        "by_focus_category": [],
+        "by_attack_family": []
+      },
+      "deduplication": {
+        "original_findings": 65519,
+        "unique_findings": 39653,
+        "duplicates_removed": 25866
+      },
+      "confidence_calibration": {
+        "by_evidence_kind": [
+          {
+            "key": "behavior",
+            "findings": 15775,
+            "true_positive": 15775,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9498539
+          },
+          {
+            "key": "context",
+            "findings": 14857,
+            "true_positive": 14857,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94984496
+          },
+          {
+            "key": "intent",
+            "findings": 5047,
+            "true_positive": 5047,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9495437
+          },
+          {
+            "key": "ioc",
+            "findings": 3974,
+            "true_positive": 3974,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9494206
+          }
+        ],
+        "by_category": [
+          {
+            "key": "autonomy_escalation",
+            "findings": 161,
+            "true_positive": 161,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.93601716
+          },
+          {
+            "key": "credential_exposure",
+            "findings": 6679,
+            "true_positive": 6679,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94965506
+          },
+          {
+            "key": "data_exfiltration",
+            "findings": 3121,
+            "true_positive": 3121,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492624
+          },
+          {
+            "key": "generic",
+            "findings": 7,
+            "true_positive": 7,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.7373967
+          },
+          {
+            "key": "obfuscation",
+            "findings": 2331,
+            "true_positive": 2331,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94901276
+          },
+          {
+            "key": "persistent_prompt_tampering",
+            "findings": 448,
+            "true_positive": 448,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9448987
+          },
+          {
+            "key": "persuasive_language",
+            "findings": 3158,
+            "true_positive": 3158,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492711
+          },
+          {
+            "key": "privilege_escalation",
+            "findings": 453,
+            "true_positive": 453,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94495463
+          },
+          {
+            "key": "remote_exec",
+            "findings": 3427,
+            "true_positive": 3427,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9493282
+          },
+          {
+            "key": "scope_creep",
+            "findings": 9168,
+            "true_positive": 9168,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94974875
+          },
+          {
+            "key": "social_manipulation",
+            "findings": 1957,
+            "true_positive": 1957,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9488245
+          },
+          {
+            "key": "supply_chain",
+            "findings": 6533,
+            "true_positive": 6533,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9496473
+          },
+          {
+            "key": "tool_abuse",
+            "findings": 2210,
+            "true_positive": 2210,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9489589
+          }
+        ],
+        "by_signal_pair": [
+          {
+            "key": "behavior+credential_exposure",
+            "findings": 4349,
+            "true_positive": 4349,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9494705
+          },
+          {
+            "key": "behavior+data_exfiltration",
+            "findings": 3070,
+            "true_positive": 3070,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492501
+          },
+          {
+            "key": "behavior+obfuscation",
+            "findings": 2331,
+            "true_positive": 2331,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94901276
+          },
+          {
+            "key": "behavior+persistent_prompt_tampering",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          },
+          {
+            "key": "behavior+privilege_escalation",
+            "findings": 388,
+            "true_positive": 388,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94411767
+          },
+          {
+            "key": "behavior+remote_exec",
+            "findings": 2509,
+            "true_positive": 2509,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94908273
+          },
+          {
+            "key": "behavior+social_manipulation",
+            "findings": 173,
+            "true_positive": 173,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.93696594
+          },
+          {
+            "key": "behavior+supply_chain",
+            "findings": 1931,
+            "true_positive": 1931,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94880867
+          },
+          {
+            "key": "behavior+tool_abuse",
+            "findings": 1022,
+            "true_positive": 1022,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9477531
+          },
+          {
+            "key": "context+autonomy_escalation",
+            "findings": 119,
+            "true_positive": 119,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9312364
+          },
+          {
+            "key": "context+credential_exposure",
+            "findings": 304,
+            "true_positive": 304,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9425125
+          },
+          {
+            "key": "context+generic",
+            "findings": 7,
+            "true_positive": 7,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.7373967
+          },
+          {
+            "key": "context+persistent_prompt_tampering",
+            "findings": 446,
+            "true_positive": 446,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9448761
+          },
+          {
+            "key": "context+privilege_escalation",
+            "findings": 65,
+            "true_positive": 65,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.916518
+          },
+          {
+            "key": "context+remote_exec",
+            "findings": 588,
+            "true_positive": 588,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94610536
+          },
+          {
+            "key": "context+scope_creep",
+            "findings": 9092,
+            "true_positive": 9092,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9497466
+          },
+          {
+            "key": "context+supply_chain",
+            "findings": 3048,
+            "true_positive": 3048,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94924474
+          },
+          {
+            "key": "context+tool_abuse",
+            "findings": 1188,
+            "true_positive": 1188,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9480661
+          },
+          {
+            "key": "intent+autonomy_escalation",
+            "findings": 29,
+            "true_positive": 29,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.8798158
+          },
+          {
+            "key": "intent+persuasive_language",
+            "findings": 3158,
+            "true_positive": 3158,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492711
+          },
+          {
+            "key": "intent+scope_creep",
+            "findings": 76,
+            "true_positive": 76,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9211309
+          },
+          {
+            "key": "intent+social_manipulation",
+            "findings": 1784,
+            "true_positive": 1784,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9487108
+          },
+          {
+            "key": "ioc+autonomy_escalation",
+            "findings": 13,
+            "true_positive": 13,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.8131389
+          },
+          {
+            "key": "ioc+credential_exposure",
+            "findings": 2026,
+            "true_positive": 2026,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94886446
+          },
+          {
+            "key": "ioc+data_exfiltration",
+            "findings": 51,
+            "true_positive": 51,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.90797067
+          },
+          {
+            "key": "ioc+remote_exec",
+            "findings": 330,
+            "true_positive": 330,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94309556
+          },
+          {
+            "key": "ioc+supply_chain",
+            "findings": 1554,
+            "true_positive": 1554,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9485204
+          }
+        ]
+      },
+      "threshold_recommendation": {
+        "current_approval_threshold": 20,
+        "current_block_threshold": 50,
+        "recommended_approval_threshold": 10,
+        "recommended_block_threshold": 30,
+        "current_metrics": {
+          "precision": 1.0,
+          "recall": 0.9375,
+          "false_positive_rate": 0.0,
+          "accuracy": 0.9375,
+          "exact_label_accuracy": 0.8985215,
+          "true_positive": 2790,
+          "false_positive": 0,
+          "true_negative": 0,
+          "false_negative": 186
+        },
+        "recommended_metrics": {
+          "precision": 1.0,
+          "recall": 0.9516129,
+          "false_positive_rate": 0.0,
+          "accuracy": 0.9516129,
+          "exact_label_accuracy": 0.9250672,
+          "true_positive": 2832,
+          "false_positive": 0,
+          "true_negative": 0,
+          "false_negative": 144
+        },
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score -2.797)."
+      },
+      "family_metrics": []
+    },
+    {
+      "release_id": "vt-baseline-test",
+      "generated_at": "2026-04-27T15:19:23.473836Z",
+      "metrics": {
+        "precision": 1.0,
+        "recall": 0.90893817,
+        "false_positive_rate": 0.0,
+        "accuracy": 0.90893817,
+        "exact_label_accuracy": 0.52486557,
+        "true_positive": 2705,
+        "false_positive": 0,
+        "true_negative": 0,
+        "false_negative": 271
+      },
+      "coverage": {
+        "total_samples": 2976,
+        "by_label": [
+          {
+            "key": "malicious",
+            "samples": 2976
+          }
+        ],
+        "by_focus_category": [],
+        "by_attack_family": []
+      },
+      "deduplication": {
+        "original_findings": 65073,
+        "unique_findings": 39212,
+        "duplicates_removed": 25861
+      },
+      "confidence_calibration": {
+        "by_evidence_kind": [
+          {
+            "key": "behavior",
+            "findings": 15750,
+            "true_positive": 15750,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94985366
+          },
+          {
+            "key": "context",
+            "findings": 14441,
+            "true_positive": 14441,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9498404
+          },
+          {
+            "key": "intent",
+            "findings": 5047,
+            "true_positive": 5047,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9495437
+          },
+          {
+            "key": "ioc",
+            "findings": 3974,
+            "true_positive": 3974,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9494206
+          }
+        ],
+        "by_category": [
+          {
+            "key": "autonomy_escalation",
+            "findings": 161,
+            "true_positive": 161,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.93601716
+          },
+          {
+            "key": "credential_exposure",
+            "findings": 6679,
+            "true_positive": 6679,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94965506
+          },
+          {
+            "key": "data_exfiltration",
+            "findings": 3096,
+            "true_positive": 3096,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492564
+          },
+          {
+            "key": "generic",
+            "findings": 7,
+            "true_positive": 7,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.7373967
+          },
+          {
+            "key": "obfuscation",
+            "findings": 2331,
+            "true_positive": 2331,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94901276
+          },
+          {
+            "key": "persistent_prompt_tampering",
+            "findings": 32,
+            "true_positive": 32,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.88569045
+          },
+          {
+            "key": "persuasive_language",
+            "findings": 3158,
+            "true_positive": 3158,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492711
+          },
+          {
+            "key": "privilege_escalation",
+            "findings": 453,
+            "true_positive": 453,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94495463
+          },
+          {
+            "key": "remote_exec",
+            "findings": 3427,
+            "true_positive": 3427,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9493282
+          },
+          {
+            "key": "scope_creep",
+            "findings": 9168,
+            "true_positive": 9168,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94974875
+          },
+          {
+            "key": "social_manipulation",
+            "findings": 1957,
+            "true_positive": 1957,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9488245
+          },
+          {
+            "key": "supply_chain",
+            "findings": 6533,
+            "true_positive": 6533,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9496473
+          },
+          {
+            "key": "tool_abuse",
+            "findings": 2210,
+            "true_positive": 2210,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9489589
+          }
+        ],
+        "by_signal_pair": [
+          {
+            "key": "behavior+credential_exposure",
+            "findings": 4349,
+            "true_positive": 4349,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9494705
+          },
+          {
+            "key": "behavior+data_exfiltration",
+            "findings": 3045,
+            "true_positive": 3045,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.949244
+          },
+          {
+            "key": "behavior+obfuscation",
+            "findings": 2331,
+            "true_positive": 2331,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94901276
+          },
+          {
+            "key": "behavior+persistent_prompt_tampering",
+            "findings": 2,
+            "true_positive": 2,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.55542314
+          },
+          {
+            "key": "behavior+privilege_escalation",
+            "findings": 388,
+            "true_positive": 388,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94411767
+          },
+          {
+            "key": "behavior+remote_exec",
+            "findings": 2509,
+            "true_positive": 2509,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94908273
+          },
+          {
+            "key": "behavior+social_manipulation",
+            "findings": 173,
+            "true_positive": 173,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.93696594
+          },
+          {
+            "key": "behavior+supply_chain",
+            "findings": 1931,
+            "true_positive": 1931,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94880867
+          },
+          {
+            "key": "behavior+tool_abuse",
+            "findings": 1022,
+            "true_positive": 1022,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9477531
+          },
+          {
+            "key": "context+autonomy_escalation",
+            "findings": 119,
+            "true_positive": 119,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9312364
+          },
+          {
+            "key": "context+credential_exposure",
+            "findings": 304,
+            "true_positive": 304,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9425125
+          },
+          {
+            "key": "context+generic",
+            "findings": 7,
+            "true_positive": 7,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.7373967
+          },
+          {
+            "key": "context+persistent_prompt_tampering",
+            "findings": 30,
+            "true_positive": 30,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.8818898
+          },
+          {
+            "key": "context+privilege_escalation",
+            "findings": 65,
+            "true_positive": 65,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.916518
+          },
+          {
+            "key": "context+remote_exec",
+            "findings": 588,
+            "true_positive": 588,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94610536
+          },
+          {
+            "key": "context+scope_creep",
+            "findings": 9092,
+            "true_positive": 9092,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9497466
+          },
+          {
+            "key": "context+supply_chain",
+            "findings": 3048,
+            "true_positive": 3048,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94924474
+          },
+          {
+            "key": "context+tool_abuse",
+            "findings": 1188,
+            "true_positive": 1188,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9480661
+          },
+          {
+            "key": "intent+autonomy_escalation",
+            "findings": 29,
+            "true_positive": 29,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.8798158
+          },
+          {
+            "key": "intent+persuasive_language",
+            "findings": 3158,
+            "true_positive": 3158,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9492711
+          },
+          {
+            "key": "intent+scope_creep",
+            "findings": 76,
+            "true_positive": 76,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9211309
+          },
+          {
+            "key": "intent+social_manipulation",
+            "findings": 1784,
+            "true_positive": 1784,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9487108
+          },
+          {
+            "key": "ioc+autonomy_escalation",
+            "findings": 13,
+            "true_positive": 13,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.8131389
+          },
+          {
+            "key": "ioc+credential_exposure",
+            "findings": 2026,
+            "true_positive": 2026,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94886446
+          },
+          {
+            "key": "ioc+data_exfiltration",
+            "findings": 51,
+            "true_positive": 51,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.90797067
+          },
+          {
+            "key": "ioc+remote_exec",
+            "findings": 330,
+            "true_positive": 330,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.94309556
+          },
+          {
+            "key": "ioc+supply_chain",
+            "findings": 1554,
+            "true_positive": 1554,
+            "false_positive": 0,
+            "observed_precision": 1.0,
+            "recommended_confidence": 0.9485204
+          }
+        ]
+      },
+      "threshold_recommendation": {
+        "current_approval_threshold": 20,
+        "current_block_threshold": 50,
+        "recommended_approval_threshold": 10,
+        "recommended_block_threshold": 30,
+        "current_metrics": {
+          "precision": 1.0,
+          "recall": 0.93346775,
+          "false_positive_rate": 0.0,
+          "accuracy": 0.93346775,
+          "exact_label_accuracy": 0.8797043,
+          "true_positive": 2778,
+          "false_positive": 0,
+          "true_negative": 0,
+          "false_negative": 198
+        },
+        "recommended_metrics": {
+          "precision": 1.0,
+          "recall": 0.94758064,
+          "false_positive_rate": 0.0,
+          "accuracy": 0.94758064,
+          "exact_label_accuracy": 0.91969085,
+          "true_positive": 2820,
+          "false_positive": 0,
+          "true_negative": 0,
+          "false_negative": 156
+        },
+        "rationale": "Selected thresholds using a weighted objective that prefers low false-positive rate, preserves recall, and penalizes label jumps around benign and suspicious samples (score -3.079)."
+      },
+      "family_metrics": []
+    }
+  ]
+}
