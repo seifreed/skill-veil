@@ -137,7 +137,7 @@ pub(crate) fn enrich_scan_result(
         provider_override: opts.provider_override,
     };
 
-    std::fs::create_dir_all(&resolved_opts.cache_root)
+    crate::util::secure_fs::create_dir_secure(&resolved_opts.cache_root)
         .with_context(|| format!("creating {}", resolved_opts.cache_root.display()))?;
 
     let mut enrichment = LlmEnrichment {
@@ -148,7 +148,7 @@ pub(crate) fn enrich_scan_result(
     };
 
     // Zip results with bundles (index-matched).
-    for (scan_res, bundle) in scan_result.results.iter().zip(bundles.into_iter()) {
+    for (scan_res, bundle) in scan_result.results.iter().zip(bundles) {
         match enrich_one(
             provider.as_ref(),
             &provider_name,
@@ -286,9 +286,26 @@ fn enrich_one(
                         .iter()
                         .map(|(p, c)| (p.display().to_string(), c.clone()))
                         .collect();
+                    // A path can be in `manifest_paths` (so it survived the
+                    // first filter) yet absent from `lookup` if the bundle
+                    // builder dropped it under the prompt-budget cap. The
+                    // `filter_map` below would silently skip such requests;
+                    // emit a debug trace so "turn-2 ignored my
+                    // insufficient_context entry" is debuggable without
+                    // re-running the whole pipeline.
                     let requested_with_contents: Vec<(PathBuf, String)> = requested
                         .into_iter()
-                        .filter_map(|p| lookup.get(&p).cloned().map(|c| (PathBuf::from(&p), c)))
+                        .filter_map(|p| match lookup.get(&p) {
+                            Some(c) => Some((PathBuf::from(&p), c.clone())),
+                            None => {
+                                tracing::debug!(
+                                    "LLM-requested path {p:?} is in manifest but \
+                                     was dropped from bundle (likely budget truncation); \
+                                     skipping for turn-2"
+                                );
+                                None
+                            }
+                        })
                         .collect();
                     if !requested_with_contents.is_empty() {
                         let followup_input = SkillBundleInput {
@@ -407,7 +424,13 @@ fn compute_cache_key_with_followup(
 
 fn persist(path: &Path, result: &LlmPackageResult) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
+        // Defensive: outer `enrich_scan_result` already creates the cache
+        // root with `create_dir_secure`, but `persist` may run with a
+        // path whose intermediate directory doesn't exist yet (turn-2
+        // followups, future cache-path refactors). Use `create_dir_secure`
+        // so any newly created intermediate is owner-only (0o700) and the
+        // contract holds even when call sites diverge.
+        crate::util::secure_fs::create_dir_secure(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
     let json = serde_json::to_string_pretty(result).context("serialising LLM result")?;
@@ -422,11 +445,9 @@ fn persist(path: &Path, result: &LlmPackageResult) -> Result<()> {
 pub(crate) const ERROR_CACHE_TTL: Duration = Duration::minutes(5);
 
 fn load_fresh(path: &Path, ttl: Duration) -> Result<Option<LlmPackageResult>> {
-    if !path.exists() {
+    let Some(bytes) = crate::util::cache_io::read_cache_file_bounded(path)? else {
         return Ok(None);
-    }
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading cached LLM result {}", path.display()))?;
+    };
     let Ok(record) = serde_json::from_slice::<LlmPackageResult>(&bytes) else {
         return Ok(None);
     };
@@ -663,5 +684,39 @@ mod tests {
             load_fresh(&path, ttl).unwrap().is_some(),
             "Ok results must keep the long TTL"
         );
+    }
+
+    /// # Contract
+    ///
+    /// `persist` MUST create any missing parent directory with owner-only
+    /// permissions (`0o700` on Unix). Pre-fix the function used a bare
+    /// `std::fs::create_dir_all`, honouring the process umask (typically
+    /// `0o755`). On a shared host this exposed the LLM analysis cache —
+    /// extracted IOCs, full LLM verdicts, primary path digests — to other
+    /// local users. This test pins that the new parent directory is
+    /// created via `secure_fs::create_dir_secure`.
+    #[cfg(unix)]
+    #[test]
+    fn persist_creates_parent_with_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let nested = tmp.path().join("nested").join("further");
+        let cache_path = nested.join("entry.json");
+
+        let result = package_result_with_status(LlmStatus::Ok, Duration::seconds(0));
+        persist(&cache_path, &result).expect("persist must succeed");
+
+        let mode = std::fs::metadata(&nested)
+            .expect("metadata on freshly created parent")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode, 0o700,
+            "persist's newly created parent dir must be 0o700 (got {mode:o}); \
+             this guards against a regression to bare std::fs::create_dir_all",
+        );
+        assert!(cache_path.exists(), "cache file must be written");
     }
 }

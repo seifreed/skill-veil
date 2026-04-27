@@ -398,7 +398,7 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     if !options.explain_policy && !factor_totals.is_empty() {
         output.push_str("Top score factors:\n");
         let mut ranked_factors: Vec<_> = factor_totals.into_iter().collect();
-        ranked_factors.sort_by(|left, right| right.1.cmp(&left.1));
+        ranked_factors.sort_by_key(|right| std::cmp::Reverse(right.1));
         for (factor, contribution) in ranked_factors.into_iter().take(5) {
             output.push_str(&format!("  - {} ({})\n", factor, contribution));
         }
@@ -416,7 +416,7 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
     if !trigger_counts.is_empty() {
         output.push_str("Policy escalation triggers:\n");
         let mut ranked_triggers: Vec<_> = trigger_counts.into_iter().collect();
-        ranked_triggers.sort_by(|left, right| right.1.cmp(&left.1));
+        ranked_triggers.sort_by_key(|right| std::cmp::Reverse(right.1));
         for (factor, count) in ranked_triggers.into_iter().take(5) {
             output.push_str(&format!("  - {} ({} file(s))\n", factor, count));
         }
