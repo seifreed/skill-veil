@@ -22,6 +22,11 @@ CLAUDE.md
 # under data/ would be tracked, so we ignore the whole tree.
 data/
 
+# Local presentation/demo material (slides, screenshots, recordings) kept
+# out of the public repo for the same reason as `data/` — per-author
+# artefacts, not part of the shipping codebase.
+presentation/
+
 # Local cargo config (often used to point at vendored deps / private mirrors)
 .cargo/config.toml
 
