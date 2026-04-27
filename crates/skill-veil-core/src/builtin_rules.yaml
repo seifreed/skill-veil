@@ -90,6 +90,21 @@
     - supply_chain
     - npm
 
+- id: SKILL_SUPPLY_CHAIN_TYPOSQUATTING
+  category: supply_chain
+  severity: critical
+  confidence: 0.88
+  when: !regex
+    pattern: "(?i)(npm install|npm i\\b|npx|yarn add|pnpm add|clawhub install|clauhub install)\\s+(-g\\s|--global\\s|--force\\s).{0,80}\\b(shersh|humantest-app|clawion|clauwd|claudd|claaude|openclaaw|openlcaw)\\b"
+  action: block
+  reason: "Looks-alike package name installed globally — typosquat supply-chain attack"
+  shield:
+    scope: skill.install
+  enabled: true
+  tags:
+    - supply_chain
+    - typosquat
+
 - id: SKILL_SUPPLY_CHAIN_UNPINNED_PIP
   category: supply_chain
   severity: low
@@ -1720,3 +1735,48 @@
     - financial_fraud
     - wallet
     - automation
+
+- id: SKILL_COMMAND_INJECTION_HEREDOC
+  category: remote_exec
+  severity: critical
+  confidence: 0.80
+  when: !regex
+    pattern: "(?is)(<<\\s*['\\\"]?[A-Z]+|<<<).{0,400}\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+  action: require_approval
+  reason: "Unquoted variable interpolation inside heredoc — possible shell injection"
+  shield:
+    scope: skill.exec
+  enabled: true
+  tags:
+    - command_injection
+    - shell
+
+- id: SKILL_CRED_THEFT_ENV_EXFIL
+  category: credential_exposure
+  severity: critical
+  confidence: 0.92
+  when: !regex
+    pattern: "(?is)(ANTHROPIC_API_KEY|OPENAI_API_KEY|DEEPSEEK_API_KEY|GEMINI_API_KEY|GROQ_API_KEY|MISTRAL_API_KEY|XAI_API_KEY|HUGGINGFACE_TOKEN|HF_TOKEN).{0,160}(curl\\b|fetch\\(|requests\\.|axios|Invoke-WebRequest).{0,180}(webhook|telegram|discord|pastebin|ngrok|attacker|moltpad|bore\\.pub)"
+  action: block
+  reason: "Provider API key from environment exfiltrated over HTTP"
+  shield:
+    scope: skill.secrets
+  enabled: true
+  tags:
+    - credentials
+    - exfil
+
+- id: SKILL_SCAREWARE_PAYMENT_INSTRUCTION
+  category: social_manipulation
+  severity: high
+  confidence: 0.78
+  when: !regex
+    pattern: "(?i)(send\\s+payment|transfer.*alipay|qq.*pay|scan.*to\\s+pay|wallet\\s+address|deposit\\s+(usdt|usdc|btc|eth)|wechat\\s*pay|微信支付|支付宝).{0,160}(\\$\\d+|¥\\d+\\b|USDT\\b|BTC\\b|ETH\\b|recv|deposit|tx_hash|chain_id)"
+  action: require_approval
+  reason: "Skill embeds payment / wallet instructions — likely scareware or scam"
+  shield:
+    scope: skill.review
+  enabled: true
+  tags:
+    - social_manipulation
+    - fraud

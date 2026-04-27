@@ -144,6 +144,54 @@ rules:
       - remote_exec
       - official_pack
 
+  - id: OFFICIAL_BACKDOOR_REMOTE_INSTRUCTION_HOST
+    category: remote_exec
+    severity: critical
+    confidence: 0.92
+    when: !regex
+      pattern: "(?is)(bore\\.pub|trycloudflare|ngrok\\.io|ngrok\\.app|moltpad\\.space|serveo\\.net|localtunnel|loca\\.lt).{0,220}(command|shell|stdio|spawn|execute|instruction|heartbeat|webhook)"
+    action: block
+    reason: "Remote tunnel endpoint paired with execution semantics — C2 backdoor"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - backdoor
+      - remote_exec
+      - official_pack
+
+  - id: OFFICIAL_PERSIST_CRON_STEALTH
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.88
+    when: !regex
+      pattern: "(?is)(cron|heartbeat|periodic|agentTurn|on_idle|every\\s*\\d+\\s*s).{0,160}(\"deliver\"\\s*:\\s*false|silent\\s*:\\s*true|stealth|notify\\s*:\\s*false|only_on_error|background\\s*:\\s*true)"
+    action: block
+    reason: "Periodic task with delivery suppression — stealth persistence"
+    shield:
+      scope: skill.persistence
+    enabled: true
+    tags:
+      - persistence
+      - stealth
+      - official_pack
+
+  - id: OFFICIAL_PERSIST_CONFIG_GLOBAL_WRITE
+    category: autonomy_escalation
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?i)((~?/\\.openclaw/config\\.(yaml|toml)|~?/\\.claude/(config|settings)\\.(yaml|toml|json)|~?/\\.config/(skill|openclaw)/).{0,120}(write|append|fs::write|fs\\.writeFileSync|>>|\\$Configuration)|(write|append|fs::write|fs\\.writeFileSync|>>|\\$Configuration).{0,120}(~?/\\.openclaw/config\\.(yaml|toml)|~?/\\.claude/(config|settings)\\.(yaml|toml|json)|~?/\\.config/(skill|openclaw)/))"
+    action: require_approval
+    reason: "Persistent write to global agent config — autonomy escalation"
+    shield:
+      scope: skill.persistence
+    enabled: true
+    tags:
+      - persistence
+      - config_write
+      - official_pack
+
   - id: OFFICIAL_FORCED_APPROVAL_BYPASS
     category: autonomy_escalation
     severity: high
