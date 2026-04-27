@@ -11,6 +11,7 @@ mod dataset;
 mod llm;
 mod rule_tools;
 mod text_output;
+mod util;
 mod vt;
 
 use crate::cli_args::{
