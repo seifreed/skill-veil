@@ -17,13 +17,17 @@ pub(crate) const DEFAULT_QUERY: &str =
     "entity:file has:codeinsight codeinsight:\"Type: OpenClaw Skill\" codeinsight_verdict:malicious";
 pub(crate) const REPORTS_DIRNAME: &str = ".vt-reports";
 const PER_PAGE: usize = 40;
-use super::REQUEST_DELAY_MS;
 
 pub(crate) struct DownloadOptions {
     pub(crate) query: String,
     pub(crate) dest: PathBuf,
     pub(crate) limit: usize,
     pub(crate) report_only: bool,
+    /// Per-request delay in ms. Defaults to `super::REQUEST_DELAY_MS` (500ms,
+    /// safe for VT free-tier). Premium accounts may lower this; the value is
+    /// applied between every search-pagination request and every
+    /// per-sample download to throttle the client side.
+    pub(crate) rate_limit_ms: u64,
 }
 
 pub(crate) struct DownloadSummary {
@@ -77,7 +81,7 @@ pub(crate) fn run_download(client: &VtClient, opts: DownloadOptions) -> Result<D
         if cursor.is_none() {
             break;
         }
-        sleep(Duration::from_millis(REQUEST_DELAY_MS));
+        sleep(Duration::from_millis(opts.rate_limit_ms));
     }
 
     summary.total_discovered = collected.len();
@@ -92,7 +96,7 @@ pub(crate) fn run_download(client: &VtClient, opts: DownloadOptions) -> Result<D
             tracing::warn!("vt download error for {}: {:#}", sha, err);
             summary.errors += 1;
         }
-        sleep(Duration::from_millis(REQUEST_DELAY_MS));
+        sleep(Duration::from_millis(opts.rate_limit_ms));
     }
 
     Ok(summary)

@@ -27,6 +27,7 @@ fn run_download(args: VtDownloadArgs) -> Result<()> {
         dest: args.dest,
         limit: args.limit.get(),
         report_only: args.report_only,
+        rate_limit_ms: args.rate_limit_ms,
     };
     let summary = download::run_download(&client, opts)?;
     println!(

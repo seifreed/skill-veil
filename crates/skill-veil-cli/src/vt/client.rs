@@ -70,6 +70,33 @@ pub(crate) struct VtClient {
     download_agent: ureq::Agent,
 }
 
+/// Outcome of the first hop in `/files/{sha}/download`. VT either sends the
+/// payload back directly (rare) or, more typically, replies with HTTP 302
+/// pointing at a signed Google Storage URL the caller must follow without
+/// the `x-apikey` header. `Direct` is boxed because `ureq::Response` is
+/// ~264 bytes whereas `Redirect(String)` is ~24 — boxing equalises the
+/// enum variant footprint and silences `clippy::large_enum_variant`.
+enum DownloadResponse {
+    Direct(Box<ureq::Response>),
+    Redirect(String),
+}
+
+/// Allow-list for the second hop of `download_file`. VT's signed storage
+/// targets resolve to one of these hosts; anything else means the redirect
+/// was tampered with (DNS hijack, transparent proxy) and we refuse to
+/// follow it. Update this list if VT introduces a new storage backend.
+const ALLOWED_STORAGE_HOSTS: &[&str] = &[
+    "vtsamples.commondatastorage.googleapis.com",
+    "www.virustotal.com",
+];
+
+fn is_allowed_storage_target(url: &str) -> bool {
+    let prefixes = ALLOWED_STORAGE_HOSTS
+        .iter()
+        .map(|host| format!("https://{host}/"));
+    prefixes.into_iter().any(|p| url.starts_with(&p))
+}
+
 impl VtClient {
     pub(crate) fn new(config: VtConfig) -> Self {
         // `redirects(0)` is critical: every request sets the `x-apikey`
@@ -236,9 +263,79 @@ impl VtClient {
     /// leaving half-written files when the connection drops. The atomic-
     /// rename helper (`util::cache_io::finalize_atomic_write`) preserves
     /// `tmp` cleanup semantics on rename failure.
+    ///
+    /// VT's `/files/{sha}/download` endpoint replies with HTTP 302 to a
+    /// time-bounded, query-signed Google Storage URL. The storage host
+    /// authenticates via the `Signature` query parameter, so the second
+    /// hop must NOT carry the `x-apikey` header. We therefore handle the
+    /// redirect manually: first request with apikey, then a clean fetch
+    /// of the redirect target without apikey, after host-allowlisting.
     pub(crate) fn download_file(&self, sha256: &str, dest: &Path) -> Result<(), VtError> {
         let url = format!("{BASE_URL}/files/{sha256}/download");
-        let response = self.request_with_retry(&self.download_agent, &url, &[])?;
+        let resp = self.request_download_redirect(&url)?;
+
+        let location = match resp {
+            DownloadResponse::Direct(r) => return Self::stream_response_to(dest, *r),
+            DownloadResponse::Redirect(loc) => loc,
+        };
+
+        if !is_allowed_storage_target(&location) {
+            return Err(VtError::Decode(format!(
+                "VT download redirect target is not allow-listed: {location}"
+            )));
+        }
+
+        // Second hop: fetch the signed storage URL with the same agent
+        // (timeouts/UA preserved) but no apikey header. ureq's `redirects(0)`
+        // is fine here — the storage URL goes straight to bytes.
+        let response = self
+            .download_agent
+            .get(&location)
+            .call()
+            .map_err(|err| match err {
+                ureq::Error::Status(status, r) => {
+                    let body = drain_error_body(status, r);
+                    VtError::HttpStatus { status, body }
+                }
+                ureq::Error::Transport(e) => VtError::Network(e.to_string()),
+            })?;
+        Self::stream_response_to(dest, response)
+    }
+
+    fn request_download_redirect(&self, url: &str) -> Result<DownloadResponse, VtError> {
+        let resp = self
+            .download_agent
+            .get(url)
+            .set("x-apikey", &self.apikey)
+            .call()
+            .map_err(|err| match err {
+                ureq::Error::Status(401 | 403, _) => VtError::Unauthorized,
+                ureq::Error::Status(status, r) => {
+                    let body = drain_error_body(status, r);
+                    VtError::HttpStatus { status, body }
+                }
+                ureq::Error::Transport(e) => VtError::Network(e.to_string()),
+            })?;
+        let status = resp.status();
+        if (200..300).contains(&status) {
+            return Ok(DownloadResponse::Direct(Box::new(resp)));
+        }
+        if (300..400).contains(&status) {
+            let location = resp
+                .header("Location")
+                .ok_or_else(|| {
+                    VtError::Decode(format!(
+                        "VT returned HTTP {status} without `Location` header"
+                    ))
+                })?
+                .to_string();
+            return Ok(DownloadResponse::Redirect(location));
+        }
+        let body = drain_error_body(status, resp);
+        Err(VtError::HttpStatus { status, body })
+    }
+
+    fn stream_response_to(dest: &Path, response: ureq::Response) -> Result<(), VtError> {
         let tmp = dest.with_extension("tmp");
         {
             let mut out = std::fs::File::create(&tmp)?;

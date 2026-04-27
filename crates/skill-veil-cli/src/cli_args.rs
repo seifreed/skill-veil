@@ -112,6 +112,13 @@ pub struct VtDownloadArgs {
     /// premium VT apikey).
     #[arg(long, default_value_t = false)]
     pub report_only: bool,
+    /// Per-request delay in milliseconds. Default 500ms is safe for the VT
+    /// free tier (4 lookups/min, 500/day). Premium accounts can lower this
+    /// (e.g. 60ms ≈ 16 req/s) for substantially faster bulk downloads. The
+    /// value applies to both the search-pagination loop and the per-sample
+    /// download loop.
+    #[arg(long, default_value_t = 500)]
+    pub rate_limit_ms: u64,
 }
 
 #[derive(Args, Clone)]
