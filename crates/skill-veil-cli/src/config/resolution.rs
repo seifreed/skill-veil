@@ -1,288 +1,20 @@
-//! Unified skill-veil LLM configuration loader.
+//! Disk-side TOML loading and orchestration: `UnifiedConfig::load`,
+//! `resolve_llm`, and the helpers that compose the per-provider map and
+//! the limits block.
 //!
-//! `~/.skill-veil.toml` carries provider settings for the LLM enrichment
-//! engine. VirusTotal credentials live in their own loader at
-//! [`crate::vt::config`] (it predates this module and resolves
-//! `~/.vt.toml` plus `VT_APIKEY`).
-//!
-//! # Resolution order (first non-empty wins, per field)
-//! 1. Environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-//!    `OLLAMA_CLOUD_API_KEY`, `XAI_API_KEY`/`GROK_API_KEY`,
-//!    `PERPLEXITY_API_KEY`/`PERPLEXITY_API`).
-//! 2. `~/.skill-veil.toml`.
-//!
-//! The loader is lossy on purpose: a missing `[llm]` section produces
-//! `None` rather than an error, so callers can branch on "is the LLM
-//! engine configured?" without handling "config file syntax error but
-//! this engine isn't used" edge cases.
+//! TOML on-disk types (`FileFormat`, `FileLlmSection`, `FileProviderParams`,
+//! `FileLlmLimits`) are private to this module — public consumers only see
+//! `UnifiedConfig` and `LlmConfigSection`.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use super::limits::DEFAULT_REQUEST_TIMEOUT_SECS;
+use super::providers::{validate_provider_base_url, LLM_PROVIDER_VALID_VALUES};
+use super::{LlmConfigSection, LlmLimits, LlmProviderKind, ProviderParams, UnifiedConfig};
+
 const UNIFIED_CONFIG_NAME: &str = ".skill-veil.toml";
-
-const OPENAI_APIKEY_ENV: &str = "OPENAI_API_KEY";
-const ANTHROPIC_APIKEY_ENV: &str = "ANTHROPIC_API_KEY";
-const OLLAMA_CLOUD_APIKEY_ENV: &str = "OLLAMA_CLOUD_API_KEY";
-/// Ollama's own CLI uses `OLLAMA_API_KEY`; we accept it as an alias so users
-/// don't have to duplicate the secret under two names.
-const OLLAMA_APIKEY_ENV_ALIAS: &str = "OLLAMA_API_KEY";
-/// xAI's official env var is `XAI_API_KEY`; `GROK_API_KEY` is widely used
-/// in the community. We accept both, primary first.
-const XAI_APIKEY_ENV: &str = "XAI_API_KEY";
-const GROK_APIKEY_ENV_ALIAS: &str = "GROK_API_KEY";
-/// Perplexity: `PERPLEXITY_API_KEY` is documented; `PERPLEXITY_API` is a
-/// shorter form that occasionally appears in user configs.
-const PERPLEXITY_APIKEY_ENV: &str = "PERPLEXITY_API_KEY";
-const PERPLEXITY_APIKEY_ENV_ALIAS: &str = "PERPLEXITY_API";
-
-/// Fully-resolved config, ready for consumers.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct UnifiedConfig {
-    pub llm: Option<LlmConfigSection>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LlmConfigSection {
-    /// The active provider. Overridable via `--llm-provider` CLI flag.
-    pub provider: LlmProviderKind,
-    pub provider_configs: BTreeMap<LlmProviderKind, ProviderParams>,
-    pub limits: LlmLimits,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum LlmProviderKind {
-    OpenAi,
-    Anthropic,
-    Ollama,
-    OllamaCloud,
-    LmStudio,
-    Grok,
-    Perplexity,
-}
-
-impl LlmProviderKind {
-    /// Stable wire name, used in output formatting and cache keys.
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            LlmProviderKind::OpenAi => "openai",
-            LlmProviderKind::Anthropic => "anthropic",
-            LlmProviderKind::Ollama => "ollama",
-            LlmProviderKind::OllamaCloud => "ollama-cloud",
-            LlmProviderKind::LmStudio => "lmstudio",
-            LlmProviderKind::Grok => "grok",
-            LlmProviderKind::Perplexity => "perplexity",
-        }
-    }
-
-    pub(crate) fn from_str_ci(s: &str) -> Option<Self> {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "openai" => Some(Self::OpenAi),
-            "anthropic" => Some(Self::Anthropic),
-            "ollama" => Some(Self::Ollama),
-            "ollama-cloud" | "ollama_cloud" | "ollamacloud" => Some(Self::OllamaCloud),
-            "lmstudio" | "lm-studio" | "lm_studio" => Some(Self::LmStudio),
-            "grok" | "xai" => Some(Self::Grok),
-            "perplexity" | "pplx" => Some(Self::Perplexity),
-            _ => None,
-        }
-    }
-
-    /// Env vars that can carry this provider's API key, in priority order.
-    /// The first variable that resolves to a non-empty value wins.
-    fn apikey_envs(self) -> &'static [&'static str] {
-        match self {
-            LlmProviderKind::OpenAi => &[OPENAI_APIKEY_ENV],
-            LlmProviderKind::Anthropic => &[ANTHROPIC_APIKEY_ENV],
-            LlmProviderKind::OllamaCloud => &[OLLAMA_CLOUD_APIKEY_ENV, OLLAMA_APIKEY_ENV_ALIAS],
-            LlmProviderKind::Grok => &[XAI_APIKEY_ENV, GROK_APIKEY_ENV_ALIAS],
-            LlmProviderKind::Perplexity => &[PERPLEXITY_APIKEY_ENV, PERPLEXITY_APIKEY_ENV_ALIAS],
-            LlmProviderKind::Ollama | LlmProviderKind::LmStudio => &[],
-        }
-    }
-
-    /// First env var in `apikey_envs()` whose value is non-empty, if any.
-    fn resolve_apikey_from_env(self) -> Option<String> {
-        for name in self.apikey_envs() {
-            if let Ok(val) = std::env::var(name) {
-                let trimmed = val.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
-        }
-        None
-    }
-}
-
-/// Canonical provider names listed in user-facing error messages. Kept in
-/// sync with `LlmProviderKind::from_str_ci`; aliases (`xai`, `pplx`,
-/// `lm-studio`, etc.) are accepted by the parser but omitted here so the
-/// hint stays short.
-pub(crate) const LLM_PROVIDER_VALID_VALUES: &str =
-    "openai, anthropic, ollama, ollama-cloud, lmstudio, grok, perplexity";
-
-/// Resolve the `--llm-provider` CLI flag.
-///
-/// `None` (flag absent) returns `Ok(None)`. A recognised value returns
-/// `Ok(Some(kind))`. An unrecognised value returns an `Err` naming the
-/// offending input — the previous `and_then` collapsed unknown values to
-/// `None`, silently falling back to whichever provider the config file
-/// selected and giving the user no signal that their flag was dropped.
-pub(crate) fn resolve_llm_provider_override(raw: Option<&str>) -> Result<Option<LlmProviderKind>> {
-    match raw {
-        None => Ok(None),
-        Some(value) => LlmProviderKind::from_str_ci(value).map(Some).ok_or_else(|| {
-            anyhow!(
-                "--llm-provider \"{value}\" is not recognised. Valid values: {LLM_PROVIDER_VALID_VALUES}"
-            )
-        }),
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ProviderParams {
-    pub model: String,
-    pub base_url: Option<String>,
-    pub api_key: Option<String>,
-    pub max_tokens: Option<u32>,
-    pub temperature: Option<f32>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct LlmLimits {
-    /// `None` means "let `effective_max_prompt_chars` decide based on the
-    /// active model". `Some(n)` is the user's explicit override and wins
-    /// over the auto-detected value.
-    pub max_prompt_chars: Option<usize>,
-    pub request_timeout_secs: u64,
-}
-
-impl Default for LlmLimits {
-    fn default() -> Self {
-        Self {
-            max_prompt_chars: None,
-            request_timeout_secs: 120,
-        }
-    }
-}
-
-/// Fallback char budget when the model isn't recognised in the context table.
-pub(crate) const FALLBACK_MAX_PROMPT_CHARS: usize = 100_000;
-
-/// Extra cap for locally-hosted providers (Ollama, LMStudio). The
-/// *architectural* context of a model (e.g. Gemma-4's 128k) is often larger
-/// than the context the local server loaded it with (LMStudio defaults to
-/// 4-8k). We ship a conservative ceiling so we don't overrun the physical
-/// runtime; the user can raise it via `[llm.limits].max_prompt_chars` if
-/// they configured their loader with more.
-pub(crate) const LOCAL_PROVIDER_CAP_CHARS: usize = 60_000;
-
-/// Fraction of the raw context window we reserve for the prompt (rest is
-/// response headroom). ~0.75 gives the model ~25% of its context for the
-/// structured JSON reply.
-const PROMPT_FRACTION: f64 = 0.75;
-
-/// Approximate chars-per-token multiplier. Token density varies by language
-/// (English ~4 chars/tok, CJK ~1) and by tokeniser; 3 is a conservative
-/// middle ground that still leaves headroom.
-const CHARS_PER_TOKEN: usize = 3;
-
-/// Prefix-matched table of known models → context window in tokens.
-/// Matching is case-insensitive and prefix-based so `claude-sonnet-4-5`,
-/// `claude-sonnet-4-6` etc. all hit `claude-sonnet-4`. Keep list alphabetised
-/// within a family for easy upkeep.
-const KNOWN_MODEL_CONTEXT: &[(&str, usize)] = &[
-    ("claude-haiku-4", 200_000),
-    ("claude-opus-4", 200_000),
-    ("claude-sonnet-4", 200_000),
-    ("gemini-1.5-pro", 2_000_000),
-    ("gemini-2", 1_000_000),
-    ("gemma-4", 128_000),
-    ("gpt-4-turbo", 128_000),
-    ("gpt-4o", 128_000),
-    ("grok-4", 256_000),
-    ("grok-beta", 128_000),
-    ("llama3.1", 128_000),
-    ("llama3.3", 128_000),
-    ("o1", 128_000),
-    ("o3", 200_000),
-    ("qwen3", 32_000),
-    ("qwq", 32_000),
-    ("sonar-pro", 200_000),
-    ("sonar-reasoning", 127_000),
-];
-
-impl LlmConfigSection {
-    /// Resolve the prompt-character budget for this scan, honoring user
-    /// override first, then the known-model table, then a safe default.
-    /// Returns the char budget to pass to the prompt builder.
-    pub(crate) fn effective_max_prompt_chars(&self) -> usize {
-        self.effective_max_prompt_chars_with_probe(None)
-    }
-
-    /// Resolve the prompt-character budget, accepting a runtime probe of the
-    /// model's actually-loaded context window (in tokens) for local providers.
-    /// Cascade: user override → probe → model table → fallback, then local cap.
-    pub(crate) fn effective_max_prompt_chars_with_probe(
-        &self,
-        probed_tokens: Option<usize>,
-    ) -> usize {
-        // 1. Explicit user override wins — even over a successful probe.
-        if let Some(user) = self.limits.max_prompt_chars {
-            return user;
-        }
-
-        let active = self.provider;
-
-        // Cap local providers (Ollama/LMStudio) at LOCAL_PROVIDER_CAP_CHARS
-        // regardless of how the budget was derived. A probed or table
-        // context window of, say, 500k tokens still bumps up against
-        // latency/memory ceilings on a self-hosted server; the cap keeps
-        // prompts predictable. Users who really want a bigger budget set
-        // `limits.max_prompt_chars` explicitly (handled above).
-        let apply_local_cap = |budget: usize| -> usize {
-            match active {
-                LlmProviderKind::Ollama | LlmProviderKind::LmStudio => {
-                    budget.min(LOCAL_PROVIDER_CAP_CHARS)
-                }
-                _ => budget,
-            }
-        };
-
-        // 2. Runtime probe for local providers. The probe reflects the
-        // actually-loaded ctx, which is often smaller than the model's
-        // theoretical max — we trust it over the static table.
-        if let Some(tokens) = probed_tokens {
-            let budget = (tokens * CHARS_PER_TOKEN) as f64 * PROMPT_FRACTION;
-            return apply_local_cap(budget as usize);
-        }
-
-        let model = self
-            .provider_configs
-            .get(&active)
-            .map(|p| p.model.as_str())
-            .unwrap_or("");
-
-        // 3. Prefix-match the model name.
-        let lookup = lookup_model_context(model);
-        let budget = match lookup {
-            Some(tokens) => (tokens * CHARS_PER_TOKEN) as f64 * PROMPT_FRACTION,
-            None => FALLBACK_MAX_PROMPT_CHARS as f64,
-        };
-
-        apply_local_cap(budget as usize)
-    }
-}
-
-fn lookup_model_context(model: &str) -> Option<usize> {
-    let lc = model.to_ascii_lowercase();
-    KNOWN_MODEL_CONTEXT
-        .iter()
-        .find(|(prefix, _)| lc.starts_with(prefix))
-        .map(|(_, tokens)| *tokens)
-}
 
 impl UnifiedConfig {
     pub(crate) fn load() -> Result<Self> {
@@ -351,15 +83,27 @@ fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>>
         )
     })?;
 
-    let mut provider_configs: BTreeMap<LlmProviderKind, ProviderParams> = BTreeMap::new();
-    let file_sections = &llm.providers;
+    validate_provider_section_keys(&llm.providers)?;
+    let mut provider_configs = build_provider_configs(&llm.providers)?;
+    ensure_active_provider_entry(&mut provider_configs, provider);
+    let limits = resolve_llm_limits(llm.limits.as_ref());
 
-    // Validate sub-keys eagerly. `FileLlmSection` uses `#[serde(flatten)]` on
-    // a `BTreeMap<String, FileProviderParams>`, so any unknown sub-key under
-    // `[llm]` (e.g. `provder = "openai"` instead of `provider`) is silently
-    // absorbed as a fake provider entry. Pre-fix the loop below filtered
-    // unknown names with `if let Some(kind) = ...`, so user typos vanished
-    // without trace and the active provider quietly fell back to defaults.
+    Ok(Some(LlmConfigSection {
+        provider,
+        provider_configs,
+        limits,
+    }))
+}
+
+/// Reject sub-keys under `[llm]` that aren't recognised provider names.
+/// `FileLlmSection` uses `#[serde(flatten)]` on a
+/// `BTreeMap<String, FileProviderParams>`, so any unknown sub-key (e.g.
+/// `provder = "openai"` instead of `provider`) is otherwise silently
+/// absorbed as a fake provider entry — user typos vanished without trace
+/// and the active provider quietly fell back to defaults.
+fn validate_provider_section_keys(
+    file_sections: &BTreeMap<String, FileProviderParams>,
+) -> Result<()> {
     for name in file_sections.keys() {
         if LlmProviderKind::from_str_ci(name).is_none() {
             return Err(anyhow!(
@@ -368,9 +112,18 @@ fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>>
             ));
         }
     }
+    Ok(())
+}
 
+/// Build the per-provider configuration map from the parsed file
+/// sections, applying base-URL validation and env-var precedence over
+/// the file-specified API key.
+fn build_provider_configs(
+    file_sections: &BTreeMap<String, FileProviderParams>,
+) -> Result<BTreeMap<LlmProviderKind, ProviderParams>> {
+    let mut provider_configs: BTreeMap<LlmProviderKind, ProviderParams> = BTreeMap::new();
     for (name, params) in file_sections {
-        let kind = LlmProviderKind::from_str_ci(name).expect("validated above");
+        let kind = LlmProviderKind::from_str_ci(name).expect("validated by caller");
         if let Some(raw_url) = params.base_url.as_deref() {
             validate_provider_base_url(kind, raw_url)?;
         }
@@ -387,95 +140,38 @@ fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>>
         }
         provider_configs.insert(kind, p);
     }
+    Ok(provider_configs)
+}
 
-    // Ensure the active provider has an entry even if the user omitted its
-    // section (e.g. they only want defaults for Anthropic). Env vars still
-    // populate the api_key.
-    provider_configs.entry(provider).or_insert_with(|| {
+/// Ensure the active provider has a config entry even if the user
+/// omitted its section (e.g. they only want defaults for Anthropic).
+/// Env vars still populate the api_key on the synthesised entry.
+fn ensure_active_provider_entry(
+    configs: &mut BTreeMap<LlmProviderKind, ProviderParams>,
+    provider: LlmProviderKind,
+) {
+    configs.entry(provider).or_insert_with(|| {
         let mut p = ProviderParams::default();
         if let Some(env_key) = provider.resolve_apikey_from_env() {
             p.api_key = Some(env_key);
         }
         p
     });
+}
 
-    let limits = llm
-        .limits
-        .as_ref()
+/// Translate the optional `[llm.limits]` block into runtime limits.
+/// Preserves user intent: an explicit value in the file becomes
+/// `Some(...)`; an omitted field falls back to auto-detection via
+/// `effective_max_prompt_chars`.
+fn resolve_llm_limits(limits: Option<&FileLlmLimits>) -> LlmLimits {
+    limits
         .map(|l| LlmLimits {
-            // Preserve user intent: explicit value in the file → Some(); if
-            // the user left the field out we fall back to auto-detection via
-            // `effective_max_prompt_chars`.
             max_prompt_chars: l.max_prompt_chars,
-            request_timeout_secs: l.request_timeout_secs.unwrap_or(120),
+            request_timeout_secs: l
+                .request_timeout_secs
+                .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
         })
-        .unwrap_or_default();
-
-    Ok(Some(LlmConfigSection {
-        provider,
-        provider_configs,
-        limits,
-    }))
-}
-
-/// Validate a provider's `base_url` from `~/.skill-veil.toml` to prevent
-/// a tampered or typo'd config from silently exfiltrating skill bundles
-/// to an attacker-controlled host. The bundle contains the full SKILL.md,
-/// supporting scripts, extracted IOCs, and (for cloud providers) an API
-/// key in the Authorization header — leaking it to the wrong endpoint is
-/// equivalent to exfiltrating the entire scan target.
-///
-/// Rules:
-/// - Scheme MUST be `http` or `https`. Other schemes (`file://`,
-///   `ftp://`, `gopher://`, custom) are rejected outright.
-/// - Local providers (Ollama, LMStudio) may use `http://` to any host —
-///   their typical defaults are `http://localhost:11434` /
-///   `http://localhost:1234/v1` and users frequently point them at
-///   private LAN hosts.
-/// - Remote providers (OpenAI, Anthropic, Ollama-Cloud, Grok, Perplexity)
-///   MUST use `https://` UNLESS the host is a loopback address — that
-///   exception preserves the legitimate "I'm running a local mitm proxy
-///   for debugging" workflow without re-opening the SSRF vector.
-fn validate_provider_base_url(kind: LlmProviderKind, raw: &str) -> Result<()> {
-    let parsed = url::Url::parse(raw).map_err(|err| {
-        anyhow!(
-            "[llm.providers.{}].base_url is not a valid URL ({raw:?}): {err}",
-            kind.as_str(),
-        )
-    })?;
-
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" {
-        return Err(anyhow!(
-            "[llm.providers.{}].base_url scheme must be http or https; got {scheme:?}",
-            kind.as_str(),
-        ));
-    }
-
-    let is_local_provider = matches!(kind, LlmProviderKind::Ollama | LlmProviderKind::LmStudio);
-    if !is_local_provider && scheme == "http" && !host_is_loopback(&parsed) {
-        return Err(anyhow!(
-            "[llm.providers.{}].base_url must use https for remote providers; \
-             plain http is only allowed to loopback hosts (localhost / 127.0.0.1 / ::1). \
-             Got: {raw}",
-            kind.as_str(),
-        ));
-    }
-
-    Ok(())
-}
-
-/// True iff the parsed URL points at a loopback host. Treats `localhost`
-/// (the conventional name) and any loopback IPv4/IPv6 literal as
-/// equivalent. Used to carve a narrow `http://` exception for remote
-/// providers without opening a generic SSRF vector.
-fn host_is_loopback(url: &url::Url) -> bool {
-    match url.host() {
-        Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
-        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
-        None => false,
-    }
+        .unwrap_or_default()
 }
 
 // ---- On-disk format (serde) -------------------------------------------
@@ -521,11 +217,12 @@ struct FileLlmLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Env-var tests mutate process-global state, so serialise them to keep
-    // parallel `cargo test` runs from stepping on each other.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use crate::config::providers::{
+        ANTHROPIC_APIKEY_ENV, GROK_APIKEY_ENV_ALIAS, OLLAMA_APIKEY_ENV_ALIAS,
+        OLLAMA_CLOUD_APIKEY_ENV, OPENAI_APIKEY_ENV, PERPLEXITY_APIKEY_ENV,
+        PERPLEXITY_APIKEY_ENV_ALIAS, XAI_APIKEY_ENV,
+    };
+    use crate::config::test_support::ENV_LOCK;
 
     /// Contract: `~/.skill-veil.toml` parses every documented `[llm.*]`
     /// sub-table — the active provider, per-provider sections, and the
@@ -555,85 +252,6 @@ request_timeout_secs = 60
         assert_eq!(llm.providers.len(), 2);
         assert!(llm.providers.contains_key("anthropic"));
         assert!(llm.providers.contains_key("openai"));
-    }
-
-    #[test]
-    fn provider_kind_parsing() {
-        assert_eq!(
-            LlmProviderKind::from_str_ci("OpenAI"),
-            Some(LlmProviderKind::OpenAi)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("ollama-cloud"),
-            Some(LlmProviderKind::OllamaCloud)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("ollama_cloud"),
-            Some(LlmProviderKind::OllamaCloud)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("LMStudio"),
-            Some(LlmProviderKind::LmStudio)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("Grok"),
-            Some(LlmProviderKind::Grok)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("xai"),
-            Some(LlmProviderKind::Grok)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("Perplexity"),
-            Some(LlmProviderKind::Perplexity)
-        );
-        assert_eq!(
-            LlmProviderKind::from_str_ci("pplx"),
-            Some(LlmProviderKind::Perplexity)
-        );
-        assert_eq!(LlmProviderKind::from_str_ci("unknown"), None);
-    }
-
-    /// # Contract
-    ///
-    /// `resolve_llm_provider_override` must:
-    /// - return `Ok(None)` when the flag is absent (`None`),
-    /// - return `Ok(Some(kind))` for a recognised value (canonical or alias),
-    /// - return `Err` whose message names the offending value AND lists the
-    ///   canonical provider names, when the value is unknown.
-    ///
-    /// Pre-fix the resolver lived inline in `commands/scan.rs` as
-    /// `args.llm_provider.as_deref().and_then(LlmProviderKind::from_str_ci)`
-    /// — the `and_then` collapsed unknown values to `None`, silently falling
-    /// back to whichever provider the config file selected. Users had no
-    /// signal that their `--llm-provider` flag had been dropped.
-    #[test]
-    fn resolve_llm_provider_override_rejects_unknown_value() {
-        assert!(matches!(resolve_llm_provider_override(None), Ok(None)));
-        assert_eq!(
-            resolve_llm_provider_override(Some("Anthropic")).unwrap(),
-            Some(LlmProviderKind::Anthropic)
-        );
-        assert_eq!(
-            resolve_llm_provider_override(Some("xai")).unwrap(),
-            Some(LlmProviderKind::Grok)
-        );
-
-        let err =
-            resolve_llm_provider_override(Some("foobar")).expect_err("unknown provider must error");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("foobar"),
-            "error must name the bad value: {msg}"
-        );
-        assert!(
-            msg.contains("openai"),
-            "error must list canonical names: {msg}"
-        );
-        assert!(
-            msg.contains("anthropic"),
-            "error must list canonical names: {msg}"
-        );
     }
 
     /// # Contract
@@ -884,112 +502,6 @@ model = "gpt-4o-mini"
         assert_eq!(oc.api_key.as_deref(), Some("primary"));
         std::env::remove_var(OLLAMA_CLOUD_APIKEY_ENV);
         std::env::remove_var(OLLAMA_APIKEY_ENV_ALIAS);
-    }
-
-    #[test]
-    fn limits_have_sane_defaults() {
-        let l = LlmLimits::default();
-        // No user override by default — resolution defers to
-        // `effective_max_prompt_chars` which consults the model table.
-        assert!(l.max_prompt_chars.is_none());
-        assert!(l.request_timeout_secs >= 30);
-    }
-
-    fn mk_section(
-        provider: LlmProviderKind,
-        model: &str,
-        override_chars: Option<usize>,
-    ) -> LlmConfigSection {
-        let mut pc = BTreeMap::new();
-        pc.insert(
-            provider,
-            ProviderParams {
-                model: model.to_string(),
-                ..Default::default()
-            },
-        );
-        LlmConfigSection {
-            provider,
-            provider_configs: pc,
-            limits: LlmLimits {
-                max_prompt_chars: override_chars,
-                request_timeout_secs: 120,
-            },
-        }
-    }
-
-    #[test]
-    fn cloud_provider_uses_model_table() {
-        let s = mk_section(LlmProviderKind::Anthropic, "claude-sonnet-4-5", None);
-        // 200_000 tokens × 3 × 0.75 = 450_000 chars
-        assert_eq!(s.effective_max_prompt_chars(), 450_000);
-    }
-
-    #[test]
-    fn user_override_always_wins_over_table() {
-        let s = mk_section(
-            LlmProviderKind::Anthropic,
-            "claude-sonnet-4-5",
-            Some(20_000),
-        );
-        assert_eq!(s.effective_max_prompt_chars(), 20_000);
-    }
-
-    #[test]
-    fn local_provider_caps_at_60k_when_using_table() {
-        // gemma-4's architectural ctx is 128k tokens → 288k chars, but
-        // local providers are capped because the *loaded* ctx may be
-        // smaller than the architectural one.
-        let s = mk_section(LlmProviderKind::LmStudio, "google/gemma-4-26b-a4b", None);
-        assert_eq!(s.effective_max_prompt_chars(), LOCAL_PROVIDER_CAP_CHARS);
-    }
-
-    #[test]
-    fn local_provider_override_escapes_cap() {
-        // If the user loaded a bigger ctx in LMStudio, they can override
-        // the cap by setting max_prompt_chars explicitly.
-        let s = mk_section(
-            LlmProviderKind::LmStudio,
-            "google/gemma-4-26b-a4b",
-            Some(200_000),
-        );
-        assert_eq!(s.effective_max_prompt_chars(), 200_000);
-    }
-
-    #[test]
-    fn local_provider_cap_applies_to_probed_tokens() {
-        // A probed ctx of 500k tokens would yield ~1.125M chars, but the
-        // local-provider cap must still apply so prompts stay predictable
-        // on self-hosted servers.
-        let s = mk_section(LlmProviderKind::LmStudio, "google/gemma-4-26b-a4b", None);
-        assert_eq!(
-            s.effective_max_prompt_chars_with_probe(Some(500_000)),
-            LOCAL_PROVIDER_CAP_CHARS,
-        );
-    }
-
-    #[test]
-    fn cloud_provider_skips_cap_with_probed_tokens() {
-        // Cloud providers are not capped: an Anthropic probe of 1M tokens
-        // must flow through as the full char budget.
-        let s = mk_section(LlmProviderKind::Anthropic, "claude-sonnet-4-5", None);
-        let got = s.effective_max_prompt_chars_with_probe(Some(1_000_000));
-        // 1_000_000 * 3 chars/tok * 0.75 prompt fraction = 2_250_000
-        assert_eq!(got, 2_250_000);
-    }
-
-    #[test]
-    fn unknown_model_falls_back_to_default() {
-        let s = mk_section(LlmProviderKind::OpenAi, "some-custom-fine-tune", None);
-        assert_eq!(s.effective_max_prompt_chars(), FALLBACK_MAX_PROMPT_CHARS);
-    }
-
-    #[test]
-    fn model_lookup_is_case_insensitive_and_prefix_matched() {
-        assert_eq!(lookup_model_context("Claude-Sonnet-4-6"), Some(200_000));
-        assert_eq!(lookup_model_context("llama3.1:70b"), Some(128_000));
-        assert_eq!(lookup_model_context("GPT-4o-mini"), Some(128_000));
-        assert_eq!(lookup_model_context("mystery"), None);
     }
 
     fn config_with_provider_url(provider: &str, base_url: Option<&str>) -> FileFormat {
