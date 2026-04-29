@@ -1,76 +1,19 @@
-//! Disk-side TOML loading and orchestration: `UnifiedConfig::load`,
-//! `resolve_llm`, and the helpers that compose the per-provider map and
-//! the limits block.
+//! Resolve the `[llm.*]` sub-tables into the runtime
+//! [`LlmConfigSection`]: validate provider keys, layer env-var precedence
+//! over file-specified API keys, and ensure the active provider always
+//! has an entry.
 //!
-//! TOML on-disk types (`FileFormat`, `FileLlmSection`, `FileProviderParams`,
-//! `FileLlmLimits`) are private to this module — public consumers only see
-//! `UnifiedConfig` and `LlmConfigSection`.
+//! `resolve_llm` is the single entry point used by `UnifiedConfig::load`.
 
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::limits::DEFAULT_REQUEST_TIMEOUT_SECS;
-use super::providers::{validate_provider_base_url, LLM_PROVIDER_VALID_VALUES};
-use super::{LlmConfigSection, LlmLimits, LlmProviderKind, ProviderParams, UnifiedConfig};
+use super::file_io::{FileFormat, FileLlmLimits, FileProviderParams};
+use crate::config::limits::DEFAULT_REQUEST_TIMEOUT_SECS;
+use crate::config::providers::{validate_provider_base_url, LLM_PROVIDER_VALID_VALUES};
+use crate::config::{LlmConfigSection, LlmLimits, LlmProviderKind, ProviderParams};
 
-const UNIFIED_CONFIG_NAME: &str = ".skill-veil.toml";
-
-impl UnifiedConfig {
-    pub(crate) fn load() -> Result<Self> {
-        let home = dirs::home_dir();
-
-        let file_contents = home.as_ref().and_then(|h| {
-            let path = h.join(UNIFIED_CONFIG_NAME);
-            read_file_if_exists(&path)
-        });
-
-        let parsed_unified: Option<FileFormat> = file_contents
-            .map(|c| {
-                toml::from_str(&c).map_err(|e| anyhow!("invalid {}: {}", UNIFIED_CONFIG_NAME, e))
-            })
-            .transpose()?;
-
-        Ok(Self {
-            llm: resolve_llm(parsed_unified.as_ref())?,
-        })
-    }
-}
-
-/// Read `path` if it exists, surfacing a `tracing::warn!` if the file is
-/// group-/other-readable. Used for `~/.skill-veil.toml` and the legacy
-/// `~/.vt.toml`, both of which hold API keys (VT, OpenAI, Anthropic,
-/// xAI, Perplexity, Ollama Cloud).
-///
-/// # Contract
-///
-/// - `NotFound` ⇒ `None` (silent: file is truly absent).
-/// - `EACCES`/other I/O ⇒ `None` PLUS a `tracing::warn!` so the operator
-///   can distinguish "no config" from "config exists but is unreadable".
-///
-/// Pre-fix this function used `path.exists()` followed by `read_to_string`,
-/// which both (a) introduced a TOCTOU race between the two syscalls, and
-/// (b) silently masked `EACCES` (chmod 000) as `not found`, so an admin
-/// who restricted the config without informing the user produced an
-/// undebuggable "no API key configured" failure.
-fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
-    match std::fs::read_to_string(path) {
-        Ok(contents) => {
-            crate::util::secure_fs::warn_if_file_world_readable(path);
-            Some(contents)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => {
-            tracing::warn!(
-                "skipping config file {}: {err} (check file permissions)",
-                path.display(),
-            );
-            None
-        }
-    }
-}
-
-fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>> {
+pub(super) fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>> {
     let Some(llm) = unified.and_then(|f| f.llm.as_ref()) else {
         return Ok(None);
     };
@@ -174,48 +117,9 @@ fn resolve_llm_limits(limits: Option<&FileLlmLimits>) -> LlmLimits {
         .unwrap_or_default()
 }
 
-// ---- On-disk format (serde) -------------------------------------------
-
-#[derive(Debug, Deserialize, Serialize, Default)]
-struct FileFormat {
-    #[serde(default)]
-    llm: Option<FileLlmSection>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Default)]
-struct FileLlmSection {
-    #[serde(default)]
-    provider: Option<String>,
-    #[serde(flatten)]
-    providers: BTreeMap<String, FileProviderParams>,
-    #[serde(default)]
-    limits: Option<FileLlmLimits>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Default)]
-struct FileProviderParams {
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    base_url: Option<String>,
-    #[serde(default)]
-    api_key: Option<String>,
-    #[serde(default)]
-    max_tokens: Option<u32>,
-    #[serde(default)]
-    temperature: Option<f32>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Default)]
-struct FileLlmLimits {
-    #[serde(default)]
-    max_prompt_chars: Option<usize>,
-    #[serde(default)]
-    request_timeout_secs: Option<u64>,
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::file_io::{FileFormat, FileLlmSection, FileProviderParams};
     use super::*;
     use crate::config::providers::{
         ANTHROPIC_APIKEY_ENV, GROK_APIKEY_ENV_ALIAS, OLLAMA_APIKEY_ENV_ALIAS,
@@ -223,36 +127,6 @@ mod tests {
         PERPLEXITY_APIKEY_ENV_ALIAS, XAI_APIKEY_ENV,
     };
     use crate::config::test_support::ENV_LOCK;
-
-    /// Contract: `~/.skill-veil.toml` parses every documented `[llm.*]`
-    /// sub-table — the active provider, per-provider sections, and the
-    /// shared `[llm.limits]` block — without flagging any of them as
-    /// unknown sub-keys (the TOML loader uses `#[serde(flatten)]` for
-    /// per-provider sections).
-    #[test]
-    fn parses_unified_toml_with_llm_sections() {
-        let src = r#"
-[llm]
-provider = "anthropic"
-
-[llm.anthropic]
-model = "claude-sonnet-4-5"
-max_tokens = 1024
-
-[llm.openai]
-model = "gpt-4o-mini"
-
-[llm.limits]
-max_prompt_chars = 80000
-request_timeout_secs = 60
-"#;
-        let f: FileFormat = toml::from_str(src).unwrap();
-        let llm = f.llm.as_ref().unwrap();
-        assert_eq!(llm.provider.as_deref(), Some("anthropic"));
-        assert_eq!(llm.providers.len(), 2);
-        assert!(llm.providers.contains_key("anthropic"));
-        assert!(llm.providers.contains_key("openai"));
-    }
 
     /// # Contract
     ///
@@ -606,98 +480,5 @@ model = "gpt-4o-mini"
         let unified = config_with_provider_url("anthropic", Some("https://api.anthropic.com/v1"));
         resolve_llm(Some(&unified))
             .expect("https remote URLs MUST resolve cleanly — this is the canonical path");
-    }
-
-    /// # Contract
-    ///
-    /// `read_file_if_exists` MUST return `None` for a path that does
-    /// not exist, without panicking. Safe to call speculatively on
-    /// every config-search location, which is how `UnifiedConfig::load`
-    /// uses it.
-    #[test]
-    fn read_file_if_exists_returns_none_for_missing_path() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let missing = tmp.path().join("does-not-exist.toml");
-
-        let result = read_file_if_exists(&missing);
-
-        assert!(
-            result.is_none(),
-            "missing config files MUST yield None, not Some(empty)"
-        );
-    }
-
-    /// # Contract
-    ///
-    /// `read_file_if_exists` MUST return the file body when the file
-    /// exists, regardless of permissions. Pre-fix `~/.skill-veil.toml`
-    /// got NO permission warning at all (only the standalone
-    /// `~/.vt.toml` loader had one); post-fix the unified loader emits
-    /// a tracing warning AND still returns the body so legitimate
-    /// scans don't break. This test pins the load-success path so a
-    /// future "fail-closed on world-readable config" refactor regresses
-    /// here instead of silently disabling every shared-host install.
-    #[cfg(unix)]
-    #[test]
-    fn read_file_if_exists_loads_world_readable_file_with_warning() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("config.toml");
-        std::fs::write(&path, "apikey = \"x\"").expect("seed config");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-            .expect("seed mode 0o644");
-
-        let result = read_file_if_exists(&path);
-
-        assert_eq!(
-            result.as_deref(),
-            Some("apikey = \"x\""),
-            "world-readable config MUST still load — we warn, never block"
-        );
-    }
-
-    /// # Contract
-    ///
-    /// A config file that exists on disk but is unreadable by the current
-    /// process (e.g. `chmod 0o000` after admin lockdown) MUST NOT be
-    /// silently treated as absent. Pre-fix the implementation used
-    /// `path.exists() && read_to_string().ok()` so `EACCES` collapsed to
-    /// `None` (`exists()` returns `false` on permission-denied stat in
-    /// some cases, and `.ok()` discarded the error otherwise) — making
-    /// "API key not configured" indistinguishable from "API key file is
-    /// locked down". The new contract: still return `None` (callers
-    /// remain branch-free), but the function MUST be reachable through
-    /// the I/O error arm so callers can rely on the warn diagnostic.
-    /// This test cannot capture the warn output portably; it asserts the
-    /// reachability and `None` return without panicking.
-    #[cfg(unix)]
-    #[test]
-    fn read_file_if_exists_returns_none_for_unreadable_file() {
-        use std::os::unix::fs::PermissionsExt;
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("locked.toml");
-        std::fs::write(&path, "apikey = \"x\"").expect("seed config");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))
-            .expect("seed mode 0o000");
-
-        // Skip when running as root — root bypasses DAC permission checks
-        // and can read any file regardless of mode.
-        if let Ok(uid_str) = std::env::var("UID") {
-            if uid_str == "0" {
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
-                return;
-            }
-        }
-
-        let result = read_file_if_exists(&path);
-
-        // Restore so tempdir cleanup works even if the assertion fails.
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644));
-
-        assert!(
-            result.is_none(),
-            "unreadable config MUST yield None (and produce a warn-level diagnostic, \
-             not silently look identical to a missing file)"
-        );
     }
 }
