@@ -100,6 +100,7 @@ pub use findings::{
     PackageVerdictReport, RecommendedAction, RiskFactor, RootCauseGroup, Severity, SeverityCounts,
     SignalClass, ThreatCategory, Verdict, VerdictReason,
 };
+pub use ioc_extraction::{ExtractedIocs, FileHash};
 pub use policy::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
     baseline_from_reports, count_baseline_matches, diff_reports, diff_reports_with_policy_state,
@@ -116,8 +117,8 @@ pub use rules::{
     RULE_PACK_SCHEMA_VERSION,
 };
 pub use scanner::{
-    ArtifactMetadata, DefaultScanner, PackageScanResult, ScanOptions, ScanResult, ScanTargetMode,
-    Scanner,
+    ArtifactMetadata, DefaultScanner, PackageScanResult, ScanError, ScanErrorEntry, ScanOptions,
+    ScanResult, ScanTargetMode, Scanner,
 };
 pub use scanner_graph::{artifact_kind_for_path, derive_package_id};
 
