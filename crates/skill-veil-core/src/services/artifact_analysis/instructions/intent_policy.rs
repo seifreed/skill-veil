@@ -15,64 +15,46 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, SignalClass,
     ThreatCategory,
 };
-use regex::Regex;
+use crate::lazy_pattern;
 use std::path::Path;
-use std::sync::LazyLock;
 
-/// Verb that indicates the agent is being told to retrieve remote
-/// content. Matched against the lowercased section/block content.
-static RE_FETCH_VERB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\b(fetch|download|curl|wget|web_fetch|web-fetch|webfetch|retrieve|clone|claude\s+--dangerously-skip-permissions)\b",
-    )
-    .expect("RE_FETCH_VERB compiles")
-});
+lazy_pattern!(
+    RE_FETCH_VERB,
+    r"(?i)\b(fetch|download|curl|wget|web_fetch|web-fetch|webfetch|retrieve|clone|claude\s+--dangerously-skip-permissions)\b"
+);
 
-/// Verb that indicates execution of fetched content. Matched against
-/// the lowercased section/block content.
-///
-/// Kept conservative: matches concrete exec/eval verbs and the
-/// "follow the instructions"-style imperatives that consistently
-/// appear when a malicious skill instructs the agent to treat fetched
-/// content as instructions. Avoids over-matching on bare verbs like
-/// `\bcontinue\s+loading\b` which appears in benign idioms ("To
-/// continue loading this skill, ...").
-static RE_EXEC_VERB: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(?:\bexec(?:ute)?\b|\beval\b|\brun\b|\bbash\s+-c\b|\bsh\s+-c\b|\bfollow\s+(?:the|each|these|those|all)\s+(?:steps|commands|instructions)\b|\bthen\s+(?:install|run|execute)\b|\bcontinue\s+from\s+(?:the\s+)?(?:url|playbook|instructions?)\b)",
-    )
-    .expect("RE_EXEC_VERB compiles")
-});
+// Verbs indicating execution of fetched content. Kept conservative: matches
+// concrete exec/eval verbs and the "follow the instructions"-style
+// imperatives that consistently appear when a malicious skill instructs
+// the agent to treat fetched content as instructions. Avoids over-matching
+// on bare verbs like `\bcontinue\s+loading\b` which appears in benign
+// idioms ("To continue loading this skill, ...").
+lazy_pattern!(
+    RE_EXEC_VERB,
+    r"(?i)(?:\bexec(?:ute)?\b|\beval\b|\brun\b|\bbash\s+-c\b|\bsh\s+-c\b|\bfollow\s+(?:the|each|these|those|all)\s+(?:steps|commands|instructions)\b|\bthen\s+(?:install|run|execute)\b|\bcontinue\s+from\s+(?:the\s+)?(?:url|playbook|instructions?)\b)"
+);
 
-/// HTTP/HTTPS URL with at least one path or query character — keeps
-/// out bare scheme-only matches.
-static RE_URL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"https?://[^\s)>\]\}'"`,]+"#).expect("RE_URL compiles"));
+// HTTP/HTTPS URL with at least one path or query character — keeps out bare
+// scheme-only matches.
+lazy_pattern!(RE_URL, r#"https?://[^\s)>\]\}'"`,]+"#);
 
-/// Instruction-bait suffix or token that suggests the fetched URL
-/// carries instructions for the agent to follow (rather than e.g.
-/// JSON data or an image). High-confidence tier — matches escalate to
-/// `Critical/Block` via `BaitStrength::Strict`.
-static RE_INSTRUCTION_BAIT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(?:\.md\b|\bplaybook\b|\binstructions?\b|\bprompts?\b|\bcommands?\b|\bnext.?step\b|\bheartbeat\b|\breadme\b|raw\.githubusercontent|gist\.github|pastebin|moltpad)",
-    )
-    .expect("RE_INSTRUCTION_BAIT compiles")
-});
+// Instruction-bait suffix/token suggesting the fetched URL carries
+// instructions for the agent (rather than data). High-confidence tier;
+// escalates to Critical/Block via BaitStrength::Strict.
+lazy_pattern!(
+    RE_INSTRUCTION_BAIT,
+    r"(?i)(?:\.md\b|\bplaybook\b|\binstructions?\b|\bprompts?\b|\bcommands?\b|\bnext.?step\b|\bheartbeat\b|\breadme\b|raw\.githubusercontent|gist\.github|pastebin|moltpad)"
+);
 
-/// Lower-confidence bait tier. Matches escalate to `Medium/RequireApproval`
-/// via `BaitStrength::Loose`. These tokens are weaker indicators of
-/// "fetched content is instructions" — they cover real-world malicious
-/// patterns (`.json` policy/threat-feed pull, `compliance_note`-style
-/// embedded directives, "follow any/your instructions" phrasing,
-/// `register your agent` heartbeat callbacks) but also occur in
-/// benign skills, so the loose tier intentionally downgrades severity.
-static RE_INSTRUCTION_BAIT_LOOSE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)(?:\.json\b|\bcompliance[\s-]?notes?\b|\bfollow\s+(?:any|your|the\s+(?:linked|listed))\s+(?:instructions?|steps?|commands?|notes?)\b|\bbefore\s+proceeding\b|\bregister\s+(?:your|the)\s+agent\b|\bheartbeat\s+config(?:uration)?\b)",
-    )
-    .expect("RE_INSTRUCTION_BAIT_LOOSE compiles")
-});
+// Lower-confidence bait tier (Medium/RequireApproval via BaitStrength::Loose).
+// Covers real-world malicious patterns (.json policy/threat-feed pulls,
+// `compliance_note`-style embedded directives, "follow any/your instructions"
+// phrasing, `register your agent` heartbeat callbacks) but also benign
+// skills — the loose tier intentionally downgrades severity.
+lazy_pattern!(
+    RE_INSTRUCTION_BAIT_LOOSE,
+    r"(?i)(?:\.json\b|\bcompliance[\s-]?notes?\b|\bfollow\s+(?:any|your|the\s+(?:linked|listed))\s+(?:instructions?|steps?|commands?|notes?)\b|\bbefore\s+proceeding\b|\bregister\s+(?:your|the)\s+agent\b|\bheartbeat\s+config(?:uration)?\b)"
+);
 
 /// Confidence tier for a `INTENT_REMOTE_INSTRUCTION_DOWNLOAD` match.
 /// Drives downstream severity/action selection in
@@ -309,8 +291,8 @@ fn scan_document(doc: &SkillDocument) -> Option<Detection> {
 /// `OFFICIAL_PROMPT_INJECT_REMOTE_INSTRUCTION_FETCH` rule.
 fn first_fetch_with_url(text: &str) -> Option<(String, BaitStrength)> {
     let mut loose_match: Option<(String, BaitStrength)> = None;
-    for fetch_match in RE_FETCH_VERB.find_iter(text) {
-        let window_start = fetch_match.end();
+    for fetch_match in RE_FETCH_VERB.find_matches(text) {
+        let window_start = fetch_match.end;
         let window_end = window_start.saturating_add(200).min(text.len());
         if window_end <= window_start {
             continue;
@@ -321,15 +303,15 @@ fn first_fetch_with_url(text: &str) -> Option<(String, BaitStrength)> {
         let Some(window) = text.get(window_start..window_end) else {
             continue;
         };
-        let Some(url_match) = RE_URL.find(window) else {
+        let Some(url_match) = RE_URL.find_matches(window).into_iter().next() else {
             continue;
         };
-        let absolute_url_end = window_start.saturating_add(url_match.end());
-        let url = url_match.as_str().trim_end_matches(|c: char| {
+        let absolute_url_end = window_start.saturating_add(url_match.end);
+        let url = url_match.matched_text.trim_end_matches(|c: char| {
             matches!(c, '.' | ',' | ';' | ')' | ']' | '}' | '"' | '\'' | '>')
         });
 
-        let bait_window_start = fetch_match.start().saturating_sub(80);
+        let bait_window_start = fetch_match.start.saturating_sub(80);
         let bait_window_end = absolute_url_end.saturating_add(80).min(text.len());
         let bait_window = text
             .get(bait_window_start..bait_window_end)

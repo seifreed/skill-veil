@@ -13,7 +13,7 @@ use crate::findings::{
 mod intent_policy;
 mod signals;
 
-use regex::Regex;
+use crate::ports::CompiledPattern;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -130,7 +130,7 @@ pub(super) fn instruction_capabilities(
 }
 
 struct PersistenceSpec {
-    regex: &'static LazyLock<Regex>,
+    regex: &'static LazyLock<CompiledPattern>,
     rule_id: &'static str,
     category: ThreatCategory,
     severity: Severity,
