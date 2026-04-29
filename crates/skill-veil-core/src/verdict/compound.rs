@@ -54,9 +54,9 @@ fn most_specific_scope_for_category(
         .min()
 }
 
-// Checks if a rule fired with an actionable recommendation (not Log).
-// NOTE: Checks original finding action, NOT calibrated state — calibration only modifies
-// root_cause_groups, not individual findings. Use compound_has_category for calibrated rules.
+// Checks the *pre-calibration* finding action — calibration only modifies
+// root_cause_groups, not individual findings. Use compound_has_category for
+// calibrated rule ids.
 fn compound_has_rule(findings: &[Finding], rule_id: &str) -> bool {
     debug_assert!(
         !crate::verdict_calibration::CALIBRATED_RULE_IDS.contains(&rule_id),

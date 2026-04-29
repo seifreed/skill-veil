@@ -16,7 +16,7 @@ use std::fs;
 use std::io::IsTerminal;
 use std::sync::Arc;
 
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use formatting::format_dataset_verdicts_text;
 
 /// Default `ScanOptions` for dataset-mode runs: package target, recursive,
