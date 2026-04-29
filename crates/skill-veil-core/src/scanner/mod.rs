@@ -75,7 +75,10 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
         Ok(Self {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
-            file_discovery: FileDiscoveryService::new(options.recursive),
+            file_discovery: FileDiscoveryService::with_fs_provider(
+                options.recursive,
+                StdFileSystemProvider::new(),
+            ),
             filter_service: ScanFilterService::with_policy_state(
                 options, baseline, waivers, policy,
             ),
@@ -133,7 +136,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub fn scan_file(&self, path: impl AsRef<Path>) -> Result<ScanResult, ScanError> {
         let path = path.as_ref();
-        if !path.exists() {
+        if !self.file_discovery.fs_provider().exists(path) {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
         scanner_execution::scan_document_path(self, path)
@@ -141,7 +144,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub fn scan_skill_file(&self, path: impl AsRef<Path>) -> Result<ScanResult, ScanError> {
         let path = path.as_ref();
-        if !path.exists() {
+        if !self.file_discovery.fs_provider().exists(path) {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
         if !FileDiscoveryService::<F>::is_explicit_skill_file(path) {
@@ -152,7 +155,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub fn scan_package(&self, path: impl AsRef<Path>) -> Result<PackageScanResult, ScanError> {
         let path = path.as_ref();
-        if !path.exists() {
+        if !self.file_discovery.fs_provider().exists(path) {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
         if path.is_file() {

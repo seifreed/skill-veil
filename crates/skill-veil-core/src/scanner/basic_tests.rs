@@ -1,6 +1,11 @@
 use super::*;
+use crate::adapters::PulldownMarkdownParser;
+use crate::ports::{FileContent, FileMeta, FileSystemError};
 use crate::Severity;
 use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tempfile::{tempdir, NamedTempFile};
 
 #[test]
@@ -108,6 +113,100 @@ fn test_scan_empty_skill_produces_no_critical() {
         !result.has_severity(Severity::Critical),
         "a heading-only skill must not produce critical findings"
     );
+}
+
+/// In-memory `FileSystemProvider` that records every `exists()` call and
+/// always reports the path as missing. Lets us prove that the scanner
+/// entrypoints route existence checks through the port instead of calling
+/// `Path::exists` directly — a `std::fs` short-circuit would never touch
+/// the recorder.
+struct ExistenceRecordingFs {
+    exists_calls: Arc<AtomicUsize>,
+    queried_paths: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl ExistenceRecordingFs {
+    fn new() -> Self {
+        Self {
+            exists_calls: Arc::new(AtomicUsize::new(0)),
+            queried_paths: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl FileSystemProvider for ExistenceRecordingFs {
+    fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
+        Err(FileSystemError::PathNotFound(path.to_path_buf()))
+    }
+    fn list_files(
+        &self,
+        _path: &Path,
+        _pattern: &str,
+        _recursive: bool,
+    ) -> Result<Vec<PathBuf>, FileSystemError> {
+        Ok(Vec::new())
+    }
+    fn exists(&self, path: &Path) -> bool {
+        self.exists_calls.fetch_add(1, Ordering::SeqCst);
+        self.queried_paths
+            .lock()
+            .expect("ExistenceRecordingFs mutex poisoned")
+            .push(path.to_path_buf());
+        false
+    }
+    fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
+        Err(FileSystemError::PathNotFound(path.to_path_buf()))
+    }
+}
+
+/// Contract: `Scanner::scan_file`, `scan_skill_file`, and `scan_package`
+/// route existence checks through the injected `FileSystemProvider`
+/// port. A direct `Path::exists` call would short-circuit before
+/// reaching the mock and silently bypass the TOCTOU contract that the
+/// rest of the pipeline (`scanner_execution::scan_supporting_artifacts`)
+/// observes. This test pins the contract for all three public
+/// entrypoints — a future refactor that re-introduces `path.exists()`
+/// at any of them will fail the recorder assertion below.
+#[test]
+fn scanner_entrypoints_route_existence_through_port() {
+    let probe = PathBuf::from("/virtual/does-not-exist.skill.md");
+
+    for entrypoint in ["scan_file", "scan_skill_file", "scan_package"] {
+        let fs = ExistenceRecordingFs::new();
+        let calls = Arc::clone(&fs.exists_calls);
+        let queried = Arc::clone(&fs.queried_paths);
+
+        let scanner = Scanner::with_custom_adapters(
+            ScanOptions::default(),
+            fs,
+            PulldownMarkdownParser::new(),
+        )
+        .unwrap();
+
+        let err = match entrypoint {
+            "scan_file" => scanner.scan_file(&probe).unwrap_err(),
+            "scan_skill_file" => scanner.scan_skill_file(&probe).unwrap_err(),
+            "scan_package" => scanner.scan_package(&probe).unwrap_err(),
+            other => unreachable!("{other}"),
+        };
+
+        assert!(
+            matches!(err, ScanError::PathNotFound(ref p) if p == &probe),
+            "{entrypoint} must surface PathNotFound through the port-driven check, got {err:?}"
+        );
+        assert!(
+            calls.load(Ordering::SeqCst) >= 1,
+            "{entrypoint} must call FileSystemProvider::exists at least once"
+        );
+        assert!(
+            queried
+                .lock()
+                .expect("ExistenceRecordingFs mutex poisoned")
+                .iter()
+                .any(|p| p == &probe),
+            "{entrypoint} must consult the port with the user-supplied path"
+        );
+    }
 }
 
 #[test]
