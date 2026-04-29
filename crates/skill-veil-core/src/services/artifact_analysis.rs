@@ -61,12 +61,14 @@ impl ArtifactAnalysisService {
     pub(crate) fn extract_mcp_tool_names(&self, content: &str) -> Vec<String> {
         let mut tools = Vec::new();
         if let Some(array_match) = patterns::RE_MCP_TOOLS_ARRAY
-            .captures(content)
-            .and_then(|captures| captures.get(1))
+            .captures_iter(content)
+            .into_iter()
+            .next()
+            .and_then(|captures| captures.get(1).cloned())
         {
-            for capture in patterns::RE_QUOTED_TOOL_NAME.captures_iter(array_match.as_str()) {
+            for capture in patterns::RE_QUOTED_TOOL_NAME.captures_iter(&array_match.matched_text) {
                 if let Some(name) = capture.get(1) {
-                    let value = name.as_str().to_string();
+                    let value = name.matched_text.clone();
                     if !tools.contains(&value) {
                         tools.push(value);
                     }
@@ -155,9 +157,9 @@ impl ArtifactAnalysisService {
 
     pub(crate) fn generic_url_relations(&self, content: &str) -> Vec<ArtifactLink> {
         let mut links = Vec::new();
-        for matched in patterns::RE_GENERIC_URL.find_iter(content) {
+        for matched in patterns::RE_GENERIC_URL.find_matches(content) {
             links.push(ArtifactLink {
-                target: matched.as_str().to_string(),
+                target: matched.matched_text,
                 relation: ArtifactRelation::ConnectsTo,
             });
         }

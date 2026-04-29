@@ -3,29 +3,28 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+use crate::lazy_pattern;
 use crate::services::ArtifactAnalysisService;
-use regex::Regex;
 use std::path::Path;
-use std::sync::LazyLock;
 
-static RE_REMOTE_ENDPOINT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?i)(https?://|wss?://)").expect("valid regex: remote endpoint"));
-static RE_EXEC_SURFACE_TRANSPORT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(command|stdio|args|transport)").expect("valid regex: exec surface transport")
-});
-static RE_EXEC_SURFACE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("(?i)(command|stdio|args)").expect("valid regex: exec surface"));
-static RE_IDENTITY_SCOPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(oauth|scope|scopes|bearer|authorization)")
-        .expect("valid regex: identity scope")
-});
-static RE_AUTH_OR_APIKEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(oauth|scope|authorization|bearer|api[_-]?key)")
-        .expect("valid regex: auth or api key")
-});
-static RE_IDENTITY_ACCESS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("(?i)(oauth|scope|authorization|bearer)").expect("valid regex: identity access")
-});
+lazy_pattern!(RE_REMOTE_ENDPOINT, r"(?i)(https?://|wss?://)");
+lazy_pattern!(
+    RE_EXEC_SURFACE_TRANSPORT,
+    r"(?i)(command|stdio|args|transport)"
+);
+lazy_pattern!(RE_EXEC_SURFACE, r"(?i)(command|stdio|args)");
+lazy_pattern!(
+    RE_IDENTITY_SCOPE,
+    r"(?i)(oauth|scope|scopes|bearer|authorization)"
+);
+lazy_pattern!(
+    RE_AUTH_OR_APIKEY,
+    r"(?i)(oauth|scope|authorization|bearer|api[_-]?key)"
+);
+lazy_pattern!(
+    RE_IDENTITY_ACCESS,
+    r"(?i)(oauth|scope|authorization|bearer)"
+);
 
 const MCP_BROAD_TOOL_COUNT_THRESHOLD: usize = 5;
 

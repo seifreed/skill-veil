@@ -4,23 +4,14 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use regex::Regex;
+use crate::lazy_pattern;
 use std::path::Path;
-use std::sync::LazyLock;
 
-static RE_CARGO_GIT_SOURCE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"source\s*=\s*"git\+"#).expect("valid regex: cargo git source"));
-static RE_POETRY_URL_SOURCE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"url\s*=\s*"https?://"#).expect("valid regex: poetry url source")
-});
-static RE_UV_GIT_SOURCE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"git\+https?://").expect("valid regex: uv git source"));
-static RE_YARN_REMOTE_TARBALL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"resolved\s+"https?://"#).expect("valid regex: yarn remote tarball")
-});
-static RE_PNPM_REMOTE_TARBALL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"tarball:\s*https?://").expect("valid regex: pnpm remote tarball")
-});
+lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"source\s*=\s*"git\+"#);
+lazy_pattern!(RE_POETRY_URL_SOURCE, r#"url\s*=\s*"https?://"#);
+lazy_pattern!(RE_UV_GIT_SOURCE, r"git\+https?://");
+lazy_pattern!(RE_YARN_REMOTE_TARBALL, r#"resolved\s+"https?://"#);
+lazy_pattern!(RE_PNPM_REMOTE_TARBALL, r"tarball:\s*https?://");
 
 pub(crate) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile(
@@ -107,7 +98,7 @@ pub(crate) fn lockfile_relations(content: &str) -> Vec<ArtifactLink> {
 
 enum LockfilePattern<'a> {
     JsonKey(&'a str),
-    Regex(&'a Regex),
+    Regex(&'a crate::ports::CompiledPattern),
 }
 
 fn analyze_lockfile(

@@ -43,7 +43,13 @@ pub fn default_matcher() -> &'static (dyn PatternMatcher + 'static) {
 #[macro_export]
 macro_rules! lazy_pattern {
     ($name:ident, $pattern:expr $(,)?) => {
-        static $name: std::sync::LazyLock<$crate::ports::CompiledPattern> =
+        $crate::lazy_pattern!(@build (), $name, $pattern);
+    };
+    ($vis:vis $name:ident, $pattern:expr $(,)?) => {
+        $crate::lazy_pattern!(@build ($vis), $name, $pattern);
+    };
+    (@build ($($vis:tt)*), $name:ident, $pattern:expr) => {
+        $($vis)* static $name: std::sync::LazyLock<$crate::ports::CompiledPattern> =
             std::sync::LazyLock::new(|| {
                 $crate::pattern_helpers::default_matcher()
                     .compile($pattern)
