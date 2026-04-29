@@ -15,7 +15,9 @@ pub(crate) fn looks_like_local_control_plane_reference(content: &str) -> bool {
 }
 
 pub(crate) fn contains_ssrf_like_fetch_line(content: &str) -> bool {
-    content.lines().any(|line| RE_SSRF_FETCH_LINE.is_match(line))
+    content
+        .lines()
+        .any(|line| RE_SSRF_FETCH_LINE.is_match(line))
 }
 
 #[cfg(test)]

@@ -65,10 +65,6 @@ impl NetworkTarget {
             "Artifact references internal or loopback network targets"
         }
     }
-
-    pub(crate) fn is_localhost_like(self) -> bool {
-        matches!(self, Self::Loopback | Self::Localhost | Self::BindAll)
-    }
 }
 
 #[cfg(test)]
@@ -78,7 +74,10 @@ mod tests {
 
     #[test]
     fn metadata_service_target_maps_to_stronger_policy_defaults() {
-        assert_eq!(NetworkTarget::MetadataService.rule_id(), "METADATA_SERVICE_ACCESS");
+        assert_eq!(
+            NetworkTarget::MetadataService.rule_id(),
+            "METADATA_SERVICE_ACCESS"
+        );
         assert_eq!(
             NetworkTarget::MetadataService.threat_category(),
             ThreatCategory::CredentialExposure
@@ -95,9 +94,11 @@ mod tests {
 
     #[test]
     fn localhost_like_targets_keep_review_semantics() {
-        assert!(NetworkTarget::Loopback.is_localhost_like());
         assert_eq!(NetworkTarget::Localhost.label(), "localhost");
         assert_eq!(NetworkTarget::BindAll.action(), RecommendedAction::Log);
-        assert_eq!(NetworkTarget::LocalDomain.signal_class(), SignalClass::ReviewSignal);
+        assert_eq!(
+            NetworkTarget::LocalDomain.signal_class(),
+            SignalClass::ReviewSignal
+        );
     }
 }

@@ -1,4 +1,6 @@
-use super::patterns::{RE_EXAMPLE_WEBHOOK, RE_OPTIONAL_WEBHOOK_DOCS};
+use crate::services::artifact_analysis::network::patterns::{
+    RE_EXAMPLE_WEBHOOK, RE_OPTIONAL_WEBHOOK_DOCS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WebhookExposure {
@@ -80,7 +82,8 @@ mod tests {
 
     #[test]
     fn webhook_docs_do_not_trigger_public_exposure() {
-        let content = "optional webhook: if your agent has a publicly reachable endpoint, see /docs/webhooks";
+        let content =
+            "optional webhook: if your agent has a publicly reachable endpoint, see /docs/webhooks";
         assert!(looks_like_optional_webhook_docs(content));
         assert_eq!(classify_webhook_exposure(content), None);
     }

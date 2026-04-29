@@ -5,7 +5,7 @@ mod instructions;
 mod lockfiles;
 mod manifests;
 mod mcp;
-mod network;
+pub(crate) mod network;
 mod patterns;
 mod permissions;
 pub(crate) mod scripts;

@@ -1,12 +1,13 @@
-use super::network::{
-    contains_internal_network_action, contains_internal_network_target,
-    contains_ssrf_like_fetch_line, looks_like_local_control_plane_reference,
-    looks_like_local_dev_reference, looks_like_webhook_receiver_without_auth,
-};
 use super::permissions::{explicit_declared_permission_rules, infer_declared_intent};
 use super::{ArtifactAnalysisService, ArtifactLink};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
+use crate::detectors::network::targets::{
+    contains_internal_network_action, contains_internal_network_target,
+    contains_ssrf_like_fetch_line, looks_like_local_control_plane_reference,
+    looks_like_local_dev_reference,
+};
+use crate::detectors::network::webhook::{classify_webhook_exposure, WebhookExposure};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
@@ -23,7 +24,6 @@ use signals::{
 };
 
 const BROAD_PERMISSION_THRESHOLD: usize = 3;
-const METADATA_SERVICE_IP: &str = "169.254.169.254";
 
 fn analyze_with_kind(
     service: &ArtifactAnalysisService,
@@ -121,7 +121,7 @@ pub(super) fn instruction_capabilities(
             ArtifactCapability::IdentityAccess,
         ));
     }
-    if looks_like_webhook_receiver_without_auth(content).is_some() {
+    if classify_webhook_exposure(content).is_some() {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::InboundNetworkSurface,
         ));
@@ -305,40 +305,18 @@ fn check_internal_network_target(
         return None;
     }
     let artifact_path = path.display().to_string();
-    let is_metadata_service = target == METADATA_SERVICE_IP;
-    let (rule_id, category, reason) = if is_metadata_service {
-        (
-            "METADATA_SERVICE_ACCESS",
-            ThreatCategory::CredentialExposure,
-            "Artifact references a metadata service target commonly used for credential discovery",
-        )
-    } else {
-        (
-            "INTERNAL_NETWORK_ACCESS",
-            ThreatCategory::ToolAbuse,
-            "Artifact references internal or loopback network targets",
-        )
-    };
     Some(
-        Finding::builder(rule_id, category)
+        Finding::builder(target.rule_id(), target.threat_category())
             .severity(Severity::Medium)
-            .action(if is_metadata_service {
-                RecommendedAction::RequireApproval
-            } else {
-                RecommendedAction::Log
-            })
+            .action(target.action())
             .evidence_kind(EvidenceKind::Behavior)
-            .signal_class(if is_metadata_service {
-                crate::findings::SignalClass::SuspiciousPackageBehavior
-            } else {
-                crate::findings::SignalClass::ReviewSignal
-            })
+            .signal_class(target.signal_class())
             .artifact(artifact_kind, Some(artifact_path.clone()))
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path,
             })
-            .match_value(target)
-            .reason(reason)
+            .match_value(target.label())
+            .reason(target.reason())
             .build(),
     )
 }
@@ -378,22 +356,14 @@ fn check_webhook_without_auth(
     content: &str,
     artifact_kind: ArtifactKind,
 ) -> Option<Finding> {
-    let kind = looks_like_webhook_receiver_without_auth(content)?;
+    let kind = classify_webhook_exposure(content)?;
     let artifact_path = path.display().to_string();
-    let (rule_id, reason, action) = match kind {
-        "webhook_auth_bypass" => (
-            "WEBHOOK_AUTH_BYPASS",
-            "Artifact appears to define a webhook or inbound endpoint without verification or signature checks",
-            RecommendedAction::Block,
-        ),
-        _ => (
-            "PUBLIC_INBOUND_ENDPOINT",
-            "Artifact appears to expose a public inbound endpoint without visible authentication controls",
-            RecommendedAction::RequireApproval,
-        ),
+    let action = match kind {
+        WebhookExposure::AuthBypass => RecommendedAction::Block,
+        WebhookExposure::PublicInboundEndpoint => RecommendedAction::RequireApproval,
     };
     Some(
-        Finding::builder(rule_id, ThreatCategory::ToolAbuse)
+        Finding::builder(kind.finding_rule_id(), ThreatCategory::ToolAbuse)
             .severity(Severity::Medium)
             .action(action)
             .evidence_kind(EvidenceKind::Context)
@@ -401,8 +371,8 @@ fn check_webhook_without_auth(
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path,
             })
-            .match_value(kind)
-            .reason(reason)
+            .match_value(kind.label())
+            .reason(kind.finding_reason())
             .build(),
     )
 }

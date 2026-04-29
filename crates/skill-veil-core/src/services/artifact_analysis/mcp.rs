@@ -1,5 +1,5 @@
-use super::network::looks_like_webhook_receiver_without_auth;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
+use crate::detectors::network::webhook::classify_webhook_exposure;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
@@ -305,7 +305,7 @@ pub(crate) fn mcp_manifest_capabilities(
             ArtifactCapability::SecretAccess,
         ));
     }
-    if looks_like_webhook_receiver_without_auth(content).is_some() {
+    if classify_webhook_exposure(content).is_some() {
         capabilities.push(ArtifactAnalysisService::observed_capability(
             ArtifactCapability::InboundNetworkSurface,
         ));
