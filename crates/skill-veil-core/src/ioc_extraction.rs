@@ -11,13 +11,38 @@
 //! - Conservative: only extract what we can recognise structurally; no
 //!   fuzzy inference.
 
+use crate::lazy_pattern;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
-use regex::Regex;
+lazy_pattern!(URL_PATTERN, r#"https?://[^\s"'<>`\{\}\[\]\(\)\\]{3,512}"#);
+
+lazy_pattern!(
+    IPV4_PATTERN,
+    r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b"
+);
+
+// IPv6 is loose on purpose: catches full 8-group and compressed
+// (`::`) forms. Word boundaries prevent matching inside larger
+// hex-colon identifiers (custom UUIDs, opaque tokens) that
+// happen to contain `≥2` colons — without `\b` the second
+// alternative would gladly match an arbitrary
+// `abc1:abc2:abc3:abc4:abc5:abc6:abc7:abc8` substring.
+lazy_pattern!(
+    IPV6_PATTERN,
+    r"\b(?:(?:[A-Fa-f0-9]{1,4}:){1,7}(?::[A-Fa-f0-9]{1,4}){1,7}|(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4})\b"
+);
+
+// Standalone host mentions like "sphinx.espuny.net:5000" without
+// scheme. Very conservative to avoid matching filenames / dotted
+// identifiers. Requires a TLD of ≥2 lowercase letters and rejects
+// obvious programming patterns (e.g. `object.method`).
+lazy_pattern!(
+    HOST_MENTION_PATTERN,
+    r"\b([a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?)+\.(?:com|net|org|io|dev|ai|fly\.dev|vercel\.app|co|me|xyz|app|cloud|tech|info|biz|pro|us|uk|de|fr|es|it|ru|cn|jp|hk|tw|kr|sg|in|br|mx|ca|au|nz|za|ae|tr|il|ch|nl|be|se|no|fi|dk|pl|ir|pk|sa|eg|th|vn|ph|id|my|ng))\b"
+);
 
 /// Collection of IOCs extracted from a single artifact (or package-level
 /// aggregate across many artifacts). All values are deduplicated and sorted
@@ -74,45 +99,6 @@ impl ExtractedIocs {
     }
 }
 
-struct Patterns {
-    url: Regex,
-    ipv4: Regex,
-    ipv6: Regex,
-    host_mention: Regex,
-}
-
-fn patterns() -> &'static Patterns {
-    static CACHE: OnceLock<Patterns> = OnceLock::new();
-    CACHE.get_or_init(|| Patterns {
-        // URLs: match http(s):// + permissive set of URL chars. Stops at
-        // whitespace, quotes, brackets, or common separators.
-        url: Regex::new(r#"https?://[^\s"'<>`\{\}\[\]\(\)\\]{3,512}"#).expect("url regex"),
-        // IPv4 with optional port
-        ipv4: Regex::new(
-            r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b",
-        )
-        .expect("ipv4 regex"),
-        // IPv6 is loose on purpose: catches full 8-group and compressed
-        // (`::`) forms. Word boundaries prevent matching inside larger
-        // hex-colon identifiers (custom UUIDs, opaque tokens) that
-        // happen to contain `≥2` colons — without `\b` the second
-        // alternative would gladly match an arbitrary
-        // `abc1:abc2:abc3:abc4:abc5:abc6:abc7:abc8` substring.
-        ipv6: Regex::new(
-            r"\b(?:(?:[A-Fa-f0-9]{1,4}:){1,7}(?::[A-Fa-f0-9]{1,4}){1,7}|(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4})\b",
-        )
-        .expect("ipv6 regex"),
-        // Standalone host mentions like "sphinx.espuny.net:5000" without
-        // scheme. Very conservative to avoid matching filenames / dotted
-        // identifiers. Requires a TLD of ≥2 lowercase letters and rejects
-        // obvious programming patterns (e.g. `object.method`).
-        host_mention: Regex::new(
-            r"\b([a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?)+\.(?:com|net|org|io|dev|ai|fly\.dev|vercel\.app|co|me|xyz|app|cloud|tech|info|biz|pro|us|uk|de|fr|es|it|ru|cn|jp|hk|tw|kr|sg|in|br|mx|ca|au|nz|za|ae|tr|il|ch|nl|be|se|no|fi|dk|pl|ir|pk|sa|eg|th|vn|ph|id|my|ng))\b",
-        )
-        .expect("host regex"),
-    })
-}
-
 /// Domains that must never be reported — loopback, localhost variants, and
 /// documentation/testing ranges. These otherwise pollute the IOC list and
 /// burn enrichment quota.
@@ -165,15 +151,13 @@ pub fn extract_from_artifact(path: &Path, content: &[u8]) -> ExtractedIocs {
 
 /// Extract URL/domain/IP indicators from a string (no file-hash computed).
 pub fn extract_from_text(text: &str) -> ExtractedIocs {
-    let p = patterns();
-
     let mut urls: BTreeSet<String> = BTreeSet::new();
     let mut domains: BTreeSet<String> = BTreeSet::new();
     let mut ipv4: BTreeSet<String> = BTreeSet::new();
     let mut ipv6: BTreeSet<String> = BTreeSet::new();
 
-    for m in p.url.find_iter(text) {
-        let raw = m.as_str();
+    for m in URL_PATTERN.find_matches(text) {
+        let raw = m.matched_text.as_str();
         let trimmed = raw.trim_end_matches([',', '.', ';', ':', ')', ']', '}', '!', '?']);
         urls.insert(trimmed.to_string());
         if let Some(host) = extract_host_from_url(trimmed) {
@@ -183,22 +167,22 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
         }
     }
 
-    for m in p.host_mention.find_iter(text) {
-        let host = m.as_str().to_ascii_lowercase();
+    for m in HOST_MENTION_PATTERN.find_matches(text) {
+        let host = m.matched_text.to_ascii_lowercase();
         if !is_noise_domain(&host) {
             domains.insert(host);
         }
     }
 
-    for m in p.ipv4.find_iter(text) {
-        let ip = m.as_str();
+    for m in IPV4_PATTERN.find_matches(text) {
+        let ip = m.matched_text.as_str();
         if !is_noise_ipv4(ip) {
             ipv4.insert(ip.to_string());
         }
     }
 
-    for m in p.ipv6.find_iter(text) {
-        let ip = m.as_str().to_string();
+    for m in IPV6_PATTERN.find_matches(text) {
+        let ip = m.matched_text;
         // Mirror `is_ipv6`: require colon-group boundary AND a plausible
         // IPv6 shape. Without `is_plausible_ipv6` the extractor silently
         // accepted hex-colon tokens (e.g. 4-group session IDs without `::`
@@ -280,11 +264,11 @@ fn is_rfc1918_172(ip: &str) -> bool {
 }
 
 fn is_ipv4(s: &str) -> bool {
-    patterns().ipv4.is_match(s) && s.matches('.').count() == 3
+    IPV4_PATTERN.is_match(s) && s.matches('.').count() == 3
 }
 
 fn is_ipv6(s: &str) -> bool {
-    s.matches(':').count() >= 2 && patterns().ipv6.is_match(s) && is_plausible_ipv6(s)
+    s.matches(':').count() >= 2 && IPV6_PATTERN.is_match(s) && is_plausible_ipv6(s)
 }
 
 /// Reject 8-group hex-colon strings that look like custom session

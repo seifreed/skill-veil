@@ -13,7 +13,8 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, SignalClass,
     ThreatCategory,
 };
-use regex::Regex;
+use crate::pattern_helpers::default_matcher;
+use crate::ports::CompiledPattern;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -150,27 +151,30 @@ struct CompiledTables {
 
 struct CompiledClaim {
     kind: ClaimKind,
-    claim_regexes: Vec<Regex>,
-    contradiction_regexes: Vec<Regex>,
+    claim_regexes: Vec<CompiledPattern>,
+    contradiction_regexes: Vec<CompiledPattern>,
 }
 
 fn tables() -> &'static CompiledTables {
     static CACHE: OnceLock<CompiledTables> = OnceLock::new();
     CACHE.get_or_init(|| {
+        let matcher = default_matcher();
+        let compile_each = |patterns: &[&str]| -> Vec<CompiledPattern> {
+            patterns
+                .iter()
+                .map(|p| {
+                    matcher
+                        .compile(p)
+                        .expect("deceptive_docs hardcoded pattern compiles")
+                })
+                .collect()
+        };
         let entries = CLAIM_DEFINITIONS
             .iter()
             .map(|def| CompiledClaim {
                 kind: def.kind,
-                claim_regexes: def
-                    .claim_patterns
-                    .iter()
-                    .map(|p| Regex::new(p).expect("deceptive_docs claim pattern compiles"))
-                    .collect(),
-                contradiction_regexes: def
-                    .contradiction_patterns
-                    .iter()
-                    .map(|p| Regex::new(p).expect("deceptive_docs contradiction pattern compiles"))
-                    .collect(),
+                claim_regexes: compile_each(def.claim_patterns),
+                contradiction_regexes: compile_each(def.contradiction_patterns),
             })
             .collect();
         CompiledTables { entries }
@@ -189,10 +193,10 @@ fn detect_claims(skill_md: &str) -> Vec<DetectedClaim> {
     for entry in &tables().entries {
         for (idx, line) in skill_md.lines().enumerate() {
             for re in &entry.claim_regexes {
-                if let Some(m) = re.find(line) {
+                if let Some(m) = re.find_matches(line).into_iter().next() {
                     out.push(DetectedClaim {
                         kind: entry.kind,
-                        matched_text: m.as_str().to_string(),
+                        matched_text: m.matched_text,
                         line: idx + 1,
                     });
                     break; // one match per (claim, line) is enough
@@ -225,12 +229,12 @@ fn detect_contradictions(
             continue;
         }
         for re in &entry.contradiction_regexes {
-            if let Some(m) = re.find(contents) {
-                let line = locate_line(contents, m.start());
+            if let Some(m) = re.find_matches(contents).into_iter().next() {
+                let line = locate_line(contents, m.start);
                 out.push(DetectedContradiction {
                     kind: entry.kind,
                     artifact: artifact.to_path_buf(),
-                    matched_text: m.as_str().to_string(),
+                    matched_text: m.matched_text,
                     line,
                 });
                 break; // one contradiction per (claim, artifact) is enough
@@ -350,36 +354,35 @@ fn claim_phrase(kind: ClaimKind) -> &'static str {
 #[cfg(test)]
 mod compile_time_pattern_tests {
     use super::CLAIM_DEFINITIONS;
-    use regex::Regex;
+    use crate::pattern_helpers::default_matcher;
 
     /// # Contract
     ///
     /// Every `claim_pattern` and `contradiction_pattern` in
-    /// `CLAIM_DEFINITIONS` MUST compile as a valid regex. The
-    /// production code path uses `OnceLock::get_or_init` with
-    /// `.expect("... pattern compiles")`, so an invalid literal would
-    /// panic on the first call from a long-running scan instead of
-    /// surfacing in CI. This test moves that invariant from runtime
-    /// to test-time, which is what the project's engineering
-    /// standards require ("never `unwrap()` in library code").
+    /// `CLAIM_DEFINITIONS` MUST compile through the `PatternMatcher`
+    /// port. Production calls `tables()` once via `OnceLock::get_or_init`
+    /// with `.expect("... pattern compiles")`, so an invalid literal
+    /// would panic on the first scan instead of surfacing in CI. This
+    /// test moves that invariant from runtime to test-time, which is
+    /// what the project's engineering standards require ("never
+    /// `unwrap()` in library code").
     #[test]
     fn all_claim_patterns_compile() {
+        let matcher = default_matcher();
         for def in CLAIM_DEFINITIONS {
             for pattern in def.claim_patterns {
-                Regex::new(pattern).unwrap_or_else(|err| {
-                    panic!(
-                        "claim pattern {pattern:?} for {:?} invalid: {err}",
-                        def.kind
-                    )
-                });
+                assert!(
+                    matcher.compile(pattern).is_ok(),
+                    "claim pattern {pattern:?} for {:?} must compile",
+                    def.kind
+                );
             }
             for pattern in def.contradiction_patterns {
-                Regex::new(pattern).unwrap_or_else(|err| {
-                    panic!(
-                        "contradiction pattern {pattern:?} for {:?} invalid: {err}",
-                        def.kind
-                    )
-                });
+                assert!(
+                    matcher.compile(pattern).is_ok(),
+                    "contradiction pattern {pattern:?} for {:?} must compile",
+                    def.kind
+                );
             }
         }
     }
