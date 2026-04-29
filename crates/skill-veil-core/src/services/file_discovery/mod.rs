@@ -12,12 +12,11 @@ use crate::analyzer::{assess_artifact_path, ArtifactClassification};
 use crate::ports::FileSystemProvider;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use walkdir::WalkDir;
 
 use classification::{
-    should_skip_discovery_dir, DATA_FILE_GLOB_PATTERNS, JSON_GLOB_PATTERN, MARKDOWN_GLOB_PATTERN,
-    MAX_DATA_FILE_BYTES, MAX_DISCOVERED_DATA_FILES, MAX_DISCOVERED_SCRIPTS,
-    SCRIPT_DISCOVERY_SUBDIRS, SCRIPT_GLOB_PATTERNS, YAML_GLOB_PATTERN, YML_GLOB_PATTERN,
+    DATA_FILE_GLOB_PATTERNS, JSON_GLOB_PATTERN, MARKDOWN_GLOB_PATTERN, MAX_DATA_FILE_BYTES,
+    MAX_DISCOVERED_DATA_FILES, MAX_DISCOVERED_SCRIPTS, SCRIPT_DISCOVERY_SUBDIRS,
+    SCRIPT_GLOB_PATTERNS, SKIP_DISCOVERY_DIRS, YAML_GLOB_PATTERN, YML_GLOB_PATTERN,
 };
 
 /// Service for discovering skill markdown files.
@@ -254,74 +253,93 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             false
         }
     }
-}
 
-pub(crate) fn discover_package_manifests(path: &Path) -> Vec<PathBuf> {
-    const MANIFEST_NAMES: &[&str] = &[
-        "package.json",
-        "mcp.json",
-        "mcp.yaml",
-        "mcp.yml",
-        "requirements.txt",
-        "pyproject.toml",
-        "cargo.toml",
-        "dockerfile",
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "makefile",
-        ".npmrc",
-        "pip.conf",
-    ];
-    discover_files_by_name(path, MANIFEST_NAMES)
-}
+    /// Discover package manifests (`package.json`, `pyproject.toml`,
+    /// `Dockerfile`, …) anywhere under `path`.
+    ///
+    /// Routes the recursive walk through the
+    /// [`FileSystemProvider::walk_files`] port so test mocks observe
+    /// the same code path as production. Pre-fix this lived as a free
+    /// function calling `WalkDir` directly, which broke the hexagonal
+    /// contract (services MUST depend only on ports, not on concrete
+    /// filesystem libraries).
+    pub(crate) fn discover_package_manifests(&self, path: &Path) -> Vec<PathBuf> {
+        const MANIFEST_NAMES: &[&str] = &[
+            "package.json",
+            "mcp.json",
+            "mcp.yaml",
+            "mcp.yml",
+            "requirements.txt",
+            "pyproject.toml",
+            "cargo.toml",
+            "dockerfile",
+            "docker-compose.yml",
+            "docker-compose.yaml",
+            "makefile",
+            ".npmrc",
+            "pip.conf",
+        ];
+        self.discover_files_by_name(path, MANIFEST_NAMES)
+    }
 
-pub(crate) fn discover_lockfiles(path: &Path) -> Vec<PathBuf> {
-    const LOCKFILE_NAMES: &[&str] = &[
-        "package-lock.json",
-        "cargo.lock",
-        "poetry.lock",
-        "uv.lock",
-        "pipfile.lock",
-        "yarn.lock",
-        "pnpm-lock.yaml",
-        "npm-shrinkwrap.json",
-    ];
-    discover_files_by_name(path, LOCKFILE_NAMES)
+    /// Discover lockfiles (`package-lock.json`, `Cargo.lock`, …)
+    /// anywhere under `path`. Same port-routed walk as
+    /// [`Self::discover_package_manifests`].
+    pub(crate) fn discover_lockfiles(&self, path: &Path) -> Vec<PathBuf> {
+        const LOCKFILE_NAMES: &[&str] = &[
+            "package-lock.json",
+            "cargo.lock",
+            "poetry.lock",
+            "uv.lock",
+            "pipfile.lock",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "npm-shrinkwrap.json",
+        ];
+        self.discover_files_by_name(path, LOCKFILE_NAMES)
+    }
+
+    /// Walk `root` recursively through the
+    /// [`FileSystemProvider::walk_files`] port, returning entries
+    /// whose lowercased filename matches one of `names`.
+    ///
+    /// `MAX_DISCOVERY_DEPTH` and `SKIP_DISCOVERY_DIRS` are forwarded
+    /// to the port so the std adapter can prune vendored / generated
+    /// trees and bound descent on adversarial inputs. A failure on
+    /// the root path is logged and treated as "no matches" rather
+    /// than propagated, mirroring the pre-fix tracing-warning
+    /// behaviour of the WalkDir-based implementation.
+    fn discover_files_by_name(&self, root: &Path, names: &[&str]) -> Vec<PathBuf> {
+        let files =
+            match self
+                .fs_provider
+                .walk_files(root, MAX_DISCOVERY_DEPTH, SKIP_DISCOVERY_DIRS)
+            {
+                Ok(files) => files,
+                Err(err) => {
+                    tracing::warn!("Skipping discovery walk in {}: {err}", root.display(),);
+                    return Vec::new();
+                }
+            };
+
+        files
+            .into_iter()
+            .filter_map(|path| {
+                let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
+                names.contains(&file_name.as_str()).then_some(path)
+            })
+            .collect()
+    }
 }
 
 /// Hard cap on discovery descent depth. Protects against adversarial
-/// or runaway directory trees that would otherwise force WalkDir into
-/// pathological recursion (the `should_skip_discovery_dir` exclude-list
+/// or runaway directory trees that would otherwise force the walker
+/// into pathological recursion (the `SKIP_DISCOVERY_DIRS` exclude-list
 /// only catches well-known names like `node_modules`; an attacker can
 /// nest under custom names indefinitely). 20 levels comfortably covers
 /// every monorepo layout we have seen in benchmarks/corpus and leaves
 /// large headroom over typical skill packages (≤ 6 levels).
 const MAX_DISCOVERY_DEPTH: usize = 20;
-
-fn discover_files_by_name(root: &Path, names: &[&str]) -> Vec<PathBuf> {
-    WalkDir::new(root)
-        .max_depth(MAX_DISCOVERY_DEPTH)
-        .into_iter()
-        .filter_entry(|entry| !should_skip_discovery_dir(entry))
-        .filter_map(|e| match e {
-            Ok(entry) => Some(entry),
-            Err(err) => {
-                tracing::warn!(
-                    "Skipping entry during package discovery in {}: {err}",
-                    root.display()
-                );
-                None
-            }
-        })
-        .filter(|entry| entry.file_type().is_file())
-        .filter_map(|entry| {
-            let file_name = entry.file_name().to_str()?.to_ascii_lowercase();
-            names
-                .contains(&file_name.as_str())
-                .then(|| entry.into_path())
-        })
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {
@@ -568,5 +586,140 @@ Run it!
                 idx + 1
             );
         }
+    }
+
+    /// Architectural contract: `discover_files_by_name` and its public
+    /// wrappers (`discover_package_manifests`, `discover_lockfiles`)
+    /// MUST route the recursive walk through the
+    /// `FileSystemProvider::walk_files` port instead of calling
+    /// `WalkDir` (or `std::fs`) directly. The pre-fix free-function
+    /// version named `WalkDir` and `entry.file_type().is_file()`
+    /// inline, breaking the hexagonal contract: test mocks could not
+    /// observe or override discovery I/O. This test pins the post-fix
+    /// behaviour by checking the production module's source.
+    #[test]
+    fn file_discovery_does_not_use_walkdir_or_filetype_directly() {
+        let body = include_str!("mod.rs");
+        let production = body.split("#[cfg(test)]").next().unwrap_or(body);
+        // Tolerate rustfmt's multi-line method chains: the pattern can
+        // be written either as `self.fs_provider.walk_files(...)` on a
+        // single line OR with the receiver on its own line followed by
+        // `.walk_files(...)`. We only care that the port method is
+        // invoked from the production module, not where the linebreak
+        // happens to fall.
+        let collapsed: String = production.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            collapsed.contains("self.fs_provider .walk_files(")
+                || collapsed.contains("self.fs_provider.walk_files(")
+                || collapsed.contains("self . fs_provider . walk_files (")
+                || collapsed.contains(".fs_provider .walk_files(")
+                || collapsed.contains(".fs_provider.walk_files("),
+            "discover_files_by_name must route the recursive walk through the fs_provider port",
+        );
+        for (idx, line) in production.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            assert!(
+                !trimmed.contains("WalkDir::new("),
+                "production line {} still calls WalkDir::new directly: {line}",
+                idx + 1
+            );
+            assert!(
+                !trimmed.contains(".file_type().is_file()"),
+                "production line {} still inspects file_type via the WalkDir entry: {line}",
+                idx + 1
+            );
+        }
+    }
+
+    /// Behavioral contract: `discover_package_manifests` consults the
+    /// `FileSystemProvider::walk_files` port. Records every
+    /// `walk_files` call against an in-memory adapter and asserts at
+    /// least one call lands with `MAX_DISCOVERY_DEPTH` and the
+    /// `SKIP_DISCOVERY_DIRS` exclude list — proving both that the
+    /// service routes through the port AND that it forwards the
+    /// hardening knobs the std adapter relies on.
+    #[test]
+    fn discover_package_manifests_invokes_walk_files_with_hardening_knobs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct WalkRecordingFs {
+            walk_calls: Arc<AtomicUsize>,
+            recorded_max_depth: Arc<Mutex<Vec<usize>>>,
+            recorded_skip_dirs: Arc<Mutex<Vec<Vec<String>>>>,
+        }
+
+        impl FileSystemProvider for WalkRecordingFs {
+            fn read_file_bytes(
+                &self,
+                _path: &Path,
+            ) -> Result<crate::ports::FileContent, crate::ports::FileSystemError> {
+                Err(crate::ports::FileSystemError::PathNotFound(PathBuf::new()))
+            }
+            fn list_files(
+                &self,
+                _path: &Path,
+                _pattern: &str,
+                _recursive: bool,
+            ) -> Result<Vec<PathBuf>, crate::ports::FileSystemError> {
+                Ok(Vec::new())
+            }
+            fn exists(&self, _path: &Path) -> bool {
+                true
+            }
+            fn walk_files(
+                &self,
+                _path: &Path,
+                max_depth: usize,
+                skip_dirs: &[&str],
+            ) -> Result<Vec<PathBuf>, crate::ports::FileSystemError> {
+                self.walk_calls.fetch_add(1, Ordering::SeqCst);
+                self.recorded_max_depth
+                    .lock()
+                    .expect("WalkRecordingFs mutex poisoned")
+                    .push(max_depth);
+                self.recorded_skip_dirs
+                    .lock()
+                    .expect("WalkRecordingFs mutex poisoned")
+                    .push(skip_dirs.iter().map(|s| (*s).to_string()).collect());
+                Ok(Vec::new())
+            }
+        }
+
+        use std::sync::{Arc, Mutex};
+        let fs = WalkRecordingFs {
+            walk_calls: Arc::new(AtomicUsize::new(0)),
+            recorded_max_depth: Arc::new(Mutex::new(Vec::new())),
+            recorded_skip_dirs: Arc::new(Mutex::new(Vec::new())),
+        };
+        let calls = Arc::clone(&fs.walk_calls);
+        let max_depths = Arc::clone(&fs.recorded_max_depth);
+        let skip_dirs_log = Arc::clone(&fs.recorded_skip_dirs);
+
+        let service = FileDiscoveryService::with_fs_provider(false, fs);
+        let _ = service.discover_package_manifests(Path::new("/virtual/pkg"));
+        let _ = service.discover_lockfiles(Path::new("/virtual/pkg"));
+
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "manifest + lockfile discovery must invoke walk_files at least twice",
+        );
+
+        let depths = max_depths.lock().expect("poisoned");
+        assert!(
+            depths.iter().all(|d| *d == MAX_DISCOVERY_DEPTH),
+            "every walk_files call must forward MAX_DISCOVERY_DEPTH ({MAX_DISCOVERY_DEPTH}); got {depths:?}",
+        );
+        let skips = skip_dirs_log.lock().expect("poisoned");
+        let expected_skip: Vec<String> = SKIP_DISCOVERY_DIRS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert!(
+            skips.iter().all(|recorded| recorded == &expected_skip),
+            "every walk_files call must forward SKIP_DISCOVERY_DIRS verbatim; got {skips:?}",
+        );
     }
 }

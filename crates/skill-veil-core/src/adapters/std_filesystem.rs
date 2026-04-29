@@ -179,6 +179,81 @@ impl FileSystemProvider for StdFileSystemProvider {
         let meta = std::fs::metadata(path).map_err(FileSystemError::IoError)?;
         Ok(FileMeta { len: meta.len() })
     }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn is_dir(&self, path: &Path) -> bool {
+        path.is_dir()
+    }
+
+    /// Recursive walk over `path` honouring `max_depth` and `skip_dirs`.
+    ///
+    /// Symlinks are NOT followed (`follow_links(false)`). Errors on
+    /// individual entries are logged via `tracing::warn!` and the walk
+    /// continues, matching the asymmetry documented for `list_files`:
+    /// the root error is fatal, child errors are non-fatal so a single
+    /// unreadable subtree does not blank an entire package scan.
+    ///
+    /// `max_depth = 0` means unlimited (matches the documented port
+    /// contract). `skip_dirs` is checked against the lossy filename of
+    /// each directory entry; a match prunes the entire subtree.
+    fn walk_files(
+        &self,
+        path: &Path,
+        max_depth: usize,
+        skip_dirs: &[&str],
+    ) -> Result<Vec<PathBuf>, FileSystemError> {
+        let mut walker = WalkDir::new(path).follow_links(false);
+        if max_depth > 0 {
+            walker = walker.max_depth(max_depth);
+        }
+
+        let mut files = Vec::new();
+        let walker = walker
+            .into_iter()
+            .filter_entry(|entry| !is_skipped_dir(entry, skip_dirs));
+        for result in walker {
+            match result {
+                Ok(entry) => {
+                    let file_type = entry.file_type();
+                    if file_type.is_file() && !file_type.is_symlink() {
+                        files.push(entry.into_path());
+                    }
+                }
+                Err(err) if err.depth() == 0 => {
+                    let io_err = err.into_io_error().unwrap_or_else(|| {
+                        io::Error::other("walkdir error without underlying io::Error")
+                    });
+                    return match io_err.kind() {
+                        io::ErrorKind::NotFound => {
+                            Err(FileSystemError::PathNotFound(path.to_path_buf()))
+                        }
+                        _ => Err(FileSystemError::IoError(io_err)),
+                    };
+                }
+                Err(err) => {
+                    tracing::warn!("Skipping entry during recursive walk: {err}");
+                }
+            }
+        }
+        Ok(files)
+    }
+}
+
+/// Filter helper: prune a directory subtree if its name matches one of
+/// `skip_dirs`. Mirrors the exclusion list used by file-discovery so
+/// the walker doesn't pay for vendored / generated trees on adversarial
+/// inputs.
+fn is_skipped_dir(entry: &walkdir::DirEntry, skip_dirs: &[&str]) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|name| skip_dirs.contains(&name))
 }
 
 /// Match the entry's filename against the discovery pattern using a

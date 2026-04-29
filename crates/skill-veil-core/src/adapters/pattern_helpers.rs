@@ -55,6 +55,12 @@ pub fn default_matcher() -> &'static (dyn PatternMatcher + 'static) {
 /// runtime data. Tests cover the patterns directly so the panic only
 /// fires when a developer hand-edits an invalid literal.
 ///
+/// The macro expansion uses `unwrap_or_else(|err| panic!(...))` rather
+/// than `.expect(...)` so the surfaced diagnostic carries both the
+/// static name and the underlying [`PatternError`]. Matches the idiom
+/// used by [`compile_patterns`] below — keep both call sites aligned
+/// when editing one.
+///
 /// # Examples
 /// ```ignore
 /// lazy_pattern!(MY_RE, r"(?i)\bfoo\b");
@@ -108,11 +114,17 @@ macro_rules! lazy_pattern {
     (@build ($($vis:tt)*), $name:ident, $pattern:expr) => {
         $($vis)* static $name: std::sync::LazyLock<$crate::ports::CompiledPattern> =
             std::sync::LazyLock::new(|| {
+                // Use `unwrap_or_else(|err| panic!(...))` instead of
+                // `.expect(...)` so the diagnostic surfaces both the
+                // static name AND the underlying PatternError. Matches
+                // the `compile_patterns` idiom and keeps the codebase
+                // free of `.expect()` in library code.
                 $crate::adapters::pattern_helpers::default_matcher()
                     .compile($pattern)
-                    .expect(concat!(
-                        "hardcoded pattern must compile: ",
-                        stringify!($name)
+                    .unwrap_or_else(|err| panic!(
+                        "hardcoded pattern must compile: {}: {}",
+                        stringify!($name),
+                        err,
                     ))
             });
     };
@@ -144,5 +156,61 @@ mod tests {
         assert!(!LAZY_DIGITS.is_match("no digits here"));
         assert_eq!(LAZY_DIGITS.find_matches("a 1 b 2 c").len(), 2);
         assert_eq!(LAZY_DIGITS.captures_iter("a 1 b 2 c").len(), 2);
+    }
+
+    /// # Contract
+    /// `compile_patterns` MUST compile every input literal in the order
+    /// it was passed. Callers (e.g. injection-pattern tables keyed by
+    /// rule id) rely on positional alignment between the input slice
+    /// and the returned `Vec<CompiledPattern>`; reordering would silently
+    /// associate the wrong rule id with the wrong pattern.
+    #[test]
+    fn compile_patterns_compiles_every_input_in_order() {
+        let inputs = [r"\bfoo\b", r"\d+", r"(?i)bar"];
+        let compiled = compile_patterns(&inputs);
+        assert_eq!(compiled.len(), inputs.len());
+        assert!(compiled[0].is_match("say foo here"));
+        assert!(!compiled[0].is_match("foobar only"));
+        assert!(compiled[1].is_match("answer 42"));
+        assert!(compiled[2].is_match("BAR"));
+    }
+
+    /// # Contract (negative)
+    /// `compile_patterns` MUST panic with the documented diagnostic
+    /// when a hardcoded literal fails to compile. The literal is part of
+    /// the binary contract — surfacing a `Result` here would only let
+    /// callers re-panic on the same invariant.
+    #[test]
+    #[should_panic(expected = "hardcoded pattern must compile")]
+    fn compile_patterns_panics_on_invalid_literal() {
+        let inputs = [r"[unterminated"];
+        let _ = compile_patterns(&inputs);
+    }
+
+    /// # Contract
+    /// `try_compile` MUST return a usable `CompiledPattern` for any
+    /// pattern accepted by the underlying matcher; this is the seam
+    /// rule-pack loaders use to validate user-supplied patterns without
+    /// pulling `RegexPatternMatcher` into domain code.
+    #[test]
+    fn try_compile_returns_compiled_pattern_for_valid_input() {
+        let compiled = try_compile(r"^hello\s+world$").expect("valid pattern must compile");
+        assert!(compiled.is_match("hello world"));
+        assert!(!compiled.is_match("hello  there"));
+    }
+
+    /// # Contract (negative)
+    /// `try_compile` MUST surface the matcher's `PatternError` instead
+    /// of panicking, because YAML rule packs and other boundary inputs
+    /// can legitimately contain malformed regex authored by users.
+    /// Propagating the error lets the loader reject the pack with a
+    /// human-readable diagnostic.
+    #[test]
+    fn try_compile_returns_pattern_error_for_invalid_input() {
+        let result = try_compile(r"[unterminated");
+        assert!(
+            result.is_err(),
+            "malformed pattern must surface as Result::Err, not panic"
+        );
     }
 }

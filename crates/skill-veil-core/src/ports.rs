@@ -322,4 +322,56 @@ pub trait FileSystemProvider: Send + Sync {
             len: bytes.as_bytes().len() as u64,
         })
     }
+
+    /// Whether `path` resolves to a regular file.
+    ///
+    /// Used by the scanner entrypoints to decide between single-file and
+    /// package scans. Routing this through the port (instead of calling
+    /// `Path::is_file` directly) keeps test doubles consistent with
+    /// production behaviour and preserves the hexagonal contract.
+    ///
+    /// The default implementation derives the answer from
+    /// `read_file_bytes`: a path whose bytes can be read is treated as
+    /// a file. This is correct for the std adapter but slow; adapters
+    /// with cheaper file-type access SHOULD override.
+    fn is_file(&self, path: &Path) -> bool {
+        self.read_file_bytes(path).is_ok()
+    }
+
+    /// Whether `path` resolves to a directory.
+    ///
+    /// Counterpart of [`FileSystemProvider::is_file`]. The default
+    /// implementation treats an existing path that is not a file as a
+    /// directory. Adapters MUST override this when they need to model
+    /// special files (devices, sockets, FIFOs) explicitly.
+    fn is_dir(&self, path: &Path) -> bool {
+        self.exists(path) && !self.is_file(path)
+    }
+
+    /// Walk regular files under `path`, returning their absolute paths.
+    ///
+    /// `max_depth` caps descent depth (`0` means unlimited). `skip_dirs`
+    /// names directories whose subtrees MUST be skipped — used to keep
+    /// the walker out of vendored / generated trees on adversarial
+    /// inputs. Implementations MUST NOT follow symlinks.
+    ///
+    /// The default implementation delegates to `list_files(path, "*",
+    /// recursive=true)` and ignores `max_depth` / `skip_dirs`. This is
+    /// correct (just less efficient) and lets test mocks pick up the
+    /// new method without bespoke walk logic. The std adapter overrides
+    /// to honour both knobs.
+    ///
+    /// # Errors
+    /// Returns [`FileSystemError::PathNotFound`] when the root does not
+    /// exist, or [`FileSystemError::IoError`] for other I/O failures
+    /// on the root path. Errors on individual children are logged and
+    /// the walk continues, mirroring [`FileSystemProvider::list_files`].
+    fn walk_files(
+        &self,
+        path: &Path,
+        _max_depth: usize,
+        _skip_dirs: &[&str],
+    ) -> Result<Vec<PathBuf>, FileSystemError> {
+        self.list_files(path, "*", true)
+    }
 }

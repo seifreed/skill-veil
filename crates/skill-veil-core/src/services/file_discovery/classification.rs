@@ -121,34 +121,31 @@ pub(super) fn is_explicit_skill_file(path: &Path) -> bool {
             .is_some_and(|name| name.eq_ignore_ascii_case("prompts"))
 }
 
-/// Skip directory entries that conventionally hold vendored or generated
-/// content (node_modules, vendor, build outputs, virtualenvs, …) so the
-/// `WalkDir` discovery walker doesn't pay for trees that never contain
-/// skills. Pure: only inspects cached `file_type()` and `file_name()`.
-pub(super) fn should_skip_discovery_dir(entry: &walkdir::DirEntry) -> bool {
-    if !entry.file_type().is_dir() {
-        return false;
-    }
-    entry.file_name().to_str().is_some_and(|name| {
-        matches!(
-            name,
-            "node_modules"
-                | "vendor"
-                | ".git"
-                | "dist"
-                | "build"
-                | "target"
-                | ".venv"
-                | "venv"
-                | "__pycache__"
-                | ".yarn"
-                | ".pnpm-store"
-                | ".next"
-                | ".turbo"
-                | "coverage"
-        )
-    })
-}
+/// Directory names whose subtrees the discovery walker MUST prune.
+///
+/// Conventionally hold vendored or generated content (node_modules,
+/// vendor, build outputs, virtualenvs, …) which never contain skills.
+/// Pruning these subtrees keeps the walker out of pathological trees
+/// on adversarial inputs and avoids paying recursive I/O cost on
+/// legitimate but bulky monorepos. Consumed by the
+/// [`crate::ports::FileSystemProvider::walk_files`] port via
+/// `discover_files_by_name`.
+pub(super) const SKIP_DISCOVERY_DIRS: &[&str] = &[
+    "node_modules",
+    "vendor",
+    ".git",
+    "dist",
+    "build",
+    "target",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".yarn",
+    ".pnpm-store",
+    ".next",
+    ".turbo",
+    "coverage",
+];
 
 #[cfg(test)]
 mod tests {

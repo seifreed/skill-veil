@@ -44,9 +44,7 @@ use crate::scanner_support::{
     artifact_parse_error_finding, binary_disguise_finding, decode_warning_finding,
     parse_warning_finding, read_text_file_lossy, structured_parse_warning,
 };
-use crate::services::file_discovery::{
-    discover_lockfiles, discover_package_manifests, FileDiscoveryService,
-};
+use crate::services::file_discovery::FileDiscoveryService;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -525,10 +523,10 @@ pub(crate) fn discover_package_targets<F: FileSystemProvider, P: MarkdownParser>
     for entrypoint in entrypoints {
         targets.insert(entrypoint);
     }
-    for manifest in discover_package_manifests(path) {
+    for manifest in scanner.file_discovery().discover_package_manifests(path) {
         targets.insert(manifest);
     }
-    for lockfile in discover_lockfiles(path) {
+    for lockfile in scanner.file_discovery().discover_lockfiles(path) {
         targets.insert(lockfile);
     }
 

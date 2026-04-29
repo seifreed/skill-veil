@@ -155,10 +155,11 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub fn scan_package(&self, path: impl AsRef<Path>) -> Result<PackageScanResult, ScanError> {
         let path = path.as_ref();
-        if !self.file_discovery.fs_provider().exists(path) {
+        let fs = self.file_discovery.fs_provider();
+        if !fs.exists(path) {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
-        if path.is_file() {
+        if fs.is_file(path) {
             return Ok(match self.scan_file(path) {
                 Ok(result) => PackageScanResult {
                     results: vec![result],
@@ -197,13 +198,14 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         let path = path.as_ref();
         match self.filter_service.target_mode() {
             ScanTargetMode::Auto => {
-                if path.is_file() {
+                let fs = self.file_discovery.fs_provider();
+                if fs.is_file(path) {
                     let result = self.scan_file(path)?;
                     Ok(PackageScanResult {
                         results: vec![result],
                         errors: Vec::new(),
                     })
-                } else if path.is_dir() {
+                } else if fs.is_dir(path) {
                     self.scan_package(path)
                 } else {
                     Err(ScanError::PathNotFound(path.to_path_buf()))

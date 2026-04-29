@@ -3,10 +3,13 @@ use crate::artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactGraph,
 };
 
+/// Contract: a finding whose `artifact_path` lives in a sibling
+/// subdirectory MUST classify as supporting, never as primary, even
+/// when the trailing components match. Pre-fix the matcher used
+/// `ends_with`, which collapsed sibling packages in dataset scans
+/// into the same primary bucket.
 #[test]
 fn test_split_findings_by_scope_rejects_subdirectory_path() {
-    // A finding from "other/skill.md" should NOT be classified as primary
-    // when the primary path is "/project/skill.md".
     let primary_path = std::path::Path::new("/project/skill.md");
     let finding = Finding::builder("RULE", ThreatCategory::Generic)
         .artifact(
@@ -28,10 +31,12 @@ fn test_split_findings_by_scope_rejects_subdirectory_path() {
     assert_eq!(supporting.len(), 1);
 }
 
+/// Contract: a single-component relative `artifact_path` (`skill.md`)
+/// MUST classify as primary against an absolute primary path that
+/// ends with the same filename. Positive twin of the
+/// reject-subdirectory test above.
 #[test]
 fn test_split_findings_by_scope_accepts_short_artifact_path() {
-    // A finding with artifact_path "skill.md" should match primary path
-    // "/project/skill.md" because primary ends with the artifact path.
     let primary_path = std::path::Path::new("/project/skill.md");
     let finding = Finding::builder("RULE", ThreatCategory::Generic)
         .artifact(ArtifactKind::SkillDocument, Some("skill.md".to_string()))
@@ -47,6 +52,10 @@ fn test_split_findings_by_scope_accepts_short_artifact_path() {
     assert!(supporting.is_empty());
 }
 
+/// Contract: `Severity` orders strictly from `Low` to `Critical`.
+/// Pinned because risk-score aggregation and dedup tie-breakers all
+/// depend on this monotonic ordering — flipping one variant would
+/// silently invert escalation logic.
 #[test]
 fn test_severity_ordering() {
     assert!(Severity::Low < Severity::Medium);
@@ -54,6 +63,10 @@ fn test_severity_ordering() {
     assert!(Severity::High < Severity::Critical);
 }
 
+/// Contract: each `Severity` resolves to its corresponding named
+/// weight constant. Locks the mapping so a future tweak to one
+/// constant doesn't desynchronise scoring weights from the variant
+/// they're meant to govern.
 #[test]
 fn test_severity_weights() {
     assert_eq!(Severity::Low.weight(), SEVERITY_WEIGHT_LOW);
@@ -62,6 +75,10 @@ fn test_severity_weights() {
     assert_eq!(Severity::Critical.weight(), SEVERITY_WEIGHT_CRITICAL);
 }
 
+/// Contract: `Finding::weighted_score` blends severity weight and
+/// confidence into the documented numeric range. Pins the formula so
+/// downstream verdict thresholds (which compare against fixed
+/// numeric bands) keep working when severity weights are retuned.
 #[test]
 fn test_finding_weighted_score() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::RemoteExec)
@@ -74,6 +91,10 @@ fn test_finding_weighted_score() {
     assert!((finding.weighted_score() - 56.6).abs() < 0.2);
 }
 
+/// Contract: `FindingSummary::from_findings` aggregates total counts,
+/// severity histogram, recommended action, and a non-empty score
+/// breakdown. Anchors the multi-finding aggregation that callers
+/// compare against verdict thresholds.
 #[test]
 fn test_finding_summary() {
     let findings = vec![
@@ -101,6 +122,10 @@ fn test_finding_summary() {
     assert!(!summary.score_breakdown.is_empty());
 }
 
+/// Contract: `Finding::builder` produces a sensible default finding
+/// when no optional fields are set. Pins each defaulted field so a
+/// future change to the default (e.g. lowering the seed confidence)
+/// is caught here instead of skewing the entire corpus baseline.
 #[test]
 fn test_finding_builder_defaults() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::Generic).build();
@@ -120,6 +145,10 @@ fn test_finding_builder_defaults() {
     assert!(finding.line_number.is_none());
 }
 
+/// Contract: `.severity(Critical)` paired with an explicit line
+/// number flows into `recommended_action = Block`. Locks the
+/// severity-to-action escalation rule that drives the SARIF output
+/// and CI gating.
 #[test]
 fn test_finding_builder_with_line() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::RemoteExec)
@@ -131,6 +160,11 @@ fn test_finding_builder_with_line() {
     assert_eq!(finding.recommended_action, RecommendedAction::Block);
 }
 
+/// Contract: setting `evidence_kind`, `artifact_kind`, and
+/// `artifact_path` on the builder propagates verbatim to the built
+/// finding AND triggers the `OperationalContext::Install` heuristic
+/// when the path lives under `scripts/`. Pins the path-derivation
+/// rule that powers operational-context tagging downstream.
 #[test]
 fn test_finding_builder_with_evidence_and_artifact() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
@@ -150,6 +184,10 @@ fn test_finding_builder_with_evidence_and_artifact() {
         .contains(&OperationalContext::Install));
 }
 
+/// Contract: an explicit per-finding `RecommendedAction::Block`
+/// overrides the otherwise-low risk profile (Low severity + 0.1
+/// confidence) when it bubbles up to the package summary. Prevents a
+/// future scoring tweak from silently masking a hand-marked block.
 #[test]
 fn test_summary_respects_highest_recommended_action() {
     let findings = vec![Finding::builder("R1", ThreatCategory::SupplyChain)
@@ -165,6 +203,13 @@ fn test_summary_respects_highest_recommended_action() {
     assert_eq!(summary.recommended_action, RecommendedAction::Block);
 }
 
+/// Contract: when artifact-graph capabilities cross the
+/// privileged-runtime + host-filesystem-access combo, the package
+/// summary escalates to `Block` and surfaces a
+/// `capability_combo:privileged_host_filesystem` factor in the
+/// score breakdown — even when the underlying findings are weak.
+/// Pins the cross-artifact escalation contract that the verdict
+/// pipeline relies on.
 #[test]
 fn test_summary_escalates_for_high_risk_capability_combo() {
     let findings = vec![Finding::builder("R1", ThreatCategory::Generic)
@@ -200,6 +245,11 @@ fn test_summary_escalates_for_high_risk_capability_combo() {
         .any(|factor| factor.factor == "capability_combo:privileged_host_filesystem"));
 }
 
+/// Contract: when two findings share a dedup key, the merge keeps
+/// the strongest severity, max confidence, longer reason text, and
+/// the explicit remediation/line — yielding one canonical entry per
+/// match site. Anchors the dedup happy path; the more elaborate
+/// strength-winner rules below pin the corner cases.
 #[test]
 fn test_deduplicate_findings_keeps_strongest_variant() {
     let duplicate_a = Finding::builder("RULE_DUP", ThreatCategory::SupplyChain)
@@ -235,6 +285,11 @@ fn test_deduplicate_findings_keeps_strongest_variant() {
     );
 }
 
+/// Contract: each Phase-2 threat category derives a deterministic
+/// set of `OperationalContext` tags from its `evidence_kind`. Pins
+/// the category→context mapping so SARIF output and policy filters
+/// (which group findings by operational context) keep classifying
+/// the same kinds of threats consistently.
 #[test]
 fn test_operational_contexts_capture_phase2_categories() {
     let prompt_tampering =
@@ -265,6 +320,10 @@ fn test_operational_contexts_capture_phase2_categories() {
         .contains(&OperationalContext::ExternalComms));
 }
 
+/// Contract: at equal raw confidence, a `Behavior` finding's
+/// calibrated confidence beats an `Intent` finding's. Pins the
+/// asymmetry so prompt-injection (Intent) doesn't silently
+/// out-rank concrete remote-exec evidence (Behavior).
 #[test]
 fn test_confidence_calibration_prefers_behavior_over_intent() {
     let behavior = Finding::builder("BEHAVIOR", ThreatCategory::RemoteExec)
@@ -281,6 +340,11 @@ fn test_confidence_calibration_prefers_behavior_over_intent() {
     assert!(intent.confidence_rationale.contains("evidence=intent"));
 }
 
+/// Contract: prompt-override + remote-exec is a compound signal
+/// that escalates a package to `Verdict::Malicious` even when each
+/// finding individually is `RequireApproval`. Pins the rationale
+/// text so downstream consumers can rely on the canonical phrasing
+/// in audits.
 #[test]
 fn test_compound_verdict_escalates_prompt_override_plus_exec() {
     let findings = vec![
@@ -317,6 +381,10 @@ fn test_compound_verdict_escalates_prompt_override_plus_exec() {
         .contains("prompt override is paired with execution")));
 }
 
+/// Contract: package.json `postinstall` hook + remote-fetch in a
+/// supporting script escalates to `Malicious`. Captures the
+/// supply-chain compound that drives most real-world npm
+/// post-install attacks; pins the rationale phrase consumers grep.
 #[test]
 fn test_compound_verdict_escalates_remote_fetch_plus_install_hook() {
     let findings = vec![
@@ -353,6 +421,9 @@ fn test_compound_verdict_escalates_remote_fetch_plus_install_hook() {
         .contains("install hook is paired with remote fetch")));
 }
 
+/// Contract: broad declared permissions + autonomy-escalation
+/// signal escalates to `Malicious`. Mirrors the "permission +
+/// approval-bypass" attack pattern from the regression corpus.
 #[test]
 fn test_compound_verdict_escalates_broad_permissions_plus_autonomy() {
     let findings = vec![
@@ -389,6 +460,11 @@ fn test_compound_verdict_escalates_broad_permissions_plus_autonomy() {
         .contains("broad permissions are paired with autonomous execution semantics")));
 }
 
+/// Contract: an OAuth-scope declaration paired with
+/// approval-bypass wording (without a concrete high-risk action)
+/// stays `Suspicious`, NOT `Malicious`. Negative-direction pin so
+/// the broad-permissions+autonomy escalation above can't widen to
+/// catch benign declared-permission-plus-prose patterns.
 #[test]
 fn test_oauth_without_high_risk_autonomy_does_not_escalate_to_malicious() {
     let findings = vec![
@@ -423,6 +499,10 @@ fn test_oauth_without_high_risk_autonomy_does_not_escalate_to_malicious() {
     assert_eq!(verdict.verdict, Verdict::Suspicious);
 }
 
+/// Contract: an MCP server config that declares a remote endpoint
+/// AND advertises a stdio/exec surface escalates to `Malicious`.
+/// Closes the MCP-specific compound that combines two
+/// individually-`RequireApproval` signals.
 #[test]
 fn test_compound_verdict_escalates_mcp_remote_endpoint_plus_exec_surface() {
     let findings = vec![
@@ -453,6 +533,11 @@ fn test_compound_verdict_escalates_mcp_remote_endpoint_plus_exec_surface() {
         .contains("MCP remote endpoint is paired with command or stdio")));
 }
 
+/// Contract: a single low-severity Log-action finding on a
+/// package-root artifact downgrades the package to `Benign`.
+/// Pins the calibration safety net that prevents an isolated
+/// hygiene signal (e.g. "MCP transport declared") from inflating
+/// the verdict on otherwise-clean packages.
 #[test]
 fn test_isolated_weak_package_root_signal_downgrades_to_benign() {
     let findings =
@@ -475,6 +560,11 @@ fn test_isolated_weak_package_root_signal_downgrades_to_benign() {
     assert_eq!(verdict.verdict, Verdict::Benign);
 }
 
+/// Contract: hygiene-only signals on an agent entrypoint
+/// (declared network access + a permission mismatch) keep the
+/// verdict `Benign` while flagging `PackageHealth::NeedsReview`.
+/// Pins the contradictory-state contract: Benign + Elevated must
+/// surface as NeedsReview, never as silent agreement.
 #[test]
 fn test_hygiene_only_agent_entrypoint_signal_stays_benign() {
     let findings = vec![
@@ -507,10 +597,12 @@ fn test_hygiene_only_agent_entrypoint_signal_stays_benign() {
     assert_eq!(verdict.package_health, PackageHealth::NeedsReview);
 }
 
+/// Contract: hygiene-only findings with `RequireApproval` action
+/// stay `Benign + NeedsReview`; only `Block`-action hygiene
+/// findings escalate to `Suspicious`. Pins the asymmetry between
+/// the two action levels so a future tweak doesn't conflate them.
 #[test]
 fn test_severe_hygiene_only_produces_needs_review() {
-    // Hygiene-only findings with RequireApproval should NOT escalate to
-    // Suspicious — only Block-level hygiene findings trigger that path.
     let findings: Vec<Finding> = (0..4)
         .map(|i| {
             Finding::builder(format!("HYGIENE_RULE_{}", i), ThreatCategory::ScopeCreep)
@@ -556,11 +648,13 @@ fn test_severe_hygiene_only_produces_needs_review() {
     assert_eq!(verdict_b.package_health, PackageHealth::NeedsReview);
 }
 
+/// Contract: an actionable Hygiene group (non-Log action)
+/// disables the isolated-weak-package-root downgrade. With two
+/// actionable groups present, `isolated_weak_package_root_signal`
+/// must evaluate to `false` and the verdict cannot collapse to
+/// `Benign`.
 #[test]
 fn test_hygiene_with_non_log_action_prevents_isolated_weak_downgrade() {
-    // A single weak PackageRoot ReviewSignal would normally downgrade to Benign,
-    // but adding a Hygiene group with RequireApproval should prevent the downgrade
-    // because both groups are "actionable" (non-Log), so isolated_weak is false.
     let findings = vec![
         Finding::builder("WEAK_PKG_SIGNAL", ThreatCategory::Generic)
             .severity(Severity::Medium)
@@ -920,9 +1014,14 @@ fn deduplicate_findings_prefers_longer_reason_on_total_tuple_tie() {
     );
 }
 
+/// Contract: empty findings produce `Verdict::Benign` AND
+/// `PackageHealth::Healthy`, with empty supporting collections
+/// (root cause groups, calibration notes, declared permissions,
+/// effective capabilities) and a `Low` blast radius. Closes
+/// issue #8 — empty input must NOT collapse to `NeedsReview` on
+/// the contradictory-state path.
 #[test]
 fn test_empty_findings_produce_benign_healthy_verdict() {
-    // Issue #8: Empty input should produce Benign verdict and Healthy package status
     let findings: Vec<Finding> = vec![];
 
     let primary = FindingSummary::from_findings(&[]);

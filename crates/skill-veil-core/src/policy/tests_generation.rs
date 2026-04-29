@@ -4,6 +4,10 @@ use crate::artifact_graph::{
 };
 use crate::findings::{Finding, MatchTarget, ThreatCategory};
 
+/// Contract: `PolicyGenerator::generate_shield_md` MUST embed both the
+/// SHIELD policy header (so reviewers can recognize the document type)
+/// and a per-finding policy id derived from `<rule_id>-<skill_name>`,
+/// because downstream SHIELD tooling keys gating decisions off that id.
 #[test]
 fn test_generate_shield_md() {
     let findings = vec![Finding::builder("TEST_RULE", ThreatCategory::RemoteExec)
@@ -23,6 +27,11 @@ fn test_generate_shield_md() {
     assert!(shield.to_lowercase().contains("test_rule"));
 }
 
+/// Contract: `PolicyGenerator::generate_json` MUST emit a `JsonReport`
+/// whose `skill_name`, `findings`, and `context_policies` reflect the
+/// scanner inputs verbatim — no findings dropped, no synthetic skill
+/// renaming, and the default `OperationalContext::Install` policy
+/// always materialised so callers can rely on its presence downstream.
 #[test]
 fn test_generate_json() {
     let findings = vec![Finding::builder("TEST_RULE", ThreatCategory::RemoteExec)
@@ -45,6 +54,11 @@ fn test_generate_json() {
         .any(|policy| policy.context == OperationalContext::Install));
 }
 
+/// Contract: `PolicyGenerator::generate_sarif` MUST always emit
+/// version "2.1.0" and exactly one `Run`, plus a synthetic
+/// `SKILL_VEIL_ACTION_TRIGGER` result alongside the real findings so
+/// CI consumers can distinguish "scanner ran successfully" from "no
+/// findings produced" without inspecting an empty array.
 #[test]
 fn test_generate_sarif() {
     let findings = vec![Finding::builder("TEST_RULE", ThreatCategory::RemoteExec)
@@ -64,6 +78,11 @@ fn test_generate_sarif() {
     assert_eq!(sarif.runs[0].results.len(), 2);
 }
 
+/// Contract: when several findings share the same `rule_id` but carry
+/// different `RecommendedAction`s, the generated policy MUST surface
+/// the STRONGEST action (Block > RequireApproval > Log). A weaker
+/// action winning would silently downgrade a `RequireApproval` signal
+/// just because a co-occurring `Log` finding was also produced.
 #[test]
 fn test_generate_policies_uses_strongest_recommended_action() {
     let findings = vec![
@@ -90,6 +109,13 @@ fn test_generate_policies_uses_strongest_recommended_action() {
     assert_eq!(json.policies[0].action, RecommendedAction::RequireApproval);
 }
 
+/// Contract: graph-derived capability combos
+/// (`PrivilegedRuntime` + `HostFilesystemAccess`) MUST escalate the
+/// top-level `summary.recommended_action` to `Block` and add a
+/// `capability_combo:privileged_host_filesystem` factor to the score
+/// breakdown, while the per-finding `policies` keep their own action
+/// level (the global summary escalation is for CI gating, not for
+/// rewriting the meaning of individual findings).
 #[test]
 fn test_generate_json_escalates_summary_from_graph_capabilities() {
     let findings = vec![Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
@@ -133,6 +159,12 @@ fn test_generate_json_escalates_summary_from_graph_capabilities() {
         .all(|policy| policy.action == RecommendedAction::Log));
 }
 
+/// Contract: when a `PolicyProfile` is attached to the generator, the
+/// generated JSON MUST include a `context_policies` entry for every
+/// `OperationalContext` covered by that profile, with the action the
+/// profile dictates (e.g. `Team` profile → `Block` for `Secrets`).
+/// This is what surfaces "this team always blocks secrets" without
+/// each scan needing its own override.
 #[test]
 fn test_generate_json_includes_context_policies_from_profile() {
     let findings = vec![
@@ -157,6 +189,12 @@ fn test_generate_json_includes_context_policies_from_profile() {
     assert_eq!(json.policy_audit.effective_fail_on, None);
 }
 
+/// Contract: when graph capabilities trigger a `Block`-level escalation
+/// the SARIF output MUST contain a synthetic
+/// `SKILL_VEIL_ACTION_TRIGGER` result so SARIF consumers (GitHub code
+/// scanning, IDE integrations) see a concrete signal anchored to the
+/// escalation, not just a metadata-level severity bump that a human
+/// could miss when scrolling the results panel.
 #[test]
 fn test_generate_sarif_includes_action_trigger_results() {
     let findings = vec![Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)

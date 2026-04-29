@@ -9,6 +9,9 @@ use crate::findings::{
 };
 use chrono::Utc;
 
+/// Contract: `apply_baseline` MUST drop every finding whose fingerprint
+/// matches a `BaselineEntry`, leaving callers with only findings the
+/// policy author has not yet acknowledged.
 #[test]
 fn test_apply_baseline_filters_known_findings() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
@@ -30,6 +33,9 @@ fn test_apply_baseline_filters_known_findings() {
     assert!(filtered.is_empty());
 }
 
+/// Contract: `apply_waivers` MUST drop a finding whose `rule_id` and
+/// `artifact_path` both match a `WaiverEntry`; the waiver is the
+/// caller's explicit acceptance of that signal at that location.
 #[test]
 fn test_apply_waivers_filters_matching_findings() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
@@ -56,6 +62,10 @@ fn test_apply_waivers_filters_matching_findings() {
     assert!(filtered.is_empty());
 }
 
+/// Contract: `apply_waivers` MUST also accept `OperationalContext` as a
+/// matching dimension — a waiver can wave findings of a given rule_id
+/// across all artifact paths whenever they fire under the declared
+/// context (e.g., `Secrets`).
 #[test]
 fn test_apply_waivers_filters_matching_context() {
     let finding = Finding::builder("TEST_SECRET", ThreatCategory::CredentialExposure)
@@ -78,6 +88,11 @@ fn test_apply_waivers_filters_matching_context() {
     assert!(filtered.is_empty());
 }
 
+/// Contract: when multiple `PolicyOverride`s match the same finding,
+/// `apply_policy_overrides` MUST pick the most specific one
+/// (rule_id + artifact_path + context wins over rule_id alone). This
+/// stops a broad org-wide override from silently masking a precise,
+/// per-artifact decision.
 #[test]
 fn test_apply_policy_overrides_uses_most_specific_match() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
@@ -119,6 +134,10 @@ fn test_apply_policy_overrides_uses_most_specific_match() {
     assert_eq!(overridden[0].recommended_action, RecommendedAction::Log);
 }
 
+/// Contract: `apply_policy_overrides_with_audit` MUST emit an
+/// `OverrideAuditEntry` for every override it applies, carrying the
+/// override's `id` so reviewers can trace why a given finding was
+/// downgraded back to the policy file that authorized it.
 #[test]
 fn test_apply_policy_overrides_with_audit_records_override() {
     let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
@@ -151,6 +170,10 @@ fn test_apply_policy_overrides_with_audit_records_override() {
     assert_eq!(audit[0].override_id.as_deref(), Some("override-1"));
 }
 
+/// Contract: a `ConfiguredProfile` declared in `PolicyFile.profiles`
+/// MUST be honored by `resolve_fail_on` and `resolve_context_action`,
+/// so org-level guardrails (per-team `fail_on`, per-context Block)
+/// take effect without each finding needing its own override.
 #[test]
 fn test_policy_file_can_override_profile_context_action() {
     let policy = PolicyFile {
@@ -178,6 +201,11 @@ fn test_policy_file_can_override_profile_context_action() {
     );
 }
 
+/// Contract (negative): `validate_policy` MUST reject a `PolicyOverride`
+/// that defines no selectors at all (rule_id, artifact_path, context all
+/// `None`). A selectorless override would silently match every finding
+/// and effectively disable the rule engine; failing fast at policy load
+/// is the only safe outcome.
 #[test]
 fn test_validate_policy_rejects_selectorless_override() {
     let policy = PolicyFile {
@@ -195,6 +223,30 @@ fn test_validate_policy_rejects_selectorless_override() {
     };
 
     assert!(validate_policy(&policy).is_err());
+}
+
+/// Contract (positive): `validate_policy` MUST accept an override that
+/// declares at least one selector (here `rule_id`). Pairs with
+/// [`test_validate_policy_rejects_selectorless_override`] so both
+/// directions of the selector-presence rule are pinned, per the
+/// CLAUDE.md mandate to cover positive AND negative cases.
+#[test]
+fn test_validate_policy_accepts_override_with_rule_id_selector() {
+    let policy = PolicyFile {
+        schema_version: POLICY_SCHEMA_VERSION.to_string(),
+        profiles: PolicyProfiles::default(),
+        overrides: vec![PolicyOverride {
+            id: None,
+            rule_id: Some("TEST_RULE".to_string()),
+            artifact_path: None,
+            context: None,
+            action: RecommendedAction::Log,
+            reason: "valid override".to_string(),
+            expires_at: None,
+        }],
+    };
+
+    assert!(validate_policy(&policy).is_ok());
 }
 
 fn make_report(skill: &str, findings: Vec<Finding>, verdict: Verdict) -> JsonReport {
@@ -237,6 +289,10 @@ fn make_report(skill: &str, findings: Vec<Finding>, verdict: Verdict) -> JsonRep
     }
 }
 
+/// Contract: `diff_reports` MUST classify findings present only in the
+/// current scan as `new_findings` and findings present only in the
+/// previous scan as `resolved_findings`, so reviewers can see what
+/// changed across runs without re-deriving fingerprints by hand.
 #[test]
 fn test_diff_reports_detects_new_and_resolved_findings() {
     let previous = make_report(
@@ -266,6 +322,11 @@ fn test_diff_reports_detects_new_and_resolved_findings() {
     assert_eq!(diff.unchanged_findings, 0);
 }
 
+/// Contract: when a baseline and waiver file are passed to
+/// `diff_reports_with_policy_state`, findings matching them MUST be
+/// surfaced as `baselined_findings` and `waived_findings` respectively
+/// rather than masquerading as `new_findings` — otherwise CI would
+/// fail-loud on signals the policy already accepted.
 #[test]
 fn test_diff_reports_classifies_waived_and_baselined_findings() {
     let current_finding = Finding::builder("CUR_RULE", ThreatCategory::CredentialExposure)
@@ -316,6 +377,12 @@ fn test_diff_reports_classifies_waived_and_baselined_findings() {
     assert_eq!(diff.baselined_findings.len(), 1);
 }
 
+/// Contract: a finding whose `match_value` or `reason` text drifts
+/// between scans but whose rule_id + artifact_path still match an
+/// active waiver MUST be classified ONLY as `waived_findings`, never
+/// double-counted as `resolved_findings`. The earlier behaviour
+/// double-counted because fingerprints differed when the text drifted,
+/// inflating the resolved bucket on every minor wording change.
 #[test]
 fn test_diff_reports_waived_finding_with_changed_text_is_not_also_resolved() {
     let previous_finding = Finding::builder("RULE_A", ThreatCategory::CredentialExposure)
@@ -369,6 +436,12 @@ fn test_diff_reports_waived_finding_with_changed_text_is_not_also_resolved() {
     );
 }
 
+/// Contract: when an absolute artifact path on the finding shares a
+/// ≥3-component suffix with the waiver's relative `artifact_path`, the
+/// fuzzy path match MUST count as a hit so the finding is classified
+/// as `waived_findings`, not `resolved_findings`. Earlier exact-equality
+/// comparison silently treated waived findings as resolved whenever the
+/// scan ran from a different working directory.
 #[test]
 fn test_diff_reports_waived_finding_with_fuzzy_path_is_not_resolved() {
     let previous_finding = Finding::builder("RULE_B", ThreatCategory::CredentialExposure)
@@ -429,6 +502,12 @@ fn test_diff_reports_waived_finding_with_fuzzy_path_is_not_resolved() {
     );
 }
 
+/// Contract: `PolicyGenerator::generate_sarif` MUST emit a document that
+/// satisfies the SARIF 2.1.0 required-field set ($schema, version, runs
+/// with a non-empty array of {tool.driver.name, tool.driver.rules,
+/// results}, and per-result {ruleId, level, message.text, locations}).
+/// Downstream tooling (GitHub code-scanning, IDEs) treats missing fields
+/// as a hard parse error, so this contract pins SARIF compatibility.
 #[test]
 fn sarif_output_conforms_to_2_1_0_schema() {
     let findings = vec![

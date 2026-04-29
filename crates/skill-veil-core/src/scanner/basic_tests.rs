@@ -159,6 +159,58 @@ impl FileSystemProvider for ExistenceRecordingFs {
     }
 }
 
+/// In-memory `FileSystemProvider` that records every `is_file` and
+/// `is_dir` call. Lets us prove that scanner entrypoints route
+/// file-type discrimination through the port instead of calling
+/// `Path::is_file()` / `Path::is_dir()` directly. The recorder also
+/// fakes `exists` so the entrypoints reach the file-type branch
+/// instead of short-circuiting on the missing-path guard.
+struct FileTypeRecordingFs {
+    is_file_calls: Arc<AtomicUsize>,
+    is_dir_calls: Arc<AtomicUsize>,
+    /// Whether to report the probed path as a file (drives the
+    /// `scan` entrypoint into its `is_file` branch in Auto mode).
+    answer_is_file: bool,
+}
+
+impl FileTypeRecordingFs {
+    fn new(answer_is_file: bool) -> Self {
+        Self {
+            is_file_calls: Arc::new(AtomicUsize::new(0)),
+            is_dir_calls: Arc::new(AtomicUsize::new(0)),
+            answer_is_file,
+        }
+    }
+}
+
+impl FileSystemProvider for FileTypeRecordingFs {
+    fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
+        Err(FileSystemError::PathNotFound(path.to_path_buf()))
+    }
+    fn list_files(
+        &self,
+        _path: &Path,
+        _pattern: &str,
+        _recursive: bool,
+    ) -> Result<Vec<PathBuf>, FileSystemError> {
+        Ok(Vec::new())
+    }
+    fn exists(&self, _path: &Path) -> bool {
+        true
+    }
+    fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
+        Err(FileSystemError::PathNotFound(path.to_path_buf()))
+    }
+    fn is_file(&self, _path: &Path) -> bool {
+        self.is_file_calls.fetch_add(1, Ordering::SeqCst);
+        self.answer_is_file
+    }
+    fn is_dir(&self, _path: &Path) -> bool {
+        self.is_dir_calls.fetch_add(1, Ordering::SeqCst);
+        !self.answer_is_file
+    }
+}
+
 /// Contract: `Scanner::scan_file`, `scan_skill_file`, and `scan_package`
 /// route existence checks through the injected `FileSystemProvider`
 /// port. A direct `Path::exists` call would short-circuit before
@@ -206,6 +258,97 @@ fn scanner_entrypoints_route_existence_through_port() {
                 .any(|p| p == &probe),
             "{entrypoint} must consult the port with the user-supplied path"
         );
+    }
+}
+
+/// Contract: `Scanner::scan` (Auto mode) and `Scanner::scan_package`
+/// MUST route file-type discrimination through the
+/// `FileSystemProvider` port, never through `Path::is_file()` or
+/// `Path::is_dir()` directly. A direct `std::fs` short-circuit would
+/// bypass test mocks and break the hexagonal contract documented in
+/// `CLAUDE.md`. Recorder counts MUST observe at least one call per
+/// entrypoint when the path looks like a file or directory.
+#[test]
+fn scan_routes_file_type_check_through_port_in_auto_mode() {
+    let probe = PathBuf::from("/virtual/looks-like-a-file.md");
+    let fs = FileTypeRecordingFs::new(true);
+    let is_file_calls = Arc::clone(&fs.is_file_calls);
+
+    let scanner =
+        Scanner::with_custom_adapters(ScanOptions::default(), fs, PulldownMarkdownParser::new())
+            .unwrap();
+
+    // Auto mode: routes through fs.is_file then fs.is_dir. The downstream
+    // scan returns an error because the mock can't read bytes — that's
+    // fine for our purposes; we only need to prove the port is consulted.
+    let _ = scanner.scan(&probe);
+
+    assert!(
+        is_file_calls.load(Ordering::SeqCst) >= 1,
+        "Scanner::scan must call FileSystemProvider::is_file at least once in Auto mode",
+    );
+}
+
+#[test]
+fn scan_package_routes_file_type_check_through_port() {
+    let probe = PathBuf::from("/virtual/single-file.md");
+    let fs = FileTypeRecordingFs::new(true);
+    let is_file_calls = Arc::clone(&fs.is_file_calls);
+
+    let scanner =
+        Scanner::with_custom_adapters(ScanOptions::default(), fs, PulldownMarkdownParser::new())
+            .unwrap();
+
+    let _ = scanner.scan_package(&probe);
+
+    assert!(
+        is_file_calls.load(Ordering::SeqCst) >= 1,
+        "Scanner::scan_package must call FileSystemProvider::is_file at least once \
+         to distinguish single-file from directory inputs",
+    );
+}
+
+/// Architectural contract (source-level): `scanner/mod.rs` MUST NOT
+/// call `Path::is_file()` or `Path::is_dir()` outside the
+/// `FileSystemProvider` port. Mirrors the source-inspection style of
+/// the sibling test
+/// `file_discovery_does_not_call_std_fs_metadata_directly` so a future
+/// refactor that re-introduces direct `std::fs` calls is caught at
+/// compile-test time, not by accidental coverage gaps in the behavior
+/// tests above.
+#[test]
+fn scanner_module_does_not_call_path_is_file_or_is_dir_directly() {
+    let body = include_str!("mod.rs");
+    let production = body.split("#[cfg(test)]").next().unwrap_or(body);
+    for (idx, line) in production.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // `fs.is_file(path)` is the port-routed form and is allowed; only
+        // bare `path.is_file()` / `.is_file()` against an `&Path` value is
+        // forbidden. The cheap discriminator is the absence of the `fs.`
+        // qualifier in front of the call.
+        if trimmed.contains(".is_file(")
+            && !trimmed.contains("fs.is_file(")
+            && !trimmed.contains("fs_provider().is_file(")
+            && !trimmed.contains("fn is_file(")
+        {
+            panic!(
+                "scanner/mod.rs line {} calls .is_file() outside the FileSystemProvider port: {line}",
+                idx + 1,
+            );
+        }
+        if trimmed.contains(".is_dir(")
+            && !trimmed.contains("fs.is_dir(")
+            && !trimmed.contains("fs_provider().is_dir(")
+            && !trimmed.contains("fn is_dir(")
+        {
+            panic!(
+                "scanner/mod.rs line {} calls .is_dir() outside the FileSystemProvider port: {line}",
+                idx + 1,
+            );
+        }
     }
 }
 

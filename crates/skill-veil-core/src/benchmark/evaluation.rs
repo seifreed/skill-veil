@@ -1,11 +1,12 @@
 use super::loader::load_manifest;
 use super::types::{
     AttackFamilyMetrics, BenchmarkError, CalibrationBucket, CalibrationSummary, CorpusCoverage,
-    CorpusEvaluation, CoverageBucket, DeduplicationMetrics, RegressionMetrics, SampleEvaluation,
-    SampleLabel, ThresholdRecommendation,
+    CorpusEvaluation, CoverageBucket, DeduplicationMetrics, LabeledSample, RegressionMetrics,
+    SampleEvaluation, SampleLabel, ThresholdRecommendation,
 };
 use crate::ports::FileSystemProvider;
-use crate::{EvidenceKind, Finding, Scanner, ThreatCategory, Verdict};
+use crate::scanner::PackageScanResult;
+use crate::{EvidenceKind, Finding, RecommendedAction, Scanner, ThreatCategory, Verdict};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -58,6 +59,41 @@ const OBJ_LABEL_ERROR_PENALTY: f32 = 0.01;
 /// recall for FPR gains.
 const OBJ_RECALL_TOLERANCE: f32 = 0.02;
 
+/// Per-sample aggregation extracted from a `PackageScanResult`. Keeps
+/// the inner loop of `evaluate_corpus` focused on routing data into
+/// the right bucket instead of computing it in line.
+struct SampleAggregate {
+    recommended_action: RecommendedAction,
+    package_verdict: Verdict,
+    risk_score: u32,
+    finding_count: usize,
+    primary_finding_count: usize,
+    supporting_finding_count: usize,
+    duplicates_removed: usize,
+}
+
+/// Coverage tally used by `evaluate_corpus` to build the final
+/// `CorpusCoverage`. Wraps three logically-related maps so they can be
+/// updated through a single helper without leaking the per-bucket
+/// vocabulary into the orchestration loop.
+#[derive(Default)]
+struct CoverageBuckets {
+    by_label: BTreeMap<String, u32>,
+    by_focus_category: BTreeMap<String, u32>,
+    by_attack_family: BTreeMap<String, u32>,
+}
+
+impl CoverageBuckets {
+    fn finalize(self, total_samples: u32) -> CorpusCoverage {
+        CorpusCoverage {
+            total_samples,
+            by_label: finalize_coverage_buckets(self.by_label),
+            by_focus_category: finalize_coverage_buckets(self.by_focus_category),
+            by_attack_family: finalize_coverage_buckets(self.by_attack_family),
+        }
+    }
+}
+
 pub fn evaluate_corpus<F: FileSystemProvider>(
     fs: &F,
     scanner: &Scanner,
@@ -71,136 +107,45 @@ pub fn evaluate_corpus<F: FileSystemProvider>(
     let mut samples = Vec::new();
     let mut all_findings = Vec::<(SampleLabel, Finding)>::new();
     let mut deduplication = DeduplicationMetrics::default();
-    let mut coverage_by_label = BTreeMap::<String, u32>::new();
-    let mut coverage_by_focus_category = BTreeMap::<String, u32>::new();
-    let mut coverage_by_attack_family = BTreeMap::<String, u32>::new();
+    let mut coverage = CoverageBuckets::default();
 
     for sample in manifest.samples {
         let sample_path = root.join(&sample.path);
-        let pkg_result = if sample_path.is_dir() {
-            scanner.scan_package(&sample_path)
-        } else {
-            scanner
-                .scan_file(&sample_path)
-                .map(|result| crate::scanner::PackageScanResult {
-                    results: vec![result],
-                    errors: Vec::new(),
-                })
-        }
-        .map_err(|error| BenchmarkError::SampleScan {
-            id: sample.id.clone(),
-            path: sample_path.clone(),
-            message: error.to_string(),
-        })?;
-
-        if !pkg_result.errors.is_empty() {
-            let message = pkg_result
-                .errors
-                .iter()
-                .map(|entry| format!("{}: {}", entry.path.display(), entry.error))
-                .collect::<Vec<_>>()
-                .join("; ");
-            return Err(BenchmarkError::SampleScan {
-                id: sample.id.clone(),
-                path: sample_path.clone(),
-                message: format!("partial scan failure: {message}"),
-            });
-        }
-
+        let pkg_result = scan_corpus_sample(fs, scanner, &sample, &sample_path)?;
         let results = &pkg_result.results;
-        if results.is_empty() {
-            return Err(BenchmarkError::SampleScan {
-                id: sample.id.clone(),
-                path: sample_path.clone(),
-                message: "sample produced no scan results".to_string(),
-            });
-        }
-        let recommended_action = results
-            .iter()
-            .fold(crate::RecommendedAction::Log, |current, result| {
-                current.max(result.summary.recommended_action)
-            });
-        let package_verdict = results.iter().fold(Verdict::Benign, |current, result| {
-            match (current, result.verdict) {
-                (Verdict::Malicious, _) | (_, Verdict::Malicious) => Verdict::Malicious,
-                (Verdict::Suspicious, _) | (_, Verdict::Suspicious) => Verdict::Suspicious,
-                _ => Verdict::Benign,
-            }
-        });
-        let risk_score = results
-            .iter()
-            .map(|result| result.summary.risk_score)
-            .max()
-            .unwrap_or(0);
-        let finding_count = results.iter().map(|result| result.findings.len()).sum();
-        let primary_finding_count = results
-            .iter()
-            .map(|result| result.primary_findings.len())
-            .sum();
-        let supporting_finding_count = results
-            .iter()
-            .map(|result| result.supporting_findings.len())
-            .sum();
-        let duplicates_removed = results
-            .iter()
-            .map(|result| result.deduplication_summary.duplicates_removed)
-            .sum();
-        let actual_label = classify_verdict(package_verdict);
+
+        let aggregate = aggregate_sample_metrics(results);
+        let actual_label = classify_verdict(aggregate.package_verdict);
         expected.push(sample.label);
         actual.push(actual_label);
-        for result in results {
-            deduplication.original_findings +=
-                result.deduplication_summary.original_findings as u32;
-            deduplication.unique_findings += result.deduplication_summary.unique_findings as u32;
-            deduplication.duplicates_removed +=
-                result.deduplication_summary.duplicates_removed as u32;
-            all_findings.extend(
-                result
-                    .findings
-                    .iter()
-                    .cloned()
-                    .map(|finding| (sample.label, finding)),
-            );
-        }
-        *coverage_by_label
-            .entry(sample.label.to_string())
-            .or_insert(0) += 1;
-        if let Some(family) = sample.attack_family.clone().or_else(|| {
-            sample
-                .focus_category
-                .map(|category| attack_family_for_category(category).to_string())
-        }) {
-            *coverage_by_attack_family.entry(family).or_insert(0) += 1;
-        }
-        if let Some(category) = sample.focus_category {
-            *coverage_by_focus_category
-                .entry(category.to_string())
-                .or_insert(0) += 1;
-        }
+
+        accumulate_deduplication_metrics(
+            &mut deduplication,
+            &mut all_findings,
+            results,
+            sample.label,
+        );
+        update_coverage_buckets(&mut coverage, &sample);
+
         samples.push(SampleEvaluation {
             id: sample.id,
             expected: sample.label,
             actual: actual_label,
-            verdict: package_verdict,
+            verdict: aggregate.package_verdict,
             focus_category: sample.focus_category,
             attack_family: sample.attack_family,
-            recommended_action,
-            risk_score,
-            finding_count,
-            primary_finding_count,
-            supporting_finding_count,
-            duplicates_removed,
+            recommended_action: aggregate.recommended_action,
+            risk_score: aggregate.risk_score,
+            finding_count: aggregate.finding_count,
+            primary_finding_count: aggregate.primary_finding_count,
+            supporting_finding_count: aggregate.supporting_finding_count,
+            duplicates_removed: aggregate.duplicates_removed,
             path: sample_path,
         });
     }
 
     let metrics = compute_metrics(&expected, &actual);
-    let coverage = CorpusCoverage {
-        total_samples: samples.len() as u32,
-        by_label: finalize_coverage_buckets(coverage_by_label),
-        by_focus_category: finalize_coverage_buckets(coverage_by_focus_category),
-        by_attack_family: finalize_coverage_buckets(coverage_by_attack_family),
-    };
+    let coverage = coverage.finalize(samples.len() as u32);
     let confidence_calibration = calibrate_confidence(&all_findings);
     let threshold_recommendation = recommend_thresholds(&samples);
     let family_metrics = build_family_metrics(&samples);
@@ -214,6 +159,155 @@ pub fn evaluate_corpus<F: FileSystemProvider>(
         family_metrics,
         samples,
     })
+}
+
+/// Run the scanner on one corpus sample and validate the result.
+///
+/// Routes the file-vs-directory discrimination through the
+/// `FileSystemProvider` port (pre-fix it called `Path::is_dir`
+/// directly, breaking the hexagonal contract that test mocks rely on).
+/// Surfaces an error when the scanner returns partial failures or when
+/// no scan results were produced — both states would otherwise be
+/// silently ignored downstream and skew the metrics.
+fn scan_corpus_sample<F: FileSystemProvider>(
+    fs: &F,
+    scanner: &Scanner,
+    sample: &LabeledSample,
+    sample_path: &Path,
+) -> Result<PackageScanResult, BenchmarkError> {
+    let pkg_result = if fs.is_dir(sample_path) {
+        scanner.scan_package(sample_path)
+    } else {
+        scanner
+            .scan_file(sample_path)
+            .map(|result| PackageScanResult {
+                results: vec![result],
+                errors: Vec::new(),
+            })
+    }
+    .map_err(|error| BenchmarkError::SampleScan {
+        id: sample.id.clone(),
+        path: sample_path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+
+    if !pkg_result.errors.is_empty() {
+        let message = pkg_result
+            .errors
+            .iter()
+            .map(|entry| format!("{}: {}", entry.path.display(), entry.error))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(BenchmarkError::SampleScan {
+            id: sample.id.clone(),
+            path: sample_path.to_path_buf(),
+            message: format!("partial scan failure: {message}"),
+        });
+    }
+
+    if pkg_result.results.is_empty() {
+        return Err(BenchmarkError::SampleScan {
+            id: sample.id.clone(),
+            path: sample_path.to_path_buf(),
+            message: "sample produced no scan results".to_string(),
+        });
+    }
+
+    Ok(pkg_result)
+}
+
+/// Fold per-result fields (verdict, action, risk score, finding
+/// counts) into a single [`SampleAggregate`]. The package-level
+/// verdict is the strongest among the per-result verdicts; the
+/// recommended action is the strongest as well.
+fn aggregate_sample_metrics(results: &[crate::scanner::ScanResult]) -> SampleAggregate {
+    let recommended_action = results
+        .iter()
+        .fold(RecommendedAction::Log, |current, result| {
+            current.max(result.summary.recommended_action)
+        });
+    let package_verdict = results.iter().fold(Verdict::Benign, |current, result| {
+        match (current, result.verdict) {
+            (Verdict::Malicious, _) | (_, Verdict::Malicious) => Verdict::Malicious,
+            (Verdict::Suspicious, _) | (_, Verdict::Suspicious) => Verdict::Suspicious,
+            _ => Verdict::Benign,
+        }
+    });
+    let risk_score = results
+        .iter()
+        .map(|result| result.summary.risk_score)
+        .max()
+        .unwrap_or(0);
+    let finding_count = results.iter().map(|result| result.findings.len()).sum();
+    let primary_finding_count = results
+        .iter()
+        .map(|result| result.primary_findings.len())
+        .sum();
+    let supporting_finding_count = results
+        .iter()
+        .map(|result| result.supporting_findings.len())
+        .sum();
+    let duplicates_removed = results
+        .iter()
+        .map(|result| result.deduplication_summary.duplicates_removed)
+        .sum();
+    SampleAggregate {
+        recommended_action,
+        package_verdict,
+        risk_score,
+        finding_count,
+        primary_finding_count,
+        supporting_finding_count,
+        duplicates_removed,
+    }
+}
+
+/// Accumulate per-result deduplication counters and append every
+/// finding to `all_findings` paired with the sample label so the
+/// confidence calibrator can cluster TP/FP per evidence/category.
+fn accumulate_deduplication_metrics(
+    deduplication: &mut DeduplicationMetrics,
+    all_findings: &mut Vec<(SampleLabel, Finding)>,
+    results: &[crate::scanner::ScanResult],
+    label: SampleLabel,
+) {
+    for result in results {
+        deduplication.original_findings += result.deduplication_summary.original_findings as u32;
+        deduplication.unique_findings += result.deduplication_summary.unique_findings as u32;
+        deduplication.duplicates_removed += result.deduplication_summary.duplicates_removed as u32;
+        all_findings.extend(
+            result
+                .findings
+                .iter()
+                .cloned()
+                .map(|finding| (label, finding)),
+        );
+    }
+}
+
+/// Update the three coverage buckets (label / attack family / focus
+/// category) for one sample. Attack family falls back to the focus
+/// category when the sample carries no explicit family — keeps the
+/// derived family histogram comparable across mixed-source corpora.
+fn update_coverage_buckets(coverage: &mut CoverageBuckets, sample: &LabeledSample) {
+    *coverage
+        .by_label
+        .entry(sample.label.to_string())
+        .or_insert(0) += 1;
+    let derived_family = sample.attack_family.clone().or_else(|| {
+        sample
+            .focus_category
+            .map(|category| attack_family_for_category(category).to_string())
+    });
+    if let Some(family) = derived_family {
+        *coverage.by_attack_family.entry(family).or_insert(0) += 1;
+    }
+    if let Some(category) = sample.focus_category {
+        *coverage
+            .by_focus_category
+            .entry(category.to_string())
+            .or_insert(0) += 1;
+    }
 }
 
 fn build_family_metrics(samples: &[SampleEvaluation]) -> Vec<AttackFamilyMetrics> {
@@ -813,5 +907,34 @@ mod tests {
         let result = calibrate_confidence_value(0.5, 10);
         assert!(result.is_finite(), "non-empty bucket must be finite");
         assert!((0.1..=0.99).contains(&result));
+    }
+
+    /// Architectural contract: `evaluate_corpus` and the helper it
+    /// delegates to (`scan_corpus_sample`) MUST route the
+    /// file-vs-directory discrimination through the
+    /// `FileSystemProvider` port. Pre-fix the orchestration loop
+    /// called `sample_path.is_dir()` directly, breaking the hexagonal
+    /// contract: a test mock could not influence whether the scanner
+    /// took the file or the package branch. Mirrors the source-level
+    /// contract test in `scanner/mod.rs`.
+    #[test]
+    fn evaluate_corpus_does_not_call_path_is_dir_directly() {
+        let body = include_str!("evaluation.rs");
+        let production = body.split("#[cfg(test)]").next().unwrap_or(body);
+        for (idx, line) in production.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if trimmed.contains(".is_dir(")
+                && !trimmed.contains("fs.is_dir(")
+                && !trimmed.contains("fs_provider().is_dir(")
+            {
+                panic!(
+                    "benchmark/evaluation.rs line {} calls .is_dir() outside the FileSystemProvider port: {line}",
+                    idx + 1,
+                );
+            }
+        }
     }
 }
