@@ -3,10 +3,10 @@
 pub(crate) mod dispatch;
 mod instructions;
 mod lockfiles;
-mod manifests;
+pub(crate) mod manifests;
 mod mcp;
 pub(crate) mod network;
-mod patterns;
+pub(crate) mod patterns;
 mod permissions;
 pub(crate) mod scripts;
 
@@ -117,7 +117,7 @@ impl ArtifactAnalysisService {
         }
     }
 
-    fn missing_lockfile_findings(
+    pub(crate) fn missing_lockfile_findings(
         &self,
         path: &Path,
         sibling_files: &[PathBuf],

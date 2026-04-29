@@ -12,5 +12,6 @@
 //! changes to one detection family do not force readers through
 //! unrelated logic.
 
+pub(crate) mod manifests;
 pub(crate) mod network;
 pub(crate) mod scripts;

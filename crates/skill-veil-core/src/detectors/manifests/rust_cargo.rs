@@ -21,7 +21,10 @@ pub(crate) fn analyze_cargo_toml(
 
     // Suppress unpinned dep findings when Cargo.lock exists, since the
     // lockfile pins exact versions. In Cargo, `^` is the default operator.
-    let has_lockfile = super::sibling_has_file(sibling_files, "Cargo.lock");
+    let has_lockfile = crate::services::artifact_analysis::manifests::sibling_has_file(
+        sibling_files,
+        "Cargo.lock",
+    );
 
     if !has_lockfile {
         if let Some(dependencies) = toml.get("dependencies").and_then(TomlValue::as_table) {

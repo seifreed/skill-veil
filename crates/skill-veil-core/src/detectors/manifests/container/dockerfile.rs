@@ -8,7 +8,7 @@ use crate::findings::{
 use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
 use std::path::Path;
 
-use super::super::strip_inline_hash_comment;
+use crate::services::artifact_analysis::manifests::strip_inline_hash_comment;
 
 /// Tokens that, when present in a lowercased Dockerfile line, indicate the
 /// build pulls something from the network at image-build time.

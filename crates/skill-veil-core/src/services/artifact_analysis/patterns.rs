@@ -46,7 +46,7 @@ lazy_pattern!(pub(super) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 /// real fixtures) and backtick command substitution. Comments containing
 /// `bash` text are out of scope here — comment filtering is the caller's
 /// responsibility.
-pub(super) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
+pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
     line.split_whitespace().any(|token| {
         let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
         let basename = basename.strip_suffix(".exe").unwrap_or(basename);

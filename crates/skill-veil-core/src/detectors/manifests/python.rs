@@ -1,7 +1,9 @@
-use super::{strip_inline_hash_comment, strip_inline_ini_comment};
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+};
+use crate::services::artifact_analysis::manifests::{
+    strip_inline_hash_comment, strip_inline_ini_comment,
 };
 use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
 use std::path::{Path, PathBuf};

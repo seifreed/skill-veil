@@ -1,8 +1,8 @@
-use super::strip_inline_ini_comment;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+use crate::services::artifact_analysis::manifests::strip_inline_ini_comment;
 use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -55,7 +55,9 @@ pub(crate) fn analyze_package_json(
     // lockfile pins exact versions regardless of the version specifier.
     let has_lockfile = package_json_expected_lockfiles(content)
         .iter()
-        .any(|lockfile| super::sibling_has_file(sibling_files, lockfile));
+        .any(|lockfile| {
+            crate::services::artifact_analysis::manifests::sibling_has_file(sibling_files, lockfile)
+        });
 
     for dependency_field in ["dependencies", "devDependencies", "optionalDependencies"] {
         let Some(dependencies) = json.get(dependency_field).and_then(Value::as_object) else {

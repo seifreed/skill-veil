@@ -1,9 +1,9 @@
-use super::super::patterns::line_invokes_shell_or_interpreter;
-use super::strip_inline_hash_comment;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+use crate::services::artifact_analysis::manifests::strip_inline_hash_comment;
+use crate::services::artifact_analysis::patterns::line_invokes_shell_or_interpreter;
 use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
 use std::path::Path;
 
