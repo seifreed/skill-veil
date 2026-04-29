@@ -1,27 +1,24 @@
-use super::permissions::{explicit_declared_permission_rules, infer_declared_intent};
 use super::{ArtifactAnalysisService, ArtifactLink};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
+use crate::detectors::instructions::intent_policy;
+use crate::detectors::instructions::signals::{
+    RE_BROWSER_FULL, RE_COGNITIVE_ROOTKIT, RE_NETWORK, RE_OAUTH, RE_PERSISTENCE,
+    RE_PRIVILEGED_ROLE, RE_SECRET,
+};
 use crate::detectors::network::targets::{
     contains_internal_network_action, contains_internal_network_target,
     contains_ssrf_like_fetch_line, looks_like_local_control_plane_reference,
     looks_like_local_dev_reference,
 };
 use crate::detectors::network::webhook::{classify_webhook_exposure, WebhookExposure};
+use crate::detectors::permissions::{explicit_declared_permission_rules, infer_declared_intent};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-mod intent_policy;
-mod signals;
-
 use crate::ports::CompiledPattern;
 use std::path::Path;
 use std::sync::LazyLock;
-
-use signals::{
-    RE_BROWSER_FULL, RE_COGNITIVE_ROOTKIT, RE_NETWORK, RE_OAUTH, RE_PERSISTENCE,
-    RE_PRIVILEGED_ROLE, RE_SECRET,
-};
 
 const BROAD_PERMISSION_THRESHOLD: usize = 3;
 

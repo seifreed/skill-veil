@@ -1,10 +1,10 @@
-use super::network::{extract_http_urls, is_common_lockfile_source};
-use super::{ArtifactAnalysisService, ArtifactLink};
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::lazy_pattern;
+use crate::services::artifact_analysis::network::{extract_http_urls, is_common_lockfile_source};
+use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
 use std::path::Path;
 
 lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"source\s*=\s*"git\+"#);

@@ -110,7 +110,7 @@ impl BaitStrength {
 ///
 /// At-most-one finding per document; the `match_value` carries the
 /// fetched URL and the (lowercased) sources of evidence.
-pub(super) fn remote_instruction_download_findings(
+pub(crate) fn remote_instruction_download_findings(
     path: &Path,
     doc: &SkillDocument,
     artifact_kind: ArtifactKind,

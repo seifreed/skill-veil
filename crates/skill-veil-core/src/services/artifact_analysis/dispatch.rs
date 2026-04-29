@@ -1,6 +1,7 @@
-use super::{lockfiles, manifests, mcp, scripts, ArtifactAnalysisService, ArtifactLink};
+use super::{manifests, scripts, ArtifactAnalysisService, ArtifactLink};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactCapabilityFact;
+use crate::detectors::{lockfiles, mcp};
 use crate::findings::Finding;
 use std::path::{Path, PathBuf};
 

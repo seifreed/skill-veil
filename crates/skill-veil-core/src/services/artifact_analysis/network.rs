@@ -7,7 +7,7 @@ pub(crate) mod patterns;
 
 use patterns::RE_HTTP_URL;
 
-pub(super) fn extract_http_urls(content: &str) -> Vec<String> {
+pub(crate) fn extract_http_urls(content: &str) -> Vec<String> {
     RE_HTTP_URL
         .find_matches(content)
         .into_iter()
@@ -19,7 +19,7 @@ pub(super) fn extract_http_urls(content: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn is_common_lockfile_source(url: &str) -> bool {
+pub(crate) fn is_common_lockfile_source(url: &str) -> bool {
     [
         "registry.npmjs.org",
         "registry.yarnpkg.com",

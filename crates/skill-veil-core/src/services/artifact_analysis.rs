@@ -2,12 +2,9 @@
 
 pub(crate) mod dispatch;
 mod instructions;
-mod lockfiles;
 pub(crate) mod manifests;
-mod mcp;
 pub(crate) mod network;
 pub(crate) mod patterns;
-mod permissions;
 pub(crate) mod scripts;
 
 use crate::artifact_graph::{

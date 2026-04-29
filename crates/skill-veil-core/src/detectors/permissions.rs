@@ -10,7 +10,7 @@
 /// `explicit_declared_permission_rules` counts the same permission keyword
 /// N times per anchor, which can falsely cross the
 /// `SCOPE_OVERPROVISIONING` threshold from a single source line.
-pub(super) fn permission_context(content: &str) -> String {
+pub(crate) fn permission_context(content: &str) -> String {
     let lines: Vec<_> = content.lines().collect();
     let mut buffer = String::new();
     // Dedup by EMITTED LINE INDEX, not by anchor index. Adjacent anchor
@@ -49,7 +49,7 @@ pub(super) fn permission_context(content: &str) -> String {
     }
 }
 
-pub(super) fn intent_context(content: &str) -> String {
+pub(crate) fn intent_context(content: &str) -> String {
     let mut buffer = String::new();
     let lines: Vec<_> = content.lines().collect();
     for (index, line) in lines.iter().enumerate() {
@@ -75,7 +75,7 @@ pub(super) fn intent_context(content: &str) -> String {
     }
 }
 
-pub(super) fn infer_declared_intent(content: &str) -> (&'static str, usize) {
+pub(crate) fn infer_declared_intent(content: &str) -> (&'static str, usize) {
     let context = intent_context(content).to_ascii_lowercase();
     let narrow_terms = [
         "read-only",
@@ -114,7 +114,7 @@ pub(super) fn infer_declared_intent(content: &str) -> (&'static str, usize) {
     }
 }
 
-pub(super) fn explicit_declared_permission_rules(
+pub(crate) fn explicit_declared_permission_rules(
     content: &str,
 ) -> Vec<(&'static str, &'static str, &'static str)> {
     let context = permission_context(content).to_ascii_lowercase();
