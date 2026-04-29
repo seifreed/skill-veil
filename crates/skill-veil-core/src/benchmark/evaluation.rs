@@ -23,6 +23,41 @@ const BLOCK_THRESHOLD_SEARCH_MAX: u32 = 90;
 /// double loop at ~21 × 31 = 651 evaluations rather than the dense form.
 const THRESHOLD_SEARCH_STEP: usize = 2;
 
+/// Confidence floor for a bucket with at least one labelled finding.
+/// Picked so that "Wilson lower bound = 0" still yields 0.35 rather than
+/// the noisy 0.0 that downstream consumers were collapsing into "unknown".
+const CONFIDENCE_FLOOR: f32 = 0.35;
+/// Multiplier applied to the Wilson lower bound when blending it into
+/// the reported confidence. Empirically tuned so that fully-precise
+/// buckets converge near the upper clamp.
+const CONFIDENCE_WILSON_SCALE: f32 = 0.6;
+/// Lower clamp on the reported confidence: preserves the "we have at
+/// least one labelled signal" guarantee.
+const CONFIDENCE_LOWER_CLAMP: f32 = 0.1;
+/// Upper clamp on the reported confidence: prevents overclaiming on
+/// small-N buckets where the Wilson bound is statistically optimistic.
+const CONFIDENCE_UPPER_CLAMP: f32 = 0.99;
+
+/// Z-score for a 95 % confidence interval; the assumption matches the
+/// reporting copy in `recommend_thresholds`.
+const WILSON_Z_SCORE_95: f32 = 1.96;
+
+/// Weights of the threshold-selection objective. Precision and recall
+/// are equal-weighted, accuracy is a tiebreaker, false-positive rate is
+/// a hard penalty, and label-distance is a small monotonic regulariser.
+/// Adjust together — the values are jointly tuned against the corpus
+/// and changing one in isolation drifts the optimiser.
+const OBJ_PRECISION_WEIGHT: f32 = 0.35;
+const OBJ_RECALL_WEIGHT: f32 = 0.35;
+const OBJ_ACCURACY_WEIGHT: f32 = 0.20;
+const OBJ_FALSE_POSITIVE_PENALTY: f32 = 0.55;
+const OBJ_LABEL_ERROR_PENALTY: f32 = 0.01;
+/// Slack permitted on recall vs the current operating point. A
+/// candidate threshold is only adopted if its recall stays within this
+/// margin of the baseline; prevents the optimiser from trading away
+/// recall for FPR gains.
+const OBJ_RECALL_TOLERANCE: f32 = 0.02;
+
 pub fn evaluate_corpus<F: FileSystemProvider>(
     fs: &F,
     scanner: &Scanner,
@@ -394,7 +429,8 @@ fn calibrate_confidence_value(observed_precision: f32, findings: u32) -> f32 {
         return f32::NAN;
     }
     let lower_bound = wilson_lower_bound(observed_precision, findings);
-    (0.35 + (lower_bound * 0.6)).clamp(0.1, 0.99)
+    (CONFIDENCE_FLOOR + (lower_bound * CONFIDENCE_WILSON_SCALE))
+        .clamp(CONFIDENCE_LOWER_CLAMP, CONFIDENCE_UPPER_CLAMP)
 }
 
 fn wilson_lower_bound(observed_precision: f32, findings: u32) -> f32 {
@@ -402,13 +438,16 @@ fn wilson_lower_bound(observed_precision: f32, findings: u32) -> f32 {
         findings > 0,
         "wilson_lower_bound: callers must guard `findings == 0` themselves",
     );
-    let n = findings.max(1) as f32;
-    let z = 1.96_f32;
-    let z2 = z * z;
-    let center = observed_precision + z2 / (2.0 * n);
-    let margin =
-        z * ((observed_precision * (1.0 - observed_precision) + z2 / (4.0 * n)) / n).sqrt();
-    let denominator = 1.0 + z2 / n;
+    let sample_count = findings.max(1) as f32;
+    let z_score_95 = WILSON_Z_SCORE_95;
+    let z_score_squared = z_score_95 * z_score_95;
+    let center = observed_precision + z_score_squared / (2.0 * sample_count);
+    let margin = z_score_95
+        * ((observed_precision * (1.0 - observed_precision)
+            + z_score_squared / (4.0 * sample_count))
+            / sample_count)
+            .sqrt();
+    let denominator = 1.0 + z_score_squared / sample_count;
     ((center - margin) / denominator).clamp(0.0, 1.0)
 }
 
@@ -456,8 +495,8 @@ fn recommend_thresholds(samples: &[SampleEvaluation]) -> ThresholdRecommendation
                 .collect();
             let metrics = compute_metrics(&expected, &actual);
             let score = threshold_objective(&metrics, samples, &actual);
-            let acceptable_recall =
-                current_metrics.recall == 0.0 || metrics.recall + 0.02 >= current_metrics.recall;
+            let acceptable_recall = current_metrics.recall == 0.0
+                || metrics.recall + OBJ_RECALL_TOLERANCE >= current_metrics.recall;
 
             if acceptable_recall && score > best_score {
                 best_approval = approval;
@@ -493,9 +532,11 @@ fn threshold_objective(
         .map(|(sample, predicted)| label_distance(sample.expected, *predicted) as f32)
         .sum::<f32>();
 
-    (metrics.precision * 0.35) + (metrics.recall * 0.35) + (metrics.accuracy * 0.20)
-        - (metrics.false_positive_rate * 0.55)
-        - (label_error_penalty * 0.01)
+    (metrics.precision * OBJ_PRECISION_WEIGHT)
+        + (metrics.recall * OBJ_RECALL_WEIGHT)
+        + (metrics.accuracy * OBJ_ACCURACY_WEIGHT)
+        - (metrics.false_positive_rate * OBJ_FALSE_POSITIVE_PENALTY)
+        - (label_error_penalty * OBJ_LABEL_ERROR_PENALTY)
 }
 
 fn label_distance(expected: SampleLabel, actual: SampleLabel) -> u32 {

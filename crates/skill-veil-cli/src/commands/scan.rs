@@ -19,6 +19,42 @@ use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+/// Maximum chars of the SHA-256 package id rendered next to the package
+/// path. 12 hex chars give ~6 bytes of entropy — enough to disambiguate
+/// at human-eye scale without making the line wrap.
+const PACKAGE_ID_DISPLAY_CHARS: usize = 12;
+/// Maximum chars of the LLM analysis text shown in text-mode output.
+/// Long enough to read the LLM's reasoning, short enough to keep a
+/// terminal summary scannable; the full text is preserved in JSON.
+const LLM_ANALYSIS_DISPLAY_CHARS: usize = 400;
+/// Maximum chars of the raw LLM response excerpt shown when parsing
+/// fails — enough to debug the schema mismatch without dumping a full
+/// model response into the terminal.
+const LLM_RAW_EXCERPT_DISPLAY_CHARS: usize = 160;
+/// Maximum chars of an LLM provider error message before truncation.
+/// Provider errors can include long backend traces; we cap them so they
+/// stay readable on a single screen.
+const LLM_PROVIDER_ERROR_DISPLAY_CHARS: usize = 120;
+/// Shared cap for short error blurbs (LLM parse error, VT enrichment
+/// error). Both sources are external strings whose authors might emit
+/// a multi-paragraph stack trace; we want a single line.
+const ERROR_MESSAGE_DISPLAY_CHARS: usize = 80;
+
+/// Finding-limit cap applied by `--preset ci` and the default branch of
+/// `--preset strict`. Const-constructed so a zero literal would be a
+/// compile-time error rather than a runtime `expect()` panic.
+const FINDING_LIMIT_CI: std::num::NonZeroUsize = match std::num::NonZeroUsize::new(10) {
+    Some(n) => n,
+    None => panic!("FINDING_LIMIT_CI must be non-zero"),
+};
+/// Finding-limit cap applied by `--preset enterprise`. Higher than
+/// `FINDING_LIMIT_CI` because enterprise reviewers expect more context
+/// per package than CI gating does.
+const FINDING_LIMIT_ENTERPRISE: std::num::NonZeroUsize = match std::num::NonZeroUsize::new(20) {
+    Some(n) => n,
+    None => panic!("FINDING_LIMIT_ENTERPRISE must be non-zero"),
+};
+
 pub(crate) fn load_rule_engine_from_dir(rules_dir: &Path) -> Result<skill_veil_core::RuleEngine> {
     let mut engine = skill_veil_core::RuleEngine::new();
     let fs = StdFileSystemProvider::new();
@@ -28,30 +64,24 @@ pub(crate) fn load_rule_engine_from_dir(rules_dir: &Path) -> Result<skill_veil_c
     Ok(engine)
 }
 
-/// Preset finding-limit defaults. `expect` is unreachable: the literals
-/// are positive constants validated at compile time.
-fn nz(value: usize) -> std::num::NonZeroUsize {
-    std::num::NonZeroUsize::new(value).expect("preset finding-limit defaults are non-zero")
-}
-
 pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
     match args.preset {
         Some(ScanPresetArg::Local) | None => {}
         Some(ScanPresetArg::Ci) => {
             args.quiet_summary = true;
-            args.finding_limit.get_or_insert(nz(10));
+            args.finding_limit.get_or_insert(FINDING_LIMIT_CI);
             args.profile.get_or_insert(PolicyProfileArg::Team);
         }
         Some(ScanPresetArg::Strict) => {
             args.quiet_summary = true;
-            args.finding_limit.get_or_insert(nz(10));
+            args.finding_limit.get_or_insert(FINDING_LIMIT_CI);
             args.profile.get_or_insert(PolicyProfileArg::Enterprise);
             args.fail_on.get_or_insert(SeverityArg::High);
             args.min_severity.get_or_insert(SeverityArg::Medium);
         }
         Some(ScanPresetArg::Enterprise) => {
             args.quiet_summary = true;
-            args.finding_limit.get_or_insert(nz(20));
+            args.finding_limit.get_or_insert(FINDING_LIMIT_ENTERPRISE);
             args.profile.get_or_insert(PolicyProfileArg::Enterprise);
             args.min_severity.get_or_insert(SeverityArg::Medium);
         }
@@ -476,15 +506,15 @@ fn format_llm_enrichment(e: &LlmEnrichment) -> String {
     );
     for pkg in &e.packages {
         let _ = writeln!(out);
-        // Char-aware truncation: byte indexing (`&s[..12]`) panics on
-        // multi-byte UTF-8 boundaries. Today `package_id` is always SHA
-        // hex (ASCII) but the type is `Option<String>` with no
-        // documented constraint — char-take is the safe form, and it
-        // matches the rendering elsewhere in this file.
+        // Char-aware truncation: byte indexing panics on multi-byte
+        // UTF-8 boundaries. Today `package_id` is always SHA hex
+        // (ASCII) but the type is `Option<String>` with no documented
+        // constraint — char-take is the safe form, and it matches the
+        // rendering elsewhere in this file.
         let id_owned: String = pkg
             .package_id
             .as_deref()
-            .map(|s| s.chars().take(12).collect())
+            .map(|s| s.chars().take(PACKAGE_ID_DISPLAY_CHARS).collect())
             .unwrap_or_else(|| "no-id".to_string());
         let _ = writeln!(out, "  {id_owned}… {}", pkg.primary_path.display());
         format_llm_pkg(pkg, &mut out);
@@ -524,7 +554,10 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
                 let _ = writeln!(
                     out,
                     "    analysis     : {}",
-                    v.analysis.chars().take(400).collect::<String>()
+                    v.analysis
+                        .chars()
+                        .take(LLM_ANALYSIS_DISPLAY_CHARS)
+                        .collect::<String>()
                 );
             }
         }
@@ -532,13 +565,19 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
             let _ = writeln!(
                 out,
                 "    llm verdict  : <parse-error: {}>{cached_tag}",
-                message.chars().take(80).collect::<String>()
+                message
+                    .chars()
+                    .take(ERROR_MESSAGE_DISPLAY_CHARS)
+                    .collect::<String>()
             );
             if let Some(excerpt) = &pkg.raw_response_excerpt {
                 let _ = writeln!(
                     out,
                     "    raw excerpt  : {}",
-                    excerpt.chars().take(160).collect::<String>()
+                    excerpt
+                        .chars()
+                        .take(LLM_RAW_EXCERPT_DISPLAY_CHARS)
+                        .collect::<String>()
                 );
             }
         }
@@ -546,7 +585,10 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
             let _ = writeln!(
                 out,
                 "    llm verdict  : <error: {}>{cached_tag}",
-                message.chars().take(120).collect::<String>()
+                message
+                    .chars()
+                    .take(LLM_PROVIDER_ERROR_DISPLAY_CHARS)
+                    .collect::<String>()
             );
         }
         LlmStatus::BundleTooLarge {
@@ -631,7 +673,13 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
                 EnrichmentStatus::NotFound => "not_found".to_string(),
                 EnrichmentStatus::Submitted { .. } => "submitted".to_string(),
                 EnrichmentStatus::Error { message } => {
-                    format!("error: {}", message.chars().take(80).collect::<String>())
+                    format!(
+                        "error: {}",
+                        message
+                            .chars()
+                            .take(ERROR_MESSAGE_DISPLAY_CHARS)
+                            .collect::<String>()
+                    )
                 }
             };
             let summary = ind

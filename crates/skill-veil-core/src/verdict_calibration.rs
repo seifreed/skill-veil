@@ -102,6 +102,28 @@ struct CalibrationRule {
 /// only when one tier needs to suppress an alias rule that other tiers
 /// would otherwise re-amplify (none currently do, but the schema supports
 /// it).
+/// Risk-score rollback applied when an isolated `DECLARED_PERMISSION_NETWORK_ACCESS`
+/// finding fires without corroborating behaviour. Sized to exactly cancel the
+/// original scoring path's contribution for declared network access.
+const TIER1_DECLARED_NETWORK_ROLLBACK: i32 = -10;
+
+/// Rollback for an isolated `CAPABILITY_PERMISSION_MISMATCH`. Smaller than
+/// Tier 1 because the original score contribution is also smaller (one
+/// weighted finding, not a multi-signal declared permission).
+const TIER2_CAPABILITY_MISMATCH_ROLLBACK: i32 = -8;
+
+/// Rollback for an isolated `INTERNAL_NETWORK_ACCESS` (loopback / 127.x /
+/// 169.254.x). The largest rollback in the pipeline because the original
+/// `INTERNAL_NETWORK_ACCESS` weight was calibrated for "external network
+/// access on a sensitive port" and was over-firing on local traffic.
+const TIER3_INTERNAL_NETWORK_ROLLBACK: i32 = -12;
+
+/// Rollback for the remote-MCP-without-auth tier (`MCP_NO_AUTH_MODEL` and
+/// `OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT`). The smallest rollback in the
+/// pipeline: leaves a residual signal so packages with multiple weak
+/// hygiene markers still tip into Suspicious.
+const TIER4_REMOTE_MCP_NO_AUTH_ROLLBACK: i32 = -6;
+
 const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
     // Tier 1 — declared network access (manifest-level, no behavior).
     //
@@ -124,7 +146,7 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
     CalibrationRule {
         trigger_rule_ids: &["DECLARED_PERMISSION_NETWORK_ACCESS"],
         rule_ids: &["DECLARED_PERMISSION_NETWORK_ACCESS"],
-        risk_delta: -10,
+        risk_delta: TIER1_DECLARED_NETWORK_ROLLBACK,
         reclassify_signal: false,
         effect_downgraded: "downgraded_to_context",
         effect_unchanged: "remains_context_only",
@@ -150,7 +172,7 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
     CalibrationRule {
         trigger_rule_ids: &["CAPABILITY_PERMISSION_MISMATCH"],
         rule_ids: &["CAPABILITY_PERMISSION_MISMATCH"],
-        risk_delta: -8,
+        risk_delta: TIER2_CAPABILITY_MISMATCH_ROLLBACK,
         reclassify_signal: false,
         effect_downgraded: "downgraded_to_context",
         effect_unchanged: "remains_context_only",
@@ -183,7 +205,7 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
     CalibrationRule {
         trigger_rule_ids: &["INTERNAL_NETWORK_ACCESS"],
         rule_ids: &["INTERNAL_NETWORK_ACCESS"],
-        risk_delta: -12,
+        risk_delta: TIER3_INTERNAL_NETWORK_ROLLBACK,
         reclassify_signal: true,
         effect_downgraded: "downgraded_to_review_only",
         effect_unchanged: "remains_review_only",
@@ -218,7 +240,7 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
     CalibrationRule {
         trigger_rule_ids: &["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"],
         rule_ids: &["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"],
-        risk_delta: -6,
+        risk_delta: TIER4_REMOTE_MCP_NO_AUTH_ROLLBACK,
         reclassify_signal: true,
         effect_downgraded: "downgraded_to_context",
         effect_unchanged: "remains_context_only",
