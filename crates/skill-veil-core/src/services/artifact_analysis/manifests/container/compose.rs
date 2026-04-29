@@ -14,171 +14,227 @@ use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, render_e
 
 pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
-
-    // A `docker-compose.yml` whose YAML body is unparseable is suspicious on
-    // its own: the manifest is shipped, the rest of the analysis pipeline
-    // (capabilities, relations) silently drops it for lack of structure, and
-    // an attacker can intentionally craft "almost valid" YAML to bypass every
-    // host-mount / privilege / env_file detector below. Emit an explicit
-    // finding so the manifest's existence — and our inability to analyze it —
-    // is recorded in the audit output instead of being swallowed.
-    let yaml = match serde_yaml::from_str::<serde_yaml::Value>(content) {
-        Ok(v) => v,
-        Err(err) => {
-            return vec![Finding::builder(
-                "MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE",
-                ThreatCategory::Generic,
-            )
-            .severity(Severity::Low)
-            .action(RecommendedAction::Log)
-            .evidence_kind(EvidenceKind::Context)
-            .matched_on(MatchTarget::ReferencedFile {
-                path: artifact_path.clone(),
-            })
-            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-            .match_value(err.to_string())
-            .reason(
-                "docker-compose manifest is not valid YAML; capability and \
-                         volume/env analyses cannot run against this file",
-            )
-            .build()];
-        }
+    let yaml = match parse_compose_yaml(content) {
+        Ok(value) => value,
+        Err(err) => return vec![parse_failure_finding(&artifact_path, &err)],
+    };
+    let Some(services) = yaml.get("services").and_then(serde_yaml::Value::as_mapping) else {
+        return Vec::new();
     };
 
     let mut findings = Vec::new();
-
-    let Some(services) = yaml.get("services").and_then(serde_yaml::Value::as_mapping) else {
-        return findings;
-    };
-
-    for (service_name, service) in services {
-        let service_name = service_name.as_str().unwrap_or("unknown");
+    for (raw_name, service) in services {
+        let service_name = raw_name.as_str().unwrap_or("unknown");
         let Some(mapping) = service.as_mapping() else {
             continue;
         };
-
-        if let Some(image) = mapping
-            .get(serde_yaml::Value::String("image".to_string()))
-            .and_then(serde_yaml::Value::as_str)
-        {
-            if image.ends_with(":latest") {
-                findings.push(
-                    Finding::builder(
-                        "MANIFEST_DOCKER_COMPOSE_LATEST_TAG",
-                        ThreatCategory::SupplyChain,
-                    )
-                    .severity(Severity::Low)
-                    .action(RecommendedAction::RequireApproval)
-                    .evidence_kind(EvidenceKind::Context)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.clone(),
-                    })
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                    .match_value(format!("{service_name}: {image}"))
-                    .reason("docker-compose service uses a mutable latest image tag")
-                    .build(),
-                );
-            }
-        }
-
-        if mapping.contains_key(serde_yaml::Value::String("privileged".to_string()))
-            && mapping
-                .get(serde_yaml::Value::String("privileged".to_string()))
-                .and_then(serde_yaml::Value::as_bool)
-                == Some(true)
-        {
-            findings.push(
-                Finding::builder(
-                    "MANIFEST_DOCKER_COMPOSE_PRIVILEGED",
-                    ThreatCategory::PrivilegeEscalation,
-                )
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value(format!("{service_name}: privileged=true"))
-                .reason("docker-compose service requests privileged execution")
-                .build(),
-            );
-        }
-
-        if let Some(volumes) = mapping
-            .get(serde_yaml::Value::String("volumes".to_string()))
-            .and_then(serde_yaml::Value::as_sequence)
-        {
-            for volume in volumes.iter().filter_map(serde_yaml::Value::as_str) {
-                if is_sensitive_host_volume(volume) {
-                    findings.push(
-                        Finding::builder(
-                            "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT",
-                            ThreatCategory::PrivilegeEscalation,
-                        )
-                        .severity(Severity::Medium)
-                        .action(RecommendedAction::RequireApproval)
-                        .evidence_kind(EvidenceKind::Behavior)
-                        .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                        .matched_on(MatchTarget::ReferencedFile {
-                            path: artifact_path.clone(),
-                        })
-                        .match_value(format!("{service_name}: {volume}"))
-                        .reason("docker-compose service mounts sensitive host paths")
-                        .build(),
-                    );
-                }
-            }
-        }
-
-        if let Some(network_mode) = mapping
-            .get(serde_yaml::Value::String("network_mode".to_string()))
-            .and_then(serde_yaml::Value::as_str)
-        {
-            if matches!(network_mode, "host" | "service:host") {
-                findings.push(
-                    Finding::builder(
-                        "MANIFEST_DOCKER_COMPOSE_HOST_NETWORK",
-                        ThreatCategory::PrivilegeEscalation,
-                    )
-                    .severity(Severity::Medium)
-                    .action(RecommendedAction::RequireApproval)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.clone(),
-                    })
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                    .match_value(format!("{service_name}: network_mode={network_mode}"))
-                    .reason("docker-compose service shares the host network namespace")
-                    .build(),
-                );
-            }
-        }
-
-        if let Some(env_file) = mapping
-            .get(serde_yaml::Value::String("env_file".to_string()))
-            .filter(|value| env_file_has_real_paths(value))
-        {
-            findings.push(
-                Finding::builder(
-                    "MANIFEST_DOCKER_COMPOSE_ENV_FILE",
-                    ThreatCategory::CredentialExposure,
-                )
-                .severity(Severity::Low)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value(format!("{service_name}: {}", render_env_file(env_file)))
-                .reason("docker-compose service loads environment files that may contain secrets")
-                .build(),
-            );
-        }
+        findings.extend(detect_latest_image_tag(
+            service_name,
+            mapping,
+            &artifact_path,
+        ));
+        findings.extend(detect_privileged(service_name, mapping, &artifact_path));
+        findings.extend(detect_host_volumes(service_name, mapping, &artifact_path));
+        findings.extend(detect_host_network(service_name, mapping, &artifact_path));
+        findings.extend(detect_env_file(service_name, mapping, &artifact_path));
     }
-
     findings
+}
+
+fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, serde_yaml::Error> {
+    serde_yaml::from_str::<serde_yaml::Value>(content)
+}
+
+/// A `docker-compose.yml` whose YAML body is unparseable is suspicious on
+/// its own: the manifest is shipped, the rest of the analysis pipeline
+/// (capabilities, relations) silently drops it for lack of structure, and
+/// an attacker can intentionally craft "almost valid" YAML to bypass every
+/// host-mount / privilege / env_file detector. Emit an explicit finding so
+/// the manifest's existence — and our inability to analyze it — is recorded
+/// in the audit output instead of being swallowed.
+fn parse_failure_finding(artifact_path: &str, err: &serde_yaml::Error) -> Finding {
+    Finding::builder(
+        "MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE",
+        ThreatCategory::Generic,
+    )
+    .severity(Severity::Low)
+    .action(RecommendedAction::Log)
+    .evidence_kind(EvidenceKind::Context)
+    .matched_on(MatchTarget::ReferencedFile {
+        path: artifact_path.to_string(),
+    })
+    .artifact(
+        ArtifactKind::PackageManifest,
+        Some(artifact_path.to_string()),
+    )
+    .match_value(err.to_string())
+    .reason(
+        "docker-compose manifest is not valid YAML; capability and \
+         volume/env analyses cannot run against this file",
+    )
+    .build()
+}
+
+fn detect_latest_image_tag(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Option<Finding> {
+    let image = mapping
+        .get(serde_yaml::Value::String("image".to_string()))
+        .and_then(serde_yaml::Value::as_str)?;
+    if !image.ends_with(":latest") {
+        return None;
+    }
+    Some(
+        Finding::builder(
+            "MANIFEST_DOCKER_COMPOSE_LATEST_TAG",
+            ThreatCategory::SupplyChain,
+        )
+        .severity(Severity::Low)
+        .action(RecommendedAction::RequireApproval)
+        .evidence_kind(EvidenceKind::Context)
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
+        .match_value(format!("{service_name}: {image}"))
+        .reason("docker-compose service uses a mutable latest image tag")
+        .build(),
+    )
+}
+
+fn detect_privileged(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Option<Finding> {
+    let privileged = mapping
+        .get(serde_yaml::Value::String("privileged".to_string()))
+        .and_then(serde_yaml::Value::as_bool)?;
+    if !privileged {
+        return None;
+    }
+    Some(
+        Finding::builder(
+            "MANIFEST_DOCKER_COMPOSE_PRIVILEGED",
+            ThreatCategory::PrivilegeEscalation,
+        )
+        .severity(Severity::Medium)
+        .action(RecommendedAction::RequireApproval)
+        .evidence_kind(EvidenceKind::Behavior)
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .match_value(format!("{service_name}: privileged=true"))
+        .reason("docker-compose service requests privileged execution")
+        .build(),
+    )
+}
+
+fn detect_host_volumes(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let Some(volumes) = mapping
+        .get(serde_yaml::Value::String("volumes".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Vec::new();
+    };
+    volumes
+        .iter()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter(|volume| is_sensitive_host_volume(volume))
+        .map(|volume| {
+            Finding::builder(
+                "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT",
+                ThreatCategory::PrivilegeEscalation,
+            )
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .artifact(
+                ArtifactKind::PackageManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value(format!("{service_name}: {volume}"))
+            .reason("docker-compose service mounts sensitive host paths")
+            .build()
+        })
+        .collect()
+}
+
+fn detect_host_network(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Option<Finding> {
+    let network_mode = mapping
+        .get(serde_yaml::Value::String("network_mode".to_string()))
+        .and_then(serde_yaml::Value::as_str)?;
+    if !matches!(network_mode, "host" | "service:host") {
+        return None;
+    }
+    Some(
+        Finding::builder(
+            "MANIFEST_DOCKER_COMPOSE_HOST_NETWORK",
+            ThreatCategory::PrivilegeEscalation,
+        )
+        .severity(Severity::Medium)
+        .action(RecommendedAction::RequireApproval)
+        .evidence_kind(EvidenceKind::Behavior)
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
+        .match_value(format!("{service_name}: network_mode={network_mode}"))
+        .reason("docker-compose service shares the host network namespace")
+        .build(),
+    )
+}
+
+fn detect_env_file(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Option<Finding> {
+    let env_file = mapping
+        .get(serde_yaml::Value::String("env_file".to_string()))
+        .filter(|value| env_file_has_real_paths(value))?;
+    Some(
+        Finding::builder(
+            "MANIFEST_DOCKER_COMPOSE_ENV_FILE",
+            ThreatCategory::CredentialExposure,
+        )
+        .severity(Severity::Low)
+        .action(RecommendedAction::RequireApproval)
+        .evidence_kind(EvidenceKind::Context)
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .match_value(format!("{service_name}: {}", render_env_file(env_file)))
+        .reason("docker-compose service loads environment files that may contain secrets")
+        .build(),
+    )
 }
 
 pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
