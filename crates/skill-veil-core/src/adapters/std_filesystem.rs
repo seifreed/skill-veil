@@ -360,21 +360,14 @@ mod tests {
         // Restore mode so TempDir teardown doesn't choke.
         std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o644)).ok();
 
-        match err {
-            FileSystemError::IoError(io_err) => {
-                assert_eq!(
-                    io_err.kind(),
-                    std::io::ErrorKind::PermissionDenied,
-                    "PermissionDenied MUST be preserved, not collapsed to PathNotFound",
-                );
-            }
-            FileSystemError::PathNotFound(p) => {
-                panic!(
-                    "PermissionDenied was masked as PathNotFound for {}",
-                    p.display()
-                );
-            }
-        }
+        assert!(
+            matches!(
+                err,
+                FileSystemError::IoError(ref io_err)
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "PermissionDenied MUST be preserved, not collapsed to PathNotFound or other variant; got {err:?}",
+        );
     }
 
     /// # Contract
@@ -480,21 +473,14 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).ok();
 
         let err = result.expect_err("unreadable directory must surface an error");
-        match err {
-            FileSystemError::IoError(io_err) => {
-                assert_eq!(
-                    io_err.kind(),
-                    std::io::ErrorKind::PermissionDenied,
-                    "PermissionDenied MUST be preserved, not collapsed to PathNotFound or empty Ok",
-                );
-            }
-            FileSystemError::PathNotFound(p) => {
-                panic!(
-                    "PermissionDenied was masked as PathNotFound for {}",
-                    p.display()
-                );
-            }
-        }
+        assert!(
+            matches!(
+                err,
+                FileSystemError::IoError(ref io_err)
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "PermissionDenied MUST be preserved, not collapsed to PathNotFound or empty Ok; got {err:?}",
+        );
     }
 
     /// # Contract
@@ -520,21 +506,14 @@ mod tests {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).ok();
 
         let err = result.expect_err("unreadable directory must surface an error");
-        match err {
-            FileSystemError::IoError(io_err) => {
-                assert_eq!(
-                    io_err.kind(),
-                    std::io::ErrorKind::PermissionDenied,
-                    "PermissionDenied MUST be preserved, not collapsed to PathNotFound",
-                );
-            }
-            FileSystemError::PathNotFound(p) => {
-                panic!(
-                    "PermissionDenied was masked as PathNotFound for {}",
-                    p.display()
-                );
-            }
-        }
+        assert!(
+            matches!(
+                err,
+                FileSystemError::IoError(ref io_err)
+                    if io_err.kind() == std::io::ErrorKind::PermissionDenied
+            ),
+            "PermissionDenied MUST be preserved, not collapsed to PathNotFound; got {err:?}",
+        );
     }
 
     /// # Contract
