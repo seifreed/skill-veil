@@ -3,8 +3,10 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::lazy_pattern;
-use crate::services::artifact_analysis::network::{extract_http_urls, is_common_lockfile_source};
-use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
+use crate::services::artifact_orchestration::network::{
+    extract_http_urls, is_common_lockfile_source,
+};
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
 lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"source\s*=\s*"git\+"#);
@@ -77,7 +79,7 @@ pub(crate) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     let lower = content.to_ascii_lowercase();
     let mut capabilities = Vec::new();
     if lower.contains("http://") || lower.contains("https://") || lower.contains("tarball:") {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }

@@ -2,7 +2,7 @@
 //! `package.json`, `pyproject.toml`, `Dockerfile`, `docker-compose.yml`,
 //! `.npmrc`, `pip.conf`, `Makefile`, `Cargo.toml`, etc.
 //!
-//! Orchestration in `services::artifact_analysis::manifests` dispatches
+//! Orchestration in `services::artifact_orchestration::manifests` dispatches
 //! against these detectors based on artifact name; each detector owns
 //! the rule-id / severity / capability mapping for its manifest kind.
 

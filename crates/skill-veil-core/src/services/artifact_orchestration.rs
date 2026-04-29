@@ -16,7 +16,7 @@ use crate::findings::{
 };
 use std::path::{Path, PathBuf};
 
-pub struct ArtifactAnalysisService;
+pub struct ArtifactOrchestratorService;
 
 #[derive(Debug, Clone)]
 pub struct ArtifactLink {
@@ -24,7 +24,7 @@ pub struct ArtifactLink {
     pub relation: ArtifactRelation,
 }
 
-impl ArtifactAnalysisService {
+impl ArtifactOrchestratorService {
     #[must_use]
     pub fn new() -> Self {
         Self
@@ -165,7 +165,7 @@ impl ArtifactAnalysisService {
     }
 }
 
-impl Default for ArtifactAnalysisService {
+impl Default for ArtifactOrchestratorService {
     fn default() -> Self {
         Self::new()
     }

@@ -126,7 +126,7 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
         let sibling_files = crate::scanner_graph::sibling_files(fs, referenced_file);
         findings.extend(
             scanner
-                .artifact_analysis()
+                .artifact_orchestration()
                 .analyze(
                     referenced_file,
                     &artifact_doc.raw_content,
@@ -322,7 +322,7 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     }
     let sibling_files =
         crate::scanner_graph::sibling_files(scanner.file_discovery().fs_provider(), path);
-    findings.extend(scanner.artifact_analysis().analyze(
+    findings.extend(scanner.artifact_orchestration().analyze(
         path,
         primary_content,
         &sibling_files,

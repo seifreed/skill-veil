@@ -11,7 +11,7 @@ pub use crate::scanner_types::{
     ArtifactMetadata, PackageScanResult, ScanError, ScanErrorEntry, ScanOptions, ScanResult,
     ScanTargetMode,
 };
-use crate::services::{ArtifactAnalysisService, FileDiscoveryService, ScanFilterService};
+use crate::services::{ArtifactOrchestratorService, FileDiscoveryService, ScanFilterService};
 use crate::{scanner_execution, scanner_graph};
 use std::path::Path;
 
@@ -52,7 +52,7 @@ pub struct Scanner<
     P: MarkdownParser = PulldownMarkdownParser,
 > {
     engine: RuleEngine,
-    artifact_analysis: ArtifactAnalysisService,
+    artifact_orchestration: ArtifactOrchestratorService,
     file_discovery: FileDiscoveryService<F>,
     filter_service: ScanFilterService,
     parser: P,
@@ -74,7 +74,7 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
         let (engine, baseline, waivers, policy) = build_engine_and_policy(&fs, &options)?;
         Ok(Self {
             engine,
-            artifact_analysis: ArtifactAnalysisService::new(),
+            artifact_orchestration: ArtifactOrchestratorService::new(),
             file_discovery: FileDiscoveryService::with_fs_provider(
                 options.recursive,
                 StdFileSystemProvider::new(),
@@ -97,7 +97,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         let (engine, baseline, waivers, policy) = build_engine_and_policy(&fs_provider, &options)?;
         Ok(Self {
             engine,
-            artifact_analysis: ArtifactAnalysisService::new(),
+            artifact_orchestration: ArtifactOrchestratorService::new(),
             file_discovery: FileDiscoveryService::with_fs_provider(options.recursive, fs_provider),
             filter_service: ScanFilterService::with_policy_state(
                 options, baseline, waivers, policy,
@@ -110,8 +110,8 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         &self.engine
     }
 
-    pub(crate) fn artifact_analysis(&self) -> &ArtifactAnalysisService {
-        &self.artifact_analysis
+    pub(crate) fn artifact_orchestration(&self) -> &ArtifactOrchestratorService {
+        &self.artifact_orchestration
     }
 
     pub(crate) fn file_discovery(&self) -> &FileDiscoveryService<F> {
@@ -128,7 +128,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub(crate) fn build_artifact_graph(&self, doc: &SkillDocument) -> ArtifactGraph {
         scanner_graph::build_artifact_graph::<F>(
-            &self.artifact_analysis,
+            &self.artifact_orchestration,
             self.file_discovery.fs_provider(),
             doc,
         )

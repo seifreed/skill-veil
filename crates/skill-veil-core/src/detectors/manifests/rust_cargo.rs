@@ -2,12 +2,12 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::artifact_analysis::ArtifactAnalysisService;
+use crate::services::artifact_orchestration::ArtifactOrchestratorService;
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
 pub(crate) fn analyze_cargo_toml(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     sibling_files: &[PathBuf],
@@ -21,7 +21,7 @@ pub(crate) fn analyze_cargo_toml(
 
     // Suppress unpinned dep findings when Cargo.lock exists, since the
     // lockfile pins exact versions. In Cargo, `^` is the default operator.
-    let has_lockfile = crate::services::artifact_analysis::manifests::sibling_has_file(
+    let has_lockfile = crate::services::artifact_orchestration::manifests::sibling_has_file(
         sibling_files,
         "Cargo.lock",
     );
@@ -74,12 +74,12 @@ pub(crate) fn cargo_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
     for dep in &dep_names {
         let name = dep.to_ascii_lowercase();
         if network_crates.iter().any(|d| name == *d) {
-            capabilities.push(ArtifactAnalysisService::observed_capability(
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
                 ArtifactCapability::NetworkAccess,
             ));
         }
         if exec_crates.iter().any(|d| name == *d) {
-            capabilities.push(ArtifactAnalysisService::observed_capability(
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
                 ArtifactCapability::ProcessExecution,
             ));
         }
@@ -181,7 +181,7 @@ duct = "0.13"
     /// common) bare-version form silently passed as "pinned".
     #[test]
     fn analyze_cargo_toml_flags_bare_version_as_unpinned() {
-        let service = ArtifactAnalysisService::new();
+        let service = ArtifactOrchestratorService::new();
         let content = r#"
 [package]
 name = "x"
@@ -203,7 +203,7 @@ serde = "1.0.0"
     /// fix does not over-fire on actually-pinned manifests.
     #[test]
     fn analyze_cargo_toml_respects_strict_equal_pin() {
-        let service = ArtifactAnalysisService::new();
+        let service = ArtifactOrchestratorService::new();
         let content = r#"
 [package]
 name = "x"
@@ -224,7 +224,7 @@ serde = "=1.0.0"
     /// unpinned finding (regression guard for the pre-existing detection).
     #[test]
     fn analyze_cargo_toml_still_flags_caret_tilde_wildcard() {
-        let service = ArtifactAnalysisService::new();
+        let service = ArtifactOrchestratorService::new();
         let content = r#"
 [package]
 name = "x"

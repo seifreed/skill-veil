@@ -1,4 +1,4 @@
-use super::{manifests, scripts, ArtifactAnalysisService, ArtifactLink};
+use super::{manifests, scripts, ArtifactLink, ArtifactOrchestratorService};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactCapabilityFact;
 use crate::detectors::{lockfiles, mcp};
@@ -27,7 +27,7 @@ const LOCKFILE_NAMES: &[&str] = &[
 ];
 
 pub(super) fn analyze(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     sibling_files: &[PathBuf],
@@ -80,7 +80,7 @@ pub(super) fn analyze(
 }
 
 pub(super) fn infer_relations(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
 ) -> Vec<ArtifactLink> {
@@ -111,7 +111,7 @@ pub(super) fn infer_relations(
 }
 
 pub(super) fn infer_capabilities(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
@@ -149,7 +149,7 @@ pub(super) fn infer_capabilities(
 }
 
 pub(super) fn expected_lockfiles(
-    _service: &ArtifactAnalysisService,
+    _service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
 ) -> Vec<&'static str> {

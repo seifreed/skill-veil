@@ -7,12 +7,12 @@
 use crate::artifact_graph::{ArtifactCapabilityFact, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
 use crate::ports::FileSystemProvider;
-use crate::services::{ArtifactAnalysisService, FileDiscoveryService};
+use crate::services::{ArtifactOrchestratorService, FileDiscoveryService};
 use crate::SkillDocument;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     fs_provider: &F,
     doc: &SkillDocument,
 ) -> ArtifactGraph {
@@ -21,11 +21,11 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
     graph.add_node_with_capabilities(
         root_path.clone(),
         artifact_kind_for_path::<F>(&doc.path),
-        artifact_capabilities(artifact_analysis, fs_provider, &doc.path),
+        artifact_capabilities(artifact_orchestration, fs_provider, &doc.path),
     );
     add_inferred_relations(
         &mut graph,
-        artifact_analysis,
+        artifact_orchestration,
         fs_provider,
         &doc.path,
         &root_path,
@@ -42,7 +42,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
             graph.add_node_with_capabilities(
                 manifest_path.clone(),
                 manifest_kind,
-                artifact_capabilities(artifact_analysis, fs_provider, &manifest),
+                artifact_capabilities(artifact_orchestration, fs_provider, &manifest),
             );
             graph.add_edge(
                 root_path.clone(),
@@ -51,14 +51,14 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
             );
             add_inferred_relations(
                 &mut graph,
-                artifact_analysis,
+                artifact_orchestration,
                 fs_provider,
                 &manifest,
                 &manifest_path,
             );
 
             for lockfile in sibling_expected_lockfiles_for_manifest(
-                artifact_analysis,
+                artifact_orchestration,
                 fs_provider,
                 &manifest,
                 parent_dir,
@@ -67,7 +67,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
                 graph.add_node_with_capabilities(
                     lockfile_path.clone(),
                     ArtifactKind::Lockfile,
-                    artifact_capabilities(artifact_analysis, fs_provider, &lockfile),
+                    artifact_capabilities(artifact_orchestration, fs_provider, &lockfile),
                 );
                 graph.add_edge(
                     manifest_path.clone(),
@@ -76,7 +76,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
                 );
                 add_inferred_relations(
                     &mut graph,
-                    artifact_analysis,
+                    artifact_orchestration,
                     fs_provider,
                     &lockfile,
                     &lockfile.display().to_string(),
@@ -90,7 +90,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
         graph.add_node_with_capabilities(
             referenced_path.clone(),
             artifact_kind_for_path::<F>(referenced_file),
-            artifact_capabilities(artifact_analysis, fs_provider, referenced_file),
+            artifact_capabilities(artifact_orchestration, fs_provider, referenced_file),
         );
         graph.add_edge(
             root_path.clone(),
@@ -99,7 +99,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
         );
         add_inferred_relations(
             &mut graph,
-            artifact_analysis,
+            artifact_orchestration,
             fs_provider,
             referenced_file,
             &referenced_file.display().to_string(),
@@ -239,7 +239,7 @@ fn is_lower_hex_byte(b: u8) -> bool {
 }
 
 fn artifact_capabilities<F: FileSystemProvider>(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     fs_provider: &F,
     path: &Path,
 ) -> Vec<ArtifactCapabilityFact> {
@@ -258,12 +258,12 @@ fn artifact_capabilities<F: FileSystemProvider>(
             "graph capability inference using lossy UTF-8 decode (likely binary content)"
         );
     }
-    artifact_analysis.infer_capabilities(path, &decoded.text)
+    artifact_orchestration.infer_capabilities(path, &decoded.text)
 }
 
 fn add_inferred_relations<F: FileSystemProvider>(
     graph: &mut ArtifactGraph,
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     fs_provider: &F,
     path: &Path,
     source_path: &str,
@@ -278,7 +278,7 @@ fn add_inferred_relations<F: FileSystemProvider>(
             "graph relation inference using lossy UTF-8 decode (likely binary content)"
         );
     }
-    for link in artifact_analysis.infer_relations(path, &decoded.text) {
+    for link in artifact_orchestration.infer_relations(path, &decoded.text) {
         graph.add_node(link.target.clone(), ArtifactKind::GenericArtifact);
         graph.add_edge(source_path.to_string(), link.target, link.relation);
     }
@@ -314,7 +314,7 @@ fn sibling_package_manifests<F: FileSystemProvider>(fs_provider: &F, path: &Path
 }
 
 fn sibling_expected_lockfiles_for_manifest<F: FileSystemProvider>(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     fs_provider: &F,
     manifest: &Path,
     parent_dir: &Path,
@@ -323,7 +323,7 @@ fn sibling_expected_lockfiles_for_manifest<F: FileSystemProvider>(
         return Vec::new();
     };
     let content = fc.decode_utf8_lossy().text;
-    artifact_analysis
+    artifact_orchestration
         .expected_lockfiles(manifest, &content)
         .into_iter()
         .map(|name| parent_dir.join(name))

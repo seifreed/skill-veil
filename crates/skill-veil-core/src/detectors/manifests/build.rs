@@ -3,8 +3,8 @@ use crate::detectors::patterns::line_invokes_shell_or_interpreter;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::artifact_analysis::manifests::strip_inline_hash_comment;
-use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
+use crate::services::artifact_orchestration::manifests::strip_inline_hash_comment;
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
 pub(crate) fn analyze_makefile(path: &Path, content: &str) -> Vec<Finding> {
@@ -50,12 +50,12 @@ pub(crate) fn makefile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     }
     let mut capabilities = Vec::new();
     if has_network {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
     if has_exec {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }

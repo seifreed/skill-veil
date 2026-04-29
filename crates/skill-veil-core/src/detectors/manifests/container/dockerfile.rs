@@ -5,10 +5,10 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
-use crate::services::artifact_analysis::manifests::strip_inline_hash_comment;
+use crate::services::artifact_orchestration::manifests::strip_inline_hash_comment;
 
 /// Tokens that, when present in a lowercased Dockerfile line, indicate the
 /// build pulls something from the network at image-build time.
@@ -89,22 +89,22 @@ pub(crate) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
 
     let mut capabilities = Vec::new();
     if has_expose {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
     if has_network_download {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
     if has_run {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }
     if has_copy_or_add {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::FilesystemWrite,
         ));
     }

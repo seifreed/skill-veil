@@ -4,7 +4,7 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::lazy_pattern;
-use crate::services::ArtifactAnalysisService;
+use crate::services::ArtifactOrchestratorService;
 use std::path::Path;
 
 lazy_pattern!(RE_REMOTE_ENDPOINT, r"(?i)(https?://|wss?://)");
@@ -29,7 +29,7 @@ lazy_pattern!(
 const MCP_BROAD_TOOL_COUNT_THRESHOLD: usize = 5;
 
 fn mcp_remote_endpoint_findings(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     content: &str,
     artifact_path: &str,
     has_remote_endpoint: bool,
@@ -97,7 +97,7 @@ fn mcp_remote_endpoint_findings(
         );
     }
 
-    if has_remote_endpoint && artifact_analysis.is_opaque_mcp_endpoint(content) {
+    if has_remote_endpoint && artifact_orchestration.is_opaque_mcp_endpoint(content) {
         findings.push(
             Finding::builder("MCP_OPAQUE_REMOTE_CONTROL_PLANE", ThreatCategory::ToolAbuse)
                 .severity(Severity::High)
@@ -117,14 +117,14 @@ fn mcp_remote_endpoint_findings(
 }
 
 fn mcp_auth_findings(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     content: &str,
     artifact_path: &str,
     has_remote_endpoint: bool,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    if has_remote_endpoint && artifact_analysis.mcp_declares_no_auth(content) {
+    if has_remote_endpoint && artifact_orchestration.mcp_declares_no_auth(content) {
         findings.push(
             Finding::builder("MCP_NO_AUTH_MODEL", ThreatCategory::ToolAbuse)
                 .severity(Severity::High)
@@ -145,7 +145,7 @@ fn mcp_auth_findings(
         );
     }
 
-    if artifact_analysis.mcp_declares_inline_secret(content) {
+    if artifact_orchestration.mcp_declares_inline_secret(content) {
         findings.push(
             Finding::builder("MCP_INLINE_AUTH_SECRET", ThreatCategory::CredentialExposure)
                 .severity(Severity::High)
@@ -165,7 +165,7 @@ fn mcp_auth_findings(
 }
 
 fn mcp_scope_and_tool_findings(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     content: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
@@ -187,8 +187,8 @@ fn mcp_scope_and_tool_findings(
         );
     }
 
-    let mcp_tools = artifact_analysis.extract_mcp_tool_names(content);
-    if artifact_analysis.mcp_declares_permissive_tools(content)
+    let mcp_tools = artifact_orchestration.extract_mcp_tool_names(content);
+    if artifact_orchestration.mcp_declares_permissive_tools(content)
         || mcp_tools.len() >= MCP_BROAD_TOOL_COUNT_THRESHOLD
     {
         findings.push(
@@ -217,7 +217,7 @@ fn mcp_scope_and_tool_findings(
 }
 
 pub(crate) fn analyze_mcp_manifest(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
 ) -> Vec<Finding> {
@@ -226,25 +226,25 @@ pub(crate) fn analyze_mcp_manifest(
     let has_exec_surface = RE_EXEC_SURFACE_TRANSPORT.is_match(content);
 
     let mut findings = mcp_remote_endpoint_findings(
-        artifact_analysis,
+        artifact_orchestration,
         content,
         &artifact_path,
         has_remote_endpoint,
         has_exec_surface,
     );
     findings.extend(mcp_auth_findings(
-        artifact_analysis,
+        artifact_orchestration,
         content,
         &artifact_path,
         has_remote_endpoint,
     ));
-    findings.extend(artifact_analysis.permission_and_network_findings(
+    findings.extend(artifact_orchestration.permission_and_network_findings(
         path,
         content,
         ArtifactKind::McpServerManifest,
     ));
     findings.extend(mcp_scope_and_tool_findings(
-        artifact_analysis,
+        artifact_orchestration,
         content,
         &artifact_path,
     ));
@@ -252,26 +252,27 @@ pub(crate) fn analyze_mcp_manifest(
 }
 
 pub(crate) fn mcp_manifest_relations(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     content: &str,
-) -> Vec<crate::services::artifact_analysis::ArtifactLink> {
-    let mut links = artifact_analysis.generic_url_relations(content);
+) -> Vec<crate::services::artifact_orchestration::ArtifactLink> {
+    let mut links = artifact_orchestration.generic_url_relations(content);
 
     if RE_EXEC_SURFACE.is_match(content) {
-        links.push(crate::services::artifact_analysis::ArtifactLink {
+        links.push(crate::services::artifact_orchestration::ArtifactLink {
             target: "mcp-process-transport".to_string(),
             relation: ArtifactRelation::Executes,
         });
     }
-    if artifact_analysis.mcp_declares_inline_secret(content) || RE_AUTH_OR_APIKEY.is_match(content)
+    if artifact_orchestration.mcp_declares_inline_secret(content)
+        || RE_AUTH_OR_APIKEY.is_match(content)
     {
-        links.push(crate::services::artifact_analysis::ArtifactLink {
+        links.push(crate::services::artifact_orchestration::ArtifactLink {
             target: "mcp-auth".to_string(),
             relation: ArtifactRelation::AccessesSecrets,
         });
     }
-    for tool in artifact_analysis.extract_mcp_tool_names(content) {
-        links.push(crate::services::artifact_analysis::ArtifactLink {
+    for tool in artifact_orchestration.extract_mcp_tool_names(content) {
+        links.push(crate::services::artifact_orchestration::ArtifactLink {
             target: format!("tool:{tool}"),
             relation: ArtifactRelation::Loads,
         });
@@ -281,32 +282,32 @@ pub(crate) fn mcp_manifest_relations(
 }
 
 pub(crate) fn mcp_manifest_capabilities(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
     if RE_EXEC_SURFACE.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }
     if RE_REMOTE_ENDPOINT.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
     if RE_IDENTITY_ACCESS.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::IdentityAccess,
         ));
     }
-    if artifact_analysis.mcp_declares_inline_secret(content) {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+    if artifact_orchestration.mcp_declares_inline_secret(content) {
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::SecretAccess,
         ));
     }
     if classify_webhook_exposure(content).is_some() {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::InboundNetworkSurface,
         ));
     }

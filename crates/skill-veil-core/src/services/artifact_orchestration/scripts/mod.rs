@@ -9,11 +9,11 @@ use crate::detectors::scripts::{
     detect_typosquatted_install,
 };
 use crate::findings::ArtifactKind;
-use crate::services::ArtifactAnalysisService;
+use crate::services::ArtifactOrchestratorService;
 use std::path::Path;
 
 pub(crate) fn analyze_script(
-    artifact_analysis: &ArtifactAnalysisService,
+    artifact_orchestration: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
 ) -> Vec<crate::findings::Finding> {
@@ -80,7 +80,7 @@ pub(crate) fn analyze_script(
         &language,
         &artifact_path,
     ));
-    findings.extend(artifact_analysis.permission_and_network_findings(
+    findings.extend(artifact_orchestration.permission_and_network_findings(
         path,
         content,
         ArtifactKind::ReferencedArtifact,
@@ -99,7 +99,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("http://")
         || lower.contains("https://")
     {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
@@ -109,7 +109,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("pip install")
         || lower.contains("cargo install")
     {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::InstallExecution,
         ));
     }
@@ -121,7 +121,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("start-process")
         || lower.contains("iex ")
     {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::ProcessExecution,
         ));
     }
@@ -138,7 +138,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("client_secret")
         || lower.contains("_authtoken")
     {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::SecretAccess,
         ));
     }
@@ -150,7 +150,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("autostart")
         || lower.contains("register-scheduledtask")
     {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::PersistenceSurface,
         ));
     }
@@ -161,7 +161,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("> /etc/")
         || lower.contains("set-content")
     {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::FilesystemWrite,
         ));
     }

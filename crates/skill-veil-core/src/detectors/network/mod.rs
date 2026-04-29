@@ -2,7 +2,7 @@
 //!
 //! `targets` produces the [`targets::NetworkTarget`] enum and
 //! per-line classifiers used by orchestration in
-//! `services::artifact_analysis::instructions`.
+//! `services::artifact_orchestration::instructions`.
 //!
 //! `webhook` recognises inbound webhook receivers shipped without
 //! authentication and returns a [`webhook::WebhookExposure`] enum

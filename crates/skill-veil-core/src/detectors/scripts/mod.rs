@@ -3,7 +3,7 @@
 //! Each submodule owns a coherent slice of the detection surface so that
 //! changes to (e.g.) the secret-exfiltration heuristic do not force the
 //! reader through unrelated injection-pattern logic. The orchestrator in
-//! `services::artifact_analysis::scripts::mod` composes these detectors
+//! `services::artifact_orchestration::scripts::mod` composes these detectors
 //! through the `pub(crate)` re-exports below.
 //!
 //! - [`network`] — remote-binary fetches and secret-file → network taint.

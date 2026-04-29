@@ -2,10 +2,10 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::artifact_analysis::manifests::{
+use crate::services::artifact_orchestration::manifests::{
     strip_inline_hash_comment, strip_inline_ini_comment,
 };
-use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
@@ -68,7 +68,7 @@ pub(crate) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
 }
 
 pub(crate) fn analyze_pyproject_toml(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     sibling_files: &[PathBuf],
@@ -254,12 +254,12 @@ pub(crate) fn requirements_txt_capabilities(content: &str) -> Vec<ArtifactCapabi
             continue;
         };
         if PYTHON_NETWORK_DEPS.iter().any(|d| dep_name == *d) {
-            capabilities.push(ArtifactAnalysisService::observed_capability(
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
                 ArtifactCapability::NetworkAccess,
             ));
         }
         if PYTHON_EXEC_DEPS.iter().any(|d| dep_name == *d) {
-            capabilities.push(ArtifactAnalysisService::observed_capability(
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
                 ArtifactCapability::ProcessExecution,
             ));
         }
@@ -300,12 +300,12 @@ pub(crate) fn pyproject_toml_capabilities(content: &str) -> Vec<ArtifactCapabili
             continue;
         };
         if PYTHON_NETWORK_DEPS.iter().any(|d| dep_name == *d) {
-            capabilities.push(ArtifactAnalysisService::observed_capability(
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
                 ArtifactCapability::NetworkAccess,
             ));
         }
         if PYTHON_EXEC_DEPS.iter().any(|d| dep_name == *d) {
-            capabilities.push(ArtifactAnalysisService::observed_capability(
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
                 ArtifactCapability::ProcessExecution,
             ));
         }
@@ -349,12 +349,12 @@ pub(crate) fn pip_conf_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
         }
     }
     if has_index_directive {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
     if has_client_cert {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::SecretAccess,
         ));
     }

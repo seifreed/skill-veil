@@ -7,7 +7,7 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
 use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, render_env_file};
@@ -261,7 +261,7 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
             })
         {
-            capabilities.push(ArtifactAnalysisService::declared_capability(
+            capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::PrivilegedRuntime,
             ));
         }
@@ -278,10 +278,10 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
                         && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
                 })
             {
-                capabilities.push(ArtifactAnalysisService::declared_capability(
+                capabilities.push(ArtifactOrchestratorService::declared_capability(
                     ArtifactCapability::HostFilesystemAccess,
                 ));
-                capabilities.push(ArtifactAnalysisService::declared_capability(
+                capabilities.push(ArtifactOrchestratorService::declared_capability(
                     ArtifactCapability::FilesystemWrite,
                 ));
             }
@@ -293,7 +293,7 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
             })
         {
-            capabilities.push(ArtifactAnalysisService::declared_capability(
+            capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::NetworkAccess,
             ));
         }
@@ -306,7 +306,7 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
             })
         {
-            capabilities.push(ArtifactAnalysisService::declared_capability(
+            capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::SecretAccess,
             ));
         }
@@ -318,7 +318,7 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
             })
         {
-            capabilities.push(ArtifactAnalysisService::declared_capability(
+            capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::ProcessExecution,
             ));
         }

