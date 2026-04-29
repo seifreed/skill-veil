@@ -14,7 +14,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_remote_binary_down
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     for (rule_id, regex) in REMOTE_BINARY_PATTERNS.iter() {
-        for matched in regex.find_iter(lower) {
+        for matched in regex.find_matches(lower) {
             let evidence = original_match_str(original, lower, &matched);
             findings.push(
                 Finding::builder(*rule_id, ThreatCategory::SupplyChain)

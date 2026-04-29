@@ -199,7 +199,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_injection_patterns
     language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    let patterns: &[(&str, regex::Regex)] = match language {
+    let patterns: &[(&str, crate::ports::CompiledPattern)] = match language {
         "sh" | "bash" | "zsh" => &SHELL_INJECTION_PATTERNS,
         "py" => &PYTHON_INJECTION_PATTERNS,
         "js" | "ts" | "mjs" | "cjs" | "mts" | "cts" => &NODE_INJECTION_PATTERNS,
@@ -208,7 +208,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_injection_patterns
     };
     let mut findings = Vec::new();
     for (rule_id, regex) in patterns {
-        for matched in regex.find_iter(lower) {
+        for matched in regex.find_matches(lower) {
             let evidence = original_match_str(original, lower, &matched);
             findings.push(
                 Finding::builder(*rule_id, ThreatCategory::RemoteExec)

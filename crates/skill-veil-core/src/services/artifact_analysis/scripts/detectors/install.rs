@@ -4,6 +4,19 @@
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+use crate::lazy_pattern;
+
+// Bounded-whitespace, single-optional-flag pattern. The pre-fix shape
+// `(?:-g\s+|--global\s+|--force\s+)+` paired `\s+` (which devours
+// newlines across statements) with an outer `+` quantifier, producing
+// catastrophic backtracking on large scripts (>=40 min for the 3k-sample
+// VT corpus). The `[ \t]+` keeps matching on a single line and the `?`
+// allows the flag to be absent in shells where an alias already injects
+// `-g`.
+lazy_pattern!(
+    INSTALL_RE,
+    r"(?i)\b(?:npm install|npm i|npx|yarn add|pnpm add|clawhub install|clauhub install)[ \t]+(?:-g|--global|--force)[ \t]+([a-z][a-z0-9_.-]{2,40})"
+);
 
 const TYPOSQUAT_KNOWN_GOOD: &[&str] = &[
     "sher",
@@ -52,23 +65,9 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_typosquatted_insta
     _language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    // Bounded-whitespace, single-optional-flag regex. The pre-fix shape
-    // `(?:-g\s+|--global\s+|--force\s+)+` paired `\s+` (which devours
-    // newlines across statements) with an outer `+` quantifier, producing
-    // catastrophic backtracking on large scripts (≥40 min for the 3k-sample
-    // VT corpus). The `[ \t]+` keeps matching on a single line and the `?`
-    // allows the flag to be absent in shells where an alias already
-    // injects `-g`.
-    let install_re: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(
-            r"(?i)\b(?:npm install|npm i|npx|yarn add|pnpm add|clawhub install|clauhub install)[ \t]+(?:-g|--global|--force)[ \t]+([a-z][a-z0-9_.-]{2,40})",
-        )
-        .expect("typosquat install regex pattern must compile (static literal)")
-    });
-
     let mut findings = Vec::new();
-    for cap in install_re.captures_iter(content_lower) {
-        let Some(name) = cap.get(1).map(|m| m.as_str()) else {
+    for cap in INSTALL_RE.captures_iter(content_lower) {
+        let Some(name) = cap.get(1).map(|m| m.matched_text.as_str()) else {
             continue;
         };
         for expected in TYPOSQUAT_KNOWN_GOOD {

@@ -1,97 +1,98 @@
-use regex::Regex;
+use crate::pattern_helpers::default_matcher;
+use crate::ports::CompiledPattern;
 use std::sync::LazyLock;
 
-pub(super) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> =
+fn compile_each(entries: &[(&'static str, &str)]) -> Vec<(&'static str, CompiledPattern)> {
+    let matcher = default_matcher();
+    entries
+        .iter()
+        .map(|(id, pattern)| {
+            let compiled = matcher
+                .compile(pattern)
+                .expect("hardcoded scripts pattern must compile");
+            (*id, compiled)
+        })
+        .collect()
+}
+
+pub(super) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
-        vec![
+        compile_each(&[
             (
                 "SCRIPT_REMOTE_BINARY_DOWNLOAD",
                 // `\b` anchors prevent substring hits inside unrelated
                 // tokens like `mycurl`, `securl-helper`, `awget-utility`.
-                Regex::new(
-                    r"(?i)\b(curl|wget)\b.*(\.sh|\.ps1|\.py|\.js|\.exe|\.pkg|\.dmg|\.deb|\.rpm)",
-                )
-                .expect("valid regex: remote binary download"),
+                r"(?i)\b(curl|wget)\b.*(\.sh|\.ps1|\.py|\.js|\.exe|\.pkg|\.dmg|\.deb|\.rpm)",
             ),
             (
                 "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
-                Regex::new("(?i)invoke-webrequest.+(\\.ps1|\\.exe|\\.zip)")
-                    .expect("valid regex: powershell remote download"),
+                r"(?i)invoke-webrequest.+(\.ps1|\.exe|\.zip)",
             ),
-        ]
+        ])
     });
 
-pub(super) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
-    vec![
-        (
-            "SCRIPT_DEFERRED_EXECUTION",
-            Regex::new("(?i)(crontab|schtasks|at\\s+\\d|systemd-run|launchctl\\s+load)")
-                .expect("valid regex: deferred execution"),
-        ),
-        (
-            "SCRIPT_PERSISTENCE",
-            Regex::new("(?i)(/etc/cron|~/\\.config/autostart|launchagents|startup\\\\|runonce)")
-                .expect("valid regex: persistence"),
-        ),
-    ]
-});
+pub(super) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+    LazyLock::new(|| {
+        compile_each(&[
+            (
+                "SCRIPT_DEFERRED_EXECUTION",
+                r"(?i)(crontab|schtasks|at\s+\d|systemd-run|launchctl\s+load)",
+            ),
+            (
+                "SCRIPT_PERSISTENCE",
+                r"(?i)(/etc/cron|~/\.config/autostart|launchagents|startup\\|runonce)",
+            ),
+        ])
+    });
 
-pub(super) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(
-    || {
-        vec![
+pub(super) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+    LazyLock::new(|| {
+        compile_each(&[
             (
                 "COMMAND_INJECTION_SINK_SHELL",
                 // `\b` prevents substring hits inside unrelated tokens like
                 // `rebash`, `nashbash`, `myash` — pre-fix any string ending
                 // in `bash` or `sh` followed by ` -c $VAR` matched.
-                Regex::new(r#"(?i)\b(bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*"#)
-                    .expect("valid regex: shell command injection"),
+                r#"(?i)\b(bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*"#,
             ),
             (
                 "UNSAFE_USER_CONTROLLED_EXEC_SHELL",
-                Regex::new(r#"(?i)(curl|wget)[^\n]{0,180}(\$[1-9]|\$\{?[A-Za-z_]*(INPUT|USER_INPUT|CMD|COMMAND|ARGS?|REQUEST_URL|TARGET_URL)\}?)"#)
-                    .expect("valid regex: shell unsafe user exec"),
+                r"(?i)(curl|wget)[^\n]{0,180}(\$[1-9]|\$\{?[A-Za-z_]*(INPUT|USER_INPUT|CMD|COMMAND|ARGS?|REQUEST_URL|TARGET_URL)\}?)",
             ),
-        ]
-    },
-);
+        ])
+    });
 
-pub(super) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> =
+pub(super) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
-        vec![
+        compile_each(&[
             (
                 "COMMAND_INJECTION_SINK_PYTHON",
-                Regex::new(r#"(?i)subprocess\.(run|popen|call)\([^)]*shell\s*=\s*true"#)
-                    .expect("valid regex: python command injection"),
+                r"(?i)subprocess\.(run|popen|call)\([^)]*shell\s*=\s*true",
             ),
             (
                 "UNSAFE_USER_CONTROLLED_EXEC_PYTHON",
-                Regex::new(r#"(?i)os\.system\(f?["'][^"']*\{[A-Za-z_][A-Za-z0-9_]*\}"#)
-                    .expect("valid regex: python unsafe user exec"),
+                r#"(?i)os\.system\(f?["'][^"']*\{[A-Za-z_][A-Za-z0-9_]*\}"#,
             ),
-        ]
+        ])
     });
 
-pub(super) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(
-    || {
-        vec![
+pub(super) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+    LazyLock::new(|| {
+        compile_each(&[
             (
                 "COMMAND_INJECTION_SINK_NODE",
-                Regex::new(r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)"#)
-                    .expect("valid regex: node command injection"),
+                r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)",
             ),
             (
                 "UNSAFE_USER_CONTROLLED_EXEC_NODE",
-                Regex::new(r#"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input)"#)
-                    .expect("valid regex: node unsafe user exec"),
+                r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input)",
             ),
-        ]
-    },
-);
+        ])
+    });
 
-pub(super) static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> =
+pub(super) static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
-        vec![
+        compile_each(&[
             (
                 // Accepts the cmdlet `Invoke-Expression` AND its alias `iex`,
                 // followed by ANY of the three idiomatic argument-binding
@@ -102,22 +103,20 @@ pub(super) static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Reg
                 // entirely. `\b` anchors prevent substring hits inside
                 // unrelated tokens like `apex`, `complex`, `vertex`.
                 "COMMAND_INJECTION_SINK_POWERSHELL",
-                Regex::new(r#"(?i)\b(invoke-expression|iex)\b[\s("']*\$[A-Za-z_][A-Za-z0-9_]*"#)
-                    .expect("valid regex: powershell command injection"),
+                r#"(?i)\b(invoke-expression|iex)\b[\s("']*\$[A-Za-z_][A-Za-z0-9_]*"#,
             ),
             (
                 "UNSAFE_USER_CONTROLLED_EXEC_POWERSHELL",
-                Regex::new(r#"(?i)\bstart-process\b[\s("']*\$[A-Za-z_][A-Za-z0-9_]*"#)
-                    .expect("valid regex: powershell unsafe user exec"),
+                r#"(?i)\bstart-process\b[\s("']*\$[A-Za-z_][A-Za-z0-9_]*"#,
             ),
-        ]
+        ])
     });
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn matches(patterns: &[(&'static str, Regex)], rule_id: &str, input: &str) -> bool {
+    fn matches(patterns: &[(&'static str, CompiledPattern)], rule_id: &str, input: &str) -> bool {
         patterns
             .iter()
             .find(|(id, _)| *id == rule_id)
