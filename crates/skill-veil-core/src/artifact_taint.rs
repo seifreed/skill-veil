@@ -154,10 +154,16 @@ mod tests {
             .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
             .expect("expected cross-node SECRET_TO_EXTERNAL_NETWORK finding");
 
-        let matched_path = match &cross.matched_on {
-            crate::findings::MatchTarget::ReferencedFile { path } => path.as_str(),
-            other => panic!("cross-node taint finding must use ReferencedFile, got {other:?}"),
+        let crate::findings::MatchTarget::ReferencedFile {
+            path: ref matched_path,
+        } = cross.matched_on
+        else {
+            unreachable!(
+                "cross-node taint finding MUST use ReferencedFile; got {:?}",
+                cross.matched_on
+            );
         };
+        let matched_path = matched_path.as_str();
         assert_eq!(
             cross.artifact_path.as_deref(),
             Some(matched_path),
