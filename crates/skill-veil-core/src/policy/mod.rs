@@ -9,11 +9,6 @@ pub(crate) mod serializers;
 pub(crate) mod state;
 pub(crate) mod types;
 
-#[cfg(test)]
-mod tests_filtering;
-#[cfg(test)]
-mod tests_generation;
-
 use crate::findings::{OperationalContext, RecommendedAction, Severity};
 
 pub use self::baseline::{BaselineEntry, BaselineFile, WaiverEntry, WaiverFile};
@@ -154,3 +149,8 @@ pub(crate) fn severity_to_sarif_level(severity: Severity) -> &'static str {
         Severity::Low => "note",
     }
 }
+
+#[cfg(test)]
+mod tests_filtering;
+#[cfg(test)]
+mod tests_generation;
