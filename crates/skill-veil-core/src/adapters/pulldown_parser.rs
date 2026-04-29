@@ -30,36 +30,15 @@ impl MarkdownParser for PulldownMarkdownParser {
         for event in parser {
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
-                    // Save previous section if exists
-                    if let Some(mut section) = current_section.take() {
-                        section.content = current_content.trim().to_string();
-                        section.code_blocks = code_blocks.clone();
-                        sections.push(section);
-                    } else if !current_content.trim().is_empty() || !code_blocks.is_empty() {
-                        // Preserve pre-heading content as a preamble section so
-                        // code blocks before the first heading are not discarded.
-                        sections.push(Section {
-                            name: String::new(),
-                            level: 0,
-                            content: current_content.trim().to_string(),
-                            code_blocks: code_blocks.clone(),
-                        });
-                    }
-                    current_content.clear();
-                    code_blocks.clear();
-
-                    let level_num = match level {
-                        HeadingLevel::H1 => 1,
-                        HeadingLevel::H2 => 2,
-                        HeadingLevel::H3 => 3,
-                        HeadingLevel::H4 => 4,
-                        HeadingLevel::H5 => 5,
-                        HeadingLevel::H6 => 6,
-                    };
-
+                    flush_section_or_preamble(
+                        &mut sections,
+                        current_section.take(),
+                        &mut current_content,
+                        &mut code_blocks,
+                    );
                     current_section = Some(Section {
                         name: String::new(),
-                        level: level_num,
+                        level: heading_level_to_u8(level),
                         content: String::new(),
                         code_blocks: Vec::new(),
                     });
@@ -72,24 +51,7 @@ impl MarkdownParser for PulldownMarkdownParser {
                 }
                 Event::Start(Tag::CodeBlock(kind)) => {
                     in_code_block = true;
-                    current_code_language = match kind {
-                        pulldown_cmark::CodeBlockKind::Fenced(lang) => {
-                            let lang = lang.to_string();
-                            if lang.is_empty() {
-                                None
-                            } else {
-                                // Lowercase mirrors the section-name convention at line 69
-                                // (`section.name = ...to_lowercase()`). Markdown fence
-                                // langs (`python` / `Python` / `PYTHON`) all refer to the
-                                // same language; downstream `has_code_language` compares
-                                // with `==`, so normalizing here keeps that comparison
-                                // case-insensitive without scattering
-                                // `eq_ignore_ascii_case` calls across every caller.
-                                Some(lang.to_ascii_lowercase())
-                            }
-                        }
-                        pulldown_cmark::CodeBlockKind::Indented => None,
-                    };
+                    current_code_language = code_block_language(&kind);
                     current_code.clear();
                 }
                 Event::End(TagEnd::CodeBlock) => {
@@ -133,6 +95,60 @@ impl MarkdownParser for PulldownMarkdownParser {
         }
 
         Ok(sections)
+    }
+}
+
+/// Push the in-flight section onto `sections` if one is active, or emit a
+/// synthetic preamble section that captures any pre-heading prose / code
+/// blocks. Resets the buffers so the caller can start the next section
+/// fresh. Centralising this logic keeps `parse_sections` short and ensures
+/// every Heading transition handles preamble identically.
+fn flush_section_or_preamble(
+    sections: &mut Vec<Section>,
+    current_section: Option<Section>,
+    current_content: &mut String,
+    code_blocks: &mut Vec<CodeBlock>,
+) {
+    if let Some(mut section) = current_section {
+        section.content = current_content.trim().to_string();
+        section.code_blocks = code_blocks.clone();
+        sections.push(section);
+    } else if !current_content.trim().is_empty() || !code_blocks.is_empty() {
+        // Preserve pre-heading content as a preamble section so code
+        // blocks before the first heading are not discarded.
+        sections.push(Section {
+            name: String::new(),
+            level: 0,
+            content: current_content.trim().to_string(),
+            code_blocks: code_blocks.clone(),
+        });
+    }
+    current_content.clear();
+    code_blocks.clear();
+}
+
+fn heading_level_to_u8(level: HeadingLevel) -> u8 {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
+    }
+}
+
+/// Extract a normalised language tag from a code-block kind. Lowercase
+/// mirrors the section-name convention so downstream `has_code_language`
+/// comparisons stay case-insensitive without sprinkling
+/// `eq_ignore_ascii_case` across callers.
+fn code_block_language(kind: &pulldown_cmark::CodeBlockKind<'_>) -> Option<String> {
+    match kind {
+        pulldown_cmark::CodeBlockKind::Fenced(lang) => {
+            let lang = lang.to_string();
+            (!lang.is_empty()).then(|| lang.to_ascii_lowercase())
+        }
+        pulldown_cmark::CodeBlockKind::Indented => None,
     }
 }
 
