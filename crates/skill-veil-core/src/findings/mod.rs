@@ -4,6 +4,7 @@
 
 mod builder;
 mod calibration;
+mod capability_scoring;
 mod dedup;
 mod enums;
 mod mapping;
