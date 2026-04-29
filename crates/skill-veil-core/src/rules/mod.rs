@@ -65,9 +65,9 @@ pub enum RuleError {
     /// Rule configuration is invalid
     #[error("Invalid rule configuration: {0}")]
     InvalidRule(String),
-    /// Failed to compile a regex pattern
-    #[error("Regex compilation failed: {0}")]
-    RegexError(#[from] regex::Error),
+    /// Failed to compile a pattern through the matcher port
+    #[error("Pattern compilation failed: {0}")]
+    PatternError(#[from] crate::ports::PatternError),
     /// Failed to parse YAML rule file
     #[error("YAML parsing error: {0}")]
     YamlError(#[from] serde_yaml::Error),

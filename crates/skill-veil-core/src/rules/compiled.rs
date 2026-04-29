@@ -3,6 +3,7 @@ use super::schema::Rule;
 use super::RuleError;
 use crate::analyzer::SkillDocument;
 use crate::findings::{ArtifactKind, EvidenceKind, Finding, MatchTarget, ThreatCategory};
+use crate::pattern_helpers::default_matcher;
 use crate::ports::PatternMatcher;
 
 /// Hard cap on the number of literal values a single `SectionContains`
@@ -77,11 +78,12 @@ impl CompiledRule {
     pub fn compile(rule: Rule) -> Result<Self, RuleError> {
         Self::validate_value_caps(&rule.condition)?;
         let pattern_strings = Self::extract_pattern_strings(&rule.condition);
-        // Validate all regex patterns at compile time to catch syntax errors early
+        // Validate all regex patterns at compile time to catch syntax errors
+        // early. Validation goes through the matcher port so the rule loader
+        // never depends on `regex::Regex` directly.
+        let matcher = default_matcher();
         for pattern in &pattern_strings {
-            if let Err(e) = regex::Regex::new(pattern) {
-                return Err(RuleError::RegexError(e));
-            }
+            matcher.compile(pattern)?;
         }
         Ok(Self {
             rule,
