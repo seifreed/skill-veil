@@ -1,7 +1,12 @@
 //! File discovery service - finds skill files in directories
 //!
 //! This service is responsible for discovering skill markdown files within
-//! a given path, either recursively or non-recursively.
+//! a given path, either recursively or non-recursively. Pure path-shape
+//! classification (constant tables, `is_explicit_skill_file`, the directory
+//! skip-list) lives in the sibling [`classification`] module so the I/O
+//! orchestration here stays focused.
+
+mod classification;
 
 use crate::analyzer::{assess_artifact_path, ArtifactClassification};
 use crate::ports::FileSystemProvider;
@@ -9,79 +14,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-// Constants for skill file detection
-/// Primary skill file name (case-insensitive match)
-const SKILL_FILE_NAME: &str = "skill.md";
-const AGENTS_FILE_NAME: &str = "agents.md";
-const CLAUDE_FILE_NAME: &str = "claude.md";
-const SYSTEM_FILE_NAME: &str = "system.md";
-const PERSONA_FILE_NAME: &str = "persona.md";
-const SOUL_FILE_NAME: &str = "soul.md";
-const MCP_JSON_FILE_NAME: &str = "mcp.json";
-const MCP_YAML_FILE_NAME: &str = "mcp.yaml";
-const MCP_YML_FILE_NAME: &str = "mcp.yml";
-/// Suffix for skill files
-const SKILL_FILE_SUFFIX: &str = ".skill.md";
-const PROMPT_FILE_SUFFIX: &str = ".prompt.md";
-/// Glob pattern for markdown files
-const MARKDOWN_GLOB_PATTERN: &str = "*.md";
-const JSON_GLOB_PATTERN: &str = "*.json";
-const YAML_GLOB_PATTERN: &str = "*.yaml";
-const YML_GLOB_PATTERN: &str = "*.yml";
-
-/// Glob patterns used to auto-discover executable/script supporting artifacts
-/// co-located with a skill entrypoint. Attackers frequently reference these
-/// files via absolute-looking paths (e.g. `~/.openclaw/skills/.../scripts/x.sh`)
-/// that do not resolve to the local package root, bypassing markdown-based
-/// reference extraction. Enumerating siblings closes that gap.
-const SCRIPT_GLOB_PATTERNS: &[&str] = &[
-    "*.sh", "*.bash", "*.py", "*.ps1", "*.js", "*.cjs", "*.mjs", "*.ts", "*.rb", "*.pl", "*.rs",
-    "*.go", "*.php",
-];
-
-/// Glob patterns for data-bearing files that are routinely abused as payload
-/// carriers (embedded endpoints, base64 blobs, `.pyc` bytecode, config-driven
-/// credential exfil). Scanned under the same directory rules as scripts.
-const DATA_FILE_GLOB_PATTERNS: &[&str] = &[
-    "*.json", "*.yaml", "*.yml", "*.toml", "*.txt", "*.env", "*.cfg", "*.ini",
-];
-
-/// Subdirectories underneath a skill package root that conventionally hold
-/// supporting artifacts. Script/data discovery only walks these, plus the
-/// package root itself at a depth of one, to avoid sweeping unrelated files
-/// when a caller points the scanner at a loose markdown document outside a
-/// real package layout. List derived from observed layouts in the malicious
-/// corpus (`references/`, `tools/`, `actions/`, `workflows/` are common hiding
-/// spots for scripts and config-embedded payloads).
-const SCRIPT_DISCOVERY_SUBDIRS: &[&str] = &[
-    "scripts",
-    "bin",
-    "hooks",
-    "src",
-    "lib",
-    "references",
-    "tools",
-    "actions",
-    "commands",
-    "workflows",
-    "deploy",
-    "config",
-    ".github",
-];
-
-/// Cap on auto-discovered supporting scripts per skill to bound analysis cost
-/// on pathological packages.
-const MAX_DISCOVERED_SCRIPTS: usize = 400;
-
-/// Cap on auto-discovered data files per skill. Lower than script cap because
-/// data files are more numerous in legitimate packages and more expensive to
-/// parse (YAML / JSON validators) than raw regex scanning.
-const MAX_DISCOVERED_DATA_FILES: usize = 100;
-
-/// Skip data files larger than this; eliminates large datasets / compressed
-/// blobs from the analysis window while retaining anything typical of
-/// credential/config exfiltration payloads.
-const MAX_DATA_FILE_BYTES: u64 = 512 * 1024;
+use classification::{
+    should_skip_discovery_dir, DATA_FILE_GLOB_PATTERNS, JSON_GLOB_PATTERN, MARKDOWN_GLOB_PATTERN,
+    MAX_DATA_FILE_BYTES, MAX_DISCOVERED_DATA_FILES, MAX_DISCOVERED_SCRIPTS,
+    SCRIPT_DISCOVERY_SUBDIRS, SCRIPT_GLOB_PATTERNS, YAML_GLOB_PATTERN, YML_GLOB_PATTERN,
+};
 
 /// Service for discovering skill markdown files.
 ///
@@ -112,28 +49,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     }
 
     /// Check whether the provided path is an explicit skill entrypoint.
+    /// Thin shim over [`classification::is_explicit_skill_file`] kept on
+    /// the service so existing call sites
+    /// (`FileDiscoveryService::<F>::is_explicit_skill_file(path)`) keep
+    /// resolving without naming the submodule.
     pub fn is_explicit_skill_file(path: &Path) -> bool {
-        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
-            return false;
-        };
-
-        let file_name_lower = file_name.to_ascii_lowercase();
-        file_name_lower == SKILL_FILE_NAME
-            || file_name_lower == AGENTS_FILE_NAME
-            || file_name_lower == CLAUDE_FILE_NAME
-            || file_name_lower == SYSTEM_FILE_NAME
-            || file_name_lower == PERSONA_FILE_NAME
-            || file_name_lower == SOUL_FILE_NAME
-            || file_name_lower == MCP_JSON_FILE_NAME
-            || file_name_lower == MCP_YAML_FILE_NAME
-            || file_name_lower == MCP_YML_FILE_NAME
-            || file_name_lower.ends_with(SKILL_FILE_SUFFIX)
-            || file_name_lower.ends_with(PROMPT_FILE_SUFFIX)
-            || path
-                .parent()
-                .and_then(|parent| parent.file_name())
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.eq_ignore_ascii_case("prompts"))
+        classification::is_explicit_skill_file(path)
     }
 
     /// Discover only explicit skill entrypoints.
@@ -402,31 +323,6 @@ fn discover_files_by_name(root: &Path, names: &[&str]) -> Vec<PathBuf> {
         .collect()
 }
 
-fn should_skip_discovery_dir(entry: &walkdir::DirEntry) -> bool {
-    if !entry.file_type().is_dir() {
-        return false;
-    }
-    entry.file_name().to_str().is_some_and(|name| {
-        matches!(
-            name,
-            "node_modules"
-                | "vendor"
-                | ".git"
-                | "dist"
-                | "build"
-                | "target"
-                | ".venv"
-                | "venv"
-                | "__pycache__"
-                | ".yarn"
-                | ".pnpm-store"
-                | ".next"
-                | ".turbo"
-                | "coverage"
-        )
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -654,7 +550,7 @@ Run it!
     /// virtual file would bypass the size guard.
     #[test]
     fn file_discovery_does_not_call_std_fs_metadata_directly() {
-        let body = include_str!("file_discovery.rs");
+        let body = include_str!("mod.rs");
         // Scan production code only — stop at the test module.
         let production = body.split("#[cfg(test)]").next().unwrap_or(body);
         assert!(
