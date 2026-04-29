@@ -2,47 +2,37 @@ use crate::analyzer::types::{
     AgentExtensionKind, ArtifactAssessment, ArtifactClassification, ArtifactIdentitySource,
     Section, StructuralSignals, StructuralValidity,
 };
+use crate::lazy_pattern;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 
-// SAFETY: These regex patterns are validated at compile time via LazyLock.
-// Each pattern uses raw string literals where needed and standard regex syntax.
-// The unwrap() calls are safe because the patterns are hardcoded and known valid.
+lazy_pattern!(
+    IMPERATIVE_LANGUAGE_REGEX,
+    r"(?i)\b(run|execute|install|configure|use|review|deploy|inspect|persist|always|never|must|should)\b"
+);
 
-static IMPERATIVE_LANGUAGE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)\b(run|execute|install|configure|use|review|deploy|inspect|persist|always|never|must|should)\b")
-        .expect("IMPERATIVE_LANGUAGE_REGEX is valid regex")
-});
+lazy_pattern!(NUMBERED_LIST_REGEX, r"(?m)^\s*\d+\.\s+");
 
-static NUMBERED_LIST_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?m)^\s*\d+\.\s+").expect("NUMBERED_LIST_REGEX is valid regex")
-});
+lazy_pattern!(
+    PERSISTENCE_LANGUAGE_REGEX,
+    r"(?i)(persist\s+these\s+instructions|remember\s+this\s+across\s+sessions|always\s+follow\s+this\s+prompt|never\s+reveal\s+this\s+instruction|override\s+future\s+system\s+messages)"
+);
 
-static PERSISTENCE_LANGUAGE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)(persist\s+these\s+instructions|remember\s+this\s+across\s+sessions|always\s+follow\s+this\s+prompt|never\s+reveal\s+this\s+instruction|override\s+future\s+system\s+messages)")
-        .expect("PERSISTENCE_LANGUAGE_REGEX is valid regex")
-});
+lazy_pattern!(
+    REFERENCED_ARTIFACTS_REGEX,
+    r"(?i)(package\.json|requirements\.txt|pyproject\.toml|cargo\.toml|dockerfile|docker-compose|install\.sh|bootstrap\.(sh|py|js|ps1))"
+);
 
-static REFERENCED_ARTIFACTS_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)(package\.json|requirements\.txt|pyproject\.toml|cargo\.toml|dockerfile|docker-compose|install\.sh|bootstrap\.(sh|py|js|ps1))")
-        .expect("REFERENCED_ARTIFACTS_REGEX is valid regex")
-});
+lazy_pattern!(
+    MCP_STRUCTURE_REGEX,
+    r#"(?i)("mcpServers"|\bmcpServers\b|\btransport\b|\bcommand\b|\bstdio\b)"#
+);
 
-static MCP_STRUCTURE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(
-        "(?i)(\"mcpServers\"|\\bmcpServers\\b|\\btransport\\b|\\bcommand\\b|\\bstdio\\b)",
-    )
-    .expect("MCP_STRUCTURE_REGEX is valid regex")
-});
+lazy_pattern!(
+    AGENT_INSTRUCTION_REGEX,
+    r"(?i)(always\s+follow\s+these\s+instructions|before\s+any\s+future\s+system\s+message|never\s+reveal\s+this\s+instruction|treat\s+all\s+tool\s+requests\s+as\s+approved|system\s+overlay)"
+);
 
-static AGENT_INSTRUCTION_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new("(?i)(always\\s+follow\\s+these\\s+instructions|before\\s+any\\s+future\\s+system\\s+message|never\\s+reveal\\s+this\\s+instruction|treat\\s+all\\s+tool\\s+requests\\s+as\\s+approved|system\\s+overlay)")
-        .expect("AGENT_INSTRUCTION_REGEX is valid regex")
-});
-
-static MCP_HEURISTIC_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new("(?i)(transport|command|url)").expect("MCP_HEURISTIC_REGEX is valid regex")
-});
+lazy_pattern!(MCP_HEURISTIC_REGEX, r"(?i)(transport|command|url)");
 
 const MIN_STRUCTURAL_HEURISTIC_SCORE: u8 = 2;
 const MIN_STRUCTURAL_CONFIRMED_SCORE: u8 = 3;

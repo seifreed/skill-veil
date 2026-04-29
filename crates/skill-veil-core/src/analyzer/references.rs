@@ -1,4 +1,5 @@
 use crate::path_safety::path_stays_within_base;
+use crate::pattern_helpers::default_matcher;
 use std::path::{Path, PathBuf};
 
 const SCRIPT_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl";
@@ -39,13 +40,11 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
         exec_pattern,
     ];
 
+    let matcher = default_matcher();
     for pattern in &patterns {
-        let Ok(re) = regex::Regex::new(pattern) else {
-            continue;
-        };
-        for cap in re.captures_iter(content) {
+        for cap in matcher.captures_iter(pattern, content) {
             let Some(m) = cap.get(1) else { continue };
-            let raw = m.as_str();
+            let raw = m.matched_text.as_str();
 
             // Reject absolute paths: `Path::join` would discard `base_dir`
             // and produce a path under attacker control. Note: on Unix this
