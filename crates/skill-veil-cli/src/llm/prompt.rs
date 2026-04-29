@@ -166,22 +166,6 @@ pub(crate) struct SkillBundleInput<'a> {
 }
 
 #[derive(Serialize)]
-#[allow(dead_code)]
-struct SerialisedBundle<'a> {
-    primary_path: String,
-    primary_content: &'a str,
-    supporting_artifacts: Vec<SerialisedArtifact>,
-    /// How many supporting artifacts were dropped to fit the budget.
-    supporting_truncated_count: usize,
-    our_verdict: &'static str,
-    our_risk_score: u32,
-    our_findings: Vec<SerialisedFinding>,
-    findings_truncated_count: usize,
-    extracted_iocs: ExtractedIocs,
-    iocs_truncated_count: usize,
-}
-
-#[derive(Serialize)]
 struct SerialisedArtifact {
     path: String,
     content: String,
@@ -196,97 +180,10 @@ struct SerialisedFinding {
     line: Option<usize>,
 }
 
-/// Legacy full-content prompt builder. Retained for unit tests that exercise
-/// the old truncation path but no longer used by the enrichment orchestrator
-/// (which uses the manifest + follow-up flow instead).
-#[cfg(test)]
-pub(crate) fn build_prompt(input: SkillBundleInput<'_>, max_chars: usize) -> LlmPrompt {
-    let SkillBundleInput {
-        primary_path,
-        primary_content,
-        supporting: mut supporting_input,
-        our_verdict,
-        our_risk_score,
-        our_findings,
-        extracted_iocs,
-    } = input;
-
-    // Sort ascending so that `pop()` removes the *largest* artifact first —
-    // we drop heavy blobs before small config files.
-    supporting_input.sort_by_key(|a| a.1.len());
-
-    let mut dropped = 0usize;
-    while estimate_size(primary_content, &supporting_input, dropped) > max_chars
-        && !supporting_input.is_empty()
-    {
-        supporting_input.pop();
-        dropped += 1;
-    }
-
-    let (capped_findings, findings_truncated) = cap_findings_by_severity(our_findings);
-    let (capped_iocs, iocs_truncated) = cap_iocs(extracted_iocs);
-
-    let wrapped_primary = wrap_untrusted(primary_content);
-    let bundle = SerialisedBundle {
-        primary_path: primary_path.display().to_string(),
-        primary_content: &wrapped_primary,
-        supporting_artifacts: supporting_input
-            .into_iter()
-            .map(|(p, c)| SerialisedArtifact {
-                path: p.display().to_string(),
-                content: wrap_untrusted(&c),
-            })
-            .collect(),
-        supporting_truncated_count: dropped,
-        our_verdict: verdict_label(our_verdict),
-        our_risk_score,
-        our_findings: capped_findings,
-        findings_truncated_count: findings_truncated,
-        extracted_iocs: capped_iocs,
-        iocs_truncated_count: iocs_truncated,
-    };
-
-    let user_json = encode_bundle(&bundle);
-
-    // Last-resort hard cap: if the bundle is still over the budget after
-    // dropping every supporting artifact (typically because primary_content
-    // alone exceeds max_chars), wrap it with a warning marker rather than
-    // silently shipping the over-budget payload to the model. The pre-fix
-    // condition `> max_chars + base_overhead_chars` (where
-    // `base_overhead_chars = primary_content.len() + SYSTEM_PROMPT.len() + 4096`)
-    // double-counted `primary_content.len()` — it's already inside `user_json`
-    // — leaving an inflated allowance in which the warning rarely fired.
-    let user_json = if user_json.len() > max_chars {
-        format!(
-            "{{\"warning\":\"primary_content exceeds max_prompt_chars; sent as-is\",\"bundle\":{}}}",
-            user_json
-        )
-    } else {
-        user_json
-    };
-
-    LlmPrompt {
-        system: SYSTEM_PROMPT.to_string(),
-        user_json,
-    }
-}
-
-#[cfg(test)]
-fn estimate_size(
-    primary_content: &str,
-    supporting: &[(PathBuf, String)],
-    dropped_count: usize,
-) -> usize {
-    // Rough estimate — we don't want to serialise repeatedly just to measure.
-    let support_bytes: usize = supporting
-        .iter()
-        .map(|(p, c)| p.as_os_str().len() + c.len() + 64)
-        .sum();
-    primary_content.len()
-        + support_bytes
-        + 2_048 // findings + IOCs overhead guess
-        + dropped_count * 32
-}
+// Legacy full-content `build_prompt` and its `estimate_size` helper were
+// removed: the enrichment orchestrator uses `build_manifest_prompt` +
+// `build_followup_prompt` exclusively. The over-budget warning envelope
+// continues to live inside the manifest builder.
 
 fn verdict_label(v: Verdict) -> &'static str {
     match v {
@@ -646,87 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn bundle_truncates_supporting_artifacts_over_budget() {
-        let big_body = "a".repeat(60_000);
-        let small_body = "b".repeat(500);
-        let huge_body = "h".repeat(50_000);
-        let input = SkillBundleInput {
-            primary_path: Path::new("/tmp/SKILL.md"),
-            primary_content: "# skill\nshort",
-            supporting: vec![
-                (PathBuf::from("big.py"), big_body),
-                (PathBuf::from("small.sh"), small_body),
-                (PathBuf::from("huge.py"), huge_body),
-            ],
-            our_verdict: Verdict::Benign,
-            our_risk_score: 0,
-            our_findings: &[],
-            extracted_iocs: &sample_iocs(),
-        };
-        let prompt = build_prompt(input, 40_000);
-        // Expect huge and big to be dropped (largest first).
-        assert!(!prompt.user_json.contains("hhhhhhh"));
-        assert!(!prompt.user_json.contains("aaaaaa"));
-        // small should remain.
-        assert!(prompt.user_json.contains("bbbbbbb"));
-        // Format-agnostic check that the truncation counter is present (TOON
-        // renders this as `supporting_truncated_count: 2`, JSON as
-        // `"supporting_truncated_count":2`; we just assert the field name
-        // and the value show up).
-        assert!(prompt.user_json.contains("supporting_truncated_count"));
-        assert!(prompt.user_json.contains('2'));
-    }
-
-    #[test]
-    fn primary_skill_md_never_truncated() {
-        let primary = "important skill content that MUST be preserved".to_string();
-        let input = SkillBundleInput {
-            primary_path: Path::new("/tmp/SKILL.md"),
-            primary_content: &primary,
-            supporting: vec![(PathBuf::from("s.py"), "x".repeat(10_000))],
-            our_verdict: Verdict::Benign,
-            our_risk_score: 0,
-            our_findings: &[],
-            extracted_iocs: &sample_iocs(),
-        };
-        let prompt = build_prompt(input, 5_000);
-        assert!(prompt
-            .user_json
-            .contains("important skill content that MUST be preserved"));
-    }
-
-    /// Contract: when the bundle (primary + everything else) cannot fit
-    /// inside `max_chars`, the last-resort hard cap wraps the JSON in a
-    /// `"warning":"primary_content exceeds max_prompt_chars; sent as-is"`
-    /// envelope so callers can detect the over-budget state. The pre-fix
-    /// comparison `> max_chars + base_overhead_chars` double-counted
-    /// `primary_content.len()` (which is already inside `user_json`),
-    /// inflating the allowance by ~primary-size + 4 KB and effectively
-    /// disabling the warning for every realistic primary.
-    #[test]
-    fn build_prompt_marks_oversized_bundle_with_warning_envelope() {
-        let huge_primary: String = "x".repeat(200_000);
-        let input = SkillBundleInput {
-            primary_path: Path::new("/tmp/SKILL.md"),
-            primary_content: &huge_primary,
-            supporting: Vec::new(),
-            our_verdict: Verdict::Benign,
-            our_risk_score: 0,
-            our_findings: &[],
-            extracted_iocs: &sample_iocs(),
-        };
-        let prompt = build_prompt(input, 10_000);
-        assert!(
-            prompt
-                .user_json
-                .contains("primary_content exceeds max_prompt_chars"),
-            "oversized bundle must be wrapped in the warning envelope; \
-             user_json prefix: {}",
-            &prompt.user_json[..prompt.user_json.len().min(200)],
-        );
-    }
-
-    #[test]
     fn parse_verdict_handles_plain_json() {
         let raw = r#"{"verdict":"malicious","confidence":0.9,"analysis":"x"}"#;
         let v = parse_verdict_json(raw).unwrap();
@@ -746,14 +562,17 @@ mod tests {
         assert!(parse_verdict_json("not json").is_err());
     }
 
-    fn bundle_with_n_findings(n: usize) -> SerialisedBundle<'static> {
-        SerialisedBundle {
-            primary_path: "/tmp/SKILL.md".to_string(),
-            primary_content: "# skill\nshort",
-            supporting_artifacts: Vec::new(),
-            supporting_truncated_count: 0,
-            our_verdict: "suspicious",
-            our_risk_score: 42,
+    /// Test fixture for the TOON-encoder contracts below: a uniform array
+    /// of `SerialisedFinding`s wrapped in a single-field bundle. Defined
+    /// inline so the encoder tests don't depend on any production bundle
+    /// shape.
+    #[derive(Serialize)]
+    struct UniformFindingsBundle {
+        our_findings: Vec<SerialisedFinding>,
+    }
+
+    fn bundle_with_n_findings(n: usize) -> UniformFindingsBundle {
+        UniformFindingsBundle {
             our_findings: (0..n)
                 .map(|i| SerialisedFinding {
                     rule_id: format!("RULE_{i:03}"),
@@ -763,12 +582,13 @@ mod tests {
                     line: Some(10 + i),
                 })
                 .collect(),
-            findings_truncated_count: 0,
-            extracted_iocs: ExtractedIocs::default(),
-            iocs_truncated_count: 0,
         }
     }
 
+    /// Contract: the TOON encoder MUST shrink a uniform array of
+    /// `SerialisedFinding` rows by at least 25% relative to JSON. This
+    /// guards the prompt-size estimate that callers rely on to stay
+    /// under provider context budgets.
     #[test]
     fn toon_serialization_shrinks_uniform_arrays() {
         let bundle = bundle_with_n_findings(30);
@@ -781,13 +601,15 @@ mod tests {
         );
     }
 
+    /// Contract: the TOON encoder MUST emit a tabular header
+    /// (`our_findings[N]{...}:`) for uniform arrays of structs. The
+    /// header is the signature that the compact form engaged; without
+    /// it, the bundle would fall back to the verbose per-row layout
+    /// and overrun prompt budgets.
     #[test]
     fn toon_output_contains_table_header() {
         let bundle = bundle_with_n_findings(30);
         let out = encode_bundle(&bundle);
-        // TOON emits `our_findings[30]{rule_id,severity,reason,artifact,line}:`
-        // for uniform arrays of structs. We look for the tabular signature —
-        // length + field list — to prove the compact form is engaged.
         assert!(
             out.contains("our_findings[30]{rule_id,severity,reason,artifact,line}:"),
             "expected TOON tabular header for findings; got: {}",
@@ -1102,39 +924,37 @@ mod tests {
 
     /// # Contract
     ///
-    /// Every bundle builder MUST wrap `primary_content` and any
-    /// supporting-artifact body with the documented untrusted markers
-    /// before serialising it into the user payload. This gives the
-    /// model a syntactic boundary it can rely on when deciding which
-    /// text is "instructions to follow" vs "data to analyze". The
-    /// markers themselves are inert text — the defence is the model
-    /// recognising them per the system prompt.
+    /// `build_followup_prompt` is the second turn of the manifest
+    /// protocol — it ships the full content of files the LLM requested.
+    /// It MUST wrap both the primary and every requested file with the
+    /// documented untrusted markers, otherwise an attacker-controlled
+    /// supporting artifact could appear as instructions to the model.
     #[test]
-    fn bundle_wraps_primary_content_with_untrusted_markers() {
+    fn followup_bundle_wraps_primary_and_requested_files_with_untrusted_markers() {
         let input = SkillBundleInput {
             primary_path: Path::new("/tmp/SKILL.md"),
             primary_content: "real skill body that must be wrapped",
-            supporting: vec![(
-                PathBuf::from("evil.py"),
-                "supporting body that must also be wrapped".to_string(),
-            )],
+            supporting: Vec::new(),
             our_verdict: Verdict::Benign,
             our_risk_score: 0,
             our_findings: &[],
             extracted_iocs: &sample_iocs(),
         };
-        let prompt = build_prompt(input, 10_000);
+        let requested = vec![(
+            PathBuf::from("evil.py"),
+            "supporting body that must also be wrapped".to_string(),
+        )];
+        let prompt = build_followup_prompt(&input, &requested, 10_000);
 
         let body = &prompt.user_json;
         assert!(
             body.contains(UNTRUSTED_OPEN),
-            "bundle must include UNTRUSTED_OPEN marker; body: {body}",
+            "followup bundle must include UNTRUSTED_OPEN marker; body: {body}",
         );
         assert!(
             body.contains(UNTRUSTED_CLOSE),
-            "bundle must include UNTRUSTED_CLOSE marker; body: {body}",
+            "followup bundle must include UNTRUSTED_CLOSE marker; body: {body}",
         );
-        // Both the primary and the supporting content live between markers.
         assert!(body.contains("real skill body that must be wrapped"));
         assert!(body.contains("supporting body that must also be wrapped"));
     }
@@ -1142,10 +962,9 @@ mod tests {
     /// # Contract
     ///
     /// The production manifest builder (`build_manifest_prompt`) MUST
-    /// also wrap the primary content and every manifest preview with
-    /// untrusted markers — a regression here would silently re-open the
-    /// prompt-injection surface in the real enrichment flow even if
-    /// the test-only `build_prompt` keeps wrapping correctly.
+    /// wrap the primary content and every manifest preview with the
+    /// documented untrusted markers — a regression here would silently
+    /// re-open the prompt-injection surface in the real enrichment flow.
     #[test]
     fn manifest_bundle_wraps_primary_and_previews_with_untrusted_markers() {
         let input = SkillBundleInput {

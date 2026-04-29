@@ -1,29 +1,27 @@
-//! Unified skill-veil configuration loader.
+//! Unified skill-veil LLM configuration loader.
 //!
-//! A single `~/.skill-veil.toml` consolidates VT and LLM provider settings.
-//! The legacy `~/.vt.toml` (single-field `apikey = "…"`) is still accepted as
-//! a fallback so users already using the VT-only integration don't have to
-//! migrate.
+//! `~/.skill-veil.toml` carries provider settings for the LLM enrichment
+//! engine. VirusTotal credentials live in their own loader at
+//! [`crate::vt::config`] (it predates this module and resolves
+//! `~/.vt.toml` plus `VT_APIKEY`).
 //!
 //! # Resolution order (first non-empty wins, per field)
-//! 1. Environment variables (`VT_APIKEY`, `OPENAI_API_KEY`,
-//!    `ANTHROPIC_API_KEY`, `OLLAMA_CLOUD_API_KEY`).
-//! 2. `~/.skill-veil.toml` (preferred).
-//! 3. `~/.vt.toml` — legacy, only contributes to `[vt].apikey`.
+//! 1. Environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+//!    `OLLAMA_CLOUD_API_KEY`, `XAI_API_KEY`/`GROK_API_KEY`,
+//!    `PERPLEXITY_API_KEY`/`PERPLEXITY_API`).
+//! 2. `~/.skill-veil.toml`.
 //!
-//! The loader is lossy on purpose: missing sections produce `None` rather
-//! than errors, so callers can branch on "is this engine configured?"
-//! without handling "config file syntax error but this engine isn't used"
-//! edge cases.
+//! The loader is lossy on purpose: a missing `[llm]` section produces
+//! `None` rather than an error, so callers can branch on "is the LLM
+//! engine configured?" without handling "config file syntax error but
+//! this engine isn't used" edge cases.
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 const UNIFIED_CONFIG_NAME: &str = ".skill-veil.toml";
-const LEGACY_VT_CONFIG_NAME: &str = ".vt.toml";
 
-const VT_APIKEY_ENV: &str = "VT_APIKEY";
 const OPENAI_APIKEY_ENV: &str = "OPENAI_API_KEY";
 const ANTHROPIC_APIKEY_ENV: &str = "ANTHROPIC_API_KEY";
 const OLLAMA_CLOUD_APIKEY_ENV: &str = "OLLAMA_CLOUD_API_KEY";
@@ -42,18 +40,7 @@ const PERPLEXITY_APIKEY_ENV_ALIAS: &str = "PERPLEXITY_API";
 /// Fully-resolved config, ready for consumers.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UnifiedConfig {
-    /// Reserved for a future migration where we stop reading `~/.vt.toml`
-    /// via `VtConfig::load` and consume this section instead. Kept in the
-    /// public struct now so the loader proves the section parses.
-    #[allow(dead_code)]
-    pub vt: Option<VtConfigSection>,
     pub llm: Option<LlmConfigSection>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct VtConfigSection {
-    #[allow(dead_code)]
-    pub apikey: String,
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +64,6 @@ pub(crate) enum LlmProviderKind {
 
 impl LlmProviderKind {
     /// Stable wire name, used in output formatting and cache keys.
-    #[allow(dead_code)]
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             LlmProviderKind::OpenAi => "openai",
@@ -307,25 +293,13 @@ impl UnifiedConfig {
             read_file_if_exists(&path)
         });
 
-        let legacy_vt = home.as_ref().and_then(|h| {
-            let path = h.join(LEGACY_VT_CONFIG_NAME);
-            read_file_if_exists(&path)
-        });
-
         let parsed_unified: Option<FileFormat> = file_contents
             .map(|c| {
                 toml::from_str(&c).map_err(|e| anyhow!("invalid {}: {}", UNIFIED_CONFIG_NAME, e))
             })
             .transpose()?;
 
-        let parsed_legacy_vt: Option<LegacyVtFormat> = legacy_vt
-            .map(|c| {
-                toml::from_str(&c).map_err(|e| anyhow!("invalid {}: {}", LEGACY_VT_CONFIG_NAME, e))
-            })
-            .transpose()?;
-
         Ok(Self {
-            vt: resolve_vt(parsed_unified.as_ref(), parsed_legacy_vt.as_ref()),
             llm: resolve_llm(parsed_unified.as_ref())?,
         })
     }
@@ -362,23 +336,6 @@ fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
             None
         }
     }
-}
-
-fn resolve_vt(
-    unified: Option<&FileFormat>,
-    legacy: Option<&LegacyVtFormat>,
-) -> Option<VtConfigSection> {
-    let env_key = std::env::var(VT_APIKEY_ENV).ok();
-    let file_key = unified
-        .and_then(|f| f.vt.as_ref())
-        .and_then(|s| s.apikey.clone());
-    let legacy_key = legacy.and_then(|l| l.apikey.clone());
-
-    let apikey = env_key.or(file_key).or(legacy_key)?.trim().to_string();
-    if apikey.is_empty() {
-        return None;
-    }
-    Some(VtConfigSection { apikey })
 }
 
 fn resolve_llm(unified: Option<&FileFormat>) -> Result<Option<LlmConfigSection>> {
@@ -526,15 +483,7 @@ fn host_is_loopback(url: &url::Url) -> bool {
 #[derive(Debug, Deserialize, Serialize, Default)]
 struct FileFormat {
     #[serde(default)]
-    vt: Option<FileVtSection>,
-    #[serde(default)]
     llm: Option<FileLlmSection>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Default)]
-struct FileVtSection {
-    #[serde(default)]
-    apikey: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -569,12 +518,6 @@ struct FileLlmLimits {
     request_timeout_secs: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
-struct LegacyVtFormat {
-    #[serde(default)]
-    apikey: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -584,12 +527,14 @@ mod tests {
     // parallel `cargo test` runs from stepping on each other.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Contract: `~/.skill-veil.toml` parses every documented `[llm.*]`
+    /// sub-table — the active provider, per-provider sections, and the
+    /// shared `[llm.limits]` block — without flagging any of them as
+    /// unknown sub-keys (the TOML loader uses `#[serde(flatten)]` for
+    /// per-provider sections).
     #[test]
-    fn parses_unified_toml_with_vt_and_llm() {
+    fn parses_unified_toml_with_llm_sections() {
         let src = r#"
-[vt]
-apikey = "vt-key"
-
 [llm]
 provider = "anthropic"
 
@@ -605,19 +550,11 @@ max_prompt_chars = 80000
 request_timeout_secs = 60
 "#;
         let f: FileFormat = toml::from_str(src).unwrap();
-        assert_eq!(f.vt.as_ref().unwrap().apikey.as_deref(), Some("vt-key"));
         let llm = f.llm.as_ref().unwrap();
         assert_eq!(llm.provider.as_deref(), Some("anthropic"));
         assert_eq!(llm.providers.len(), 2);
         assert!(llm.providers.contains_key("anthropic"));
         assert!(llm.providers.contains_key("openai"));
-    }
-
-    #[test]
-    fn parses_legacy_vt_toml() {
-        let src = r#"apikey = "legacy""#;
-        let f: LegacyVtFormat = toml::from_str(src).unwrap();
-        assert_eq!(f.apikey.as_deref(), Some("legacy"));
     }
 
     #[test]
@@ -730,35 +667,8 @@ model = "gpt-4o-mini"
     }
 
     #[test]
-    fn resolve_vt_prefers_env_over_file() {
-        let _g = ENV_LOCK.lock().unwrap();
-        std::env::set_var(VT_APIKEY_ENV, "env-vt-key");
-        let unified = FileFormat {
-            vt: Some(FileVtSection {
-                apikey: Some("file-vt-key".into()),
-            }),
-            llm: None,
-        };
-        let got = resolve_vt(Some(&unified), None);
-        assert_eq!(got.unwrap().apikey, "env-vt-key");
-        std::env::remove_var(VT_APIKEY_ENV);
-    }
-
-    #[test]
-    fn resolve_vt_falls_back_to_legacy_when_unified_missing() {
-        let _g = ENV_LOCK.lock().unwrap();
-        std::env::remove_var(VT_APIKEY_ENV);
-        let legacy = LegacyVtFormat {
-            apikey: Some("legacy-vt".into()),
-        };
-        let got = resolve_vt(None, Some(&legacy));
-        assert_eq!(got.unwrap().apikey, "legacy-vt");
-    }
-
-    #[test]
     fn resolve_llm_rejects_unknown_provider() {
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("unknown".into()),
                 providers: BTreeMap::new(),
@@ -772,7 +682,6 @@ model = "gpt-4o-mini"
     #[test]
     fn resolve_llm_ensures_active_provider_has_entry() {
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("ollama".into()),
                 providers: BTreeMap::new(),
@@ -789,7 +698,6 @@ model = "gpt-4o-mini"
         let _g = ENV_LOCK.lock().unwrap();
         std::env::set_var(ANTHROPIC_APIKEY_ENV, "env-anthropic-key");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("anthropic".into()),
                 providers: {
@@ -822,7 +730,6 @@ model = "gpt-4o-mini"
         std::env::remove_var(OLLAMA_CLOUD_APIKEY_ENV);
         std::env::set_var(OLLAMA_APIKEY_ENV_ALIAS, "alias-key");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("ollama-cloud".into()),
                 providers: BTreeMap::new(),
@@ -844,7 +751,6 @@ model = "gpt-4o-mini"
         std::env::set_var(XAI_APIKEY_ENV, "xai-primary");
         std::env::remove_var(GROK_APIKEY_ENV_ALIAS);
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("grok".into()),
                 providers: BTreeMap::new(),
@@ -863,7 +769,6 @@ model = "gpt-4o-mini"
         std::env::remove_var(XAI_APIKEY_ENV);
         std::env::set_var(GROK_APIKEY_ENV_ALIAS, "grok-alias");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("xai".into()),
                 providers: BTreeMap::new(),
@@ -882,7 +787,6 @@ model = "gpt-4o-mini"
         std::env::set_var(XAI_APIKEY_ENV, "xai-primary");
         std::env::set_var(GROK_APIKEY_ENV_ALIAS, "grok-alias");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("grok".into()),
                 providers: BTreeMap::new(),
@@ -902,7 +806,6 @@ model = "gpt-4o-mini"
         std::env::set_var(PERPLEXITY_APIKEY_ENV, "pplx-primary");
         std::env::remove_var(PERPLEXITY_APIKEY_ENV_ALIAS);
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("perplexity".into()),
                 providers: BTreeMap::new(),
@@ -924,7 +827,6 @@ model = "gpt-4o-mini"
         std::env::remove_var(PERPLEXITY_APIKEY_ENV);
         std::env::set_var(PERPLEXITY_APIKEY_ENV_ALIAS, "pplx-alias");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("pplx".into()),
                 providers: BTreeMap::new(),
@@ -946,7 +848,6 @@ model = "gpt-4o-mini"
         std::env::set_var(PERPLEXITY_APIKEY_ENV, "primary");
         std::env::set_var(PERPLEXITY_APIKEY_ENV_ALIAS, "alias");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("perplexity".into()),
                 providers: BTreeMap::new(),
@@ -969,7 +870,6 @@ model = "gpt-4o-mini"
         std::env::set_var(OLLAMA_CLOUD_APIKEY_ENV, "primary");
         std::env::set_var(OLLAMA_APIKEY_ENV_ALIAS, "alias");
         let unified = FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some("ollama-cloud".into()),
                 providers: BTreeMap::new(),
@@ -1102,7 +1002,6 @@ model = "gpt-4o-mini"
             },
         );
         FileFormat {
-            vt: None,
             llm: Some(FileLlmSection {
                 provider: Some(provider.to_string()),
                 providers,

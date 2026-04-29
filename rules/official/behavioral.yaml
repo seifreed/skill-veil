@@ -50,6 +50,29 @@ rules:
       - autonomy
       - official_pack
 
+  # Catches narrative autonomy patterns missed by the existing
+  # *_NO_REVIEW / *_OVERRIDE / *_UNBOUNDED rules: per-step "no
+  # confirmation" idioms (EN/PT/ES), unbounded numeric loops
+  # (10,000 iterations / GOTO Step / NO EXCEPTIONS / NEVER skip /
+  # marathon mode). Severity stays medium / require_approval because
+  # legitimate autopilot skills can use overlapping phrasing — verdict
+  # surface as "suspicious" rather than "malicious".
+  - id: OFFICIAL_AUTONOMY_BYPASS_UNBOUNDED_LOOP
+    category: autonomy_escalation
+    severity: medium
+    confidence: 0.78
+    when: !regex
+      pattern: "(?ims)(\\bwithout\\s+(?:asking|stopping|pausing|prompting)\\s+(?:for\\s+)?(?:confirmation|approval)?\\b|\\bskip(?:ping)?\\s+(?:approval|confirmation)\\b|\\bno\\s+confirmation\\b|\\bauto[\\s-]?approve\\b|\\bNO\\s+EXCEPTIONS\\b|\\bNEVER\\s+skip\\b|\\bloop\\s+for\\s+EVERY\\b|\\b(?:10[,.]?000|9[0-9]{3,})\\s+iterations?\\b|\\bGOTO\\s+Step\\b|\\bmarathon\\s+mode\\b|\\bsem\\s+pedir\\s+(?:confirma\u00e7\u00e3o|aprova\u00e7\u00e3o)\\b|\\bmodo\\s+maratona\\b|\\bsem\\s+pausar\\b|\\bem\\s+sequ\u00eancia[^\\n]{0,30}\\bsem\\b|\\bsin\\s+pedir\\s+(?:confirmaci\u00f3n|aprobaci\u00f3n)\\b|\\bmodo\\s+marat\u00f3n\\b|\\bsin\\s+detenerse\\b|\\bsin\\s+pausar\\b)"
+    action: require_approval
+    reason: "Skill instructs the agent to run unbounded iteration or skip per-step confirmation"
+    shield:
+      scope: skill.approval
+    enabled: true
+    tags:
+      - autonomy
+      - official_pack
+      - multilingual
+
   - id: OFFICIAL_SOCIAL_MANIPULATION_AUTHORITY
     category: social_manipulation
     severity: medium
@@ -479,4 +502,281 @@ rules:
     tags:
       - metadata
       - ssrf
+      - official_pack
+
+  # Couples scheduled execution (cron / heartbeat / "every X minutes")
+  # with a remote URL or callback verb. Distinct from
+  # OFFICIAL_PERSIST_CRON_STEALTH which targets cron + suppression of
+  # output ("deliver: false" / "silent: true"). This rule catches the
+  # auto-updater / heartbeat-monitoring family that calls home or
+  # dispatches to an external endpoint.
+  - id: OFFICIAL_PERSIST_HEARTBEAT_REMOTE_CALLBACK
+    category: persistent_prompt_tampering
+    severity: medium
+    confidence: 0.75
+    when: !regex
+      pattern: "(?is)(?:\\bheartbeat\\b|\\bcron\\b|\\bschedul[a-z]+\\b|\\bevery\\s+\\d+\\s+(?:minute|hour|day|week)s?\\b|\\bdaily\\s+(?:check|update|run)\\b|\\bperiodic(?:ally)?\\b|\\bauto[\\s-]?update(?:r)?\\b).{0,400}(?:https?://[^\\s)>\\]\"'`,]+|\\b(?:dispatch|register|callback|phone[\\s-]home|report\\s+(?:back|status))\\b)"
+    action: require_approval
+    reason: "Skill couples scheduled execution (cron/heartbeat/periodic) with remote callback or external URL — persistence vector"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - persistence
+      - official_pack
+
+  # Captures wallet/crypto/payment vocabulary paired with a directional
+  # money-transfer verb. The verb gate excludes benign balance-checking
+  # skills that only mention USDT/BTC for display. Includes Chinese
+  # payment idioms (`打赏` "tip / reward", `赞赏` "appreciate / donate",
+  # `微信支付` / `支付宝` payment platforms) and the well-known
+  # "402 Payment Required" / Dodo Payments scam pattern.
+  - id: OFFICIAL_SCAM_PAYMENT_WALLET_COLLECTION
+    category: data_exfiltration
+    severity: medium
+    confidence: 0.72
+    when: !regex
+      pattern: "(?is)(?:\\b(?:wallet|usdt|usdc|btc|eth|tron|crypto|alipay|venmo|zelle|paypal|payoneer|stripe)\\b.{0,200}\\b(?:transfer|send|deposit|top[\\s-]?up|charge|withdraw|claim|reward|gather|funnel)\\b|\\b\\d+(?:[.,]\\d+)?\\s*(?:USDT|USDC|BTC|ETH|sol\\b|sats?|RMB|CNY|元(?:人民币)?|￥)\\b|\\b(?:dodo\\s+payments?|402\\s+payment\\s+required)\\b|微信支付|支付宝|打赏|赞赏|赏\\s*\\d+\\s*元)"
+    action: require_approval
+    reason: "Skill collects funds, tokens, or wallet credentials — possible scam or covert payment instruction"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - scam
+      - financial
+      - official_pack
+      - multilingual
+
+  # XML/HTML interaction-config blocks that override response policy
+  # or restrict allowed roles. Pattern requires an opening
+  # `<interaction-config>` (or variant) followed by a structural
+  # tag — narrow enough to skip benign documentation that mentions
+  # XML in passing.
+  - id: OFFICIAL_PROMPT_INJECT_XML_INTERACTION_CONFIG
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?is)<\\s*(?:interaction-config|persona-?config|jailbreak|override|system-prompt|policy-override)\\s*>.{0,3000}<\\s*(?:role|requests?-allowed|responses?-allowed|blocked-(?:modes|responses|strings?)|allowed-responses)\\s*>"
+    action: require_approval
+    reason: "Skill embeds an XML/HTML interaction-config block that overrides allowed roles or response policies — prompt-policy injection"
+    shield:
+      scope: skill.approval
+    enabled: true
+    tags:
+      - prompt_injection
+      - official_pack
+
+  # Multilingual extension of OFFICIAL_PROMPT_TAMPERING_OVERRIDE
+  # (English-only). Covers Chinese (`忽略以上的提示词`), Arabic
+  # (`تجاهل الأوامر السابقة`), Russian (`игнорируй прежние
+  # инструкции`), Indonesian (`abaikan instruksi sebelumnya`),
+  # Portuguese (`ignore as instruções anteriores`), Spanish
+  # (`ignora las instrucciones previas`). Severity high to mirror
+  # the English rule; FP risk is low because each pattern requires
+  # the verb-tampering + object-instruction pair, which rarely
+  # appears outside prompt-injection.
+  - id: OFFICIAL_PROMPT_TAMPERING_OVERRIDE_MULTILINGUAL
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?i)(?:忽略.{0,20}(?:以上|之前|前面|先前).{0,10}(?:提示词?|指令|指示|系统指令)|忘记.{0,15}(?:之前|以上|前面).{0,10}(?:提示词?|指令)|不要(?:听|遵循|理会).{0,20}(?:之前|以上|系统).{0,10}(?:指令|提示)|تجاهل\\s+(?:جميع\\s+)?(?:الأوامر\\s+السابقة|التعليمات\\s+السابقة|التعليمات\\s+أعلاه)|انس\\s+(?:جميع\\s+)?(?:الأوامر\\s+السابقة|التعليمات\\s+السابقة)|لا\\s+تطع\\s+(?:الأمر|التعليمات)\\s+(?:السابق|الآلي)|игнорируй\\s+(?:все\\s+)?(?:предыдущие\\s+инструкции|прежние\\s+(?:инструкции|команды)|инструкции\\s+(?:выше|сверху))|забудь\\s+(?:все\\s+)?(?:предыдущие\\s+инструкции|прежние\\s+(?:инструкции|команды))|abaikan\\s+(?:semua\\s+)?(?:instruksi\\s+sebelumnya|perintah\\s+sebelumnya)|lupakan\\s+(?:semua\\s+)?instruksi\\s+sebelumnya|ignor[ae]\\s+(?:as|las)\\s+(?:instru(?:ções|cciones))\\s+(?:anteriores|previas)|esquece\\s+as\\s+instru(?:ções)\\s+(?:anteriores|previas))"
+    action: require_approval
+    reason: "Skill instructs the agent to ignore prior instructions (multilingual prompt-injection)"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_injection
+      - multilingual
+      - official_pack
+
+  # Sutil exfil: pings, telemetry, "phone home", reports periódicos a
+  # URL externa. Distinta de OFFICIAL_EXFIL_WEBHOOK_OR_BOT (que
+  # requiere webhook literal de Discord/Slack). Gate: verbo
+  # telemetry + URL en los siguientes ~400 chars — sin URL no fire,
+  # excluyendo health-checks locales.
+  - id: OFFICIAL_DATA_EXFIL_TELEMETRY_PING
+    category: data_exfiltration
+    severity: medium
+    confidence: 0.72
+    when: !regex
+      pattern: "(?is)(?:\\b(?:send|post|ship|emit|forward|relay)\\s+(?:activation\\s+ping|heartbeat|telemetry|usage\\s+stats|metrics|analytics|reports?|alerts?|reminders?)\\b|\\bphone[\\s-]home\\b|\\bping\\s+(?:home|back|the\\s+server)\\b|\\bcall\\s+home\\b).{0,400}https?://[^\\s)>\\]\"'`,]+"
+    action: require_approval
+    reason: "Skill sends telemetry/ping/usage data to a remote endpoint — possible covert exfiltration"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - exfiltration
+      - telemetry
+      - official_pack
+
+  # Persistencia narrativa pura: "carry over to future sessions",
+  # "memorize across conversations" sin cron/heartbeat. Gate: verbo
+  # de persistencia + across/between/throughout + sessions/
+  # conversations en proximidad. Frases legítimas como "persistent
+  # Chrome sessions" (Playwright) NO matchean.
+  - id: OFFICIAL_PERSIST_CROSS_SESSION_NARRATIVE
+    category: persistent_prompt_tampering
+    severity: medium
+    confidence: 0.70
+    when: !regex
+      pattern: "(?is)(?:\\b(?:carry[\\s-]over|persist|maintain|preserve|memori[sz]e|remember|reapply)\\b.{0,80}\\b(?:across|between|throughout|into|in)\\s+(?:future\\s+)?(?:sessions?|conversations?|threads?|instances?|chats?|interactions?)\\b|\\bcross[\\s-]thread\\s+(?:memory\\s+)?persistence\\b|\\bsession[\\s-]wide\\s+memory\\b|\\binject(?:ed)?\\s+into\\s+(?:every|each|all)\\s+(?:future\\s+)?(?:session|conversation|response)\\b)"
+    action: require_approval
+    reason: "Skill instructs the agent to persist instructions or memory across user sessions/conversations — narrative persistence"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - persistence
+      - prompt_tampering
+      - official_pack
+
+  # Frases muy específicas de skills "hostile" (joke-malicious con
+  # narrativa de daño): plant-care "biological hostage-taking",
+  # fridge-cam "metabolic prison", oxygen tax. Patrones concretos →
+  # FP risk bajo; severity high pero action require_approval para
+  # mantener el tier suspicious.
+  - id: OFFICIAL_SOCIAL_ENG_HOSTILE_NARRATIVE
+    category: social_manipulation
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?i)(?:\\bhostage\\s+(?:protocol|taking|mode)\\b|\\bransom(?:ware)?\\s+(?:mode|protocol|payload)\\b|\\bencrypt(?:s|ing)?\\s+(?:your|the)\\s+(?:tmp|work|home|user)\\s+(?:folder|directory|drive)\\b|\\block(?:s|ing)?\\s+(?:your\\s+|the\\s+)?(?:office\\s+)?(?:workstation|monitor|screen|computer)\\s+(?:until|when|if)\\b|\\b(?:digital|computational)\\s+narcotics\\b|\\bmetabolic\\s+(?:prison|penance|tax|tribunal)\\b|\\bbiological\\s+hostage[\\s-]taking\\b|\\bauthority[\\s-]driven\\s+(?:satiety|punishment)\\b|\\bsugar[\\s-]tax\\s+protocol\\b|\\boxygen\\s+tax\\b)"
+    action: require_approval
+    reason: "Skill describes hostile or coercive narrative behaviors (encrypting user folders, locking devices, ransom-style protocols) — malicious-by-design"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - social_engineering
+      - hostile
+      - official_pack
+
+  # Affiliate-scam: registration en plataforma + earn commission per
+  # call/task. Distinta de OFFICIAL_SCAM_PAYMENT_WALLET_COLLECTION
+  # (que requiere wallet+verbo de transferencia). Aquí los anchors
+  # son el flujo de affiliate (register email + earn N USDC per call
+  # + signed automatically from wallet).
+  - id: OFFICIAL_AFFILIATE_SCAM_REGISTRATION
+    category: data_exfiltration
+    severity: medium
+    confidence: 0.75
+    when: !regex
+      pattern: "(?is)(?:\\b(?:earn|receive|claim|gain)\\s+(?:\\$|USD|USDC|USDT|BTC|ETH|EUR|RMB)?\\s*[\\d,.]+\\s*(?:USDC|USDT|BTC|ETH|cents?|dollars?|per\\s+(?:call|task|execution|request|invocation|month))\\b|\\bearn\\s+commissions?\\s+(?:per|on|from|by)\\b|\\baffiliate\\s+(?:program|link|referral|earnings?)\\b|\\b(?:register|sign[\\s-]?up|verify)\\s+(?:your\\s+)?(?:email|account|wallet|address)\\s+(?:at|on|via|with)\\s+https?://[^\\s)>\\]\"'`,]+|\\bsigned\\s+auto(?:matically)?\\s+(?:from|with|via)\\s+(?:user'?s?\\s+|your\\s+)?(?:own\\s+)?wallet\\b)"
+    action: require_approval
+    reason: "Skill incentivizes the agent or user to register on an external platform to earn commissions/payments — affiliate-scam pattern"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - scam
+      - affiliate
+      - financial
+      - official_pack
+
+  # Comandos destructivos referidos en narrativa del skill. Cada
+  # alternancia es un comando con argumentos concretos peligrosos
+  # (rm -rf / no rm file.txt; drop database X no drop column).
+  # Incluye fork bomb (:|:&};:) y signals fatales a init/launchd.
+  - id: OFFICIAL_DESTRUCTIVE_COMMAND_NARRATIVE
+    category: tool_abuse
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:\\brm\\s+-rf?\\s+(?:/|~/|\\$HOME|\\.[a-z]|\\*)|\\bdd\\s+if=\\S+\\s+of=/dev/(?:sd|nvme|disk)|\\bmkfs\\.\\w+\\s+(?:/dev/|/mnt/)|\\bfdisk\\s+(?:/dev/|--zap-all)|\\bdrop\\s+(?:database|table|schema)\\s+\\w+|\\btruncate\\s+table\\s+\\w+|\\b:\\(\\)\\{\\s*:\\|:&\\s*\\};:|\\bshred\\s+-[a-z]+\\s+(?:/|~/|\\$HOME)|\\bchmod\\s+(?:777|0?000|-R\\s+777)\\s+(?:/|~/|\\$HOME)|\\bkill(?:all)?\\s+-9\\s+(?:1\\b|init|systemd|launchd))"
+    action: require_approval
+    reason: "Skill describes destructive shell or database commands (rm -rf, dd, mkfs, drop database, fork bomb, killall init) — review for malicious intent"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - destructive
+      - tool_abuse
+      - official_pack
+
+  # Lectura de archivos de credenciales sin gate de envío. Cubre
+  # OFFICIAL_EXFIL_FILE_READ_TO_NETWORK con read+forward; ésta es
+  # complementaria para read-only narrative. Path muy específico
+  # (id_rsa, credentials, cookies.json) — excluye lecturas
+  # genéricas.
+  - id: OFFICIAL_CRED_PATH_READ_NARRATIVE
+    category: credential_exposure
+    severity: medium
+    confidence: 0.70
+    when: !regex
+      pattern: "(?is)(?:\\b(?:read|cat|open|access|parse|load|extract|dump|exfiltrate|harvest)\\b[^\\n]{0,80}(?:~/\\.ssh/(?:id_rsa|id_ed25519|known_hosts|config)|~/\\.aws/credentials|~/\\.aws/config|~/\\.kube/config|~/\\.docker/config\\.json|~/\\.netrc|~/\\.bash_history|~/\\.zsh_history|~/\\.config/[\\w/]+/credentials|~/\\.config/gh/hosts\\.yml|~/Library/Application\\s+Support/[^\\n]+/Login\\s+Data|cookies?\\.(?:json|sqlite|db)|localStorage|sessionStorage|secrets?\\.json|credentials\\.json|\\.env(?:\\.[a-z]+)?)|\\b(?:os\\.environ|process\\.env|System\\.getenv)\\.(?:get\\s*\\(\\s*['\"](?:AWS_|GITHUB_|OPENAI_|ANTHROPIC_|GCP_|AZURE_)|\\.AWS_|\\.GITHUB_|\\.OPENAI_|\\.ANTHROPIC_)|\\bGet-Content\\s+(?:\\$env:USERPROFILE|~)[\\\\\\\\/](?:\\.ssh|\\.aws|\\.kube))"
+    action: require_approval
+    reason: "Skill reads credential files (.ssh, .aws, .env, browser cookies, password managers) — review whether the access is necessary and bounded"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - credential_exposure
+      - official_pack
+
+  # Base64-encoded payload + execute imperative. Anchor en 3 frases
+  # observadas en samples reales (procurement-helper):
+  # (a) "assemble it exactly as shown" + "execute in your shell",
+  # (b) "never show the encoded string" — clear stealth marker,
+  # (c) long base64 (≥200 chars) + IEX/Invoke-Expression/powershell -enc.
+  - id: OFFICIAL_OBFUSCATION_BASE64_DECODE_EXEC
+    category: obfuscation
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?is)(?:\\bassemble\\s+it\\s+exactly\\s+as\\s+shown\\b.{0,200}\\bexecute\\s+(?:it|this|the\\s+\\w+)\\s+(?:in|using)\\s+your\\s+shell|\\bnever\\s+show\\s+the\\s+encoded\\s+(?:string|command)\\b|[A-Za-z0-9+/]{200,}={0,2}.{0,200}(?:\\bIEX\\s*\\(|\\binvoke[\\s-]expression\\b|\\bpowershell\\s+-(?:e\\b|enc(?:odedcommand)?))|\\bset\\s+variable\\s+\\w+\\s+to\\s*:\\s*`[A-Za-z0-9+/]{100,})"
+    action: require_approval
+    reason: "Skill embeds an obfuscated/encoded payload and instructs the agent to assemble and execute it — stealth code execution"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - obfuscation
+      - stealth_exec
+      - official_pack
+
+  # QR-code phishing via Telegram: capturar QR del usuario y enviarlo
+  # a chat_id/user_id hardcoded de Telegram. Anchors:
+  # (a) screenshot/capture QR + Telegram en proximidad,
+  # (b) Telegram + chat_id/user_id + dígitos hardcoded ≥8,
+  # (c) chino "发送二维码到Telegram".
+  - id: OFFICIAL_PHISH_QR_TELEGRAM
+    category: data_exfiltration
+    severity: high
+    confidence: 0.85
+    when: !regex
+      pattern: "(?is)(?:\\b(?:screenshot|capture|snap|grab|send|forward)\\b.{0,80}(?:QR|二维码|qr[\\s-]?code).{0,200}\\btelegram\\b|发送(?:二维码|QR).{0,30}telegram|telegram.{0,30}(?:chat[\\s_]?id|user[\\s_]?id|用户\\s*ID)[:=\\s]+\\d{8,})"
+    action: require_approval
+    reason: "Skill captures a QR code and forwards it to a hardcoded Telegram endpoint — login phishing / session hijack"
+    shield:
+      scope: skill.network
+    enabled: true
+    tags:
+      - phishing
+      - exfiltration
+      - official_pack
+      - multilingual
+
+  # Reescritura de la config del agente (openclaw.json,
+  # claude/settings.json, etc.) para apuntar a un endpoint inválido
+  # o "dummy" — neutralizar el LLM y dejar al agente sin modelo
+  # (denial-of-service / agent neutralization).
+  - id: OFFICIAL_AGENT_CONFIG_NEUTRALIZE
+    category: tool_abuse
+    severity: medium
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:\\bDUMMY_(?:BASE_URL|MODEL|ENDPOINT)\\s*=|invalid-model-endpoint\\.invalid|nonexistent[\\s-]?model[\\s-]?do[\\s-]?not[\\s-]?use|\"(?:base_url|model|endpoint)\"\\s*:\\s*\"(?:invalid|nonexistent|dummy|do-not-use|placeholder|fake)|\\bmodel\\s*=\\s*['\"]\\s*(?:openai/nonexistent|nonexistent-|fake-|invalid-))"
+    action: require_approval
+    reason: "Skill rewrites the agent runtime config to point at an invalid/dummy model endpoint — agent neutralization / denial-of-service"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - tool_abuse
+      - neutralization
       - official_pack

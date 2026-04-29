@@ -61,7 +61,7 @@ impl LlmProvider for AnthropicProvider {
             ],
             &body,
         )?;
-        parse_messages_response(&text, &self.model)
+        parse_messages_response(&text)
     }
 
     fn name(&self) -> &'static str {
@@ -73,7 +73,7 @@ impl LlmProvider for AnthropicProvider {
     }
 }
 
-pub(crate) fn parse_messages_response(body: &str, model: &str) -> Result<LlmRawResponse, LlmError> {
+pub(crate) fn parse_messages_response(body: &str) -> Result<LlmRawResponse, LlmError> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| LlmError::Decode(e.to_string()))?;
     // content: [{ "type": "text", "text": "..." }, ...] — concatenate text blocks.
@@ -91,21 +91,15 @@ pub(crate) fn parse_messages_response(body: &str, model: &str) -> Result<LlmRawR
     if content.is_empty() {
         return Err(LlmError::Decode("no text blocks in response".into()));
     }
-    let usage_tokens = v["usage"]["output_tokens"]
-        .as_u64()
-        .and_then(|o| v["usage"]["input_tokens"].as_u64().map(|i| (i + o) as u32));
-    Ok(LlmRawResponse {
-        content,
-        usage_tokens,
-        provider: "anthropic",
-        model: model.to_string(),
-    })
+    Ok(LlmRawResponse { content })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Contract: a multi-block Anthropic envelope MUST surface every
+    /// `text` block concatenated in order.
     #[test]
     fn parses_messages_envelope() {
         let body = r#"{
@@ -115,14 +109,14 @@ mod tests {
             ],
             "usage": {"input_tokens": 100, "output_tokens": 50}
         }"#;
-        let got = parse_messages_response(body, "claude-sonnet-4-5").unwrap();
+        let got = parse_messages_response(body).unwrap();
         assert_eq!(got.content, "first second");
-        assert_eq!(got.usage_tokens, Some(150));
-        assert_eq!(got.provider, "anthropic");
     }
 
+    /// Contract (negative): an envelope without a `content` array MUST
+    /// fail rather than emit empty content.
     #[test]
     fn parse_fails_when_content_missing() {
-        assert!(parse_messages_response("{}", "x").is_err());
+        assert!(parse_messages_response("{}").is_err());
     }
 }

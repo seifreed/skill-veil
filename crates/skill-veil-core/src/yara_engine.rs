@@ -1,6 +1,7 @@
 //! YARA integration backed by the pure-Rust `yara-x` engine.
 
 use crate::findings::{ArtifactKind, EvidenceKind, Finding, MatchTarget, Severity, ThreatCategory};
+use crate::ports::{FileSystemError, FileSystemProvider};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -20,6 +21,18 @@ pub enum YaraError {
     NotCompiled,
 }
 
+impl From<FileSystemError> for YaraError {
+    fn from(err: FileSystemError) -> Self {
+        match err {
+            FileSystemError::IoError(io) => YaraError::IoError(io),
+            FileSystemError::PathNotFound(path) => YaraError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("path not found: {}", path.display()),
+            )),
+        }
+    }
+}
+
 pub struct YaraEngine {
     loaded_paths: Vec<PathBuf>,
     source_chunks: Vec<(PathBuf, String)>,
@@ -36,35 +49,38 @@ impl YaraEngine {
         })
     }
 
-    /// Load a `.yar` or `.yara` file into the compiler source set.
-    pub fn load_rules_file(&mut self, path: impl AsRef<Path>) -> Result<(), YaraError> {
+    /// Load a `.yar` or `.yara` file into the compiler source set through
+    /// a `FileSystemProvider`. Going through the port keeps yara_engine
+    /// honest under the hexagonal contract documented in `CLAUDE.md`:
+    /// even feature-gated modules read the filesystem only via the port,
+    /// so test doubles see consistent behaviour.
+    pub fn load_rules_file<F: FileSystemProvider>(
+        &mut self,
+        fs: &F,
+        path: impl AsRef<Path>,
+    ) -> Result<(), YaraError> {
         let path = path.as_ref();
-        let source = std::fs::read_to_string(path)?;
+        let bytes = fs.read_file_bytes(path)?;
+        let source = String::from_utf8(bytes.as_bytes().to_vec()).map_err(|err| {
+            YaraError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+        })?;
         self.loaded_paths.push(path.to_path_buf());
         self.source_chunks.push((path.to_path_buf(), source));
         Ok(())
     }
 
-    /// Load all YARA files from a directory.
-    pub fn load_rules_dir(&mut self, dir: impl AsRef<Path>) -> Result<(), YaraError> {
-        for entry in walkdir::WalkDir::new(dir.as_ref())
-            .into_iter()
-            .filter_map(|e| match e {
-                Ok(entry) => Some(entry),
-                Err(err) => {
-                    tracing::warn!("Skipping entry while loading YARA rules: {err}");
-                    None
-                }
-            })
-            .filter(|entry| {
-                entry
-                    .path()
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| ext == "yar" || ext == "yara")
-            })
-        {
-            self.load_rules_file(entry.path())?;
+    /// Load all YARA files (`.yar`, `.yara`) from a directory through the
+    /// `FileSystemProvider` port.
+    pub fn load_rules_dir<F: FileSystemProvider>(
+        &mut self,
+        fs: &F,
+        dir: impl AsRef<Path>,
+    ) -> Result<(), YaraError> {
+        let dir = dir.as_ref();
+        for pattern in &["*.yar", "*.yara"] {
+            for path in fs.list_files(dir, pattern, true)? {
+                self.load_rules_file(fs, &path)?;
+            }
         }
         Ok(())
     }
@@ -183,8 +199,9 @@ rule TEST_REMOTE_EXEC {{
         )
         .unwrap();
 
+        let fs = crate::adapters::StdFileSystemProvider::new();
         let mut engine = YaraEngine::new().unwrap();
-        engine.load_rules_file(file.path()).unwrap();
+        engine.load_rules_file(&fs, file.path()).unwrap();
         engine.compile().unwrap();
 
         let findings = engine.scan(b"curl | bash").unwrap();

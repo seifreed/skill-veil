@@ -16,6 +16,11 @@ pub const SEVERITY_WEIGHT_CRITICAL: u32 = 90;
 pub const RISK_THRESHOLD_BLOCK: u32 = 50;
 /// Risk score threshold above which action is RequireApproval.
 pub const RISK_THRESHOLD_APPROVAL: u32 = 20;
+/// Maximum risk score. Used as the upper bound when normalizing weighted
+/// scores and as the fail-safe value when score normalization encounters
+/// non-finite arithmetic (a Block-level ceiling is the right default for a
+/// security scanner).
+pub const MAX_RISK_SCORE: u32 = 100;
 
 // Evidence weights reflect signal reliability: IOC is nearly deterministic (10),
 // behavioral patterns are very reliable (8), intent requires interpretation (4),

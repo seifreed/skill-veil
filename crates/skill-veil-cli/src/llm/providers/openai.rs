@@ -62,7 +62,7 @@ impl LlmProvider for OpenAiProvider {
             &[("authorization", auth.as_str())],
             &body,
         )?;
-        parse_chat_completion(&text, "openai", &self.model)
+        parse_chat_completion(&text)
     }
 
     fn name(&self) -> &'static str {
@@ -76,11 +76,7 @@ impl LlmProvider for OpenAiProvider {
 
 /// Shared helper also used by LMStudio. Parses the `choices[0].message.content`
 /// shape common to all OpenAI-compatible APIs.
-pub(crate) fn parse_chat_completion(
-    body: &str,
-    provider: &'static str,
-    model: &str,
-) -> Result<LlmRawResponse, LlmError> {
+pub(crate) fn parse_chat_completion(body: &str) -> Result<LlmRawResponse, LlmError> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| LlmError::Decode(e.to_string()))?;
     let content = v["choices"]
@@ -88,33 +84,30 @@ pub(crate) fn parse_chat_completion(
         .and_then(|c| c["message"]["content"].as_str())
         .ok_or_else(|| LlmError::Decode("missing choices[0].message.content".into()))?
         .to_string();
-    let usage_tokens = v["usage"]["total_tokens"].as_u64().map(|t| t as u32);
-    Ok(LlmRawResponse {
-        content,
-        usage_tokens,
-        provider,
-        model: model.to_string(),
-    })
+    Ok(LlmRawResponse { content })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Contract: a well-formed OpenAI-compatible chat-completion envelope
+    /// MUST surface `choices[0].message.content` verbatim.
     #[test]
     fn parses_chat_completion_envelope() {
         let body = r#"{
             "choices": [{"message": {"content": "hello world"}}],
             "usage": {"total_tokens": 42}
         }"#;
-        let got = parse_chat_completion(body, "openai", "gpt-4o-mini").unwrap();
+        let got = parse_chat_completion(body).unwrap();
         assert_eq!(got.content, "hello world");
-        assert_eq!(got.usage_tokens, Some(42));
     }
 
+    /// Contract (negative): an envelope with no `choices` MUST surface a
+    /// decode error rather than producing an empty response.
     #[test]
     fn parse_chat_completion_errors_on_missing_content() {
         let body = r#"{"choices": []}"#;
-        assert!(parse_chat_completion(body, "openai", "x").is_err());
+        assert!(parse_chat_completion(body).is_err());
     }
 }

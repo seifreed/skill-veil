@@ -1,0 +1,13 @@
+# Pedantic-lint thresholds shared by every crate in the workspace.
+#
+# The project enables `clippy::pedantic` workspace-wide. These thresholds
+# document the limits we accept rather than relying on Clippy's
+# implicit defaults — when a future version raises a default, the build
+# breaks loudly here instead of silently letting unbounded growth slip
+# through review.
+#
+# Bumping a value is allowed but requires a justification in the commit
+# message and ideally a refactor that preserves the prior threshold.
+cognitive-complexity-threshold = 30
+too-many-lines-threshold = 250
+type-complexity-threshold = 250

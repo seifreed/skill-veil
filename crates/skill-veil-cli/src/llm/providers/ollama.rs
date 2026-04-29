@@ -69,7 +69,7 @@ impl LlmProvider for OllamaProvider {
             headers.push(("authorization", auth_header.as_str()));
         }
         let text = post_json_with_retry(&self.agent, &url, &headers, &body)?;
-        parse_ollama_response(&text, self.provider_name(), &self.model)
+        parse_ollama_response(&text)
     }
 
     fn name(&self) -> &'static str {
@@ -144,44 +144,37 @@ pub(crate) fn parse_ollama_context_length(body: &str) -> Option<usize> {
     None
 }
 
-pub(crate) fn parse_ollama_response(
-    body: &str,
-    provider: &'static str,
-    model: &str,
-) -> Result<LlmRawResponse, LlmError> {
+pub(crate) fn parse_ollama_response(body: &str) -> Result<LlmRawResponse, LlmError> {
     let v: serde_json::Value =
         serde_json::from_str(body).map_err(|e| LlmError::Decode(e.to_string()))?;
     let content = v["message"]["content"]
         .as_str()
         .ok_or_else(|| LlmError::Decode("missing message.content".into()))?
         .to_string();
-    let usage_tokens = v["eval_count"].as_u64().map(|n| n as u32);
-    Ok(LlmRawResponse {
-        content,
-        usage_tokens,
-        provider,
-        model: model.to_string(),
-    })
+    Ok(LlmRawResponse { content })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Contract: a well-formed Ollama chat envelope MUST surface
+    /// `message.content` verbatim.
     #[test]
     fn parses_chat_response() {
         let body = r#"{
             "message": {"role": "assistant", "content": "{\"verdict\":\"benign\"}"},
             "eval_count": 25
         }"#;
-        let got = parse_ollama_response(body, "ollama", "llama3").unwrap();
+        let got = parse_ollama_response(body).unwrap();
         assert!(got.content.contains("verdict"));
-        assert_eq!(got.usage_tokens, Some(25));
     }
 
+    /// Contract (negative): an envelope without `message.content` MUST
+    /// fail rather than emit empty content.
     #[test]
     fn parse_fails_on_missing_content() {
-        assert!(parse_ollama_response("{}", "ollama", "x").is_err());
+        assert!(parse_ollama_response("{}").is_err());
     }
 
     #[test]

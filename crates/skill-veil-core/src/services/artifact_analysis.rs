@@ -32,8 +32,14 @@ impl ArtifactAnalysisService {
         Self
     }
 
-    pub fn analyze(&self, path: &Path, content: &str, sibling_files: &[PathBuf]) -> Vec<Finding> {
-        dispatch::analyze(self, path, content, sibling_files)
+    pub fn analyze(
+        &self,
+        path: &Path,
+        content: &str,
+        sibling_files: &[PathBuf],
+        document: Option<&crate::analyzer::SkillDocument>,
+    ) -> Vec<Finding> {
+        dispatch::analyze(self, path, content, sibling_files, document)
     }
 
     pub(crate) fn is_opaque_mcp_endpoint(&self, content: &str) -> bool {
@@ -88,7 +94,11 @@ impl ArtifactAnalysisService {
         content: &str,
         artifact_kind: ArtifactKind,
     ) -> Vec<Finding> {
-        instructions::permission_and_network_findings(self, path, content, artifact_kind)
+        // Internal callers (mcp, scripts) have no `SkillDocument` to
+        // pass — those artifacts are not parsed as markdown skills.
+        // The document-aware signal (`remote_instruction_download`)
+        // simply skips when `document` is `None`.
+        instructions::permission_and_network_findings(self, path, content, artifact_kind, None)
     }
 
     pub(crate) fn declared_capability(capability: ArtifactCapability) -> ArtifactCapabilityFact {

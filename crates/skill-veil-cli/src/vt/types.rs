@@ -20,20 +20,16 @@ pub(crate) struct SearchResponse {
 pub(crate) struct SearchMeta {
     #[serde(default)]
     pub(crate) cursor: Option<String>,
-    /// VT-reported total match count. Informational only, kept here so the
-    /// field does not silently disappear from parsed responses.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) count: Option<u64>,
 }
 
 /// Reference to a single file returned by search or the `/files/{id}` endpoint.
+///
+/// VT envelopes carry a `"type"` discriminator (always `"file"` for our
+/// endpoints) and an `"id"` (the SHA-256). Serde ignores unknown fields by
+/// default, so the absent `type` field is tolerated without an explicit
+/// catch-all.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct FileRef {
-    /// Typically "file"; retained so schema drift doesn't fail deserialization.
-    #[serde(rename = "type", default)]
-    #[allow(dead_code)]
-    pub(crate) kind: String,
     pub(crate) id: String,
     #[serde(default)]
     pub(crate) attributes: FileAttributes,

@@ -4,15 +4,17 @@ use super::types::{
     CorpusEvaluation, CoverageBucket, DeduplicationMetrics, RegressionMetrics, SampleEvaluation,
     SampleLabel, ThresholdRecommendation,
 };
+use crate::ports::FileSystemProvider;
 use crate::{EvidenceKind, Finding, Scanner, ThreatCategory, Verdict};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub fn evaluate_corpus(
+pub fn evaluate_corpus<F: FileSystemProvider>(
+    fs: &F,
     scanner: &Scanner,
     manifest_path: &Path,
 ) -> Result<CorpusEvaluation, BenchmarkError> {
-    let manifest = load_manifest(manifest_path)?;
+    let manifest = load_manifest(fs, manifest_path)?;
     let root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut expected = Vec::new();
@@ -647,7 +649,8 @@ mod tests {
                 ..Default::default()
             })
             .unwrap();
-            let error = evaluate_corpus(&scanner, &corpus_path).unwrap_err();
+            let fs = crate::adapters::StdFileSystemProvider::new();
+            let error = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap_err();
 
             let mut restore_permissions = std::fs::metadata(&package_json).unwrap().permissions();
             restore_permissions.set_mode(0o644);

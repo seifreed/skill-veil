@@ -12,15 +12,18 @@ use crate::{
     color::ColorMode,
 };
 use anyhow::{Context, Result};
-use skill_veil_core::{PackageScanResult, ScanOptions, ScanTargetMode, Scanner};
+use skill_veil_core::{
+    PackageScanResult, ScanOptions, ScanTargetMode, Scanner, StdFileSystemProvider,
+};
 use std::fmt::Write as _;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn load_rule_engine_from_dir(rules_dir: &Path) -> Result<skill_veil_core::RuleEngine> {
     let mut engine = skill_veil_core::RuleEngine::new();
+    let fs = StdFileSystemProvider::new();
     engine
-        .load_from_dir(rules_dir)
+        .load_from_dir(&fs, rules_dir)
         .with_context(|| format!("Failed to load rules from {}", rules_dir.display()))?;
     Ok(engine)
 }

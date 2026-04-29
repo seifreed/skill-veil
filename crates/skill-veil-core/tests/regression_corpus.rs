@@ -1,15 +1,16 @@
-use skill_veil_core::{benchmark::evaluate_corpus, Scanner};
+use skill_veil_core::{benchmark::evaluate_corpus, Scanner, StdFileSystemProvider};
 use std::path::Path;
 
 #[test]
 fn labeled_corpus_meets_phase1_baseline() {
     let scanner = Scanner::new().unwrap();
+    let fs = StdFileSystemProvider::new();
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("fixtures")
         .join("regression_corpus.yaml");
 
-    let evaluation = evaluate_corpus(&scanner, &manifest_path).unwrap();
+    let evaluation = evaluate_corpus(&fs, &scanner, &manifest_path).unwrap();
     let metrics = evaluation.metrics;
 
     let benign_count = evaluation

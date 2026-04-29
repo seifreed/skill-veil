@@ -5,10 +5,12 @@ use super::network::{
 };
 use super::permissions::{explicit_declared_permission_rules, infer_declared_intent};
 use super::{ArtifactAnalysisService, ArtifactLink};
+use crate::analyzer::SkillDocument;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+mod intent_policy;
 mod signals;
 
 use regex::Regex;
@@ -28,10 +30,11 @@ fn analyze_with_kind(
     path: &Path,
     content: &str,
     kind: ArtifactKind,
+    document: Option<&SkillDocument>,
 ) -> Vec<Finding> {
     let mut findings = semantic_persistence_findings(service, path, content, kind);
     findings.extend(permission_and_network_findings(
-        service, path, content, kind,
+        service, path, content, kind, document,
     ));
     findings
 }
@@ -40,24 +43,45 @@ pub(super) fn analyze_instruction_file(
     service: &ArtifactAnalysisService,
     path: &Path,
     content: &str,
+    document: Option<&SkillDocument>,
 ) -> Vec<Finding> {
-    analyze_with_kind(service, path, content, ArtifactKind::AgentInstruction)
+    analyze_with_kind(
+        service,
+        path,
+        content,
+        ArtifactKind::AgentInstruction,
+        document,
+    )
 }
 
 pub(super) fn analyze_skill_document(
     service: &ArtifactAnalysisService,
     path: &Path,
     content: &str,
+    document: Option<&SkillDocument>,
 ) -> Vec<Finding> {
-    analyze_with_kind(service, path, content, ArtifactKind::SkillDocument)
+    analyze_with_kind(
+        service,
+        path,
+        content,
+        ArtifactKind::SkillDocument,
+        document,
+    )
 }
 
 pub(super) fn analyze_prompt_pack(
     service: &ArtifactAnalysisService,
     path: &Path,
     content: &str,
+    document: Option<&SkillDocument>,
 ) -> Vec<Finding> {
-    analyze_with_kind(service, path, content, ArtifactKind::PromptPackDocument)
+    analyze_with_kind(
+        service,
+        path,
+        content,
+        ArtifactKind::PromptPackDocument,
+        document,
+    )
 }
 
 pub(super) fn instruction_relations(
@@ -404,8 +428,16 @@ pub(super) fn permission_and_network_findings(
     path: &Path,
     content: &str,
     artifact_kind: ArtifactKind,
+    document: Option<&SkillDocument>,
 ) -> Vec<Finding> {
     let mut findings = declared_permission_scope_findings(path, content, artifact_kind);
     findings.extend(network_and_intent_findings(path, content, artifact_kind));
+    if let Some(doc) = document {
+        findings.extend(intent_policy::remote_instruction_download_findings(
+            path,
+            doc,
+            artifact_kind,
+        ));
+    }
     findings
 }

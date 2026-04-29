@@ -66,7 +66,7 @@ impl LlmProvider for PerplexityProvider {
             &[("authorization", auth.as_str())],
             &body,
         )?;
-        super::openai::parse_chat_completion(&text, "perplexity", &self.model)
+        super::openai::parse_chat_completion(&text)
     }
 
     fn name(&self) -> &'static str {
@@ -80,16 +80,15 @@ impl LlmProvider for PerplexityProvider {
 
 #[cfg(test)]
 mod tests {
+    /// Contract: Perplexity also speaks the OpenAI chat-completion envelope,
+    /// so `parse_chat_completion` MUST surface its content unchanged.
     #[test]
     fn parses_perplexity_chat_completion_via_shared_parser() {
         let body = r#"{
             "choices": [{"message": {"content": "{\"verdict\":\"malicious\"}"}}],
             "usage": {"total_tokens": 90}
         }"#;
-        let got =
-            super::super::openai::parse_chat_completion(body, "perplexity", "sonar-pro").unwrap();
-        assert_eq!(got.provider, "perplexity");
+        let got = super::super::openai::parse_chat_completion(body).unwrap();
         assert!(got.content.contains("verdict"));
-        assert_eq!(got.usage_tokens, Some(90));
     }
 }

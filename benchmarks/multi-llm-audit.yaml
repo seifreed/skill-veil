@@ -1,0 +1,3942 @@
+schema_version: '1.0'
+description: Per-sample multi-LLM cross-check log. Includes both passing and rejected
+  samples for full audit trail. regenerate_baseline.py does NOT read this file — see
+  vt-baseline-overrides.yaml for the active overrides.
+generated_by: scripts/llm_filter_fns.py
+generated_at: '2026-04-28T15:16:50.483384+00:00'
+providers:
+- grok
+- openai
+hard_threshold: 0.85
+high_confidence: 0.9
+runs:
+- sha256: 00585ad5865d
+  sha_short: 00585ad5865d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/00585ad5865db9e7b798877c442e6c2cd81388a7cd499b95c3516bd5cc240091
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:17:59.997213+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:18:00.460237+00:00'
+- sha256: 01d1232caa11
+  sha_short: 01d1232caa11
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/01d1232caa111e24b97e5c2517b7c4f624788e8c8099a288beba0ac3d92d985b
+  consensus_passed: false
+  rejection_reason: 'grok errored: no llm block in scan output'
+  verdicts:
+    grok:
+      error: no llm block in scan output
+    openai:
+      error: no llm block in scan output
+- sha256: 0252971b17a8
+  sha_short: 0252971b17a8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0252971b17a8101547a934a6e86a5311e22e90fa7f15c26a7e971edec2d0fd01
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:18:01.171448+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:18:01.416389+00:00'
+- sha256: 03a8f20dad2c
+  sha_short: 03a8f20dad2c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/03a8f20dad2c6f34cc17bd8c6bc7dbeefa63f6645585e02594390ec350bc0d6f
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:18:01.990737+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:18:02.561926+00:00'
+- sha256: 04c0eb6ec422
+  sha_short: 04c0eb6ec422
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/04c0eb6ec422c9298dd061fac19dddd0b23e2803a5a1ce9956d50ed370bd4af9
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:18:02.796316+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:18:03.031721+00:00'
+- sha256: 0552e83413ca
+  sha_short: 0552e83413ca
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0552e83413ca352aee25fe627580175b56190eb53eccf253d7e77048d298e41b
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:18:03.265678+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:18:03.499184+00:00'
+- sha256: 05e531e111a5
+  sha_short: 05e531e111a5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/05e531e111a5b92c3513daef83833f2a1ac88449fbb539057883207cb7bbaaeb
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:18:03.745154+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:18:03.991403+00:00'
+- sha256: 0792cdc27b4a
+  sha_short: 0792cdc27b4a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0792cdc27b4ae4de19fa1bff9000525dd26601ebb02e77963fa766ae7417cde9
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:18:04.241760+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:18:04.491898+00:00'
+- sha256: 07b9e73399e5
+  sha_short: 07b9e73399e5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/07b9e73399e5033077245adfa4e749a76b85d9362e8e9283dbd45ac466ed6dcf
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:18:05.068666+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:18:05.644287+00:00'
+- sha256: 0826fcd7e206
+  sha_short: 0826fcd7e206
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0826fcd7e2067475458ff6c64161d91324b2d9f891a166288579091d942e0bda
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:18:05.877843+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:18:06.112950+00:00'
+- sha256: 0afc0d1fe165
+  sha_short: 0afc0d1fe165
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0afc0d1fe165c0cc16d40db1aa76e755bc80ee3bdf80700193dd7a81d6abcb2a
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:18:16.508540+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:18:21.375822+00:00'
+- sha256: 0db2c733068f
+  sha_short: 0db2c733068f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0db2c733068fb5581b5a752004395180fd7aca310b8eb8faf4614bfcec9cb3b6
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:19:02.647901+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:19:07.986516+00:00'
+- sha256: 0f23e49c0b96
+  sha_short: 0f23e49c0b96
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0f23e49c0b965c36470f2c4589aa46ab934e1ee2c6c6582f2aaea49110bf034d
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:19:22.712139+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:19:26.238669+00:00'
+- sha256: 0f53f747ae13
+  sha_short: 0f53f747ae13
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0f53f747ae1375cb8cd8603e1b8ccd7ab3d648c199a474ca3442f23d0c2bf0de
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:19:35.678014+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:19:39.128300+00:00'
+- sha256: 122bea967f4c
+  sha_short: 122bea967f4c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/122bea967f4c194fd5820123d13b7b71422c31f92b9fc0b0fa05aac3ff03dfaa
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:19:51.280047+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:19:56.370459+00:00'
+- sha256: 124e27a733ee
+  sha_short: 124e27a733ee
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/124e27a733eef396a089381f702e183ac4e04be5115b8d7f74165eeb16a051aa
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:20:15.521667+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:20:40.571815+00:00'
+- sha256: 15166225ccef
+  sha_short: 15166225ccef
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/15166225ccef0647307df858a4d77c9927d0737173130f60c540df93aa387690
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:20:55.436345+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:21:01.890134+00:00'
+- sha256: 19def55b8ced
+  sha_short: 19def55b8ced
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/19def55b8cedc541cb2c8cb809997fc2867ffb2cafd82284810a599826a8f9fb
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:21:30.458875+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:21:36.750782+00:00'
+- sha256: 1fcc4af3730f
+  sha_short: 1fcc4af3730f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/1fcc4af3730f354cfe5106fbe453994e9431756a76c2464bcb608032fc7386e4
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:21:54.269838+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:21:59.294556+00:00'
+- sha256: 20bb784adac5
+  sha_short: 20bb784adac5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/20bb784adac5fc92439191013a7d43addbf57246892adeafeff19be1413dcc1c
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:22:21.601173+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:22:27.713984+00:00'
+- sha256: 217e91c4da83
+  sha_short: 217e91c4da83
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/217e91c4da8329a714cf06bf44055f0fc17940c5b19dde0152f4cf518a67dfa1
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:22:38.503043+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:22:41.852517+00:00'
+- sha256: 2233ef9aa23f
+  sha_short: 2233ef9aa23f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2233ef9aa23fc5227c173df0194abc23587a1b5bda4fdf755fcbeea54a7a98c0
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:23:03.102887+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:23:06.750981+00:00'
+- sha256: 228adf593019
+  sha_short: 228adf593019
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/228adf593019f1d2a62e4a91e4974843f134e159102dbed5372692569b3deb55
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:24:02.381688+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:24:07.809005+00:00'
+- sha256: 23b526825dc5
+  sha_short: 23b526825dc5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/23b526825dc544992fe2a4175e9f14740cbde83836c6ab2b5cde7a81998ce94b
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:24:57.376045+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:25:02.524132+00:00'
+- sha256: 24f9db128ef5
+  sha_short: 24f9db128ef5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/24f9db128ef5d0e4605c05f32e4b1bdefcb306845deed91ab4f32ea4780a40dd
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:25:17.152586+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:25:21.149902+00:00'
+- sha256: 25adcd9a0591
+  sha_short: 25adcd9a0591
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/25adcd9a05914363c25a5648705c8081de75dd7ad573d466f9fec2609d1d5d98
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:25:37.306822+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:25:42.646846+00:00'
+- sha256: 27a9ea3b0a1e
+  sha_short: 27a9ea3b0a1e
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/27a9ea3b0a1ecd91524b956accb5e88d9e7ef88f9f72de32bff219cc53c8daca
+  consensus_passed: false
+  rejection_reason: openai verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:25:53.788939+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:25:57.720589+00:00'
+- sha256: 281ca2302a41
+  sha_short: 281ca2302a41
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/281ca2302a4143f16d215d42fe37fb7e52bc29514915ab7ee586e19bb8b1b27a
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:26:11.901304+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:26:15.472310+00:00'
+- sha256: 283cb4252ef4
+  sha_short: 283cb4252ef4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/283cb4252ef4053e0932d4edf1492442093161d03e4fe99b92921234841cc410
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:26:27.211175+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:26:31.974752+00:00'
+- sha256: 28bf5414701f
+  sha_short: 28bf5414701f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/28bf5414701fabf7478d5083faef9db7283432979342a50ac1e6bef38f845a55
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:26:54.998516+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:26:59.190606+00:00'
+- sha256: 2922686ba676
+  sha_short: 2922686ba676
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2922686ba6767cb2cae6a4e862db6fe451484c25b78aa7e9e79780918cabf093
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:27:13.590716+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:27:18.190458+00:00'
+- sha256: 2a9e6aedf30a
+  sha_short: 2a9e6aedf30a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2a9e6aedf30ad54e76c502cec990ec5dcfb7a449546146157187640947a5c0c6
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:27:28.636302+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:27:32.983972+00:00'
+- sha256: 2aa0b75b9810
+  sha_short: 2aa0b75b9810
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2aa0b75b9810afc7cd9445324c4f1547716b2d3d0f3ba129801df75864625b19
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:27:41.214863+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:27:46.482364+00:00'
+- sha256: 2ddbc3a2e804
+  sha_short: 2ddbc3a2e804
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2ddbc3a2e8043857a19b7b584ff3e2cea4c360fc9a9bad37c6ce628d4508ad2f
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:28:04.440102+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:28:08.396854+00:00'
+- sha256: 2dfedc2fc700
+  sha_short: 2dfedc2fc700
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2dfedc2fc700dcb023ade9b344d05b57d772b038ebafc1ce443f42eae012053a
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:28:16.836643+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:28:24.933936+00:00'
+- sha256: 2e1c80ce4e3a
+  sha_short: 2e1c80ce4e3a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2e1c80ce4e3a663b99d5cd2c2811a7b1fcdbeeec43abf394dfa5401cc74d736a
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:28:38.804089+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:28:46.981743+00:00'
+- sha256: 2e5fd0df8aaa
+  sha_short: 2e5fd0df8aaa
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2e5fd0df8aaacc749e43cd628f308192485e0edfd88b40e1c99866c744e69ecb
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=1.00)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:28:58.293398+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:29:04.494071+00:00'
+- sha256: '310567493405'
+  sha_short: '310567493405'
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3105674934050252f8299a0f145dfbb3591b560cc97bcda2852bf674b17a344b
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:29:12.356324+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:29:16.341260+00:00'
+- sha256: 330512cd0910
+  sha_short: 330512cd0910
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/330512cd091014f4404ecbfc974d143e9c9b2983bd175918ce3b4ff9358cbcd9
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:29:23.944830+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:29:31.561788+00:00'
+- sha256: 35184e7e5e0a
+  sha_short: 35184e7e5e0a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/35184e7e5e0a506bab4d3f83e2e2d191a6bb36bf20c9e6cfc1570de2374e4106
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:29:48.716672+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:29:54.301557+00:00'
+- sha256: 361b039c2811
+  sha_short: 361b039c2811
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/361b039c2811f10b215a96b8537527f7379f58c717c27ac13fdde45f12f68caa
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:30:04.431790+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:30:07.985704+00:00'
+- sha256: 36a5364587f0
+  sha_short: 36a5364587f0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/36a5364587f022f840dc5e7d63bebcf969edfd5071dbc29b168be32150cf1bc7
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:30:15.376858+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:30:21.402676+00:00'
+- sha256: 38125d5274a0
+  sha_short: 38125d5274a0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/38125d5274a09eb9726f01a5b0abec89fe4826d9930674e6106824529883a00c
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:30:43.168734+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:30:48.612490+00:00'
+- sha256: 382f747cfa77
+  sha_short: 382f747cfa77
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/382f747cfa77d47c94bf5725068d2a00c7fbfcb9ac67d62d0dcc89fe8e15a0a0
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:30:57.214925+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:31:01.955709+00:00'
+- sha256: 38dfb3bd9505
+  sha_short: 38dfb3bd9505
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/38dfb3bd9505f14cf418a100265d1088bada66fda3abca04076dbd490c9fbc4f
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:31:08.074458+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:31:12.149212+00:00'
+- sha256: 3974012914b6
+  sha_short: 3974012914b6
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3974012914b6462f194e5e9b22d8c7b1337f458e896eeb0aef7b9e0b8fed0ce8
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:31:17.683479+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:31:22.155465+00:00'
+- sha256: 3a555355cc50
+  sha_short: 3a555355cc50
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3a555355cc50b1bd1fe2a52677bbd30826fd9b35ef8e7efc0527e5527d0aec8e
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:31:29.880968+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:31:39.023074+00:00'
+- sha256: 3ad04f4c368a
+  sha_short: 3ad04f4c368a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3ad04f4c368a6c466707fea5dbda6cfd807665ce7fd447e2223d42ce2e72b4e9
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:31:56.176307+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:32:00.910432+00:00'
+- sha256: 3b0ff718adc4
+  sha_short: 3b0ff718adc4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3b0ff718adc4705a077e4448abc27aacec83f57b29e875a273ad7db7fd84990f
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:32:11.138130+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:32:18.521148+00:00'
+- sha256: 3b7a3c6b4d26
+  sha_short: 3b7a3c6b4d26
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3b7a3c6b4d269a3f7f455b7c4aa9fef5e5b069444532a3971c6a6e008bf73e0e
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:32:24.928308+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:32:32.896880+00:00'
+- sha256: 3ba77dadb7c9
+  sha_short: 3ba77dadb7c9
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3ba77dadb7c938868a0b37e397220e4c9945eae81b41054fefe59b46175d0042
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:32:39.210821+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:32:45.540304+00:00'
+- sha256: 3cfb245c5735
+  sha_short: 3cfb245c5735
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3cfb245c57351778297e0fcaf6349cc04825153210530213e10dd681bb6acbb9
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=1.00)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:32:53.960370+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:32:58.093168+00:00'
+- sha256: 3d1cbd94010c
+  sha_short: 3d1cbd94010c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3d1cbd94010c86b4ba54499614ac5c5d8a7933a817dbfb155624982cda383602
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:33:04.945897+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:33:08.690398+00:00'
+- sha256: 3db742a74b25
+  sha_short: 3db742a74b25
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3db742a74b25b29cc02d933530bfe9413a1c69f15f63b5167d82317def666391
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:33:15.636270+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:33:19.638963+00:00'
+- sha256: 4013b4ea4959
+  sha_short: 4013b4ea4959
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4013b4ea49592659e69ea493f021534aaad99dc7a1ede40d8fb8438a6e777ed2
+  consensus_passed: false
+  rejection_reason: openai verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:33:25.651898+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:33:29.518788+00:00'
+- sha256: 40fc85876c76
+  sha_short: 40fc85876c76
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/40fc85876c768149b79463d78b552d111440976ff2fa4ef6edd890aaf651d25b
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:33:35.060710+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:33:41.315081+00:00'
+- sha256: 41d0cdd9919e
+  sha_short: 41d0cdd9919e
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/41d0cdd9919e7fa08fd2f35ab904959594c732d109276c1416ea8cfd70c0629d
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:33:50.232844+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:33:56.636215+00:00'
+- sha256: 421a8406f5e2
+  sha_short: 421a8406f5e2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/421a8406f5e29e07c394a0bf899b8d7569a9642f6bc21178054dda2dd9ddd131
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:34:00.717457+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:34:04.034148+00:00'
+- sha256: 4302e5c9c770
+  sha_short: 4302e5c9c770
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4302e5c9c7704d364d826ffd65e738490b99b6298c84ba3a8b3029d09840264e
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:34:10.041916+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:34:13.386831+00:00'
+- sha256: 44118320bd8c
+  sha_short: 44118320bd8c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/44118320bd8c7f2202e9dee37f9ee9c708b0c025fc0c3227bef26f1aab10417b
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:34:20.431278+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:34:24.357785+00:00'
+- sha256: 46bdd019c6dd
+  sha_short: 46bdd019c6dd
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/46bdd019c6dd9c93dfa44fd271c7f02dc6fccb1e5da56bfafa7f4aa1171441f7
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:34:30.869930+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:34:35.126450+00:00'
+- sha256: 4871ef57d471
+  sha_short: 4871ef57d471
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4871ef57d471c5bcee907446a555f2161c8dbb052c5b9a28698dcaf432cae237
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:34:44.064228+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:34:47.468926+00:00'
+- sha256: 4a419a29f3f9
+  sha_short: 4a419a29f3f9
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4a419a29f3f9972ad2ac9511614c52595741b98661a7bb4235fda85fc3e85df7
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:34:54.077377+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:34:58.055847+00:00'
+- sha256: 4aa03444c0bf
+  sha_short: 4aa03444c0bf
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4aa03444c0bf6557d1efbb8cba9f708ed6ad474880e43fdd974407be8f86730d
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:35:05.797236+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:35:10.315606+00:00'
+- sha256: 4b4c16dd66ff
+  sha_short: 4b4c16dd66ff
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4b4c16dd66ff2e8b344780cf7e381f4c767560c6745e857e32148cf1879b61d5
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:35:15.063436+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:35:29.508258+00:00'
+- sha256: 4b5c7cb2a812
+  sha_short: 4b5c7cb2a812
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4b5c7cb2a81237f8f20a43a84f9c89890ec996ce89224779443438c818afa8c1
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:35:36.660149+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:35:40.418850+00:00'
+- sha256: 4ce189be184c
+  sha_short: 4ce189be184c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4ce189be184c55bb6081306f3883024807f6527f5151a098b223e8cf60b43d70
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:35:47.145668+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:35:50.556026+00:00'
+- sha256: 4dfdd6b686c8
+  sha_short: 4dfdd6b686c8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4dfdd6b686c880a50f440f36453a042ce9da29ea1139b0b9019a28a9bf4f0a86
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:36:00.910659+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:36:04.039577+00:00'
+- sha256: 4e7d627ad03a
+  sha_short: 4e7d627ad03a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4e7d627ad03a3a9b69d9667417cac67b5355d39d72fc898759bb641611953175
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:36:09.826577+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:36:13.420144+00:00'
+- sha256: 4eaab483d719
+  sha_short: 4eaab483d719
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4eaab483d719614f2a960e1f6296ddd4febcdb34718add4ff71da52c71d41394
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:36:18.843236+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:36:22.629073+00:00'
+- sha256: 4ffd2eb98bf3
+  sha_short: 4ffd2eb98bf3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/4ffd2eb98bf332cc8bf4872f123d6ddc4be43c0ab49b5601204eab0833d897fe
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:36:28.166631+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:36:32.451982+00:00'
+- sha256: 50b0c0e8647c
+  sha_short: 50b0c0e8647c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/50b0c0e8647cde2b7ed95e7d7fe7cea6c1bf6fe33715cac5c86c6381a81b30b4
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=1.00)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:36:37.017147+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:36:40.429799+00:00'
+- sha256: 51911a356bab
+  sha_short: 51911a356bab
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/51911a356babf69c722481bbb2d177dc4dc243c297ac10fa24a22b80d3304cf7
+  consensus_passed: false
+  rejection_reason: openai below hard threshold (conf=0.80 < 0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:36:48.214827+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:36:52.194778+00:00'
+- sha256: 527842a351ce
+  sha_short: 527842a351ce
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/527842a351ce917be04e9e4ed330299b28fc208745a269c00c18c241d3f7e4b7
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:37:02.025764+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:37:06.045046+00:00'
+- sha256: 52ad10d50e0a
+  sha_short: 52ad10d50e0a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/52ad10d50e0ae9480fd559cfd7a30cf0d1057f56f1954d4581df60525319bbe3
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:37:10.055157+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:37:13.354741+00:00'
+- sha256: 533fbf3950ca
+  sha_short: 533fbf3950ca
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/533fbf3950ca5c20d832baa0b3a5af87696151cb781e221a0bef975cdba48a00
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:37:18.994121+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:37:22.990459+00:00'
+- sha256: 5348019d7132
+  sha_short: 5348019d7132
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/5348019d71326eb484d60650bca176dd91195406225b5baaa901e347c9ebc160
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:37:29.723555+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:37:33.355427+00:00'
+- sha256: 543c16917e9c
+  sha_short: 543c16917e9c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/543c16917e9c1405c79fb699ba0f266d75ab092c40544ac1dd4f16a8c3b1078d
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:37:38.952360+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:37:42.654111+00:00'
+- sha256: 54b9a9ee2d06
+  sha_short: 54b9a9ee2d06
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/54b9a9ee2d0677dbce7e5de8959b4905a40068d778e2f183feecbbef14ecffb8
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:37:51.269926+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:37:54.625629+00:00'
+- sha256: 54d72ddf09e9
+  sha_short: 54d72ddf09e9
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/54d72ddf09e9c0ad1e5a53583a88337171733179815b6cc15d5c548dab4dd643
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:38:00.067627+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:38:04.899365+00:00'
+- sha256: 566a7ecc0200
+  sha_short: 566a7ecc0200
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/566a7ecc02001954c847a9ded47fa7286a80c127b5a8cc726bc8fbbf50f44b98
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:38:10.130038+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:38:15.752903+00:00'
+- sha256: 57b824c73daa
+  sha_short: 57b824c73daa
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/57b824c73daa31a8fc8fab9486fc3ba66d07e94e8c17633908c2bab6f56670cf
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:38:22.704453+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:38:26.610805+00:00'
+- sha256: 580cc1616e3e
+  sha_short: 580cc1616e3e
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/580cc1616e3e0d613f3af138306fca2773992e3655a706160dac2f68e8bc0df8
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:38:31.245628+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:38:34.612233+00:00'
+- sha256: 5860d38453ae
+  sha_short: 5860d38453ae
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/5860d38453ae9a7da5c6da527228f8ef1e9c74bb4d9ec13dddd9c028b9bef48d
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:38:42.936796+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:38:47.309519+00:00'
+- sha256: 59e9b9b95151
+  sha_short: 59e9b9b95151
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/59e9b9b951512b59f52ca8f8300e8e0398d37ee52352f9663ad63a785be4c982
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:38:53.630268+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:39:09.135359+00:00'
+- sha256: 5d9a39e5a6b0
+  sha_short: 5d9a39e5a6b0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/5d9a39e5a6b03b62ad9ff8f7c5ccbadad8ecf26342923e4332f425f8ac9a8e19
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:39:26.206252+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:39:30.112487+00:00'
+- sha256: 5f2381436eb2
+  sha_short: 5f2381436eb2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/5f2381436eb23120d68bb800e413696c207cacaa55d99993c2ba90d8ff9017cf
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:39:39.608496+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:39:47.645255+00:00'
+- sha256: 60148a859496
+  sha_short: 60148a859496
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/60148a859496c851784b7544a0be6a5efebfe0774f1dbc1c90e65553c934c3bf
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:39:52.840978+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:39:56.474306+00:00'
+- sha256: 638ffcb4837b
+  sha_short: 638ffcb4837b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/638ffcb4837b2fdda7d92fefc426a5f852af5a948219ce1ebeb903f12c5feadb
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:40:05.619813+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:40:09.455448+00:00'
+- sha256: 644e56e98e83
+  sha_short: 644e56e98e83
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/644e56e98e8316f003f78aead155046813439b4955347edadab418340b9a432c
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:40:16.433299+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:40:23.666081+00:00'
+- sha256: 66a2f17006f4
+  sha_short: 66a2f17006f4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/66a2f17006f47c0cd7e0886983b81ee5be57cad243551df4fe17442f86413ade
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:40:29.608424+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:40:33.407847+00:00'
+- sha256: 679a6fa2b65d
+  sha_short: 679a6fa2b65d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/679a6fa2b65df67e78648a9606e8c567d3882b68bcc3c9337430d07978f8d164
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:40:39.697915+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:40:44.172397+00:00'
+- sha256: 686a54a2d893
+  sha_short: 686a54a2d893
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/686a54a2d893faa367d22286a8008f8413cab77f6272afe5cb2b6fc797c737ac
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:40:48.451662+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:40:52.373076+00:00'
+- sha256: 68e6fc8b78bc
+  sha_short: 68e6fc8b78bc
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/68e6fc8b78bc7930a9c06a850ca74b6cd2ef16574a9bdeecc0ff5e90218862df
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:41:02.241956+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:41:06.207857+00:00'
+- sha256: 69f7b0f6a54a
+  sha_short: 69f7b0f6a54a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/69f7b0f6a54acb8574d26c5153f127b7c8733b7f30229c8a2aed0511837c31fd
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:41:24.955641+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:41:42.132648+00:00'
+- sha256: 6af51a36076f
+  sha_short: 6af51a36076f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6af51a36076f4e70c8fbde4cab921fefea739df5497b4262829eb7f2b6f91dfc
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:41:49.306603+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:41:52.659081+00:00'
+- sha256: 6c0d110974bd
+  sha_short: 6c0d110974bd
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6c0d110974bd683090b2e8b210b34d11b91fa97cfb87c7d02d240e6ad62fcd30
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:42:01.485773+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:42:05.543576+00:00'
+- sha256: 6c2f65fc7785
+  sha_short: 6c2f65fc7785
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6c2f65fc7785b8c0d9fabdef93c8507c0ece9b0de7da662aee73f390375c95b2
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:42:10.267055+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:42:14.696052+00:00'
+- sha256: 6d3474ace6b4
+  sha_short: 6d3474ace6b4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6d3474ace6b4a9e4d9515038c29ed6ab40e2c3007e0901a5b73188d80a1dc4e1
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:42:21.782759+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:42:26.687990+00:00'
+- sha256: 6d658469753c
+  sha_short: 6d658469753c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6d658469753c0c64100d36300a19bae5b1f5ea402727dec5dad45130f295568c
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:42:32.688650+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:42:36.387772+00:00'
+- sha256: 6f29d4bdb21c
+  sha_short: 6f29d4bdb21c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6f29d4bdb21c99addfaa2fb69f15e17c819b0fa7af690a99419451a7e643494f
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:42:41.883119+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:42:45.440978+00:00'
+- sha256: 70e751218536
+  sha_short: 70e751218536
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/70e751218536d3d34e096f5340543b6cea053744b85cd4b3f4e7a350528da43e
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:43:05.975260+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:43:14.210154+00:00'
+- sha256: 70f437903062
+  sha_short: 70f437903062
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/70f4379030622412a433eb87136f24d35835c9c310cec3e080b2d0058e33c624
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:43:19.605632+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:43:22.814861+00:00'
+- sha256: 70ff1301d1f3
+  sha_short: 70ff1301d1f3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/70ff1301d1f306b1d83190af1c31cc625032d880adeb6d53bcb44a75a4f4392b
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:43:33.804021+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:43:37.733447+00:00'
+- sha256: 70ffee2178cf
+  sha_short: 70ffee2178cf
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/70ffee2178cf95b0152a385ba07ada1af7cef067955f06f9d5f39a8096e7ed7f
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:43:48.461169+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:43:52.263162+00:00'
+- sha256: 710fd28b7324
+  sha_short: 710fd28b7324
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/710fd28b7324abdc7424f57cc841de91350c9d505a286024a5936867767c459c
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:43:59.451169+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:44:02.656586+00:00'
+- sha256: 71fd3a0c5375
+  sha_short: 71fd3a0c5375
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/71fd3a0c537567645469d0f778957429b49227b4138660833a806c44d96bf409
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:44:13.372837+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:44:20.008854+00:00'
+- sha256: 722459a7599d
+  sha_short: 722459a7599d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/722459a7599df05775a45b16ee1bb9d1b0fa560404962b415850e44f99fd09d5
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:44:32.490004+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:44:41.396392+00:00'
+- sha256: 733222af43f8
+  sha_short: 733222af43f8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/733222af43f821d3550ea4a551abe22f4571b5ce5968d84140b009fb002c06aa
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:45:06.455619+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:45:09.841594+00:00'
+- sha256: 748483e92936
+  sha_short: 748483e92936
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/748483e92936e4d30b9f63807d1bf74174c57f067afe9de5256d1b5bb57f0ae2
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:45:16.846201+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:45:21.238839+00:00'
+- sha256: 74ce553d5bcd
+  sha_short: 74ce553d5bcd
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/74ce553d5bcd844eb6a6e78f6b5d6e4b40c1ba496d75e4e3a7afb9c388270e70
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:45:26.678641+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:45:31.083451+00:00'
+- sha256: 75938a6fdb1a
+  sha_short: 75938a6fdb1a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/75938a6fdb1afee22f021107cb82a4de9aa159e1d1efa75b93b51644dbd2a9c7
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:45:41.431692+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:45:46.500027+00:00'
+- sha256: 75b748d9af78
+  sha_short: 75b748d9af78
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/75b748d9af78cc3035a4359289d30cdf7da89e58b6a1910f73bd632e4d35a148
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:45:52.893925+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:45:57.128480+00:00'
+- sha256: 75edeede983e
+  sha_short: 75edeede983e
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/75edeede983e2f299499b12e638438eb731b7bd7d1ad1da7a760c4b56306d424
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:46:08.995263+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:46:12.735579+00:00'
+- sha256: 763eed0a7981
+  sha_short: 763eed0a7981
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/763eed0a7981c8be1ec3f57d5df40cc95cac0df993a848b590b5a4adbc98d7c7
+  consensus_passed: false
+  rejection_reason: openai below hard threshold (conf=0.80 < 0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:46:18.829632+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:46:22.405026+00:00'
+- sha256: 799205d27769
+  sha_short: 799205d27769
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/799205d2776975c70ebe86fc18e2f87f5fc789ec3707533c44ff93affefaa7d4
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:46:47.876507+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:46:51.982435+00:00'
+- sha256: 7a4a72cd5e7b
+  sha_short: 7a4a72cd5e7b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7a4a72cd5e7b76e5fef2df1341678f6bc287dd87738b8b86c5e8470b851cd0e4
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:47:00.444749+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:47:03.836106+00:00'
+- sha256: 7c907e3fb670
+  sha_short: 7c907e3fb670
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7c907e3fb6700db4813197c37f0bc45967f46411f195d509d0efeeee14242db6
+  consensus_passed: false
+  rejection_reason: openai verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:47:12.698697+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:47:16.498032+00:00'
+- sha256: 7e0cbb723217
+  sha_short: 7e0cbb723217
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7e0cbb7232171d70b0e47348c248a5cb9ace06d6f62c06d8b83a7a6dd4932fad
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:47:21.343627+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:47:25.390226+00:00'
+- sha256: 7e7a4ac9ceac
+  sha_short: 7e7a4ac9ceac
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7e7a4ac9ceac43c477bd538510277b22d038c1f820b53ae44dac112b99455008
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:47:34.816337+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:47:38.732782+00:00'
+- sha256: 7f17145d5c75
+  sha_short: 7f17145d5c75
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7f17145d5c7543aa58124d9847d67dcc8d9d52b6511be60aa8a4d52969b51274
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:47:46.793928+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:47:50.182261+00:00'
+- sha256: 7f6552df9042
+  sha_short: 7f6552df9042
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7f6552df90427367a9f59850bcdfaf8760ec96f1758170a149d2fdd8ecf8f183
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:48:00.966360+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:48:04.473596+00:00'
+- sha256: 81cd720ec0b5
+  sha_short: 81cd720ec0b5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/81cd720ec0b5bc5a11a84f730e54be4068a2f9f8d56977e7980a52a76765f0b1
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:48:10.689580+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:48:14.456473+00:00'
+- sha256: 83b3c5a1e72f
+  sha_short: 83b3c5a1e72f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/83b3c5a1e72f27b9bcb78a4d8e161e222591aab6b899f049a0ba53507503801e
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:48:27.069047+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:48:31.270869+00:00'
+- sha256: 856359bf1a72
+  sha_short: 856359bf1a72
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/856359bf1a728a5e33ea5791abe59567139b456f29854933a4556d6928f8b806
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:48:37.890550+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:48:41.238503+00:00'
+- sha256: 861ccd3a1b8f
+  sha_short: 861ccd3a1b8f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/861ccd3a1b8fba8b42dffe44ee8b8d1c949f1a8d8707a650e3725635e3b2e3a4
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:49:02.778767+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:49:06.310055+00:00'
+- sha256: 879667eacf2e
+  sha_short: 879667eacf2e
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/879667eacf2efe292628c9bc98852804e372eee1eae6cf4d2adf474be324fef4
+  consensus_passed: false
+  rejection_reason: openai verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:49:13.242878+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:49:17.618182+00:00'
+- sha256: 88732995d9a1
+  sha_short: 88732995d9a1
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/88732995d9a198ff5fb51df77f8fafeb1e737411a3845f09261ff5a0b123468a
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:49:38.556807+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:49:41.937497+00:00'
+- sha256: 8a69c6f249b8
+  sha_short: 8a69c6f249b8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/8a69c6f249b857913fbef2216cdd40f865cff302a535d395b1a3ee917dbd57f7
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:49:51.565035+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:49:55.789206+00:00'
+- sha256: 8be0a609d3ad
+  sha_short: 8be0a609d3ad
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/8be0a609d3ad1d91c81de1df91d5236f033e5e08de64da7a6ee298a463cda0b3
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:50:03.957201+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:50:08.349807+00:00'
+- sha256: 8cc470c61cbf
+  sha_short: 8cc470c61cbf
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/8cc470c61cbfe1d94d5ed8e5e54cf0d1ba5bfea55120f56feccfccbd4cf83ca8
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:50:16.272957+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:50:20.795491+00:00'
+- sha256: 8e9703e6354a
+  sha_short: 8e9703e6354a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/8e9703e6354a02363324309c5bb985ac91b835b2ac36da64a3151e99ccefc793
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:50:30.632445+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:50:35.926436+00:00'
+- sha256: 8f2638e4b8e0
+  sha_short: 8f2638e4b8e0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/8f2638e4b8e0d716fd57e170295060f93b6de4c6b9b7a36034d6caf0956852b1
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:50:42.145285+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:50:49.849402+00:00'
+- sha256: 904576f07be3
+  sha_short: 904576f07be3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/904576f07be3f588d219f873adde3ccbdf3663016e4dbed3e7ea6adefc1712d7
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:50:59.474599+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:51:06.803540+00:00'
+- sha256: 90dcc197a997
+  sha_short: 90dcc197a997
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/90dcc197a997db3cb5e3b029c0589ef826d3a75b0638f28894a49a41e94f6f89
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:51:18.865243+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:51:22.658899+00:00'
+- sha256: 947570e36174
+  sha_short: 947570e36174
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/947570e3617479005b1d0ec5259ef28da37202706221119ccf1a83742617ecd1
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:51:28.899395+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:51:32.632942+00:00'
+- sha256: 97fe47139b3d
+  sha_short: 97fe47139b3d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/97fe47139b3d6c783cb1497de13a42e55994808eef98fe7ffe02aa1416f2c2c4
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:51:39.886068+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:51:42.809588+00:00'
+- sha256: 995ea73eaaba
+  sha_short: 995ea73eaaba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/995ea73eaabaf83473247cfa1da318ed64f15ea5265c1bb305cc3971680653d9
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:51:51.717850+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:51:56.117270+00:00'
+- sha256: 99c3e0f54322
+  sha_short: 99c3e0f54322
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/99c3e0f543224d0ed28f51f69770ebd45cfc2aa17b2939cca08c9e58ac01e178
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:52:00.168020+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:52:03.114625+00:00'
+- sha256: 9b903a6af4d2
+  sha_short: 9b903a6af4d2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/9b903a6af4d25f2f61747d32d3704e2f8c42f35d1fd8b10b6f8e14c09ee34754
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:52:14.425687+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:52:18.328414+00:00'
+- sha256: 9c4297466320
+  sha_short: 9c4297466320
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/9c4297466320d897903a77a6033534b41a19446ac909d56cd096a147e4ef33ff
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:52:26.511353+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:52:30.574173+00:00'
+- sha256: 9c78056937e1
+  sha_short: 9c78056937e1
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/9c78056937e157fc6261bc4eea7abdc6934e35963417dab3632dc8a1b2336c34
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:52:42.231494+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:52:45.233445+00:00'
+- sha256: 9ceba730c929
+  sha_short: 9ceba730c929
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/9ceba730c9293d6bbc4af1a31e2ca384ac7f1764cce31d25f49b2e72f42ae888
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:52:52.699115+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:52:56.512432+00:00'
+- sha256: 9d10c6808581
+  sha_short: 9d10c6808581
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/9d10c6808581c4451a73d4882024f10149fd241487077823f1a7dd25c526625f
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:53:09.583424+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:53:13.217272+00:00'
+- sha256: 9d697ce3dd57
+  sha_short: 9d697ce3dd57
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/9d697ce3dd5705435cd94569f239e9cb2fbad96a81a12ce8f4e6dee55a89acae
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:53:21.624398+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:53:24.678318+00:00'
+- sha256: a0d27639b6b2
+  sha_short: a0d27639b6b2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a0d27639b6b20db04938882b335fa8fc473590590a73636faab49e322a88a732
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:53:43.218847+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:53:48.175359+00:00'
+- sha256: a0e45a62cbc3
+  sha_short: a0e45a62cbc3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a0e45a62cbc3d3db44fe8bfd7490e5daab8de684029cff9cdef6a617a6e7d2d0
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:53:57.555648+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:54:00.981272+00:00'
+- sha256: a12f553480d8
+  sha_short: a12f553480d8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a12f553480d8fcce1b1e8bb57ba2d3ea77f05faef2150ee727d2c511a867fb17
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:54:13.504050+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:54:17.200270+00:00'
+- sha256: a34221894f45
+  sha_short: a34221894f45
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a34221894f45b6d10bfb48ffe07e9961d9dbefe28e830888f5f0661cc6132155
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:54:28.638915+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:54:32.087596+00:00'
+- sha256: a52ffbd23f94
+  sha_short: a52ffbd23f94
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a52ffbd23f94b7b50fe8982fdf81e89a52ecacba122187a716ee5512ed010674
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:54:40.174092+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:54:43.474588+00:00'
+- sha256: a630c11e8443
+  sha_short: a630c11e8443
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a630c11e8443ec8ed6a8926a85e51f51f71339090e2c5f2bdca5d8525e6e5719
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:54:52.485321+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:54:55.459636+00:00'
+- sha256: a749ad6972f4
+  sha_short: a749ad6972f4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a749ad6972f4b51f8c59432c6e32205ac25738d2f0beb80d14bdebfbf04a72b9
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:55:15.625396+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:55:20.022386+00:00'
+- sha256: a76c79b478b4
+  sha_short: a76c79b478b4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a76c79b478b46571ef496392ebc1e19b43cd32113356e41b29209e7fd4c11376
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:55:29.690239+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:55:33.470894+00:00'
+- sha256: a928d7dd0724
+  sha_short: a928d7dd0724
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/a928d7dd07245ee7437b159773bddbb4837bddb3bcf1fbffcd1f292308f617a3
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:55:37.969055+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:55:41.600517+00:00'
+- sha256: aa15176de44d
+  sha_short: aa15176de44d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/aa15176de44daa35bce5acc88f17189f3deb8cf521eeb1743c807a4f95f95f5e
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:56:01.347166+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:56:05.109586+00:00'
+- sha256: ac269f5e3e1b
+  sha_short: ac269f5e3e1b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ac269f5e3e1b30b788c42657500becb16d15cfbb6a60ed331a1ec7bbd35b98f9
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:56:12.659227+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:56:17.058275+00:00'
+- sha256: ad0245cf4822
+  sha_short: ad0245cf4822
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ad0245cf482294207f32b055899b9a29c249980221442aada12860988678f9fa
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T14:56:37.166509+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:56:47.794756+00:00'
+- sha256: ad75f854bc97
+  sha_short: ad75f854bc97
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ad75f854bc97db2f6c9d855f064b470e709b9aa611d69a9955eaea4b53281e05
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:56:56.810875+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:57:00.161916+00:00'
+- sha256: ae0e4664a73d
+  sha_short: ae0e4664a73d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ae0e4664a73dc686eef1a9777fdae3aaf5845711a6878be3eb254d353e3b3150
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:57:14.888793+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:57:18.509269+00:00'
+- sha256: aecf643baff5
+  sha_short: aecf643baff5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/aecf643baff56cac44d42ecf5d042ffaa11d5bfb5983af2a8eb9c4572365e6c4
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:57:26.025059+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:57:29.373066+00:00'
+- sha256: af3288b372f9
+  sha_short: af3288b372f9
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/af3288b372f9435f3ebe90e3e9940f49246f5d1899e7016785334a6e22697457
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:57:35.287542+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:57:39.548267+00:00'
+- sha256: b0a5aed63b98
+  sha_short: b0a5aed63b98
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b0a5aed63b981fa458db895283e0591d9a2543f6bba3b01ad1e50c4479c9ee3c
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:57:47.725235+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:57:55.632049+00:00'
+- sha256: b0b057ea98a2
+  sha_short: b0b057ea98a2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b0b057ea98a24b6a2508ebff11e8712a0dfebca526fe4cb630054aaef8ea49e7
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:58:07.161542+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T14:58:10.770458+00:00'
+- sha256: b0c76c8ca311
+  sha_short: b0c76c8ca311
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b0c76c8ca3112b1fbe515f2ee8994dd9e5dae6c04ffec9034d6f5aa7acfcaeee
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=1.00)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:58:17.430332+00:00'
+    openai:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:58:21.682476+00:00'
+- sha256: b132a4764e48
+  sha_short: b132a4764e48
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b132a4764e4876bd3fdd2e1c799282d804e1fc7aeb7b0ec69d8e77381fe48d42
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:58:28.461165+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:58:32.163535+00:00'
+- sha256: b3148e7e3415
+  sha_short: b3148e7e3415
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b3148e7e341511ddc4a4f736d362cda0d039d8d627e33c52eb61782848a7b448
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:58:47.370237+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:58:51.108722+00:00'
+- sha256: b335f3fed511
+  sha_short: b335f3fed511
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b335f3fed511cd81d9be5271c1a4bda106a1094955858e44b7562a143549aab6
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:58:57.634483+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T14:59:00.949349+00:00'
+- sha256: b565f9fc7f72
+  sha_short: b565f9fc7f72
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b565f9fc7f72b62982f02ee9322005d6640bd56eab6669f7f225113d2d17635e
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:59:22.531039+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:59:26.548222+00:00'
+- sha256: b5bb18346239
+  sha_short: b5bb18346239
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b5bb183462391ed8cdbbede5631b952523101d7c7dc9605d5daf64f5b01255e0
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:59:34.302207+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:59:38.746214+00:00'
+- sha256: b79d0cee9a64
+  sha_short: b79d0cee9a64
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b79d0cee9a641d97211fe7aefba2f2ed55a2aa5f3e1ca2187180d099f03e93dd
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:59:44.786047+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:59:53.023493+00:00'
+- sha256: b7f023cf14fb
+  sha_short: b7f023cf14fb
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b7f023cf14fbefc7caff5779ff2cadc273df334b7814c8d3c9565729dcc38ad3
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:59:58.419165+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:00:04.096095+00:00'
+- sha256: b849b6ba29a8
+  sha_short: b849b6ba29a8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b849b6ba29a82414aa1a36d9aca4ecb1d5218c4b92932eaa18c4bee9be1b28c7
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:00:11.690761+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:00:22.771985+00:00'
+- sha256: b8f7537bb053
+  sha_short: b8f7537bb053
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b8f7537bb05302f56d6b122a40202a302c2c5529739bf0542e776095cd2d60cf
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:00:50.360134+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:00:56.616466+00:00'
+- sha256: bb9f6a914476
+  sha_short: bb9f6a914476
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bb9f6a9144762561dfef0c272146eb691679905032da368f77d67818f09c3d00
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:01:06.828433+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:01:11.167921+00:00'
+- sha256: bc5cc7b329a7
+  sha_short: bc5cc7b329a7
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bc5cc7b329a7708728fe50c6f8304bdeceff81e99016103823e2cad7e6bf93f2
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:01:19.684681+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:01:23.937902+00:00'
+- sha256: bc738b4108b4
+  sha_short: bc738b4108b4
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bc738b4108b4fa4baa1df7c010c743ce80487cd78a5fe86e36feaddbd07ec281
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:01:33.497756+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:01:51.843674+00:00'
+- sha256: bdde6aa7014d
+  sha_short: bdde6aa7014d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bdde6aa7014d62731e58d99b9d8b43c9c4c05d8c831fd828c92b635ae7b4b1ae
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:01:59.277782+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:02:03.608698+00:00'
+- sha256: be532a0baaf2
+  sha_short: be532a0baaf2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/be532a0baaf28e3fa4c93816db54f08aeea19cf353624c0de7584bad4dbe096a
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:02:08.974493+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:02:12.759167+00:00'
+- sha256: bf5695045f1a
+  sha_short: bf5695045f1a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bf5695045f1a929cdcef91aaa00be0d0bd584774364b663d463c3a8792c66ca8
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:02:18.090009+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:02:21.558078+00:00'
+- sha256: bfe89de8ad30
+  sha_short: bfe89de8ad30
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bfe89de8ad30e854dc425c03a2fb8f896139268b9a23e1b99d29c3b9471bec98
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:02:35.012393+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:02:38.663877+00:00'
+- sha256: c1265578188b
+  sha_short: c1265578188b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c1265578188b98cce28c9961aa565bf050268cdf7a64301ed692e197df9b5661
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:02:44.891548+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:02:48.720041+00:00'
+- sha256: c37fe155c7d6
+  sha_short: c37fe155c7d6
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c37fe155c7d6ca74d9d1c49bbf8c24ec2a53ece1c16b9878e752ebd563d77acb
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:02:59.196662+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:03:02.485679+00:00'
+- sha256: c4717e929665
+  sha_short: c4717e929665
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c4717e929665a539307fb92f3e5173fced5359193c03a8c2b8a70affadb976d0
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:03:12.507484+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:03:16.077879+00:00'
+- sha256: c6116b5906e5
+  sha_short: c6116b5906e5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c6116b5906e582575f490cf0b2e6b99735944f1a641241d6e96f64fbc7428a52
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:03:21.845743+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:03:25.927799+00:00'
+- sha256: c8e6b7aa83a2
+  sha_short: c8e6b7aa83a2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c8e6b7aa83a2fdc5e9967969c4ce41d98bce2a512a0f6d222d6a79384d4c4c35
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:03:30.669687+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:03:34.027973+00:00'
+- sha256: ca03fc68b57b
+  sha_short: ca03fc68b57b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ca03fc68b57bd4a6fcf62dfb2278958e9af19ba291e08c790084d0b76d7c614f
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:03:46.486817+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:03:49.677250+00:00'
+- sha256: ca58bc7b8587
+  sha_short: ca58bc7b8587
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ca58bc7b8587bc43c50b7fce15c4eb7ab0ce9c895abf79bbd04aaf5d8d2b2c7f
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:03:54.362757+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:03:58.822651+00:00'
+- sha256: cabb29ea3217
+  sha_short: cabb29ea3217
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cabb29ea32177f9c1885fe59b60bca309a16ff0054acb1c133779252a3094601
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:04:05.428166+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:04:09.443888+00:00'
+- sha256: cbc5f125f207
+  sha_short: cbc5f125f207
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cbc5f125f2071c39f0a092ef1e15e73886aed7b366ecdcbd3230d1b40cc3b743
+  consensus_passed: false
+  rejection_reason: openai below hard threshold (conf=0.80 < 0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:04:14.273604+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:04:17.421194+00:00'
+- sha256: cbe522b80aa6
+  sha_short: cbe522b80aa6
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cbe522b80aa69131de788d7dc7662665455aec302fd47c9a0e3dab32d9dc7b43
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=1.00)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:04:26.362883+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:04:31.672940+00:00'
+- sha256: cc2acf4e94e3
+  sha_short: cc2acf4e94e3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cc2acf4e94e322e9546f89e3b062b80f49eebf2dabfd466477e0954ad2df1902
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:04:42.112248+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:04:46.031994+00:00'
+- sha256: cd118c02a190
+  sha_short: cd118c02a190
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cd118c02a1903b024695de55c0f2b1e295391ba410ede91a24b14bbc604a9adf
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:04:55.289222+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:05:02.514548+00:00'
+- sha256: cd7fdab3c9ba
+  sha_short: cd7fdab3c9ba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cd7fdab3c9bad8e66df10c3bd31697c23e15cb6e1bfb14b889ec7de649a83ac0
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:05:07.948904+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:05:13.015589+00:00'
+- sha256: cdb6f0562354
+  sha_short: cdb6f0562354
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cdb6f05623548a0787516f4f62344bc774be2e7bde4abf4a06bbdc8bc08251d3
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:05:21.189611+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:05:25.460501+00:00'
+- sha256: ced145d84a68
+  sha_short: ced145d84a68
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ced145d84a687316a94fa06e452bf35bbe2cdb1786de3bae64f82ab7fae51c72
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.95)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:05:31.883593+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T15:05:35.538837+00:00'
+- sha256: d19a9d34bc86
+  sha_short: d19a9d34bc86
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d19a9d34bc86ee4aea4de06a064c8c9f3142b8e22fb4aa1cc99926804aeb122c
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:05:42.948000+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:05:46.715025+00:00'
+- sha256: d20d93155e07
+  sha_short: d20d93155e07
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d20d93155e07249e40eee9f58f86b9d1b3db008a69eb6b42c4979b13403a4367
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:05:51.696563+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:05:59.249379+00:00'
+- sha256: d2558e36197b
+  sha_short: d2558e36197b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d2558e36197b1c746a1224330db4be36e897958afcddf14f2f519ef6ba278a97
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:06:09.617853+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:06:13.347173+00:00'
+- sha256: d2d11ba4a9ab
+  sha_short: d2d11ba4a9ab
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d2d11ba4a9abbdb62fa74e2954b0fc7564f8e6f978cdb7ca56a41f449047da7d
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:06:19.325064+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:06:22.998932+00:00'
+- sha256: d3bc4bdfb01f
+  sha_short: d3bc4bdfb01f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d3bc4bdfb01f2750dbd4c48d3cba0bbb070d77aee42dd92682e17c4f9313e17d
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:06:31.422048+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:06:34.954210+00:00'
+- sha256: d3c3fef2870e
+  sha_short: d3c3fef2870e
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d3c3fef2870e9b2cae6add353e3f53512d806530364d96b897469fa38409c228
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:06:49.187878+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:06:53.997887+00:00'
+- sha256: d514ecf51cdf
+  sha_short: d514ecf51cdf
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d514ecf51cdfde00897b10e604104e7e393d9b02407663c34b89c8e8192a906a
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:07:05.201634+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:07:09.010998+00:00'
+- sha256: d58a5254eeb7
+  sha_short: d58a5254eeb7
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d58a5254eeb72136dd58ccf94adbde5a9bee093a42c32b356e0da9e58f46e886
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:07:16.294439+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:07:19.597844+00:00'
+- sha256: d5937ef49d05
+  sha_short: d5937ef49d05
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d5937ef49d0512e68e6324f94244c5b5205adaa11f9d163da1578d40e8d48c6a
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:07:29.037475+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:07:33.765653+00:00'
+- sha256: d6369612ff83
+  sha_short: d6369612ff83
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d6369612ff83d06d1a6935f7713b95bcd4ff2f48b1aa04b465e8fb67b0b101aa
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:07:48.934157+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:07:53.261790+00:00'
+- sha256: d65c39dc5155
+  sha_short: d65c39dc5155
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d65c39dc5155cbd5da6d3885bd6d0d951e4674d708d1b9262807c89dded400e5
+  consensus_passed: false
+  rejection_reason: openai verdict=malicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:08:05.545718+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:08:10.209140+00:00'
+- sha256: d672c497e75a
+  sha_short: d672c497e75a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d672c497e75a322d83930e976194413e35005fffcf250156e8b94cc96def39e1
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:08:16.774743+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:08:20.475436+00:00'
+- sha256: d6dcc5df6cba
+  sha_short: d6dcc5df6cba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d6dcc5df6cbaef39670964d7b0f37f3ddd8d1d63b62be477124c6241eb1a2bde
+  consensus_passed: false
+  rejection_reason: grok below hard threshold (conf=0.80 < 0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:08:25.624962+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:08:28.970991+00:00'
+- sha256: d90c7b3e7cb3
+  sha_short: d90c7b3e7cb3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d90c7b3e7cb3e215fbb5bc80c09bb8e5b18bcc9e308071c44505242f246d99c4
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:08:35.378420+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T15:08:40.795658+00:00'
+- sha256: da7ccc69ceba
+  sha_short: da7ccc69ceba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/da7ccc69cebab6cfb5c8d431a714d794e0f64e9355ebd8bf722f9042765d82da
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:08:47.959174+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:08:52.158573+00:00'
+- sha256: db5512af5ce8
+  sha_short: db5512af5ce8
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/db5512af5ce809fb4f1d83bb5c873d1fce7d358a6a96bd7a9249c736705d8891
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:08:57.733711+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:09:03.760863+00:00'
+- sha256: dd85ba5f5882
+  sha_short: dd85ba5f5882
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/dd85ba5f5882414880f54ec5dfe4ab4a1eee9ad0ff6eebd07d3852e72b80a0f9
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T15:09:13.237209+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:09:17.319185+00:00'
+- sha256: df60f33fc39b
+  sha_short: df60f33fc39b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/df60f33fc39b4a718bf87424e3edd6a638dc137848262a15399fb2e16b6c477f
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:09:23.230897+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:09:26.428509+00:00'
+- sha256: e31e42f61fb3
+  sha_short: e31e42f61fb3
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e31e42f61fb3c8ebc55859375391f7a3e0831fcb31e9ce347424a0f2176762e1
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:09:33.132791+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:09:37.238236+00:00'
+- sha256: e4a1ff2b32ab
+  sha_short: e4a1ff2b32ab
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e4a1ff2b32aba64ec64d73ea39c2d081c3eee45bf83f2c3b86d9716dc114dc08
+  consensus_passed: false
+  rejection_reason: openai verdict=malicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:09:46.189910+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:09:57.511281+00:00'
+- sha256: e511377a7d53
+  sha_short: e511377a7d53
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e511377a7d53c389459d7ff20500be8bf2397941186e5bd4dc9200c007992860
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:10:12.621863+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:10:17.608771+00:00'
+- sha256: e5dfdf6b9f37
+  sha_short: e5dfdf6b9f37
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e5dfdf6b9f3766cecd8b8971b10b3d60007182a78980839f7a28c874ec3bcdc7
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:10:36.015614+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:10:42.253694+00:00'
+- sha256: e6af7fa57fea
+  sha_short: e6af7fa57fea
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e6af7fa57fea3ece712586abf4e5fc1808b2aceeb7d87981710e726b45a8400d
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:10:51.164297+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:10:54.914572+00:00'
+- sha256: e758bf4e2827
+  sha_short: e758bf4e2827
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e758bf4e2827c15f5f02a38cd9569729e28a40e5ff240c8d18b29ec253aed7fb
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:11:10.708960+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:11:15.040758+00:00'
+- sha256: e7bd2bad9cd0
+  sha_short: e7bd2bad9cd0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e7bd2bad9cd0483cd4a69d03954ea0dfb83c76db447c7b76eea164118ef66619
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:11:20.608033+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:11:24.349387+00:00'
+- sha256: e883c763f662
+  sha_short: e883c763f662
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e883c763f6626c593b15c5a75fd7c073a3c595e0dcd121a4df83b7527818b724
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:11:28.944800+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:11:33.124502+00:00'
+- sha256: e91501b9d4c6
+  sha_short: e91501b9d4c6
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e91501b9d4c6e40cf0d07e81aad833bdcfa128f68ec399ca1052cffa1ea47a32
+  consensus_passed: false
+  rejection_reason: openai below hard threshold (conf=0.80 < 0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:11:38.615160+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:11:43.012673+00:00'
+- sha256: e957a280ad1d
+  sha_short: e957a280ad1d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e957a280ad1dfdc733f84a59bf160956c11787f01aeb9035faf619a359d56d2b
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.85)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:11:52.768622+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:11:56.907153+00:00'
+- sha256: e9fd5ab18cea
+  sha_short: e9fd5ab18cea
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e9fd5ab18ceaa72f6a40135d7623da0aae7e529c8188436ed78c058ee110ce3d
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:12:01.686217+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:12:05.109266+00:00'
+- sha256: ea277caa3408
+  sha_short: ea277caa3408
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ea277caa3408454954ce5c8724e333900301756ab9dbfe9c98f716280f7cadae
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:12:11.012942+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:12:15.735361+00:00'
+- sha256: ec0b57b4eda0
+  sha_short: ec0b57b4eda0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ec0b57b4eda00410af7a2dac26bc7997df546741913d71e2af274e8f0ec650e2
+  consensus_passed: false
+  rejection_reason: openai below hard threshold (conf=0.80 < 0.85)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:12:22.089099+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:12:29.406516+00:00'
+- sha256: ec604152683f
+  sha_short: ec604152683f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ec604152683fdb0317e0bffcc242e5f0b03416939275e850a22e860c8a9e5dc5
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:12:34.486304+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:12:38.153104+00:00'
+- sha256: ec9d9347a391
+  sha_short: ec9d9347a391
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ec9d9347a3910368bc758ce7d00e2eeb39dc3522c87f6f01a799de5f16c12934
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T15:12:47.065275+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:12:56.411845+00:00'
+- sha256: edc84320383f
+  sha_short: edc84320383f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/edc84320383f8063caaf2b4f224731cbc2e9f5d271a48014fefc6f3dfb569516
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:13:00.791361+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:13:04.589361+00:00'
+- sha256: eeb7fd047f40
+  sha_short: eeb7fd047f40
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/eeb7fd047f402c0e6a59e0fcfa4cecf6893f291e016189e37fdbd1d98e4866e3
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=1.00)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:13:25.626500+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:13:29.673836+00:00'
+- sha256: f027f712e9b9
+  sha_short: f027f712e9b9
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f027f712e9b90a917444dbee98ac061be36cc2c63dc03b57ab546a7ddf871299
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:13:34.161370+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:13:38.921287+00:00'
+- sha256: f2baefee4083
+  sha_short: f2baefee4083
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f2baefee4083ba3961e027fab41d4bb7c92739c50b24ee92f9f02f1dcf6cc85a
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:13:44.288380+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:13:48.315845+00:00'
+- sha256: f307e47260a7
+  sha_short: f307e47260a7
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f307e47260a73e93450cf826eb52f9f72970408bbe9fd3ff5bc71062478cc597
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.75)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.75
+      model: null
+      queried_at: '2026-04-28T15:13:56.978617+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:14:01.311860+00:00'
+- sha256: f33b13a01335
+  sha_short: f33b13a01335
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f33b13a013357d8bb93a853a885daa21541770f787966b18d96e2b7942a3caf0
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:14:06.358996+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:14:10.124838+00:00'
+- sha256: f4912f7e08ba
+  sha_short: f4912f7e08ba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f4912f7e08ba7ba6d81f9bc60f256ca2f6e4a168fde8ef146e7353b2fa88fa24
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:14:15.703240+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:14:19.419429+00:00'
+- sha256: f4aaf6312a04
+  sha_short: f4aaf6312a04
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f4aaf6312a0431650256b1af22572d4e9b7d1ed8b80c737d5cd3f05def3a22ec
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:14:28.874192+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:14:32.387814+00:00'
+- sha256: f576274b11eb
+  sha_short: f576274b11eb
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f576274b11eb00786007f22e0c023a87aac1c50708581cd84b24f193ef0f05ad
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:14:38.266236+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:14:41.956987+00:00'
+- sha256: f6a9ac89ad8a
+  sha_short: f6a9ac89ad8a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f6a9ac89ad8ab0c888230f5dc86fe36491ac69a802c82b195159f10d20a4b6e4
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:15:01.712847+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:15:06.282926+00:00'
+- sha256: f7e745fdd48b
+  sha_short: f7e745fdd48b
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f7e745fdd48b02fcb399d967851708f9d23d4aaf3120eea8a1b8a5cfaad21029
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:15:13.994924+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:15:32.487269+00:00'
+- sha256: f814439a8277
+  sha_short: f814439a8277
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f814439a827718640d24bb8f67e8c6cb35a5880e007137babc331355a26ac149
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:15:40.637590+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:15:44.557432+00:00'
+- sha256: f9d8cf42bede
+  sha_short: f9d8cf42bede
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f9d8cf42bede827e8f357553ed6de9b1a597cbc852da0f05ff34db4480b9c3a9
+  consensus_passed: false
+  rejection_reason: grok verdict=malicious (conf=0.90)
+  verdicts:
+    grok:
+      verdict: malicious
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:15:53.097153+00:00'
+    openai:
+      verdict: malicious
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:15:57.448156+00:00'
+- sha256: fb1df2bc2c3a
+  sha_short: fb1df2bc2c3a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/fb1df2bc2c3ae427e15ae3d5a2b7d0d734321274eb10c9f4eb779e6d95164174
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:16:05.250486+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:16:08.550513+00:00'
+- sha256: fbff8cd16622
+  sha_short: fbff8cd16622
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/fbff8cd16622ed4f881dc48e6ebe30bb3b8db4449d3e974a5e638e717b0b226b
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:16:16.874939+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:16:20.355435+00:00'
+- sha256: fd9f4a094fd1
+  sha_short: fd9f4a094fd1
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/fd9f4a094fd1d91c1dedb57c38511925d7167e58aa18d3ea1e7976fe0c6a9082
+  consensus_passed: true
+  rejection_reason: ''
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:16:27.973501+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:16:31.169648+00:00'
+- sha256: feea719e3da7
+  sha_short: feea719e3da7
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/feea719e3da7bf7ee5afa1ffd2601d7bff87f5fbe182b134101509a01486032f
+  consensus_passed: false
+  rejection_reason: grok verdict=suspicious (conf=0.80)
+  verdicts:
+    grok:
+      verdict: suspicious
+      confidence: 0.8
+      model: null
+      queried_at: '2026-04-28T15:16:38.707703+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:16:42.613407+00:00'
+- sha256: ff31b25ffade
+  sha_short: ff31b25ffade
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/ff31b25ffadea149643fdd64ff909c5e2160dbdc254ef810cd717fcbd73349ae
+  consensus_passed: false
+  rejection_reason: openai verdict=suspicious (conf=0.70)
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:16:47.096401+00:00'
+    openai:
+      verdict: suspicious
+      confidence: 0.7
+      model: null
+      queried_at: '2026-04-28T15:16:50.463597+00:00'

@@ -1,4 +1,6 @@
-use crate::findings::{ArtifactKind, Finding, RecommendedAction, Severity};
+use crate::findings::{
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+};
 use crate::policy::{
     load_baseline, load_policy, load_waivers, BaselineFile, PolicyFile, WaiverFile,
 };
@@ -25,6 +27,35 @@ pub(crate) fn read_text_file_lossy<F: FileSystemProvider>(
         .to_vec();
     let decode_warning = std::str::from_utf8(&bytes).is_err();
     Ok((String::from_utf8_lossy(&bytes).into_owned(), decode_warning))
+}
+
+/// Builds the Critical/Block finding for an artifact whose bytes start
+/// with binary magic but whose path advertises markdown. `kind` is the
+/// magic-family label (`"ZIP"`, `"ELF"`, ...). `match_target` lets
+/// callers point at either the document itself (entrypoint case) or a
+/// referenced file.
+pub(crate) fn binary_disguise_finding(
+    path: &Path,
+    kind: &str,
+    artifact_kind: ArtifactKind,
+    match_target: MatchTarget,
+) -> Finding {
+    let artifact_path = path.display().to_string();
+    Finding::builder(
+        "ARTIFACT_BINARY_DISGUISED_AS_MARKDOWN",
+        ThreatCategory::Obfuscation,
+    )
+    .severity(Severity::Critical)
+    .action(RecommendedAction::Block)
+    .evidence_kind(EvidenceKind::Behavior)
+    .signal_class(crate::findings::SignalClass::MaliciousBehavior)
+    .matched_on(match_target)
+    .artifact(artifact_kind, Some(artifact_path))
+    .match_value(format!("{kind} archive disguised as markdown"))
+    .reason(
+        "Markdown-named artifact starts with binary magic bytes — content obfuscation / payload smuggling",
+    )
+    .build()
 }
 
 pub(crate) fn decode_warning_finding(path: &Path, artifact_kind: ArtifactKind) -> Finding {
@@ -113,16 +144,29 @@ pub(crate) fn structured_parse_warning(
     })
 }
 
-pub(crate) fn load_optional_baseline(
+pub(crate) fn load_optional_baseline<F: FileSystemProvider>(
+    fs: &F,
     path: Option<&Path>,
 ) -> Result<Option<BaselineFile>, ScanError> {
-    path.map(load_baseline).transpose().map_err(ScanError::Io)
+    path.map(|p| load_baseline(fs, p))
+        .transpose()
+        .map_err(ScanError::Io)
 }
 
-pub(crate) fn load_optional_waivers(path: Option<&Path>) -> Result<Option<WaiverFile>, ScanError> {
-    path.map(load_waivers).transpose().map_err(ScanError::Io)
+pub(crate) fn load_optional_waivers<F: FileSystemProvider>(
+    fs: &F,
+    path: Option<&Path>,
+) -> Result<Option<WaiverFile>, ScanError> {
+    path.map(|p| load_waivers(fs, p))
+        .transpose()
+        .map_err(ScanError::Io)
 }
 
-pub(crate) fn load_optional_policy(path: Option<&Path>) -> Result<Option<PolicyFile>, ScanError> {
-    path.map(load_policy).transpose().map_err(ScanError::Io)
+pub(crate) fn load_optional_policy<F: FileSystemProvider>(
+    fs: &F,
+    path: Option<&Path>,
+) -> Result<Option<PolicyFile>, ScanError> {
+    path.map(|p| load_policy(fs, p))
+        .transpose()
+        .map_err(ScanError::Io)
 }

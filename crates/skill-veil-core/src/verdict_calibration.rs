@@ -80,7 +80,47 @@ struct CalibrationRule {
 
 /// Ordered calibration pipeline. Rules are applied sequentially; see module-level docs
 /// for the ordering rationale and independence guarantees.
+///
+/// # How to read each tier
+///
+/// Each `CalibrationRule` has two distinct knobs that encode the engineering
+/// decision for that tier:
+///
+/// - `risk_delta` — how much score this signal *contributed* to the original
+///   verdict, expressed as a negative number to back it out when the
+///   calibration fires. Larger absolute values mean the rule was an
+///   over-amplifier in the corpus and needs a deeper rollback.
+/// - `reclassify_signal` — whether the *isolated* finding should also lose
+///   its `MaliciousBehavior` / `SuspiciousPackageBehavior` classification
+///   and become a `ReviewSignal`. `false` means "still counts toward the
+///   verdict if anything else corroborates"; `true` means "downstream
+///   `verdict.rs` must not treat this finding as a primary driver, period".
+///
+/// `trigger_rule_ids` is what *causes* the tier to fire, and `rule_ids` is
+/// what gets *added to the accumulated exclusion list* so that subsequent
+/// tiers see the calibrated state. They are usually equal — they diverge
+/// only when one tier needs to suppress an alias rule that other tiers
+/// would otherwise re-amplify (none currently do, but the schema supports
+/// it).
 const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
+    // Tier 1 — declared network access (manifest-level, no behavior).
+    //
+    // Why this tier exists: pre-calibration the corpus produced a wave of
+    // false-positive `Suspicious` verdicts on benign packages that simply
+    // declared `network` in their permission manifest without any
+    // network-using code. The declaration is still useful for blast-radius
+    // reporting, so we keep the finding but stop letting it drive the
+    // verdict on its own.
+    //
+    // Why `risk_delta = -10`: empirically the original scoring path added
+    // ~10 points for declared network access. Rolling back exactly that
+    // amount restores the package's score to "no network signal at all"
+    // when nothing else corroborates.
+    //
+    // Why `reclassify_signal = false`: the finding is genuinely a
+    // `ReviewSignal` already (Hygiene-tier), so we leave the classification
+    // intact. Downgrading to context-only just lowers the action; the
+    // signal class doesn't need to change.
     CalibrationRule {
         trigger_rule_ids: &["DECLARED_PERMISSION_NETWORK_ACCESS"],
         rule_ids: &["DECLARED_PERMISSION_NETWORK_ACCESS"],
@@ -91,6 +131,22 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
         rationale: "Declared network access remains useful for blast-radius reporting, but it no longer drives package escalation without corroborating behavior.",
         note_rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS",
     },
+    // Tier 2 — capability vs declared permission mismatch.
+    //
+    // Why this tier exists: a permission/capability mismatch alone (e.g.
+    // code reads files but the manifest didn't declare it) is a common
+    // benign drift in well-meaning packages. It's a strong *explainability*
+    // signal but a weak *threat* signal. Pre-calibration these mismatches
+    // were re-routing into Suspicious verdicts in benign packages.
+    //
+    // Why `risk_delta = -8`: smaller than the network case (-10) because
+    // the original score contribution is also smaller — capability
+    // mismatch is one weighted finding, not a multi-signal declared
+    // permission. The corpus showed -8 was the right rollback to bring
+    // benign mismatches back to baseline.
+    //
+    // Why `reclassify_signal = false`: same reasoning as Tier 1 — the
+    // signal class is already correct, only the action needs damping.
     CalibrationRule {
         trigger_rule_ids: &["CAPABILITY_PERMISSION_MISMATCH"],
         rule_ids: &["CAPABILITY_PERMISSION_MISMATCH"],
@@ -101,19 +157,64 @@ const CALIBRATION_PIPELINE: &[CalibrationRule] = &[
         rationale: "Capability mismatch is retained as an explainability signal, but it no longer escalates verdicts without stronger intent or behavioral evidence.",
         note_rule_id: "CAPABILITY_PERMISSION_MISMATCH",
     },
+    // Tier 3 — internal / loopback network access.
+    //
+    // Why this tier exists: localhost / 127.x / 169.254.x calls in
+    // skills are overwhelmingly benign developer tooling (talking to a
+    // local LLM, an internal MCP host, a metadata service for legitimate
+    // cloud introspection). Pre-calibration the corpus marked many such
+    // packages as Suspicious. True positives — exfiltration, metadata
+    // theft — *always* show up alongside fetch/exec/exfil chain rules,
+    // so we wait for those before escalating.
+    //
+    // Why `risk_delta = -12`: this is the largest rollback in the
+    // pipeline because the original `INTERNAL_NETWORK_ACCESS` weight was
+    // calibrated for "external network access on a sensitive port" and
+    // happened to also fire on loopback. Pulling -12 effectively
+    // neutralises the misweighting.
+    //
+    // Why `reclassify_signal = true`: critical asymmetry vs. Tiers 1–2.
+    // We must downgrade not just the action but the **signal class**, so
+    // that `verdict::predicates::is_isolated_weak_package_root_signal`
+    // can recognise the finding as `ReviewSignal` and emit a Benign
+    // verdict. Without `true`, an isolated loopback hit still presents
+    // as `MaliciousBehavior` to verdict.rs and bypasses the Benign
+    // downgrade path the Tier was designed to enable.
     CalibrationRule {
         trigger_rule_ids: &["INTERNAL_NETWORK_ACCESS"],
         rule_ids: &["INTERNAL_NETWORK_ACCESS"],
         risk_delta: -12,
-        // Reclassify to ReviewSignal so that verdict.rs does not treat an
-        // isolated internal-network finding as MaliciousBehavior or
-        // SuspiciousPackageBehavior. True positives always have corroborating chain rules.
         reclassify_signal: true,
         effect_downgraded: "downgraded_to_review_only",
         effect_unchanged: "remains_review_only",
         rationale: "Internal or loopback network targets are treated as review-only unless paired with fetch, execution, exfiltration, or metadata-service behavior.",
         note_rule_id: "INTERNAL_NETWORK_ACCESS",
     },
+    // Tier 4 — remote MCP server without auth.
+    //
+    // Why this tier exists: the MCP_NO_AUTH_MODEL and the official-MCP
+    // alias OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT were originally each
+    // weighted high enough to drive Suspicious verdicts standalone. In
+    // practice "no auth" is a hygiene problem on remote MCPs, not a
+    // direct attack vector — the threat materialises only when the MCP
+    // also exposes command-execution or arbitrary-transport tools.
+    //
+    // Why both rule IDs: they describe the same risk surface from two
+    // detection paths (generic vs. official-MCP catalog match). Grouping
+    // them in one tier means a finding from either path triggers the
+    // calibration, and *both* are added to the exclusion list so a later
+    // tier can't double-deduct on the alias.
+    //
+    // Why `risk_delta = -6`: the smallest rollback in the pipeline. The
+    // corpus showed that even after calibration these findings should
+    // still nudge the score upward when present (they ARE risky), just
+    // not enough to escalate alone. -6 leaves a residual signal so
+    // packages with multiple weak hygiene markers still tip into
+    // Suspicious.
+    //
+    // Why `reclassify_signal = true`: like Tier 3, we need verdict.rs to
+    // see this as a `ReviewSignal` so its presence alone doesn't keep
+    // a package in `SuspiciousPackageBehavior`.
     CalibrationRule {
         trigger_rule_ids: &["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"],
         rule_ids: &["MCP_NO_AUTH_MODEL", "OFFICIAL_MCP_NO_AUTH_REMOTE_ENDPOINT"],

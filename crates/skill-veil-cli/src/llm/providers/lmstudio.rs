@@ -78,7 +78,7 @@ impl LlmProvider for LmStudioProvider {
             .map(|(k, v)| (*k, v.as_str()))
             .collect();
         let text = post_json_with_retry(&self.agent, &url, &headers, &body)?;
-        super::openai::parse_chat_completion(&text, "lmstudio", &self.model)
+        super::openai::parse_chat_completion(&text)
     }
 
     fn name(&self) -> &'static str {

@@ -35,8 +35,8 @@ mod ioc;
 mod parser;
 mod schema;
 
-use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher};
-use crate::ports::PatternMatcher;
+use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
+use crate::ports::{FileSystemError, FileSystemProvider, PatternMatcher};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -232,31 +232,29 @@ impl<M: PatternMatcher> RuleEngine<M> {
         Ok(())
     }
 
-    /// Load rules from a directory.
-    pub fn load_from_dir(&mut self, dir: impl AsRef<Path>) -> Result<(), RuleError> {
+    /// Load rules from a directory through a `FileSystemProvider`. Going
+    /// through the port preserves the hexagonal contract: this loader
+    /// reads YAML rule packs from disk, but the domain layer never
+    /// reaches `std::fs` directly.
+    pub fn load_from_dir<F: FileSystemProvider>(
+        &mut self,
+        fs: &F,
+        dir: impl AsRef<Path>,
+    ) -> Result<(), RuleError> {
         let dir = dir.as_ref();
         self.rules_dir = Some(dir.to_path_buf());
 
-        for entry in walkdir::WalkDir::new(dir)
-            .into_iter()
-            .filter_map(|e| match e {
-                Ok(entry) => Some(entry),
-                Err(err) => {
-                    warn!(
-                        "Skipping entry while loading rule packs from {}: {err}",
-                        dir.display()
-                    );
-                    None
-                }
-            })
-            .filter(|e| {
-                e.path()
-                    .extension()
-                    .map(|ext| ext == "yaml" || ext == "yml")
-                    .unwrap_or(false)
-            })
-        {
-            self.load_rules_file(entry.path())?;
+        for pattern in &["*.yaml", "*.yml"] {
+            let paths = fs.list_files(dir, pattern, true).map_err(|err| match err {
+                FileSystemError::IoError(io) => RuleError::IoError(io),
+                FileSystemError::PathNotFound(missing) => RuleError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("path not found: {}", missing.display()),
+                )),
+            })?;
+            for path in paths {
+                self.load_rules_file(fs, &path)?;
+            }
         }
 
         Ok(())
@@ -274,8 +272,21 @@ impl<M: PatternMatcher> RuleEngine<M> {
     /// Callers that intentionally want the legacy "warn-and-skip" behaviour
     /// (e.g. tooling that loads many overlapping experimental packs) must
     /// opt out via `set_strict_mode(false)`.
-    pub fn load_rules_file(&mut self, path: impl AsRef<Path>) -> Result<(), RuleError> {
-        let content = std::fs::read_to_string(path.as_ref())?;
+    pub fn load_rules_file<F: FileSystemProvider>(
+        &mut self,
+        fs: &F,
+        path: impl AsRef<Path>,
+    ) -> Result<(), RuleError> {
+        let bytes = fs.read_file_bytes(path.as_ref()).map_err(|err| match err {
+            FileSystemError::IoError(io) => RuleError::IoError(io),
+            FileSystemError::PathNotFound(missing) => RuleError::IoError(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("path not found: {}", missing.display()),
+            )),
+        })?;
+        let content = String::from_utf8(bytes.as_bytes().to_vec()).map_err(|err| {
+            RuleError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+        })?;
         for rule in parse_rules_file(&content)? {
             let compiled = CompiledRule::compile(rule)?;
             if self
@@ -390,10 +401,16 @@ impl<M: PatternMatcher> RuleEngine<M> {
     fn load_runtime_default_rules(&mut self) -> Result<bool, RuleError> {
         let mut loaded = false;
         let prev_strict = std::mem::replace(&mut self.strict_mode, false);
+        // Runtime defaults always read from the real filesystem (the
+        // `rules/official/` overlay shipped beside the binary). Pinning
+        // the std adapter here keeps `with_defaults_and_matcher` callable
+        // without forcing every consumer to thread an `&FileSystemProvider`
+        // through their constructor.
+        let fs = StdFileSystemProvider::new();
         let result: Result<(), RuleError> = (|| {
             for dir in default_external_rule_dirs() {
                 if dir.exists() {
-                    self.load_from_dir(&dir)?;
+                    self.load_from_dir(&fs, &dir)?;
                     loaded = true;
                 }
             }

@@ -80,6 +80,14 @@ pub struct SkillDocument {
     pub structural_signals: StructuralSignals,
     pub decode_warning: bool,
     pub parse_warning: bool,
+    /// `Some(kind)` when the artifact carries a markdown extension but the
+    /// raw bytes start with binary magic for `kind` (e.g. `"ZIP"`,
+    /// `"ELF"`). Detected before the lossy UTF-8 decode runs so we can
+    /// flag content-obfuscation cases like the `01d1232c` ZIP-as-md
+    /// sample. `#[serde(default)]` keeps cached documents from older
+    /// versions deserializable.
+    #[serde(default)]
+    pub binary_disguise_kind: Option<String>,
     pub sections: Vec<Section>,
     pub raw_content: String,
     pub referenced_files: Vec<PathBuf>,

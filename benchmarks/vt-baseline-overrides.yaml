@@ -1,0 +1,733 @@
+schema_version: '2.0'
+description: Multi-LLM consensus mislabel overrides for vt-baseline.json. Each entry
+  passed unanimous-benign agreement across the configured LLM providers (see consensus_rule).
+  Samples that did not pass consensus are recorded in multi-llm-audit.yaml and revert
+  to their VT label.
+generated_by: scripts/llm_filter_fns.py
+generated_at: '2026-04-28T15:16:50.463924+00:00'
+providers:
+- grok
+- openai
+hard_threshold: 0.85
+high_confidence: 0.9
+overrides:
+- sha256: 04c0eb6ec422
+  sha_short: 04c0eb6ec422
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/04c0eb6ec422c9298dd061fac19dddd0b23e2803a5a1ce9956d50ed370bd4af9
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:18:02.796316+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:18:03.031721+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 0f53f747ae13
+  sha_short: 0f53f747ae13
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/0f53f747ae1375cb8cd8603e1b8ccd7ab3d648c199a474ca3442f23d0c2bf0de
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:19:35.678014+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:19:39.128300+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 24f9db128ef5
+  sha_short: 24f9db128ef5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/24f9db128ef5d0e4605c05f32e4b1bdefcb306845deed91ab4f32ea4780a40dd
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:25:17.152586+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:25:21.149902+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 2a9e6aedf30a
+  sha_short: 2a9e6aedf30a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/2a9e6aedf30ad54e76c502cec990ec5dcfb7a449546146157187640947a5c0c6
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:27:28.636302+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:27:32.983972+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 38dfb3bd9505
+  sha_short: 38dfb3bd9505
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/38dfb3bd9505f14cf418a100265d1088bada66fda3abca04076dbd490c9fbc4f
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:31:08.074458+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:31:12.149212+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 3974012914b6
+  sha_short: 3974012914b6
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3974012914b6462f194e5e9b22d8c7b1337f458e896eeb0aef7b9e0b8fed0ce8
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:31:17.683479+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:31:22.155465+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 3b7a3c6b4d26
+  sha_short: 3b7a3c6b4d26
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/3b7a3c6b4d269a3f7f455b7c4aa9fef5e5b069444532a3971c6a6e008bf73e0e
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:32:24.928308+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:32:32.896880+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 52ad10d50e0a
+  sha_short: 52ad10d50e0a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/52ad10d50e0ae9480fd559cfd7a30cf0d1057f56f1954d4581df60525319bbe3
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:37:10.055157+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:37:13.354741+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 566a7ecc0200
+  sha_short: 566a7ecc0200
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/566a7ecc02001954c847a9ded47fa7286a80c127b5a8cc726bc8fbbf50f44b98
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:38:10.130038+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:38:15.752903+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 6d658469753c
+  sha_short: 6d658469753c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6d658469753c0c64100d36300a19bae5b1f5ea402727dec5dad45130f295568c
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:42:32.688650+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:42:36.387772+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 6f29d4bdb21c
+  sha_short: 6f29d4bdb21c
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/6f29d4bdb21c99addfaa2fb69f15e17c819b0fa7af690a99419451a7e643494f
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:42:41.883119+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:42:45.440978+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 70f437903062
+  sha_short: 70f437903062
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/70f4379030622412a433eb87136f24d35835c9c310cec3e080b2d0058e33c624
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:43:19.605632+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:43:22.814861+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 722459a7599d
+  sha_short: 722459a7599d
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/722459a7599df05775a45b16ee1bb9d1b0fa560404962b415850e44f99fd09d5
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:44:32.490004+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:44:41.396392+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 75b748d9af78
+  sha_short: 75b748d9af78
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/75b748d9af78cc3035a4359289d30cdf7da89e58b6a1910f73bd632e4d35a148
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:45:52.893925+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:45:57.128480+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 7f6552df9042
+  sha_short: 7f6552df9042
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/7f6552df90427367a9f59850bcdfaf8760ec96f1758170a149d2fdd8ecf8f183
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:48:00.966360+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:48:04.473596+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 81cd720ec0b5
+  sha_short: 81cd720ec0b5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/81cd720ec0b5bc5a11a84f730e54be4068a2f9f8d56977e7980a52a76765f0b1
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:48:10.689580+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:48:14.456473+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 8f2638e4b8e0
+  sha_short: 8f2638e4b8e0
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/8f2638e4b8e0d716fd57e170295060f93b6de4c6b9b7a36034d6caf0956852b1
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:50:42.145285+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:50:49.849402+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 90dcc197a997
+  sha_short: 90dcc197a997
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/90dcc197a997db3cb5e3b029c0589ef826d3a75b0638f28894a49a41e94f6f89
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:51:18.865243+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:51:22.658899+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 995ea73eaaba
+  sha_short: 995ea73eaaba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/995ea73eaabaf83473247cfa1da318ed64f15ea5265c1bb305cc3971680653d9
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T14:51:51.717850+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T14:51:56.117270+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: 99c3e0f54322
+  sha_short: 99c3e0f54322
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/99c3e0f543224d0ed28f51f69770ebd45cfc2aa17b2939cca08c9e58ac01e178
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:52:00.168020+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:52:03.114625+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: b5bb18346239
+  sha_short: b5bb18346239
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b5bb183462391ed8cdbbede5631b952523101d7c7dc9605d5daf64f5b01255e0
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:59:34.302207+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:59:38.746214+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: b79d0cee9a64
+  sha_short: b79d0cee9a64
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b79d0cee9a641d97211fe7aefba2f2ed55a2aa5f3e1ca2187180d099f03e93dd
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:59:44.786047+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T14:59:53.023493+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: b7f023cf14fb
+  sha_short: b7f023cf14fb
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/b7f023cf14fbefc7caff5779ff2cadc273df334b7814c8d3c9565729dcc38ad3
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T14:59:58.419165+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:00:04.096095+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: bf5695045f1a
+  sha_short: bf5695045f1a
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/bf5695045f1a929cdcef91aaa00be0d0bd584774364b663d463c3a8792c66ca8
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:02:18.090009+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:02:21.558078+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: c6116b5906e5
+  sha_short: c6116b5906e5
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c6116b5906e582575f490cf0b2e6b99735944f1a641241d6e96f64fbc7428a52
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:03:21.845743+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:03:25.927799+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: c8e6b7aa83a2
+  sha_short: c8e6b7aa83a2
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/c8e6b7aa83a2fdc5e9967969c4ce41d98bce2a512a0f6d222d6a79384d4c4c35
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 0.95
+      model: null
+      queried_at: '2026-04-28T15:03:30.669687+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.85
+      model: null
+      queried_at: '2026-04-28T15:03:34.027973+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: cd7fdab3c9ba
+  sha_short: cd7fdab3c9ba
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/cd7fdab3c9bad8e66df10c3bd31697c23e15cb6e1bfb14b889ec7de649a83ac0
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:05:07.948904+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:05:13.015589+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: d20d93155e07
+  sha_short: d20d93155e07
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d20d93155e07249e40eee9f58f86b9d1b3db008a69eb6b42c4979b13403a4367
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:05:51.696563+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:05:59.249379+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: d2d11ba4a9ab
+  sha_short: d2d11ba4a9ab
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d2d11ba4a9abbdb62fa74e2954b0fc7564f8e6f978cdb7ca56a41f449047da7d
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:06:19.325064+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:06:22.998932+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: d3bc4bdfb01f
+  sha_short: d3bc4bdfb01f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d3bc4bdfb01f2750dbd4c48d3cba0bbb070d77aee42dd92682e17c4f9313e17d
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:06:31.422048+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:06:34.954210+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: d58a5254eeb7
+  sha_short: d58a5254eeb7
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/d58a5254eeb72136dd58ccf94adbde5a9bee093a42c32b356e0da9e58f46e886
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:07:16.294439+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:07:19.597844+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: e9fd5ab18cea
+  sha_short: e9fd5ab18cea
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/e9fd5ab18ceaa72f6a40135d7623da0aae7e529c8188436ed78c058ee110ce3d
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:12:01.686217+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:12:05.109266+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: edc84320383f
+  sha_short: edc84320383f
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/edc84320383f8063caaf2b4f224731cbc2e9f5d271a48014fefc6f3dfb569516
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:13:00.791361+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:13:04.589361+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: f027f712e9b9
+  sha_short: f027f712e9b9
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f027f712e9b90a917444dbee98ac061be36cc2c63dc03b57ab546a7ddf871299
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:13:34.161370+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:13:38.921287+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: f33b13a01335
+  sha_short: f33b13a01335
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/f33b13a013357d8bb93a853a885daa21541770f787966b18d96e2b7942a3caf0
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:14:06.358996+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:14:10.124838+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9
+- sha256: fd9f4a094fd1
+  sha_short: fd9f4a094fd1
+  skill_path: benchmarks/../data/.skill-veil-cache/extracted/fd9f4a094fd1d91c1dedb57c38511925d7167e58aa18d3ea1e7976fe0c6a9082
+  new_label: benign
+  source: multi_llm_consensus
+  consensus_rule: unanimous_benign + at_least_one >= 0.9
+  hard_threshold: 0.85
+  high_confidence: 0.9
+  verdicts:
+    grok:
+      verdict: benign
+      confidence: 1.0
+      model: null
+      queried_at: '2026-04-28T15:16:27.973501+00:00'
+    openai:
+      verdict: benign
+      confidence: 0.9
+      model: null
+      queried_at: '2026-04-28T15:16:31.169648+00:00'
+  reason: All 2 providers returned benign at confidence >= 0.85, at least one >= 0.9

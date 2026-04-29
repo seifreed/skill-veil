@@ -42,8 +42,6 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration as StdDuration;
 
-#[allow(dead_code)]
-pub(crate) const CACHE_DIRNAME: &str = ".vt-enrichment";
 use super::REQUEST_DELAY_MS;
 const FILE_CACHE_TTL_DAYS: i64 = 90;
 const DOMAIN_CACHE_TTL_DAYS: i64 = 7;

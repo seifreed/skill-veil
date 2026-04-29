@@ -7,14 +7,15 @@ use crate::{
 use anyhow::{Context, Result};
 use skill_veil_core::{
     benchmark::{evaluate_corpus, BenchmarkHistory, BenchmarkHistoryEntry, CorpusEvaluation},
-    Scanner, POLICY_SCHEMA_VERSION,
+    Scanner, StdFileSystemProvider, POLICY_SCHEMA_VERSION,
 };
 use std::path::{Path, PathBuf};
 
 pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
     let scanner = Scanner::new().context("Failed to initialize scanner")?;
-    let evaluation =
-        evaluate_corpus(&scanner, &args.corpus).context("Failed to evaluate benchmark corpus")?;
+    let fs = StdFileSystemProvider::new();
+    let evaluation = evaluate_corpus(&fs, &scanner, &args.corpus)
+        .context("Failed to evaluate benchmark corpus")?;
     let mut dashboard_history = None;
 
     if let Some(history_path) = &args.history_file {

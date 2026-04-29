@@ -1,7 +1,7 @@
 use super::*;
 use crate::Severity;
 use std::io::Write;
-use tempfile::NamedTempFile;
+use tempfile::{tempdir, NamedTempFile};
 
 #[test]
 fn test_scan_malicious_skill() {
@@ -112,7 +112,15 @@ fn test_scan_empty_skill_produces_no_critical() {
 
 #[test]
 fn test_scan_hygiene_only_skill_does_not_fail() {
-    let mut file = NamedTempFile::with_suffix(".skill.md").unwrap();
+    // Use an isolated tempdir so the scanner does not pick up unrelated
+    // files from /tmp/ as supporting artifacts. `Scanner::scan_file`
+    // walks the parent directory for scripts and data files (see
+    // `collect_supporting_artifact_paths` in `scanner_execution.rs`),
+    // and a polluted system temp dir would cause unrelated rule hits
+    // (e.g. SKILL_AGENT_NETWORK matching another skill's `hive` token).
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("hello.skill.md");
+    let mut file = std::fs::File::create(&path).unwrap();
     writeln!(
         file,
         r#"# Hello Skill
@@ -126,7 +134,7 @@ print("hello")
     .unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let result = scanner.scan_file(file.path()).unwrap();
+    let result = scanner.scan_file(&path).unwrap();
 
     assert!(
         !result.should_fail,

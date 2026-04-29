@@ -1,5 +1,5 @@
 use crate::findings::{Finding, SuppressionRecord};
-use crate::policy::state::paths_match;
+use crate::policy::fingerprint::paths_match;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};

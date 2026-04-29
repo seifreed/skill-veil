@@ -3,6 +3,7 @@
 //! Parses skill documents and extracts structured sections for analysis.
 
 pub(crate) mod assessment;
+pub(crate) mod binary_magic;
 mod document;
 mod references;
 pub(crate) mod types;

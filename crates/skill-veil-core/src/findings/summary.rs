@@ -8,7 +8,7 @@ use super::{
     CAPABILITY_WEIGHT_INBOUND_SURFACE, CAPABILITY_WEIGHT_INSTALL_EXECUTION,
     CAPABILITY_WEIGHT_NETWORK_ACCESS, CAPABILITY_WEIGHT_PERSISTENCE_SURFACE,
     CAPABILITY_WEIGHT_PRIVILEGED_RUNTIME, CAPABILITY_WEIGHT_PROCESS_EXECUTION,
-    CAPABILITY_WEIGHT_SECRET_ACCESS, RISK_THRESHOLD_APPROVAL, RISK_THRESHOLD_BLOCK,
+    CAPABILITY_WEIGHT_SECRET_ACCESS, MAX_RISK_SCORE, RISK_THRESHOLD_APPROVAL, RISK_THRESHOLD_BLOCK,
 };
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilitySource, ArtifactGraph};
 use serde::{Deserialize, Serialize};
@@ -220,23 +220,23 @@ fn accumulate_artifact_factor(factors: &mut FactorMap, finding: &Finding) {
 
 fn normalize_score(total: f32) -> u32 {
     if total.is_finite() {
-        return total.clamp(0.0, 100.0).round() as u32;
+        return total.clamp(0.0, MAX_RISK_SCORE as f32).round() as u32;
     }
     // Defense-in-depth: a non-finite total means an invariant up-stream
     // (sanitized confidence in the builder, finite severity weights) was
-    // violated. Block (100) is the right fail-safe for a security scanner,
-    // but we MUST NOT pass silently — surface the breach so the upstream
-    // bug can be diagnosed. Mirrors the `merge_into` invariant guard in
-    // `findings/dedup.rs`.
+    // violated. `MAX_RISK_SCORE` is the right fail-safe for a security
+    // scanner, but we MUST NOT pass silently — surface the breach so the
+    // upstream bug can be diagnosed. Mirrors the `merge_into` invariant
+    // guard in `findings/dedup.rs`.
     debug_assert!(
         total.is_finite(),
         "normalize_score: total must be finite (sanitized in builder); got {total}",
     );
     tracing::warn!(
         total = ?total,
-        "normalize_score received non-finite total; defaulting to Block (100)",
+        "normalize_score received non-finite total; defaulting to MAX_RISK_SCORE",
     );
-    100
+    MAX_RISK_SCORE
 }
 
 fn score_to_action(risk_score: u32) -> RecommendedAction {

@@ -21,6 +21,13 @@
   <a href="https://buymeacoffee.com/seifreed"><img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow?style=flat-square&logo=buy-me-a-coffee&logoColor=white" alt="Buy Me a Coffee"></a>
 </p>
 
+<p align="center">
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/recall-92.86%25-brightgreen?style=flat-square&label=VT%20corpus%20recall" alt="Recall"></a>
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/precision-100%25-brightgreen?style=flat-square" alt="Precision"></a>
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/FPR-0%25-brightgreen?style=flat-square" alt="False Positive Rate"></a>
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/corpus-2976%20samples-blue?style=flat-square" alt="Corpus Size"></a>
+</p>
+
 ---
 
 ## Overview
@@ -63,6 +70,76 @@ Runtime Risk    Privileged containers, host mounts, process execution, secret ac
 Artifacts       package.json, requirements.txt, pyproject.toml, Cargo.toml,
                 Dockerfile, docker-compose, lockfiles, Makefile, .npmrc, pip.conf
 ```
+
+---
+
+## Why a dedicated scanner for agent skills?
+
+Generic malware scanners (VirusTotal, ClamAV, YARA-on-binaries) are
+designed for executables, archives, and URL/network reputation. Agent
+skills are markdown manifests where the malicious payload is *prose* —
+natural-language instructions that read credential files, persist
+across sessions, fetch remote "instructions" to execute, or bypass
+approval flows.
+
+Skill-veil's rule pack targets that surface:
+
+| Threat class | Skill-veil signals (examples) |
+|---|---|
+| Prompt injection (multilingual) | `OFFICIAL_PROMPT_TAMPERING_OVERRIDE_*`, XML interaction-config |
+| Autonomy bypass | unbounded loops, "without confirmation" idioms (EN/PT/ES) |
+| Persistence | cron / heartbeat / callback to remote URL |
+| Credential exposure | reads of `~/.ssh`, `~/.aws`, `.env`, browser cookies |
+| Remote instruction download | multi-section fetch + execute |
+| Agent neutralization | rewrites of agent config to invalid endpoints |
+| Hostile narrative | ransom protocols, coercive framings |
+
+### Benchmark on the VT-flagged corpus
+
+We ran skill-veil over 2976 skills VirusTotal had labelled `malicious`
+(corpus and SHAs in `benchmarks/vt-corpus.yaml`). Treating VT's labels
+as ground truth, skill-veil reaches **91.73% recall** at **100%
+precision** (zero false positives on this corpus —
+2730 TP / 246 FN / 0 FP).
+
+For the residual false-negative bucket we ran a strict multi-provider
+LLM cross-check (Grok + OpenAI, default models `grok-4-fast` and
+`gpt-4o-mini`). A sample is treated as a VT mislabel only when **all**
+of the following hold:
+
+1. Both providers return `verdict == benign`.
+2. Both providers' confidence is ≥ 0.85.
+3. At least one provider's confidence is ≥ 0.90.
+
+Of 246 samples submitted, **36 passed consensus** (e.g., `chart-image`,
+`mineru-pdf`-style helpers); 210 were rejected (203 had at least one
+provider disagree, 6 were below the confidence floor, 1 was a
+binary-disguised file the LLMs could not analyse). Treating the 36
+passing samples as VT mislabels lifts recall to **92.86%** at the same
+100% precision. Each override carries its per-provider verdicts,
+confidences, and timestamps in
+`benchmarks/vt-baseline-overrides.yaml`; the full audit including
+rejected samples is in `benchmarks/multi-llm-audit.yaml`.
+
+A previous single-LLM pass (lmstudio only) accepted 131 of those
+246 samples. Roughly three-quarters of that set did **not** survive
+the multi-provider consensus — a useful reminder that one model's
+opinion is not ground truth.
+
+We are *not* claiming skill-veil outperforms VirusTotal. The two tools
+answer different questions:
+
+- **VirusTotal** aggregates dozens of AV engines and network/URL
+  signals — strongest on binary reputation, supply-chain, and IOC
+  correlation.
+- **skill-veil** reads the manifest prose itself — strongest on
+  prompt-layer attacks that don't show up in static binary scanners.
+
+A sufficiently adversarial skill could craft prose that fools both
+engines, which is why `benchmarks/CLAUDE.md` requires human review
+for any override touching secrets, credentials, or remote execution.
+
+Use them together, not as substitutes.
 
 ---
 

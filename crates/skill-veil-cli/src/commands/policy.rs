@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use skill_veil_core::{
     diff_reports_with_policy_state, finding_fingerprint, load_baseline, load_waivers,
     validate_policy, validate_waivers, JsonReport, PolicyFile, RecommendedAction,
+    StdFileSystemProvider,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -22,7 +23,8 @@ pub(crate) fn load_json_reports(path: &PathBuf) -> Result<Vec<JsonReport>> {
 }
 
 pub(crate) fn run_waivers_validate(args: WaiversValidateArgs) -> Result<()> {
-    let waivers = load_waivers(&args.path).context("Failed to load waivers file")?;
+    let fs = StdFileSystemProvider::new();
+    let waivers = load_waivers(&fs, &args.path).context("Failed to load waivers file")?;
     validate_waivers(&waivers).map_err(anyhow::Error::msg)?;
     println!("Waivers file is valid");
     Ok(())
@@ -42,16 +44,17 @@ pub(crate) fn run_policy_validate(args: PolicyValidateArgs) -> Result<()> {
 pub(crate) fn run_diff(args: DiffArgs, color_choice: ColorChoiceArg) -> Result<()> {
     let previous = load_json_reports(&args.previous)?;
     let current = load_json_reports(&args.current)?;
+    let fs = StdFileSystemProvider::new();
     let baseline = args
         .baseline
         .as_ref()
-        .map(|path| load_baseline(path))
+        .map(|path| load_baseline(&fs, path))
         .transpose()
         .context("Failed to load baseline file")?;
     let waivers = args
         .waivers
         .as_ref()
-        .map(|path| load_waivers(path))
+        .map(|path| load_waivers(&fs, path))
         .transpose()
         .context("Failed to load waivers file")?;
     let diff =

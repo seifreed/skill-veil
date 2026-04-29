@@ -34,11 +34,13 @@ pub(crate) fn run_rules(action: RulesAction) -> Result<()> {
             file,
             content,
             rules_dir,
-            expect_match,
-            expected_count,
-            expected_severity,
-            expected_action,
-            expected_category,
+            RuleTestExpectations {
+                expect_match,
+                expected_count,
+                expected_severity,
+                expected_action,
+                expected_category,
+            },
         ),
         RulesAction::TestPack {
             rules_dir,
@@ -94,17 +96,23 @@ fn rules_list(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn rules_test(
-    rule_id: String,
-    file: Option<PathBuf>,
-    content: Option<String>,
-    rules_dir: PathBuf,
+/// Optional expectations the user supplied via `--expect-*` flags. Grouped
+/// here so `rules_test` stays under clippy's `too_many_arguments` limit
+/// without needing a bypass.
+struct RuleTestExpectations {
     expect_match: Option<bool>,
     expected_count: Option<usize>,
     expected_severity: Option<SeverityArg>,
     expected_action: Option<RecommendedActionArg>,
     expected_category: Option<String>,
+}
+
+fn rules_test(
+    rule_id: String,
+    file: Option<PathBuf>,
+    content: Option<String>,
+    rules_dir: PathBuf,
+    expectations: RuleTestExpectations,
 ) -> Result<()> {
     let test_content = if let Some(file_path) = file {
         std::fs::read_to_string(&file_path).context("Failed to read test file")?
@@ -123,11 +131,11 @@ fn rules_test(
         rule_id: rule_id.clone(),
         content: test_content,
         file_name: None,
-        expect_match,
-        expected_count,
-        expected_severity: expected_severity.map(Into::into),
-        expected_action: expected_action.map(Into::into),
-        expected_category,
+        expect_match: expectations.expect_match,
+        expected_count: expectations.expected_count,
+        expected_severity: expectations.expected_severity.map(Into::into),
+        expected_action: expectations.expected_action.map(Into::into),
+        expected_category: expectations.expected_category,
     };
     validate_fixture_case(&case, &findings)?;
 

@@ -2,6 +2,7 @@
 
 pub(crate) mod baseline;
 mod eval;
+pub(crate) mod fingerprint;
 pub(crate) mod reports;
 pub(crate) mod sarif;
 pub(crate) mod serializers;
@@ -16,6 +17,7 @@ mod tests_generation;
 use crate::findings::{OperationalContext, RecommendedAction, Severity};
 
 pub use self::baseline::{BaselineEntry, BaselineFile, WaiverEntry, WaiverFile};
+pub use self::fingerprint::finding_fingerprint;
 pub use self::reports::{JsonReport, PolicyGenerator};
 pub(crate) use self::sarif::{
     SarifArtifactLocation, SarifConfiguration, SarifDriver, SarifLocation, SarifMessage,
@@ -25,8 +27,7 @@ pub use self::serializers::empty_sarif_report;
 pub use self::state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
     baseline_from_reports, count_baseline_matches, diff_reports, diff_reports_with_policy_state,
-    finding_fingerprint, load_baseline, load_policy, load_waivers, validate_policy,
-    validate_waivers,
+    load_baseline, load_policy, load_waivers, validate_policy, validate_waivers,
 };
 pub(crate) use self::types::{default_policy_schema_version, empty_finding_summary};
 pub use self::types::{

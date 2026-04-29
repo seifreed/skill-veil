@@ -39,8 +39,8 @@ use crate::policy::{
 use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::scanner::{ScanError, ScanResult, Scanner};
 use crate::scanner_support::{
-    artifact_parse_error_finding, decode_warning_finding, parse_warning_finding,
-    read_text_file_lossy, structured_parse_warning,
+    artifact_parse_error_finding, binary_disguise_finding, decode_warning_finding,
+    parse_warning_finding, read_text_file_lossy, structured_parse_warning,
 };
 use crate::services::file_discovery::{
     discover_lockfiles, discover_package_manifests, FileDiscoveryService,
@@ -88,6 +88,16 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                     continue;
                 }
             };
+        if let Some(kind) = artifact_doc.binary_disguise_kind.as_deref() {
+            findings.push(binary_disguise_finding(
+                referenced_file,
+                kind,
+                artifact_kind,
+                MatchTarget::ReferencedFile {
+                    path: artifact_path.clone(),
+                },
+            ));
+        }
         findings.extend(
             scanner
                 .engine()
@@ -102,13 +112,12 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
                 }),
         );
 
-        let content = artifact_doc.raw_content;
         let decode_warning = artifact_doc.decode_warning;
         if decode_warning {
             findings.push(decode_warning_finding(referenced_file, artifact_kind));
         }
         if let Some(parse_warning) =
-            structured_parse_warning(referenced_file, &content, artifact_kind)
+            structured_parse_warning(referenced_file, &artifact_doc.raw_content, artifact_kind)
         {
             findings.push(parse_warning);
         }
@@ -116,7 +125,12 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
         findings.extend(
             scanner
                 .artifact_analysis()
-                .analyze(referenced_file, &content, &sibling_files)
+                .analyze(
+                    referenced_file,
+                    &artifact_doc.raw_content,
+                    &sibling_files,
+                    Some(&artifact_doc),
+                )
                 .into_iter()
                 .map(|f| {
                     if f.artifact_path.is_some() {
@@ -306,11 +320,12 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     }
     let sibling_files =
         crate::scanner_graph::sibling_files(scanner.file_discovery().fs_provider(), path);
-    findings.extend(
-        scanner
-            .artifact_analysis()
-            .analyze(path, primary_content, &sibling_files),
-    );
+    findings.extend(scanner.artifact_analysis().analyze(
+        path,
+        primary_content,
+        &sibling_files,
+        Some(doc),
+    ));
     let artifact_graph = scanner.build_artifact_graph(doc);
     let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph);
     // Preserve findings that already have artifact context (e.g., from supporting artifact
@@ -345,6 +360,14 @@ fn collect_primary_doc_warnings<F: FileSystemProvider>(
 ) -> Vec<Finding> {
     let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(path);
     let mut warnings = Vec::new();
+    if let Some(kind) = doc.binary_disguise_kind.as_deref() {
+        warnings.push(binary_disguise_finding(
+            path,
+            kind,
+            artifact_kind,
+            MatchTarget::Document,
+        ));
+    }
     if doc.decode_warning {
         warnings.push(decode_warning_finding(path, artifact_kind));
     }

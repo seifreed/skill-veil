@@ -1,7 +1,8 @@
 use crate::cli_args::{BaselineCreateArgs, BaselineUpdateArgs};
 use anyhow::{Context, Result};
 use skill_veil_core::{
-    baseline_from_reports, load_baseline, BaselineEntry, BaselineFile, POLICY_SCHEMA_VERSION,
+    baseline_from_reports, load_baseline, BaselineEntry, BaselineFile, StdFileSystemProvider,
+    POLICY_SCHEMA_VERSION,
 };
 use std::collections::BTreeMap;
 
@@ -16,7 +17,8 @@ pub(crate) fn run_baseline_create(args: BaselineCreateArgs) -> Result<()> {
 
 pub(crate) fn run_baseline_update(args: BaselineUpdateArgs) -> Result<()> {
     let reports = super::policy::load_json_reports(&args.report)?;
-    let existing = load_baseline(&args.baseline).context("Failed to load baseline file")?;
+    let fs = StdFileSystemProvider::new();
+    let existing = load_baseline(&fs, &args.baseline).context("Failed to load baseline file")?;
     let current = baseline_from_reports(&reports);
 
     let existing_map: BTreeMap<_, _> = existing

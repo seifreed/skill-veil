@@ -2281,7 +2281,6 @@ dependencies = [
 name = "skill-veil-core"
 version = "0.1.1"
 dependencies = [
- "anyhow",
  "chrono",
  "globset",
  "pulldown-cmark",

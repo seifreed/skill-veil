@@ -11,17 +11,10 @@ pub(crate) struct LlmPrompt {
     pub user_json: String,
 }
 
-/// Raw response returned by a provider, before structured parsing. The
-/// `usage_tokens`, `provider`, and `model` fields are retained for future
-/// telemetry / debug output; they are populated on every path but not all
-/// callers consume them yet.
+/// Raw response returned by a provider, before structured parsing.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct LlmRawResponse {
     pub content: String,
-    pub usage_tokens: Option<u32>,
-    pub provider: &'static str,
-    pub model: String,
 }
 
 /// Parsed structured verdict from the LLM. Mirrors the JSON schema the
@@ -57,10 +50,6 @@ pub(crate) enum LlmError {
     Network(String),
     #[error("failed to decode LLM response: {0}")]
     Decode(String),
-    /// Reserved for a future stricter JSON-schema pass.
-    #[allow(dead_code)]
-    #[error("LLM returned malformed JSON: {0}")]
-    MalformedJson(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }

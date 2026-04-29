@@ -1,4 +1,5 @@
 use super::{lockfiles, manifests, mcp, scripts, ArtifactAnalysisService, ArtifactLink};
+use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactCapabilityFact;
 use crate::findings::Finding;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,7 @@ pub(super) fn analyze(
     path: &Path,
     content: &str,
     sibling_files: &[PathBuf],
+    document: Option<&SkillDocument>,
 ) -> Vec<Finding> {
     use super::instructions;
 
@@ -41,7 +43,7 @@ pub(super) fn analyze(
     match name {
         "package.json" => manifests::analyze_package_json(service, path, content, sibling_files),
         _ if MCP_NAMES.contains(&name) => mcp::analyze_mcp_manifest(service, path, content),
-        "skill.md" => instructions::analyze_skill_document(service, path, content),
+        "skill.md" => instructions::analyze_skill_document(service, path, content, document),
         "requirements.txt" => manifests::analyze_requirements_txt(path, content),
         "pyproject.toml" => {
             manifests::analyze_pyproject_toml(service, path, content, sibling_files)
@@ -63,13 +65,13 @@ pub(super) fn analyze(
         ".npmrc" => manifests::analyze_npmrc(path, content),
         "pip.conf" => manifests::analyze_pip_conf(path, content),
         _ if INSTRUCTION_NAMES.contains(&name) => {
-            instructions::analyze_instruction_file(service, path, content)
+            instructions::analyze_instruction_file(service, path, content, document)
         }
         _ if file_name.to_ascii_lowercase().ends_with(".skill.md") => {
-            instructions::analyze_skill_document(service, path, content)
+            instructions::analyze_skill_document(service, path, content, document)
         }
         _ if is_prompt_pack_document(path) => {
-            instructions::analyze_prompt_pack(service, path, content)
+            instructions::analyze_prompt_pack(service, path, content, document)
         }
         _ if looks_like_script(path) => scripts::analyze_script(service, path, content),
         _ => Vec::new(),

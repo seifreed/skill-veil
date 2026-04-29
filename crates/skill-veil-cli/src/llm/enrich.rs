@@ -37,8 +37,6 @@ use sha2::{Digest, Sha256};
 use skill_veil_core::{PackageScanResult, ScanResult};
 use std::path::{Path, PathBuf};
 
-#[allow(dead_code)]
-pub(crate) const CACHE_DIRNAME: &str = ".llm-cache";
 const CACHE_TTL_DAYS: i64 = 30;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -348,6 +348,44 @@ fn claim_phrase(kind: ClaimKind) -> &'static str {
 }
 
 #[cfg(test)]
+mod compile_time_pattern_tests {
+    use super::CLAIM_DEFINITIONS;
+    use regex::Regex;
+
+    /// # Contract
+    ///
+    /// Every `claim_pattern` and `contradiction_pattern` in
+    /// `CLAIM_DEFINITIONS` MUST compile as a valid regex. The
+    /// production code path uses `OnceLock::get_or_init` with
+    /// `.expect("... pattern compiles")`, so an invalid literal would
+    /// panic on the first call from a long-running scan instead of
+    /// surfacing in CI. This test moves that invariant from runtime
+    /// to test-time, which is what the project's engineering
+    /// standards require ("never `unwrap()` in library code").
+    #[test]
+    fn all_claim_patterns_compile() {
+        for def in CLAIM_DEFINITIONS {
+            for pattern in def.claim_patterns {
+                Regex::new(pattern).unwrap_or_else(|err| {
+                    panic!(
+                        "claim pattern {pattern:?} for {:?} invalid: {err}",
+                        def.kind
+                    )
+                });
+            }
+            for pattern in def.contradiction_patterns {
+                Regex::new(pattern).unwrap_or_else(|err| {
+                    panic!(
+                        "contradiction pattern {pattern:?} for {:?} invalid: {err}",
+                        def.kind
+                    )
+                });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::analyzer::SkillDocument;

@@ -1,4 +1,5 @@
 use crate::analyzer::assessment::assess_artifact;
+use crate::analyzer::binary_magic::detect_binary_disguise_kind;
 use crate::analyzer::references::extract_references;
 use crate::analyzer::types::{AnalyzerError, CodeBlock, Section, SkillDocument};
 use crate::ports::{FileSystemError, FileSystemProvider, MarkdownParser};
@@ -16,10 +17,16 @@ impl SkillDocument {
             .map_err(file_system_error_to_io_error)?
             .as_bytes()
             .to_vec();
+        // Probe magic bytes BEFORE the lossy decode so a ZIP/PE/ELF
+        // disguised as markdown is recorded on the document. Downstream
+        // (`scanner_execution::collect_raw_findings`) turns the kind
+        // into a Critical/Block finding.
+        let binary_disguise_kind = detect_binary_disguise_kind(path, &bytes).map(str::to_owned);
         let decode_warning = std::str::from_utf8(&bytes).is_err();
         let content = String::from_utf8_lossy(&bytes).into_owned();
         Self::parse_with_parser(path.to_path_buf(), content, parser).map(|mut doc| {
             doc.decode_warning = decode_warning;
+            doc.binary_disguise_kind = binary_disguise_kind;
             doc
         })
     }
@@ -52,6 +59,7 @@ impl SkillDocument {
             structural_signals: assessment.structural_signals,
             decode_warning: false,
             parse_warning,
+            binary_disguise_kind: None,
             sections,
             raw_content: content,
             referenced_files,

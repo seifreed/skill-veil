@@ -60,7 +60,7 @@ impl LlmProvider for GrokProvider {
             &[("authorization", auth.as_str())],
             &body,
         )?;
-        super::openai::parse_chat_completion(&text, "grok", &self.model)
+        super::openai::parse_chat_completion(&text)
     }
 
     fn name(&self) -> &'static str {
@@ -74,18 +74,16 @@ impl LlmProvider for GrokProvider {
 
 #[cfg(test)]
 mod tests {
+    /// Contract: Grok speaks the OpenAI chat-completion envelope verbatim,
+    /// so `parse_chat_completion` MUST surface its `choices[0].message.content`
+    /// without provider-specific fixups.
     #[test]
     fn parses_grok_chat_completion_via_shared_parser() {
-        // Grok uses the OpenAI envelope verbatim; we just verify the shared
-        // parser returns our provider tag.
         let body = r#"{
             "choices": [{"message": {"content": "{\"verdict\":\"benign\"}"}}],
             "usage": {"total_tokens": 120}
         }"#;
-        let got =
-            super::super::openai::parse_chat_completion(body, "grok", "grok-4-latest").unwrap();
-        assert_eq!(got.provider, "grok");
+        let got = super::super::openai::parse_chat_completion(body).unwrap();
         assert!(got.content.contains("verdict"));
-        assert_eq!(got.usage_tokens, Some(120));
     }
 }

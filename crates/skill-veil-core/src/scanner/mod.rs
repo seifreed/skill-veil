@@ -25,19 +25,24 @@ type EngineAndPolicy = (
 /// Build the rule engine and load optional policy files from scan options.
 ///
 /// Shared by `with_std_adapters` and `with_custom_adapters` to avoid duplicating
-/// the engine + policy loading logic.
-fn build_engine_and_policy(options: &ScanOptions) -> Result<EngineAndPolicy, ScanError> {
+/// the engine + policy loading logic. The `fs` provider is required so policy
+/// file I/O passes through the same `FileSystemProvider` port the rest of the
+/// scanner uses, preserving the hexagonal contract documented in `CLAUDE.md`.
+fn build_engine_and_policy<F: FileSystemProvider>(
+    fs: &F,
+    options: &ScanOptions,
+) -> Result<EngineAndPolicy, ScanError> {
     let mut engine = RuleEngine::with_defaults()?;
     // Strict mode is only meaningful for external rule packs; built-ins
     // already fail-fast on internal duplicates. Enable before loading the
     // user-supplied rules_dir so collisions there are promoted to errors.
     engine.set_strict_mode(options.strict_rules);
     if let Some(ref rules_dir) = options.rules_dir {
-        engine.load_from_dir(rules_dir)?;
+        engine.load_from_dir(fs, rules_dir)?;
     }
-    let baseline = load_optional_baseline(options.baseline_path.as_deref())?;
-    let waivers = load_optional_waivers(options.waivers_path.as_deref())?;
-    let policy = load_optional_policy(options.policy_path.as_deref())?;
+    let baseline = load_optional_baseline(fs, options.baseline_path.as_deref())?;
+    let waivers = load_optional_waivers(fs, options.waivers_path.as_deref())?;
+    let policy = load_optional_policy(fs, options.policy_path.as_deref())?;
     Ok((engine, baseline, waivers, policy))
 }
 
@@ -65,7 +70,8 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
 
     #[must_use = "Scanner::with_std_adapters() returns a Result that should be used"]
     pub fn with_std_adapters(options: ScanOptions) -> Result<Self, ScanError> {
-        let (engine, baseline, waivers, policy) = build_engine_and_policy(&options)?;
+        let fs = StdFileSystemProvider::new();
+        let (engine, baseline, waivers, policy) = build_engine_and_policy(&fs, &options)?;
         Ok(Self {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
@@ -85,7 +91,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         fs_provider: F,
         parser: P,
     ) -> Result<Self, ScanError> {
-        let (engine, baseline, waivers, policy) = build_engine_and_policy(&options)?;
+        let (engine, baseline, waivers, policy) = build_engine_and_policy(&fs_provider, &options)?;
         Ok(Self {
             engine,
             artifact_analysis: ArtifactAnalysisService::new(),
