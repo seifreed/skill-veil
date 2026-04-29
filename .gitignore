@@ -32,3 +32,6 @@ presentation/
 
 # Pre-commit local cache
 .pre-commit-cache/
+
+# Local benchmark caches (multi-LLM scorer caches per-author API state).
+benchmarks/.multi-llm-cache*
