@@ -99,6 +99,22 @@ pub trait PatternMatcher: Send + Sync {
     ///
     /// Use this when the same pattern will be matched against multiple texts.
     fn compile(&self, pattern: &str) -> Result<CompiledPattern, PatternError>;
+
+    /// Check whether a pattern occurs in the given text.
+    ///
+    /// Implementations can override this for performance; the default
+    /// derives the answer from [`PatternMatcher::find_matches`].
+    fn is_match(&self, pattern: &str, text: &str) -> bool {
+        !self.find_matches(pattern, text).is_empty()
+    }
+
+    /// Iterate captures (full match plus capture groups) over a pattern.
+    ///
+    /// Each [`Captures`] entry corresponds to one match in `text`. Group
+    /// `0` is the full match; subsequent groups follow the pattern's
+    /// declaration order. Groups that did not participate in a particular
+    /// match are returned as `None`.
+    fn captures_iter(&self, pattern: &str, text: &str) -> Vec<Captures>;
 }
 
 /// A match found by the pattern matcher
@@ -114,29 +130,90 @@ pub struct PatternMatch {
     pub matched_text: String,
 }
 
-/// Type alias for pattern matching function used in CompiledPattern
-type MatchFn = Box<dyn Fn(&str) -> Vec<PatternMatch> + Send + Sync>;
+/// Capture groups produced by [`PatternMatcher::captures_iter`].
+///
+/// Group `0` is the full match. Groups that did not participate in a
+/// particular match are stored as `None`. Use [`Captures::get`] for a
+/// nullable lookup that mirrors the regex crate's `.get(idx)` ergonomics
+/// without leaking the concrete `Match` type.
+#[derive(Debug, Clone)]
+pub struct Captures {
+    groups: Vec<Option<PatternMatch>>,
+}
+
+impl Captures {
+    /// Build captures from a vector of optional groups.
+    #[must_use]
+    pub fn new(groups: Vec<Option<PatternMatch>>) -> Self {
+        Self { groups }
+    }
+
+    /// Return the capture group at `idx`, if present.
+    #[must_use]
+    pub fn get(&self, idx: usize) -> Option<&PatternMatch> {
+        self.groups.get(idx).and_then(Option::as_ref)
+    }
+
+    /// Total number of capture slots (including non-participating groups).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.groups.len()
+    }
+
+    /// Whether the captures collection holds no groups.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.groups.is_empty()
+    }
+}
+
+/// Closure stored inside [`CompiledPattern`] for finding matches.
+type FindFn = Box<dyn Fn(&str) -> Vec<PatternMatch> + Send + Sync>;
+/// Closure stored inside [`CompiledPattern`] for membership tests.
+type IsMatchFn = Box<dyn Fn(&str) -> bool + Send + Sync>;
+/// Closure stored inside [`CompiledPattern`] for capture iteration.
+type CapturesFn = Box<dyn Fn(&str) -> Vec<Captures> + Send + Sync>;
 
 /// A compiled pattern for efficient reuse
 ///
 /// Created by [`PatternMatcher::compile`] for patterns that will be
-/// matched against multiple texts.
+/// matched against multiple texts. The three operation closures share
+/// the underlying compiled state in the adapter so that a single
+/// pattern compilation services all three operations.
 pub struct CompiledPattern {
-    inner: MatchFn,
+    find: FindFn,
+    is_match: IsMatchFn,
+    captures: CapturesFn,
 }
 
 impl CompiledPattern {
-    /// Create a new compiled pattern from a match function
-    pub fn new<F>(f: F) -> Self
-    where
-        F: Fn(&str) -> Vec<PatternMatch> + Send + Sync + 'static,
-    {
-        Self { inner: Box::new(f) }
+    /// Build a compiled pattern from its three operation closures.
+    ///
+    /// Adapters are expected to share their compiled state (e.g. an
+    /// `Arc<Regex>`) across the three closures so that `find_matches`,
+    /// `is_match`, and `captures_iter` all reuse the same compilation.
+    #[must_use]
+    pub fn new(find: FindFn, is_match: IsMatchFn, captures: CapturesFn) -> Self {
+        Self {
+            find,
+            is_match,
+            captures,
+        }
     }
 
-    /// Find all matches in the given text
+    /// Find every occurrence of the pattern in `text`.
     pub fn find_matches(&self, text: &str) -> Vec<PatternMatch> {
-        (self.inner)(text)
+        (self.find)(text)
+    }
+
+    /// Whether the pattern occurs at least once in `text`.
+    pub fn is_match(&self, text: &str) -> bool {
+        (self.is_match)(text)
+    }
+
+    /// Iterate captures (full match plus groups) for every occurrence.
+    pub fn captures_iter(&self, text: &str) -> Vec<Captures> {
+        (self.captures)(text)
     }
 }
 

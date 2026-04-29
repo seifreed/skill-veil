@@ -66,6 +66,7 @@ pub mod findings;
 mod inline_suppressions;
 pub mod ioc_extraction;
 pub mod path_safety;
+pub mod pattern_helpers;
 pub mod policy;
 pub mod ports;
 pub mod rules;
