@@ -3,29 +3,31 @@
 //!
 //! # Pipeline ordering (load-bearing)
 //!
-//! `scan_one_skill` and the package-level entrypoints execute these
+//! `scan_document_path` and the package-level entrypoints execute these
 //! stages in this exact order:
 //!
 //! 1. Parse markdown → evaluate rules → scan supporting artifacts.
 //! 2. Run artifact analysis on every artifact reachable from the entry.
 //! 3. Derive taint findings from the artifact graph.
-//! 4. **Deduplicate** findings (`findings::deduplicate_findings`).
-//! 5. **Apply inline suppressions** (`# skill-veil:ignore` markers).
+//! 4. **Apply inline suppressions** (`# skill-veil:ignore` markers).
+//! 5. **Deduplicate** findings (`findings::deduplicate_findings`).
 //! 6. **Apply policy filters** (baseline, waivers, overrides).
 //! 7. Build the verdict (`PackageAssessmentPipeline`).
 //! 8. Compute the CI gating signal (`should_fail`).
 //!
-//! The order matters: dedup runs **before** suppressions so a single
-//! ignored finding does not leave duplicates behind from other call
-//! sites; suppressions run **before** policy so baselines fingerprint
-//! against the canonical (post-dedup, non-suppressed) view; and the
-//! verdict consumes the filtered set so calibration sees the same
-//! findings the user will. Reordering any pair changes guarantees other
-//! modules pin via tests (e.g. `dedup_notes_preserves_per_group_distinctions`,
-//! `baseline_matches_finding_does_not_apply_paths_match_suffix`).
-//! When you touch this file, update the rationale here and re-run
+//! # Ordering guarantees
+//!
+//! Each ordered pair below is load-bearing: reordering changes a guarantee
+//! that other modules pin via regression tests. When you touch this file,
+//! update the table and re-run
 //! `cargo test -p skill-veil-core labeled_corpus_meets_phase1_baseline`
 //! to confirm the corpus precision/recall stays within bounds.
+//!
+//! | Pair                  | Order                       | Why                                                                                                                                                                                                                                                                                                                                              | Pinned by                                                       |
+//! |-----------------------|-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------|
+//! | suppressions ↔ dedup  | suppressions BEFORE dedup   | Dedup merges on `(rule_id, category, matched_on, match_value, kind, scope, path)` and keeps the first non-`None` `line_number` it sees. If two emissions of the same rule arrive with different lines (one carrying a `// skill-veil:disable` source line, another path-less from artifact-graph taint), suppressing AFTER dedup would let the merged finding survive when its representative line is the non-suppressed copy. Suppressing first matches each emission against its own original line. | inline rationale at `scan_document_path` (see body of this file) |
+//! | dedup ↔ policy        | dedup BEFORE policy         | Baselines and waivers fingerprint findings on the canonical (post-dedup) view. Filtering against the un-deduplicated stream lets repeated emissions bypass a single baseline entry.                                                                                                                                                              | `baseline_matches_finding_does_not_apply_paths_match_suffix`    |
+//! | policy ↔ verdict      | policy BEFORE verdict       | Calibration must see exactly the findings the user will see, so waived / overridden findings do not escalate severity in the verdict.                                                                                                                                                                                                            | `labeled_corpus_meets_phase1_baseline`                          |
 
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
