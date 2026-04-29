@@ -9,6 +9,20 @@ use crate::{EvidenceKind, Finding, Scanner, ThreatCategory, Verdict};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Lower / upper bound for the approval-threshold sweep used by the
+/// `recommend_thresholds` grid search. Anchored well below any
+/// real-world block threshold so the search can always cross.
+const APPROVAL_THRESHOLD_SEARCH_MIN: u32 = 10;
+const APPROVAL_THRESHOLD_SEARCH_MAX: u32 = 50;
+/// Lower / upper bound for the block-threshold sweep. Search is bounded
+/// below `100` so the recommended block threshold never collapses onto
+/// the saturating end of the risk score.
+const BLOCK_THRESHOLD_SEARCH_MIN: u32 = 30;
+const BLOCK_THRESHOLD_SEARCH_MAX: u32 = 90;
+/// Step (in risk-score units) between successive grid points; keeps the
+/// double loop at ~21 × 31 = 651 evaluations rather than the dense form.
+const THRESHOLD_SEARCH_STEP: usize = 2;
+
 pub fn evaluate_corpus<F: FileSystemProvider>(
     fs: &F,
     scanner: &Scanner,
@@ -426,8 +440,12 @@ fn recommend_thresholds(samples: &[SampleEvaluation]) -> ThresholdRecommendation
     let mut best_block = current_block_threshold;
     let mut best_metrics = current_metrics;
 
-    for approval in (10..=50).step_by(2) {
-        for block in (30..=90).step_by(2) {
+    for approval in (APPROVAL_THRESHOLD_SEARCH_MIN..=APPROVAL_THRESHOLD_SEARCH_MAX)
+        .step_by(THRESHOLD_SEARCH_STEP)
+    {
+        for block in
+            (BLOCK_THRESHOLD_SEARCH_MIN..=BLOCK_THRESHOLD_SEARCH_MAX).step_by(THRESHOLD_SEARCH_STEP)
+        {
             if block <= approval {
                 continue;
             }

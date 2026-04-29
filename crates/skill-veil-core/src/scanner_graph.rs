@@ -224,9 +224,14 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
 pub fn derive_package_id(path: &Path) -> Option<String> {
     path.ancestors()
         .filter_map(|ancestor| ancestor.file_name().and_then(|name| name.to_str()))
-        .find(|segment| segment.len() == 64 && segment.bytes().all(is_lower_hex_byte))
+        .find(|segment| segment.len() == SHA256_HEX_LEN && segment.bytes().all(is_lower_hex_byte))
         .map(ToOwned::to_owned)
 }
+
+/// Length, in characters, of a SHA-256 digest rendered in lowercase hex
+/// (32 raw bytes × 2 hex chars). Anchors `derive_package_id` so it can
+/// recognise the canonical hex layout without a magic literal.
+const SHA256_HEX_LEN: usize = 64;
 
 #[inline]
 fn is_lower_hex_byte(b: u8) -> bool {

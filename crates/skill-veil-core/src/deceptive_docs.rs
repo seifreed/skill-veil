@@ -18,6 +18,17 @@ use crate::ports::CompiledPattern;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+/// Maximum characters of the contradicting behaviour snippet retained
+/// in the finding's `match_value`. The snippet flows through every
+/// downstream consumer (JSON, SARIF, text output) and is the primary
+/// evidence the user sees, so the cap is generous.
+const CONTRADICTION_EVIDENCE_MAX_CHARS: usize = 120;
+/// Maximum characters of the claim snippet retained alongside the
+/// contradiction. Tighter than the contradiction cap because the
+/// claim text is decorative — the contradiction is the actionable
+/// evidence.
+const CLAIM_EVIDENCE_MAX_CHARS: usize = 80;
+
 /// Categorisation of the safety claim a `SKILL.md` is making.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClaimKind {
@@ -314,9 +325,17 @@ pub(crate) fn detect_deceptive_documentation(
             })
             .match_value(format!(
                 "{} (contradicts SKILL.md line {}: \"{}\")",
-                contra.matched_text.chars().take(120).collect::<String>(),
+                contra
+                    .matched_text
+                    .chars()
+                    .take(CONTRADICTION_EVIDENCE_MAX_CHARS)
+                    .collect::<String>(),
                 claim.line,
-                claim.matched_text.chars().take(80).collect::<String>(),
+                claim
+                    .matched_text
+                    .chars()
+                    .take(CLAIM_EVIDENCE_MAX_CHARS)
+                    .collect::<String>(),
             ))
             .reason(format!(
                 "SKILL.md claims {} but {} contains contradicting behavior",
