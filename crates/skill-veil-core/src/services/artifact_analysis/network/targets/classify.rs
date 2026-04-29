@@ -1,28 +1,28 @@
 use super::model::NetworkTarget;
+use crate::lazy_pattern;
 use crate::services::artifact_analysis::network::patterns::{
     RE_RFC1918_10, RE_RFC1918_172, RE_RFC1918_192,
 };
-use std::sync::LazyLock;
 
-/// Hostname-shaped `*.local` matcher used by `classify_internal_network_target`.
-///
-/// A plain `lower.contains(".local")` substring check fired on filesystem
-/// paths that happen to contain the literal four chars `.local` —
-/// `~/.local/bin`, `node_modules/.local-cache`, `xdg.local-config`. These
-/// are not mDNS hostnames and must not classify as `LocalDomain`. The
-/// regex requires:
-///
-/// * A leading word boundary so we don't match suffixes inside identifiers.
-/// * A label-shaped prefix (`[a-z0-9-]{1,63}`) before the dot.
-/// * `.local` followed by a non-label, non-dash character or end-of-string,
-///   keeping `printer.local` while rejecting `.local-cache`.
-static RE_LOCAL_DOMAIN: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\b[a-z0-9][a-z0-9-]{0,62}\.local(?:[^a-z0-9-]|$)").unwrap());
+// Hostname-shaped `*.local` matcher. A plain `lower.contains(".local")`
+// substring check fired on filesystem paths that happen to contain the
+// literal four chars `.local` — `~/.local/bin`,
+// `node_modules/.local-cache`, `xdg.local-config`. These are not mDNS
+// hostnames and must not classify as `LocalDomain`. The pattern requires:
+// * A leading word boundary so we don't match suffixes inside identifiers.
+// * A label-shaped prefix (`[a-z0-9-]{1,63}`) before the dot.
+// * `.local` followed by a non-label, non-dash character or end-of-string,
+//   keeping `printer.local` while rejecting `.local-cache`.
+lazy_pattern!(
+    RE_LOCAL_DOMAIN,
+    r"\b[a-z0-9][a-z0-9-]{0,62}\.local(?:[^a-z0-9-]|$)"
+);
 
-/// Same shape for `.internal` mDNS-style hostnames.
-static RE_INTERNAL_DOMAIN: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"\b[a-z0-9][a-z0-9-]{0,62}\.internal(?:[^a-z0-9-]|$)").unwrap()
-});
+// Same shape for `.internal` mDNS-style hostnames.
+lazy_pattern!(
+    RE_INTERNAL_DOMAIN,
+    r"\b[a-z0-9][a-z0-9-]{0,62}\.internal(?:[^a-z0-9-]|$)"
+);
 
 fn classify_internal_network_target(content: &str) -> Option<NetworkTarget> {
     let lower = content.to_ascii_lowercase();

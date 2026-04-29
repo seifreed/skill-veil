@@ -8,9 +8,10 @@ use patterns::{
 
 pub(super) fn extract_http_urls(content: &str) -> Vec<String> {
     RE_HTTP_URL
-        .find_iter(content)
+        .find_matches(content)
+        .into_iter()
         .map(|m| {
-            m.as_str()
+            m.matched_text
                 .trim_end_matches(&['"', '\'', ')'][..])
                 .to_string()
         })
