@@ -33,7 +33,7 @@ use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{
     deduplicate_findings, derive_package_verdict, ArtifactKind, Finding, FindingSummary,
-    MatchTarget,
+    MatchTarget, PackageVerdictReport,
 };
 use crate::policy::{
     AppliedPolicyOverride, PolicyAudit, SuppressionSummary, POLICY_AUDIT_PRECEDENCE,
@@ -74,76 +74,80 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
         if !fs.exists(referenced_file) || referenced_file.is_dir() {
             continue;
         }
-
-        let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(referenced_file);
-        let artifact_path = referenced_file.display().to_string();
-
-        let artifact_doc =
-            match SkillDocument::from_file_with_provider(referenced_file, scanner.parser(), fs) {
-                Ok(doc) => doc,
-                Err(err) => {
-                    findings.push(artifact_parse_error_finding(
-                        referenced_file,
-                        artifact_kind,
-                        &err.to_string(),
-                    ));
-                    continue;
-                }
-            };
-        if let Some(kind) = artifact_doc.binary_disguise_kind.as_deref() {
-            findings.push(binary_disguise_finding(
-                referenced_file,
-                kind,
-                artifact_kind,
-                MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                },
-            ));
-        }
-        findings.extend(
-            scanner
-                .engine()
-                .evaluate(&artifact_doc)
-                .into_iter()
-                .map(|finding| {
-                    finding
-                        .with_match_target(MatchTarget::ReferencedFile {
-                            path: artifact_path.clone(),
-                        })
-                        .with_artifact(artifact_kind, artifact_path.as_str())
-                }),
-        );
-
-        let decode_warning = artifact_doc.decode_warning;
-        if decode_warning {
-            findings.push(decode_warning_finding(referenced_file, artifact_kind));
-        }
-        if let Some(parse_warning) =
-            structured_parse_warning(referenced_file, &artifact_doc.raw_content, artifact_kind)
-        {
-            findings.push(parse_warning);
-        }
-        let sibling_files = crate::scanner_graph::sibling_files(fs, referenced_file);
-        findings.extend(
-            scanner
-                .artifact_orchestration()
-                .analyze(
-                    referenced_file,
-                    &artifact_doc.raw_content,
-                    &sibling_files,
-                    Some(&artifact_doc),
-                )
-                .into_iter()
-                .map(|f| {
-                    if f.artifact_path.is_some() {
-                        f
-                    } else {
-                        f.with_artifact(artifact_kind, artifact_path.as_str())
-                    }
-                }),
-        );
+        findings.extend(analyze_referenced_artifact(scanner, referenced_file));
     }
 
+    findings
+}
+
+/// Per-artifact analysis: parse the file, then run binary-disguise checks,
+/// engine rule evaluation, decode/parse warnings, and artifact-orchestration
+/// detectors. Each finding is contextualised with the artifact's kind and
+/// path. A parse failure surfaces as a single `artifact_parse_error_finding`.
+fn analyze_referenced_artifact<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    referenced_file: &Path,
+) -> Vec<Finding> {
+    let fs = scanner.file_discovery().fs_provider();
+    let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(referenced_file);
+    let artifact_path = referenced_file.display().to_string();
+
+    let artifact_doc =
+        match SkillDocument::from_file_with_provider(referenced_file, scanner.parser(), fs) {
+            Ok(doc) => doc,
+            Err(err) => {
+                return vec![artifact_parse_error_finding(
+                    referenced_file,
+                    artifact_kind,
+                    &err.to_string(),
+                )];
+            }
+        };
+
+    let mut findings = Vec::new();
+    if let Some(kind) = artifact_doc.binary_disguise_kind.as_deref() {
+        findings.push(binary_disguise_finding(
+            referenced_file,
+            kind,
+            artifact_kind,
+            MatchTarget::ReferencedFile {
+                path: artifact_path.clone(),
+            },
+        ));
+    }
+    findings.extend(
+        scanner
+            .engine()
+            .evaluate(&artifact_doc)
+            .into_iter()
+            .map(|finding| {
+                finding
+                    .with_match_target(MatchTarget::ReferencedFile {
+                        path: artifact_path.clone(),
+                    })
+                    .with_artifact(artifact_kind, artifact_path.as_str())
+            }),
+    );
+    if artifact_doc.decode_warning {
+        findings.push(decode_warning_finding(referenced_file, artifact_kind));
+    }
+    if let Some(parse_warning) =
+        structured_parse_warning(referenced_file, &artifact_doc.raw_content, artifact_kind)
+    {
+        findings.push(parse_warning);
+    }
+    let sibling_files = crate::scanner_graph::sibling_files(fs, referenced_file);
+    let orchestrator_findings = scanner.artifact_orchestration().analyze(
+        referenced_file,
+        &artifact_doc.raw_content,
+        &sibling_files,
+        Some(&artifact_doc),
+    );
+    findings.extend(contextualize_findings(
+        orchestrator_findings,
+        artifact_kind,
+        artifact_path.as_str(),
+    ));
     findings
 }
 
@@ -215,15 +219,6 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         &artifact_path,
         &primary_content,
     );
-    // Apply inline suppressions BEFORE deduplication. The dedup pass merges
-    // findings on `(rule_id, category, matched_on, match_value, kind, scope,
-    // path)` and only preserves the first non-`None` `line_number` it sees.
-    // If two emissions of the same rule reach scan_document_path with
-    // different line numbers (one carrying a `// skill-veil:disable` comment
-    // line, another path-less from artifact-graph taint), running suppressions
-    // afterwards would let the merged finding survive when its representative
-    // line happens to be the non-suppressed copy. Suppressing first ensures
-    // each emission is matched against its own original line number.
     let (raw_findings, suppressed_findings) =
         collect_and_apply_suppressions(scanner, raw_findings, path, &doc, &primary_content);
     let (findings, deduplication_summary) = deduplicate_findings(raw_findings);
@@ -231,35 +226,20 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
 
     let filter_outcome = scanner.filter_service().filter_with_summary(findings);
     let filtered_findings = filter_outcome.findings;
-    let (primary_findings, supporting_findings) =
-        ScanResult::split_findings_by_scope(path, artifact_kind, &filtered_findings);
-    let summary = FindingSummary::from_findings_and_graph(&filtered_findings, &artifact_graph);
-    // Scope-specific summaries use finding-only scoring (no graph capabilities)
-    // so that primary_summary.risk_score reflects only primary-artifact risk,
-    // not capabilities from supporting artifacts (and vice versa).
-    let primary_summary = FindingSummary::from_findings(&primary_findings);
-    let supporting_summary = FindingSummary::from_findings(&supporting_findings);
-    let verdict_report = derive_package_verdict(
-        &filtered_findings,
-        &primary_summary,
-        &supporting_summary,
-        &summary,
-    );
+    let (
+        primary_findings,
+        supporting_findings,
+        summary,
+        primary_summary,
+        supporting_summary,
+        verdict_report,
+    ) = build_verdict_and_summaries(&filtered_findings, &artifact_graph, path, artifact_kind);
     let should_fail = scanner.filter_service().should_fail(&filtered_findings);
     let extracted_iocs = collect_extracted_iocs(scanner, &doc, path, &primary_content);
 
+    let metadata = build_artifact_metadata(path, &doc, artifact_kind);
     Ok(ScanResult {
-        metadata: crate::scanner_types::ArtifactMetadata {
-            path: path.to_path_buf(),
-            name: doc.name,
-            extension_kind: doc.extension_kind,
-            classification: doc.classification,
-            package_id: crate::scanner_graph::derive_package_id(path),
-            identity_source: doc.identity_source,
-            structural_validity: doc.structural_validity,
-            heuristic_score: doc.structural_signals.score,
-            primary_artifact_kind: artifact_kind,
-        },
+        metadata,
         findings: filtered_findings,
         suppressed_findings,
         primary_findings,
@@ -281,6 +261,67 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         should_fail,
         extracted_iocs,
     })
+}
+
+/// Snapshot the document-level metadata that the `ScanResult` carries
+/// alongside findings. Pure data marshaling; clones owned strings so the
+/// caller can keep using `doc` for downstream IOC extraction.
+fn build_artifact_metadata(
+    path: &Path,
+    doc: &SkillDocument,
+    artifact_kind: ArtifactKind,
+) -> crate::scanner_types::ArtifactMetadata {
+    crate::scanner_types::ArtifactMetadata {
+        path: path.to_path_buf(),
+        name: doc.name.clone(),
+        extension_kind: doc.extension_kind,
+        classification: doc.classification,
+        package_id: crate::scanner_graph::derive_package_id(path),
+        identity_source: doc.identity_source,
+        structural_validity: doc.structural_validity,
+        heuristic_score: doc.structural_signals.score,
+        primary_artifact_kind: artifact_kind,
+    }
+}
+
+/// Compute the package-wide finding summary, the per-scope summaries, and the
+/// verdict report from the post-policy findings + artifact graph.
+///
+/// Scope-specific summaries use finding-only scoring (no graph capabilities)
+/// so that `primary_summary.risk_score` reflects only primary-artifact risk,
+/// not capabilities from supporting artifacts (and vice versa).
+fn build_verdict_and_summaries(
+    filtered_findings: &[Finding],
+    artifact_graph: &ArtifactGraph,
+    path: &Path,
+    artifact_kind: ArtifactKind,
+) -> (
+    Vec<Finding>,
+    Vec<Finding>,
+    FindingSummary,
+    FindingSummary,
+    FindingSummary,
+    PackageVerdictReport,
+) {
+    let (primary_findings, supporting_findings) =
+        ScanResult::split_findings_by_scope(path, artifact_kind, filtered_findings);
+    let summary = FindingSummary::from_findings_and_graph(filtered_findings, artifact_graph);
+    let primary_summary = FindingSummary::from_findings(&primary_findings);
+    let supporting_summary = FindingSummary::from_findings(&supporting_findings);
+    let verdict_report = derive_package_verdict(
+        filtered_findings,
+        &primary_summary,
+        &supporting_summary,
+        &summary,
+    );
+    (
+        primary_findings,
+        supporting_findings,
+        summary,
+        primary_summary,
+        supporting_summary,
+        verdict_report,
+    )
 }
 
 /// Collect IOCs from the primary document and every supporting artifact. Runs
@@ -424,8 +465,20 @@ fn contextualize_findings(
         .collect()
 }
 
-/// Collect inline suppression sources from the primary document and its referenced
-/// files, then apply suppressions to the deduplicated findings.
+/// Collect inline suppression sources from the primary document and its
+/// referenced files, then apply per-finding suppressions.
+///
+/// # Why this runs BEFORE deduplication
+///
+/// `deduplicate_findings` merges findings on
+/// `(rule_id, category, matched_on, match_value, kind, scope, path)` and only
+/// preserves the first non-`None` `line_number` it sees. If two emissions of
+/// the same rule reach `scan_document_path` with different line numbers (one
+/// carrying a `// skill-veil:disable` comment line, another path-less from
+/// artifact-graph taint), running suppressions afterwards would let the merged
+/// finding survive when its representative line happens to be the
+/// non-suppressed copy. Suppressing first ensures each emission is matched
+/// against its own original line number.
 fn collect_and_apply_suppressions<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     findings: Vec<Finding>,
