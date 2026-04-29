@@ -1,17 +1,15 @@
 use crate::findings::{Finding, SuppressionRecord};
+use crate::lazy_pattern;
 use crate::policy::fingerprint::paths_match;
+use crate::ports::Captures;
 use chrono::{DateTime, Utc};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::sync::LazyLock;
 
-static STANDALONE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?i)^\s*(?:(?:<!--|#|//|/\*+|\*|;|--)\s*(?:skill-veil:)?|skill-veil:)(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?"#,
-    )
-    .expect("valid standalone suppression regex")
-});
+lazy_pattern!(
+    STANDALONE_SUPPRESSION_REGEX,
+    r#"(?i)^\s*(?:(?:<!--|#|//|/\*+|\*|;|--)\s*(?:skill-veil:)?|skill-veil:)(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?"#
+);
 
 /// Maximum characters retained from the `reason=` / `because=` payload
 /// of an inline suppression directive. The captured reason flows into
@@ -25,12 +23,10 @@ static STANDALONE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// guards the contract even if the regex is later relaxed.
 const MAX_SUPPRESSION_REASON_CHARS: usize = 500;
 
-static INLINE_SUPPRESSION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?"#,
-    )
-    .expect("valid inline suppression regex")
-});
+lazy_pattern!(
+    INLINE_SUPPRESSION_REGEX,
+    r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?"#
+);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InlineSuppression {
@@ -51,7 +47,11 @@ fn collect_comment_suppressions(path: &Path, content: &str) -> Vec<InlineSuppres
     let lines: Vec<_> = content.lines().collect();
     for (index, line) in lines.iter().enumerate() {
         let line_number = index + 1;
-        if let Some(capture) = STANDALONE_SUPPRESSION_REGEX.captures(line) {
+        if let Some(capture) = STANDALONE_SUPPRESSION_REGEX
+            .captures_iter(line)
+            .into_iter()
+            .next()
+        {
             add_suppressions_from_capture(
                 &mut suppressions,
                 &artifact_path,
@@ -85,18 +85,21 @@ fn add_suppressions_from_capture(
     line_number: usize,
     standalone: bool,
     next_line_number: Option<usize>,
-    capture: &regex::Captures<'_>,
+    capture: &Captures,
 ) {
-    let Some(kind) = capture.get(1).map(|m| m.as_str().to_ascii_lowercase()) else {
+    let Some(kind) = capture.get(1).map(|m| m.matched_text.to_ascii_lowercase()) else {
         return;
     };
-    let rule_list = capture.get(2).map(|m| m.as_str()).unwrap_or("*");
+    let rule_list = capture
+        .get(2)
+        .map(|m| m.matched_text.as_str())
+        .unwrap_or("*");
     // Defensive truncation in addition to the regex `{0,500}` cap. The
     // doc-comment on `MAX_SUPPRESSION_REASON_CHARS` explains the contract;
     // belt-and-braces here ensures the limit holds even if the regex is
     // later relaxed during a routine refactor.
     let reason = capture.get(3).map(|m| {
-        m.as_str()
+        m.matched_text
             .trim()
             .chars()
             .take(MAX_SUPPRESSION_REASON_CHARS)
