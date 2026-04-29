@@ -1,18 +1,17 @@
-mod detectors;
-mod patterns;
+pub(crate) mod patterns;
 
 use super::patterns::{line_invokes_shell_or_interpreter, RE_SHELL_SOURCE};
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
-use crate::findings::ArtifactKind;
-use crate::services::ArtifactAnalysisService;
-use detectors::{
+use crate::detectors::scripts::{
     detect_deferred_execution, detect_file_secret_to_network_flow, detect_injection_patterns,
     detect_node_process_exec, detect_node_secret_fs_access, detect_powershell_dynamic_exec,
     detect_powershell_persistence, detect_python_exec_network, detect_python_secret_system_access,
     detect_remote_binary_downloads, detect_shell_persistence_write, detect_shell_side_effects,
     detect_typosquatted_install,
 };
+use crate::findings::ArtifactKind;
+use crate::services::ArtifactAnalysisService;
 use std::path::Path;
 
 pub(crate) fn analyze_script(

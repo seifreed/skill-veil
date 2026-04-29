@@ -5,13 +5,13 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-use super::super::patterns::{
+use super::match_helpers::original_match_str;
+use crate::services::artifact_analysis::scripts::patterns::{
     NODE_INJECTION_PATTERNS, POWERSHELL_INJECTION_PATTERNS, PYTHON_INJECTION_PATTERNS,
     SHELL_INJECTION_PATTERNS,
 };
-use super::match_helpers::original_match_str;
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_node_process_exec(
+pub(crate) fn detect_node_process_exec(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -80,7 +80,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_node_process_exec(
     ]
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_python_exec_network(
+pub(crate) fn detect_python_exec_network(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -132,7 +132,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_python_exec_networ
     }
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_powershell_dynamic_exec(
+pub(crate) fn detect_powershell_dynamic_exec(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -162,7 +162,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_powershell_dynamic
     ]
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_shell_side_effects(
+pub(crate) fn detect_shell_side_effects(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -193,7 +193,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_shell_side_effects
     .build()]
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_injection_patterns(
+pub(crate) fn detect_injection_patterns(
     lower: &str,
     original: &str,
     language: &str,

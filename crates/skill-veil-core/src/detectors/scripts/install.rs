@@ -60,7 +60,7 @@ fn levenshtein_capped(a: &str, b: &str, cap: usize) -> usize {
 /// off) a known-good agent asset. Backstop for the YAML rule
 /// `SKILL_SUPPLY_CHAIN_TYPOSQUATTING`, which only matches a hardcoded
 /// allow-list. This detector generalises to any new typo.
-pub(in crate::services::artifact_analysis::scripts) fn detect_typosquatted_install(
+pub(crate) fn detect_typosquatted_install(
     content_lower: &str,
     _language: &str,
     artifact_path: &str,

@@ -15,7 +15,7 @@ fn compile_each(entries: &[(&'static str, &str)]) -> Vec<(&'static str, Compiled
         .collect()
 }
 
-pub(super) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
         compile_each(&[
             (
@@ -31,7 +31,7 @@ pub(super) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
         ])
     });
 
-pub(super) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+pub(crate) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
         compile_each(&[
             (
@@ -45,7 +45,7 @@ pub(super) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern
         ])
     });
 
-pub(super) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+pub(crate) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
         compile_each(&[
             (
@@ -62,7 +62,7 @@ pub(super) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Compiled
         ])
     });
 
-pub(super) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+pub(crate) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
         compile_each(&[
             (
@@ -76,7 +76,7 @@ pub(super) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Compile
         ])
     });
 
-pub(super) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+pub(crate) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
         compile_each(&[
             (
@@ -90,7 +90,7 @@ pub(super) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledP
         ])
     });
 
-pub(super) static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
+pub(crate) static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
         compile_each(&[
             (

@@ -5,7 +5,7 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_python_secret_system_access(
+pub(crate) fn detect_python_secret_system_access(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -48,7 +48,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_python_secret_syst
     .build()]
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_node_secret_fs_access(
+pub(crate) fn detect_node_secret_fs_access(
     content_lower: &str,
     language: &str,
     artifact_path: &str,

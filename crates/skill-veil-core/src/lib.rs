@@ -62,6 +62,7 @@ pub mod artifact_graph;
 mod artifact_taint;
 pub mod benchmark;
 mod deceptive_docs;
+mod detectors;
 pub mod findings;
 mod inline_suppressions;
 pub mod ioc_extraction;

@@ -4,10 +4,10 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-use super::super::patterns::REMOTE_BINARY_PATTERNS;
 use super::match_helpers::original_match_str;
+use crate::services::artifact_analysis::scripts::patterns::REMOTE_BINARY_PATTERNS;
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_remote_binary_downloads(
+pub(crate) fn detect_remote_binary_downloads(
     lower: &str,
     original: &str,
     artifact_path: &str,
@@ -91,7 +91,7 @@ const NETWORK_VERBS: &[&str] = &[
 /// regex `OFFICIAL_EXFIL_FILE_READ_TO_NETWORK` because it tolerates
 /// intermediate variable assignments and multi-line blocks the regex
 /// can't span.
-pub(in crate::services::artifact_analysis::scripts) fn detect_file_secret_to_network_flow(
+pub(crate) fn detect_file_secret_to_network_flow(
     content_lower: &str,
     _language: &str,
     artifact_path: &str,

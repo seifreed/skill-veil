@@ -5,7 +5,7 @@
 //! - `FileDiscoveryService`: Discovers skill files in directories
 //! - `ScanFilterService`: Applies filters to scan findings
 
-mod artifact_analysis;
+pub(crate) mod artifact_analysis;
 pub(crate) mod file_discovery;
 mod scan_filter;
 

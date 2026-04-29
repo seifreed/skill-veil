@@ -5,10 +5,10 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-use super::super::patterns::DEFERRED_PATTERNS;
 use super::match_helpers::original_match_str;
+use crate::services::artifact_analysis::scripts::patterns::DEFERRED_PATTERNS;
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_deferred_execution(
+pub(crate) fn detect_deferred_execution(
     lower: &str,
     original: &str,
     artifact_path: &str,
@@ -38,7 +38,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_deferred_execution
     findings
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_powershell_persistence(
+pub(crate) fn detect_powershell_persistence(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
@@ -70,7 +70,7 @@ pub(in crate::services::artifact_analysis::scripts) fn detect_powershell_persist
     .build()]
 }
 
-pub(in crate::services::artifact_analysis::scripts) fn detect_shell_persistence_write(
+pub(crate) fn detect_shell_persistence_write(
     content_lower: &str,
     language: &str,
     artifact_path: &str,

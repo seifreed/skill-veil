@@ -8,7 +8,7 @@ mod mcp;
 mod network;
 mod patterns;
 mod permissions;
-mod scripts;
+pub(crate) mod scripts;
 
 use crate::artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactRelation,
