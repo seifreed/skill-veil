@@ -13,9 +13,7 @@
 
 use crate::llm::types::{LlmPrompt, LlmVerdict};
 use serde::Serialize;
-use skill_veil_core::findings::Finding;
-use skill_veil_core::ioc_extraction::ExtractedIocs;
-use skill_veil_core::Verdict;
+use skill_veil_core::{ExtractedIocs, Finding, Verdict};
 use std::path::{Path, PathBuf};
 
 pub(crate) const SYSTEM_PROMPT: &str = r#"You are a security analyst evaluating an AI skill package (OpenClaw / Claude skill).
@@ -617,8 +615,8 @@ mod tests {
         );
     }
 
-    fn make_finding(rule: &str, severity: skill_veil_core::findings::Severity) -> Finding {
-        use skill_veil_core::findings::ThreatCategory;
+    fn make_finding(rule: &str, severity: skill_veil_core::Severity) -> Finding {
+        use skill_veil_core::ThreatCategory;
         Finding::builder(rule, ThreatCategory::DataExfiltration)
             .severity(severity)
             .reason("test reason")
@@ -654,7 +652,7 @@ mod tests {
 
     #[test]
     fn cap_findings_keeps_critical_first_and_drops_low() {
-        use skill_veil_core::findings::Severity;
+        use skill_veil_core::Severity;
         // Build 30 findings alternating Critical/High/Medium/Low, but labeled
         // so we can identify which survive the cap.
         let sevs = [
@@ -733,7 +731,7 @@ mod tests {
 
     #[test]
     fn manifest_bundle_exposes_findings_truncated_count() {
-        use skill_veil_core::findings::Severity;
+        use skill_veil_core::Severity;
         let iocs = ExtractedIocs::default();
         let findings: Vec<Finding> = (0..30)
             .map(|i| make_finding(&format!("R{i:03}"), Severity::High))
@@ -1018,7 +1016,7 @@ mod tests {
     /// past what `FINDING_ROW_AVG_CHARS` was sized for.
     #[test]
     fn serialise_finding_truncates_reason_to_max_chars() {
-        use skill_veil_core::findings::{Severity, ThreatCategory};
+        use skill_veil_core::{Severity, ThreatCategory};
         let long_reason = "x".repeat(FINDING_REASON_MAX_CHARS * 3);
         let f = Finding::builder("R001", ThreatCategory::DataExfiltration)
             .severity(Severity::High)

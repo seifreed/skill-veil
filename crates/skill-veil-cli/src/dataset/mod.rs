@@ -58,7 +58,7 @@ pub(crate) fn scan_dataset_to_results(
         .par_iter()
         .filter_map(|package_root| match scanner.scan(package_root) {
             Ok(pkg_result) => Some(pkg_result),
-            Err(skill_veil_core::scanner::ScanError::NoSkillEntrypoints(_)) => None,
+            Err(skill_veil_core::ScanError::NoSkillEntrypoints(_)) => None,
             Err(err) => {
                 tracing::warn!("scan failed for {}: {}", package_root.display(), err);
                 None
@@ -187,9 +187,7 @@ pub(crate) fn run_scan_dataset(
         .par_iter()
         .map(|package_root| match scanner.scan(package_root) {
             Ok(pkg_result) => DatasetScanOutcome::Results(pkg_result),
-            Err(skill_veil_core::scanner::ScanError::NoSkillEntrypoints(_)) => {
-                DatasetScanOutcome::Skipped
-            }
+            Err(skill_veil_core::ScanError::NoSkillEntrypoints(_)) => DatasetScanOutcome::Skipped,
             Err(err) => DatasetScanOutcome::Failed(format!("{}: {}", package_root.display(), err)),
         })
         .collect();

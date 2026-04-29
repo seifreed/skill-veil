@@ -565,9 +565,9 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
 /// before issuing VT lookups so the same indicator (URL/domain/IP/hash)
 /// shared by N artifacts triggers a single API call instead of N.
 fn consolidate_iocs<'a>(
-    sources: impl IntoIterator<Item = &'a skill_veil_core::ioc_extraction::ExtractedIocs>,
-) -> skill_veil_core::ioc_extraction::ExtractedIocs {
-    use skill_veil_core::ioc_extraction::{ExtractedIocs, FileHash};
+    sources: impl IntoIterator<Item = &'a skill_veil_core::ExtractedIocs>,
+) -> skill_veil_core::ExtractedIocs {
+    use skill_veil_core::{ExtractedIocs, FileHash};
     use std::collections::BTreeSet;
     let mut urls = BTreeSet::new();
     let mut domains = BTreeSet::new();
@@ -677,7 +677,7 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skill_veil_core::ioc_extraction::{ExtractedIocs, FileHash};
+    use skill_veil_core::{ExtractedIocs, FileHash};
     use std::path::PathBuf;
 
     /// Contract: a relative path like `SKILL.md` with a matching basename

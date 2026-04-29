@@ -36,7 +36,7 @@ use super::types::{CrowdsourcedAiResult, FileAttributes, FileReportEnvelope, Las
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use skill_veil_core::ioc_extraction::ExtractedIocs;
+use skill_veil_core::ExtractedIocs;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;

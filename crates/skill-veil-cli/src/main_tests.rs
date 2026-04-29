@@ -54,8 +54,7 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
         ],
     );
 
-    let summary =
-        skill_veil_core::findings::FindingSummary::from_findings_and_graph(&findings, &graph);
+    let summary = skill_veil_core::FindingSummary::from_findings_and_graph(&findings, &graph);
     let result = ScanResult {
         metadata: ArtifactMetadata {
             path: PathBuf::from("SKILL.md"),
@@ -73,7 +72,7 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
         primary_findings: findings,
         supporting_findings: Vec::new(),
         primary_summary: summary.clone(),
-        supporting_summary: skill_veil_core::findings::FindingSummary::from_findings(&[]),
+        supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
         summary,
         verdict: skill_veil_core::Verdict::Malicious,
         verdict_report: skill_veil_core::PackageVerdictReport {
@@ -117,7 +116,7 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
             .build(),
     ];
 
-    let summary = skill_veil_core::findings::FindingSummary::from_findings(&findings);
+    let summary = skill_veil_core::FindingSummary::from_findings(&findings);
     let result = ScanResult {
         metadata: ArtifactMetadata {
             path: PathBuf::from("SKILL.md"),
@@ -135,7 +134,7 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
         primary_findings: findings,
         supporting_findings: Vec::new(),
         primary_summary: summary.clone(),
-        supporting_summary: skill_veil_core::findings::FindingSummary::from_findings(&[]),
+        supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
         summary,
         verdict: skill_veil_core::Verdict::Benign,
         verdict_report: skill_veil_core::PackageVerdictReport {
@@ -204,8 +203,7 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
         ],
     );
 
-    let summary =
-        skill_veil_core::findings::FindingSummary::from_findings_and_graph(&findings, &graph);
+    let summary = skill_veil_core::FindingSummary::from_findings_and_graph(&findings, &graph);
     let result = ScanResult {
         metadata: ArtifactMetadata {
             path: PathBuf::from("SKILL.md"),
@@ -223,7 +221,7 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
         primary_findings: findings,
         supporting_findings: Vec::new(),
         primary_summary: summary.clone(),
-        supporting_summary: skill_veil_core::findings::FindingSummary::from_findings(&[]),
+        supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
         summary,
         verdict: skill_veil_core::Verdict::Malicious,
         verdict_report: skill_veil_core::PackageVerdictReport {
