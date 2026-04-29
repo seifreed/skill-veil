@@ -40,7 +40,7 @@ pub(super) fn original_match_str(original: &str, lower: &str, matched: &PatternM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern_helpers::default_matcher;
+    use crate::adapters::pattern_helpers::try_compile;
 
     /// # Contract
     /// `original_match_str` must remain panic-free when ASCII-lowercase
@@ -55,7 +55,7 @@ mod tests {
             // ASCII path — nothing to test for fallback. Skip.
             return;
         }
-        let matches = default_matcher().find_matches("curl", &lower);
+        let matches = try_compile("curl").unwrap().find_matches(&lower);
         if let Some(m) = matches.into_iter().next() {
             let evidence = original_match_str(original, &lower, &m);
             assert!(["curl", "CURL"].contains(&evidence.as_str()));

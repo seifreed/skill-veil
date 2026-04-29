@@ -1,11 +1,11 @@
 use crate::lazy_pattern;
 
 lazy_pattern!(
-    pub(super) RE_OPAQUE_MCP_ENDPOINT,
+    pub(crate) RE_OPAQUE_MCP_ENDPOINT,
     r"(?i)(ngrok|trycloudflare|workers\.dev|raw\.githubusercontent\.com|pastebin\.com)"
 );
 lazy_pattern!(
-    pub(super) RE_MCP_NO_AUTH,
+    pub(crate) RE_MCP_NO_AUTH,
     r#"(?is)("auth"\s*:\s*"none"|authentication\s*:\s*none|no auth|without auth|auth\s*:\s*none)"#
 );
 // Each alternative MUST require an actual secret value (>=8 char
@@ -17,17 +17,17 @@ lazy_pattern!(
 // the npm-config syntax marker — even an empty value is a
 // declaration of an auth-token slot.
 lazy_pattern!(
-    pub(super) RE_MCP_INLINE_SECRET,
+    pub(crate) RE_MCP_INLINE_SECRET,
     r#"(?is)(bearer\s+[A-Za-z0-9._-]{8,}|authorization\s*:\s*bearer\s+[A-Za-z0-9._-]{8,}|api[_-]?key["']?\s*[:=]\s*["']?[A-Za-z0-9._-]{8,}|_authtoken=|token["']?\s*[:=]\s*["']?[A-Za-z0-9._-]{8,})"#
 );
 lazy_pattern!(
-    pub(super) RE_MCP_PERMISSIVE_TOOLS,
+    pub(crate) RE_MCP_PERMISSIVE_TOOLS,
     r#"(?is)("tools"\s*:\s*\[[^\]]*"\*"|allow_all_tools|all_tools|tool_permissions\s*:\s*"all"|expose all tools)"#
 );
-lazy_pattern!(pub(super) RE_QUOTED_TOOL_NAME, r#""([A-Za-z0-9._:-]{2,})""#);
-lazy_pattern!(pub(super) RE_MCP_TOOLS_ARRAY, r#"(?is)"tools"\s*:\s*\[([^\]]+)\]"#);
-lazy_pattern!(pub(super) RE_GENERIC_URL, r#"https?://[^\s"']+"#);
-lazy_pattern!(pub(super) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
+lazy_pattern!(pub(crate) RE_QUOTED_TOOL_NAME, r#""([A-Za-z0-9._:-]{2,})""#);
+lazy_pattern!(pub(crate) RE_MCP_TOOLS_ARRAY, r#"(?is)"tools"\s*:\s*\[([^\]]+)\]"#);
+lazy_pattern!(pub(crate) RE_GENERIC_URL, r#"https?://[^\s"']+"#);
+lazy_pattern!(pub(crate) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 
 /// Whether `line` invokes a shell or interpreter as a command — `bash`, `sh`,
 /// `dash`, `zsh`, `pwsh`, `powershell`, `python`, or `node`. Detection looks

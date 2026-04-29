@@ -8,5 +8,6 @@
 //! authentication and returns a [`webhook::WebhookExposure`] enum
 //! that carries its own rule id / reason / label.
 
+pub(crate) mod patterns;
 pub(crate) mod targets;
 pub(crate) mod webhook;

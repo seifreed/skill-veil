@@ -1,8 +1,6 @@
 use super::model::NetworkTarget;
+use crate::detectors::network::patterns::{RE_RFC1918_10, RE_RFC1918_172, RE_RFC1918_192};
 use crate::lazy_pattern;
-use crate::services::artifact_analysis::network::patterns::{
-    RE_RFC1918_10, RE_RFC1918_172, RE_RFC1918_192,
-};
 
 // Hostname-shaped `*.local` matcher. A plain `lower.contains(".local")`
 // substring check fired on filesystem paths that happen to contain the

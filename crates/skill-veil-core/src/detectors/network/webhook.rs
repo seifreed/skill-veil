@@ -1,6 +1,4 @@
-use crate::services::artifact_analysis::network::patterns::{
-    RE_EXAMPLE_WEBHOOK, RE_OPTIONAL_WEBHOOK_DOCS,
-};
+use super::patterns::{RE_EXAMPLE_WEBHOOK, RE_OPTIONAL_WEBHOOK_DOCS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WebhookExposure {

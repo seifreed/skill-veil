@@ -23,6 +23,7 @@ mod exec;
 mod install;
 mod match_helpers;
 mod network;
+pub(crate) mod patterns;
 mod persistence;
 mod secrets;
 

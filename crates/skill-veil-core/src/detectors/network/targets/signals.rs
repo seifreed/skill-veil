@@ -1,4 +1,4 @@
-use crate::services::artifact_analysis::network::patterns::{
+use crate::detectors::network::patterns::{
     RE_INTERNAL_ACTION, RE_LOCAL_CONTROL_PLANE, RE_LOCAL_DEV_REFERENCE, RE_SSRF_FETCH_LINE,
 };
 

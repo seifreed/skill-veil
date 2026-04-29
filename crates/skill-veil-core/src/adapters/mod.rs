@@ -3,6 +3,7 @@
 //! This module provides default implementations of the port traits
 //! using common libraries (pulldown-cmark, regex, std::fs).
 
+pub mod pattern_helpers;
 mod pulldown_parser;
 mod regex_matcher;
 mod std_filesystem;

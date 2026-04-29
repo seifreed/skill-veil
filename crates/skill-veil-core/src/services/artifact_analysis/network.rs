@@ -3,9 +3,7 @@
 //! exposure lives in the sibling `targets` and `webhook` submodules,
 //! which are in the process of being relocated under `crate::detectors`.
 
-pub(crate) mod patterns;
-
-use patterns::RE_HTTP_URL;
+use crate::detectors::network::patterns::RE_HTTP_URL;
 
 pub(crate) fn extract_http_urls(content: &str) -> Vec<String> {
     RE_HTTP_URL

@@ -1,9 +1,13 @@
+use crate::adapters::pattern_helpers::compile_patterns;
+use crate::lazy_pattern;
 use crate::path_safety::path_stays_within_base;
-use crate::pattern_helpers::default_matcher;
+use crate::ports::CompiledPattern;
 use std::path::{Path, PathBuf};
 
 const SCRIPT_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl";
 const ALL_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl|exe|bin|dll";
+
+lazy_pattern!(EXEC_REFERENCE_PATTERN, r"(?:chmod\s+\+x\s+|\./)([^\s]+)");
 
 /// Extract paths to supporting artifacts referenced from a markdown skill doc.
 ///
@@ -33,16 +37,21 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
         r#"(?:source|run|execute|include)\s+[\"']?([^\s\"']+\.({}))"#,
         SCRIPT_EXT_PATTERN
     );
-    let exec_pattern = r#"(?:chmod\s+\+x\s+|\./)([^\s]+)"#;
-    let patterns = [
-        link_pattern.as_str(),
-        command_pattern.as_str(),
-        exec_pattern,
-    ];
 
-    let matcher = default_matcher();
-    for pattern in &patterns {
-        for cap in matcher.captures_iter(pattern, content) {
+    // The link/command patterns embed runtime-built extension lists
+    // (`SCRIPT_EXT_PATTERN`, `ALL_EXT_PATTERN`), so they cannot live
+    // inside `lazy_pattern!`. They go through `compile_patterns` —
+    // the bulk variant of the same composition seam — which still
+    // routes through the `PatternMatcher` port without naming the
+    // concrete adapter. The static `EXEC_REFERENCE_PATTERN` uses
+    // `lazy_pattern!` because it is a binary literal.
+    let dynamic = compile_patterns(&[link_pattern.as_str(), command_pattern.as_str()]);
+    let patterns = dynamic
+        .iter()
+        .chain(std::iter::once::<&CompiledPattern>(&EXEC_REFERENCE_PATTERN));
+
+    for re in patterns {
+        for cap in re.captures_iter(content) {
             let Some(m) = cap.get(1) else { continue };
             let raw = m.matched_text.as_str();
 

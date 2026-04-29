@@ -6,7 +6,7 @@ use crate::findings::{
 };
 
 use super::match_helpers::original_match_str;
-use crate::services::artifact_analysis::scripts::patterns::{
+use super::patterns::{
     NODE_INJECTION_PATTERNS, POWERSHELL_INJECTION_PATTERNS, PYTHON_INJECTION_PATTERNS,
     SHELL_INJECTION_PATTERNS,
 };

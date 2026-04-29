@@ -1,17 +1,13 @@
-use crate::pattern_helpers::default_matcher;
+use crate::adapters::pattern_helpers::compile_patterns;
 use crate::ports::CompiledPattern;
 use std::sync::LazyLock;
 
 fn compile_each(entries: &[(&'static str, &str)]) -> Vec<(&'static str, CompiledPattern)> {
-    let matcher = default_matcher();
+    let raw: Vec<&str> = entries.iter().map(|(_, pattern)| *pattern).collect();
     entries
         .iter()
-        .map(|(id, pattern)| {
-            let compiled = matcher
-                .compile(pattern)
-                .expect("hardcoded scripts pattern must compile");
-            (*id, compiled)
-        })
+        .map(|(id, _)| *id)
+        .zip(compile_patterns(&raw))
         .collect()
 }
 

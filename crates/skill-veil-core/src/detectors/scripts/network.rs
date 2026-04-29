@@ -5,7 +5,7 @@ use crate::findings::{
 };
 
 use super::match_helpers::original_match_str;
-use crate::services::artifact_analysis::scripts::patterns::REMOTE_BINARY_PATTERNS;
+use super::patterns::REMOTE_BINARY_PATTERNS;
 
 pub(crate) fn detect_remote_binary_downloads(
     lower: &str,

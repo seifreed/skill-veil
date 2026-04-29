@@ -8,12 +8,12 @@
 //! `Finding` per `(claim, contradicting_artifact)` pair, routed through the
 //! standard verdict pipeline.
 
+use crate::adapters::pattern_helpers::compile_patterns;
 use crate::analyzer::SkillDocument;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, SignalClass,
     ThreatCategory,
 };
-use crate::pattern_helpers::default_matcher;
 use crate::ports::CompiledPattern;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -169,23 +169,12 @@ struct CompiledClaim {
 fn tables() -> &'static CompiledTables {
     static CACHE: OnceLock<CompiledTables> = OnceLock::new();
     CACHE.get_or_init(|| {
-        let matcher = default_matcher();
-        let compile_each = |patterns: &[&str]| -> Vec<CompiledPattern> {
-            patterns
-                .iter()
-                .map(|p| {
-                    matcher
-                        .compile(p)
-                        .expect("deceptive_docs hardcoded pattern compiles")
-                })
-                .collect()
-        };
         let entries = CLAIM_DEFINITIONS
             .iter()
             .map(|def| CompiledClaim {
                 kind: def.kind,
-                claim_regexes: compile_each(def.claim_patterns),
-                contradiction_regexes: compile_each(def.contradiction_patterns),
+                claim_regexes: compile_patterns(def.claim_patterns),
+                contradiction_regexes: compile_patterns(def.contradiction_patterns),
             })
             .collect();
         CompiledTables { entries }
@@ -373,32 +362,31 @@ fn claim_phrase(kind: ClaimKind) -> &'static str {
 #[cfg(test)]
 mod compile_time_pattern_tests {
     use super::CLAIM_DEFINITIONS;
-    use crate::pattern_helpers::default_matcher;
+    use crate::adapters::pattern_helpers::try_compile;
 
     /// # Contract
     ///
     /// Every `claim_pattern` and `contradiction_pattern` in
     /// `CLAIM_DEFINITIONS` MUST compile through the `PatternMatcher`
     /// port. Production calls `tables()` once via `OnceLock::get_or_init`
-    /// with `.expect("... pattern compiles")`, so an invalid literal
-    /// would panic on the first scan instead of surfacing in CI. This
-    /// test moves that invariant from runtime to test-time, which is
-    /// what the project's engineering standards require ("never
-    /// `unwrap()` in library code").
+    /// with `compile_patterns`, which panics on a malformed literal —
+    /// so an invalid pattern would crash the first scan instead of
+    /// surfacing in CI. This test moves that invariant from runtime to
+    /// test-time, satisfying the engineering standard that forbids
+    /// runtime panics on hardcoded patterns going unverified.
     #[test]
     fn all_claim_patterns_compile() {
-        let matcher = default_matcher();
         for def in CLAIM_DEFINITIONS {
             for pattern in def.claim_patterns {
                 assert!(
-                    matcher.compile(pattern).is_ok(),
+                    try_compile(pattern).is_ok(),
                     "claim pattern {pattern:?} for {:?} must compile",
                     def.kind
                 );
             }
             for pattern in def.contradiction_patterns {
                 assert!(
-                    matcher.compile(pattern).is_ok(),
+                    try_compile(pattern).is_ok(),
                     "contradiction pattern {pattern:?} for {:?} must compile",
                     def.kind
                 );

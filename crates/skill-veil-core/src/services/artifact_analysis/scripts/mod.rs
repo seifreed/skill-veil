@@ -1,8 +1,6 @@
-pub(crate) mod patterns;
-
-use super::patterns::{line_invokes_shell_or_interpreter, RE_SHELL_SOURCE};
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
+use crate::detectors::patterns::{line_invokes_shell_or_interpreter, RE_SHELL_SOURCE};
 use crate::detectors::scripts::{
     detect_deferred_execution, detect_file_secret_to_network_flow, detect_injection_patterns,
     detect_node_process_exec, detect_node_secret_fs_access, detect_powershell_dynamic_exec,

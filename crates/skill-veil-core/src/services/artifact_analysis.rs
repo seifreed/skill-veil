@@ -4,8 +4,9 @@ pub(crate) mod dispatch;
 mod instructions;
 pub(crate) mod manifests;
 pub(crate) mod network;
-pub(crate) mod patterns;
 pub(crate) mod scripts;
+
+use crate::detectors::patterns;
 
 use crate::artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactRelation,

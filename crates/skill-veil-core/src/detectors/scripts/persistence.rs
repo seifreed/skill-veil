@@ -6,7 +6,7 @@ use crate::findings::{
 };
 
 use super::match_helpers::original_match_str;
-use crate::services::artifact_analysis::scripts::patterns::DEFERRED_PATTERNS;
+use super::patterns::DEFERRED_PATTERNS;
 
 pub(crate) fn detect_deferred_execution(
     lower: &str,
