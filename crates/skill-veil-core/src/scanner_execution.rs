@@ -500,11 +500,16 @@ mod scan_supporting_artifacts_tests {
     fn scan_supporting_artifacts_uses_fs_provider_for_existence_check() {
         let body = include_str!("scanner_execution.rs");
         let production = body.split("#[cfg(test)]").next().unwrap_or(body);
-        let in_function = production
-            .split("fn scan_supporting_artifacts<")
-            .nth(1)
-            .and_then(|after_sig| after_sig.split("\nfn ").next())
-            .expect("scan_supporting_artifacts must be present in production code");
+        let Some(after_sig) = production.split("fn scan_supporting_artifacts<").nth(1) else {
+            // The signature renamed; surface a single, actionable failure
+            // message rather than a generic .expect panic stack.
+            panic!(
+                "scanner_execution.rs no longer contains a `fn scan_supporting_artifacts<...>` \
+                 production definition. If you renamed it, update this contract test to track \
+                 the new name."
+            );
+        };
+        let in_function = after_sig.split("\nfn ").next().unwrap_or(after_sig);
         assert!(
             !in_function.contains("referenced_file.exists()"),
             "scan_supporting_artifacts must not call Path::exists directly; \
