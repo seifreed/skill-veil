@@ -10,6 +10,7 @@
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
 use crate::util::cache_io::finalize_atomic_write;
+use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::time::Duration;
@@ -32,6 +33,14 @@ const DOWNLOAD_HTTP_TIMEOUT_SECS: u64 = 300;
 /// Anything beyond this point is truncation noise for operator diagnostics,
 /// so we drop it before it reaches log aggregators or operator terminals.
 const ERROR_BODY_MAX_BYTES: usize = 512;
+
+/// Hard ceiling for a single VT file download. VT's largest sample size is
+/// 650 MiB (per the public quota table); 768 MiB leaves headroom for that
+/// edge while preventing a hostile/misconfigured CDN or MITM from streaming
+/// an unbounded body into the operator's disk. The cap is enforced during
+/// streaming (`stream_response_to`) so the `.tmp` file never exceeds the
+/// limit and an attacker cannot fill the disk before the producer notices.
+const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
 
 /// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
 /// UTF-8 char boundary, appending `"...[truncated]"` when shortened.
@@ -85,6 +94,14 @@ pub(crate) enum VtError {
     Network(String),
     #[error("failed to decode VirusTotal response: {0}")]
     Decode(String),
+    #[error(
+        "VirusTotal download integrity mismatch: requested SHA-256 {expected} but received {actual}"
+    )]
+    IntegrityMismatch { expected: String, actual: String },
+    #[error(
+        "VirusTotal download exceeded the {limit_bytes}-byte cap before reaching end of stream"
+    )]
+    DownloadTooLarge { limit_bytes: u64 },
     #[error(transparent)]
     Io(#[from] io::Error),
 }
@@ -292,7 +309,9 @@ impl VtClient {
         let resp = self.request_download_redirect(&url)?;
 
         let location = match resp {
-            DownloadResponse::Direct(r) => return Self::stream_response_to(dest, *r),
+            DownloadResponse::Direct(r) => {
+                return Self::stream_response_to(dest, *r, sha256, MAX_DOWNLOAD_BYTES);
+            }
             DownloadResponse::Redirect(loc) => loc,
         };
 
@@ -316,7 +335,7 @@ impl VtClient {
                 }
                 ureq::Error::Transport(e) => VtError::Network(e.to_string()),
             })?;
-        Self::stream_response_to(dest, response)
+        Self::stream_response_to(dest, response, sha256, MAX_DOWNLOAD_BYTES)
     }
 
     fn request_download_redirect(&self, url: &str) -> Result<DownloadResponse, VtError> {
@@ -352,23 +371,73 @@ impl VtClient {
         Err(VtError::HttpStatus { status, body })
     }
 
-    fn stream_response_to(dest: &Path, response: ureq::Response) -> Result<(), VtError> {
+    /// Stream `response` body to `dest` while enforcing two contracts:
+    ///
+    /// 1. **Integrity**: bytes are SHA-256 hashed in-flight and the digest is
+    ///    compared against `expected_sha256` (case-insensitive hex). VT's
+    ///    download endpoint is keyed by SHA-256, so a mismatch means the
+    ///    storage layer, the redirect target, or the network path delivered
+    ///    a different sample than the one requested. For a malware analysis
+    ///    pipeline this is an unrecoverable trust violation: the `.tmp` file
+    ///    is removed and `VtError::IntegrityMismatch` propagates so the
+    ///    caller never observes a `dest` whose contents disagree with the
+    ///    name that indexed it.
+    ///
+    /// 2. **Size cap**: writes abort once the cumulative body exceeds
+    ///    `max_bytes`. VT's allowlisted storage hosts are trusted, but a
+    ///    misconfigured CDN or a MITM with a valid cert could otherwise
+    ///    stream an unbounded body and fill the operator's disk before
+    ///    `timeout_read` fires (the timer measures inactivity per read,
+    ///    not total transfer). The check is on bytes already written, not
+    ///    on `Content-Length`, because chunked-transfer responses can lie.
+    fn stream_response_to(
+        dest: &Path,
+        response: ureq::Response,
+        expected_sha256: &str,
+        max_bytes: u64,
+    ) -> Result<(), VtError> {
         let tmp = dest.with_extension("tmp");
-        {
+        let result = (|| -> Result<String, VtError> {
             let mut out = std::fs::File::create(&tmp)?;
             let mut reader = response.into_reader();
+            let mut hasher = Sha256::new();
             let mut buf = [0u8; 64 * 1024];
+            let mut total: u64 = 0;
             loop {
                 let read = reader.read(&mut buf)?;
                 if read == 0 {
                     break;
                 }
+                total = total.saturating_add(read as u64);
+                if total > max_bytes {
+                    return Err(VtError::DownloadTooLarge {
+                        limit_bytes: max_bytes,
+                    });
+                }
+                hasher.update(&buf[..read]);
                 out.write_all(&buf[..read])?;
             }
             out.flush()?;
+            Ok(format!("{:x}", hasher.finalize()))
+        })();
+
+        match result {
+            Ok(actual) if actual.eq_ignore_ascii_case(expected_sha256) => {
+                finalize_atomic_write(&tmp, dest)?;
+                Ok(())
+            }
+            Ok(actual) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(VtError::IntegrityMismatch {
+                    expected: expected_sha256.to_string(),
+                    actual,
+                })
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(err)
+            }
         }
-        finalize_atomic_write(&tmp, dest)?;
-        Ok(())
     }
 
     fn get_json_with_retry<T>(&self, url: &str, query: &[(&str, &str)]) -> Result<T, VtError>
@@ -651,5 +720,165 @@ mod truncate_error_body_tests {
             "truncated body must carry the suffix; got tail: {:?}",
             &truncated[truncated.len().saturating_sub(20)..]
         );
+    }
+}
+
+#[cfg(test)]
+mod download_integrity_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        format!("{:x}", h.finalize())
+    }
+
+    fn serve_once(port_tx: std::sync::mpsc::Sender<u16>, body: Vec<u8>) -> thread::JoinHandle<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind localhost");
+        let port = listener.local_addr().unwrap().port();
+        port_tx.send(port).unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let cloned = stream.try_clone().expect("clone");
+            let mut reader = BufReader::new(cloned);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&body);
+        })
+    }
+
+    fn fetch_response(port: u16) -> ureq::Response {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build();
+        agent
+            .get(&format!("http://127.0.0.1:{port}/"))
+            .call()
+            .expect("connect")
+    }
+
+    /// # Contract
+    ///
+    /// `stream_response_to` MUST hash bytes as they stream to disk and
+    /// reject the download when the resulting digest differs from the
+    /// caller-supplied `expected_sha256`. Pre-fix the function trusted
+    /// VT/Google Storage to deliver the requested sample, so a corrupt
+    /// CDN response or a MITM with a valid cert could substitute a
+    /// different file under the same SHA-controlled filename. For a
+    /// malware analysis pipeline the SHA-256 is the trust anchor — accepting
+    /// mismatched bytes silently poisons every downstream consumer
+    /// (taint analysis, manual review, dataset corpora). On rejection,
+    /// the `.tmp` sibling MUST also be removed so the operator's disk
+    /// never holds a partial, unverified blob.
+    #[test]
+    fn stream_response_to_rejects_sha_mismatch() {
+        let body = b"actual file bytes that hash differently".to_vec();
+        let bogus_sha = "0".repeat(64);
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let dest = tmpdir.path().join("sample");
+
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        let server = serve_once(port_tx, body);
+        let port = port_rx.recv().unwrap();
+        let response = fetch_response(port);
+
+        let result = VtClient::stream_response_to(&dest, response, &bogus_sha, MAX_DOWNLOAD_BYTES);
+
+        assert!(
+            matches!(&result, Err(VtError::IntegrityMismatch { expected, actual })
+                if expected == &bogus_sha && actual.len() == 64),
+            "expected IntegrityMismatch for diverging SHA; got {result:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "dest must not be created when the digest mismatches"
+        );
+        assert!(
+            !dest.with_extension("tmp").exists(),
+            "tmp sibling must be removed on integrity failure to avoid leaking unverified bytes"
+        );
+        let _ = server.join();
+    }
+
+    /// # Contract
+    ///
+    /// `stream_response_to` MUST commit `dest` only when the streamed body's
+    /// SHA-256 matches the caller's `expected_sha256` (case-insensitive).
+    /// Pins the happy path so a future refactor cannot silently disable
+    /// verification by short-circuiting the comparison.
+    #[test]
+    fn stream_response_to_accepts_matching_sha() {
+        let body = b"contents whose digest is computed and matched".to_vec();
+        let expected = sha256_hex(&body);
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let dest = tmpdir.path().join("sample");
+
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        let server = serve_once(port_tx, body.clone());
+        let port = port_rx.recv().unwrap();
+        let response = fetch_response(port);
+
+        VtClient::stream_response_to(&dest, response, &expected, MAX_DOWNLOAD_BYTES)
+            .expect("matching SHA must succeed");
+
+        assert!(dest.exists(), "dest must be present after atomic finalize");
+        let written = std::fs::read(&dest).expect("read dest");
+        assert_eq!(written, body, "dest contents must match streamed body");
+        let _ = server.join();
+    }
+
+    /// # Contract
+    ///
+    /// `stream_response_to` MUST stop writing once the cumulative body
+    /// exceeds `max_bytes`, returning `VtError::DownloadTooLarge`. Pre-fix
+    /// the loop read until EOF unbounded; a chunked-transfer response
+    /// (where `Content-Length` is absent) could fill the operator's disk
+    /// before `timeout_read` ever fired, since that timer measures
+    /// inactivity per read, not total transfer. The cap also defends
+    /// against MITM attempts that ignore the requested SHA's known size.
+    #[test]
+    fn stream_response_to_aborts_when_body_exceeds_cap() {
+        let body = vec![0xABu8; 4096];
+        let expected = sha256_hex(&body);
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let dest = tmpdir.path().join("sample");
+
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        let server = serve_once(port_tx, body);
+        let port = port_rx.recv().unwrap();
+        let response = fetch_response(port);
+
+        let cap: u64 = 1024;
+        let result = VtClient::stream_response_to(&dest, response, &expected, cap);
+
+        assert!(
+            matches!(&result, Err(VtError::DownloadTooLarge { limit_bytes }) if *limit_bytes == cap),
+            "expected DownloadTooLarge at cap {cap}; got {result:?}"
+        );
+        assert!(
+            !dest.exists(),
+            "dest must not be finalized when the cap aborts the stream"
+        );
+        assert!(
+            !dest.with_extension("tmp").exists(),
+            "tmp sibling must be removed on cap-abort to bound disk use"
+        );
+        let _ = server.join();
     }
 }

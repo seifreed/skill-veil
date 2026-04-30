@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -127,11 +128,42 @@ fn is_zip_archive(path: &Path) -> bool {
     zip::ZipArchive::new(file).is_ok()
 }
 
+/// Per-entry hard cap on decompressed bytes. A malicious "zip-bomb" is a
+/// few-KB archive containing a single entry that decompresses to many
+/// gigabytes; without a cap, `std::io::copy` would happily fill the disk
+/// before the dataset prep ever returns. 512 MiB covers any realistic
+/// skill-package supporting artifact (typical agent bundles are under a
+/// few MB) while bounding the worst case from a hostile archive.
+const MAX_ZIP_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Aggregate cap across all entries in a single zip. Defends against the
+/// "many small bombs" variant where each entry stays under
+/// [`MAX_ZIP_ENTRY_BYTES`] but the archive carries thousands of them.
+/// 4 GiB matches the typical free-space slack on CI runners.
+const MAX_ZIP_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
 fn extract_zip_package(zip_path: &Path, output_dir: &Path) -> Result<()> {
+    extract_zip_package_with_caps(
+        zip_path,
+        output_dir,
+        MAX_ZIP_ENTRY_BYTES,
+        MAX_ZIP_TOTAL_BYTES,
+    )
+}
+
+/// Cap-injected variant for tests. Production callers go through
+/// [`extract_zip_package`], which pins the production caps.
+fn extract_zip_package_with_caps(
+    zip_path: &Path,
+    output_dir: &Path,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<()> {
     let file = fs::File::open(zip_path)
         .with_context(|| format!("Failed to open {}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("Invalid zip {}", zip_path.display()))?;
+    let mut total_bytes_written: u64 = 0;
     for index in 0..archive.len() {
         let mut entry = archive
             .by_index(index)
@@ -158,14 +190,54 @@ fn extract_zip_package(zip_path: &Path, output_dir: &Path) -> Result<()> {
                 .with_context(|| format!("Failed to create {}", destination.display()))?;
             continue;
         }
+        // Header-declared size is advisory — a malicious producer can lie —
+        // so we still enforce the cap during the streaming copy below.
+        // The pre-check is a cheap fast-path that rejects honest bombs
+        // without ever writing partial output to disk.
+        if entry.size() > max_entry_bytes {
+            tracing::warn!(
+                zip = %zip_path.display(),
+                entry = %relative_path.display(),
+                declared_size = entry.size(),
+                cap = max_entry_bytes,
+                "skipping zip entry whose declared decompressed size exceeds the per-entry cap (possible zip-bomb)"
+            );
+            continue;
+        }
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create {}", parent.display()))?;
         }
         let mut outfile = fs::File::create(&destination)
             .with_context(|| format!("Failed to create {}", destination.display()))?;
-        std::io::copy(&mut entry, &mut outfile)
+        // `take(cap + 1)`: if `copy` returns more than `cap`, we know the
+        // entry tried to exceed the cap (a bomb that lied in its header).
+        // Capping at exactly `cap` would be ambiguous between "entry is
+        // exactly at the limit" and "entry is over the limit".
+        let probe_limit = max_entry_bytes.saturating_add(1);
+        let mut limited = (&mut entry).take(probe_limit);
+        let written = std::io::copy(&mut limited, &mut outfile)
             .with_context(|| format!("Failed to extract {}", destination.display()))?;
+        if written > max_entry_bytes {
+            drop(outfile);
+            let _ = fs::remove_file(&destination);
+            anyhow::bail!(
+                "zip entry {} exceeded per-entry decompression cap of {} bytes (possible zip-bomb in {})",
+                relative_path.display(),
+                max_entry_bytes,
+                zip_path.display(),
+            );
+        }
+        total_bytes_written = total_bytes_written.saturating_add(written);
+        if total_bytes_written > max_total_bytes {
+            drop(outfile);
+            let _ = fs::remove_file(&destination);
+            anyhow::bail!(
+                "zip {} exceeded aggregate decompression cap of {} bytes (possible zip-bomb)",
+                zip_path.display(),
+                max_total_bytes,
+            );
+        }
     }
     Ok(())
 }
@@ -669,5 +741,122 @@ mod tests {
             cache_root.join(FALLBACK_PACKAGE_NAME).is_dir(),
             "extraction must materialise under the sanitized fallback name"
         );
+    }
+
+    /// # Contract
+    ///
+    /// The aggregate cap defends against the "many small bombs" variant
+    /// where each individual entry stays under the per-entry cap but the
+    /// archive carries enough of them to still exhaust disk. After the
+    /// total exceeds [`MAX_ZIP_TOTAL_BYTES`], extraction MUST abort and
+    /// remove the entry that pushed it over the threshold.
+    #[test]
+    fn extract_zip_package_enforces_aggregate_cap_across_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("many.zip");
+        let output_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        let payload = vec![b'A'; 4 * 1024];
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            for i in 0..8 {
+                writer
+                    .start_file(format!("file_{i}.bin"), SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(&payload).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+
+        // Per-entry cap is generous (8 KiB), so each individual entry
+        // passes; the aggregate cap of 16 KiB caps total at 4 entries.
+        let result = extract_zip_package_with_caps(&zip_path, &output_dir, 8 * 1024, 16 * 1024);
+        assert!(
+            result.is_err(),
+            "expected aggregate cap to abort the extraction; got {result:?}"
+        );
+        let err_msg = format!("{:#}", result.unwrap_err());
+        assert!(
+            err_msg.contains("aggregate decompression cap"),
+            "error must explain the aggregate cap; got: {err_msg}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// A header-declared decompressed size that already exceeds the cap
+    /// MUST be rejected without ever opening `dest`. This is the cheap
+    /// fast-path: before allocating I/O, `entry.size()` lets us refuse
+    /// the entry entirely so a partial file is never observable on disk.
+    #[test]
+    fn extract_zip_package_rejects_oversized_declared_size_without_writing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("declared.zip");
+        let output_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        // Build a stored (uncompressed) entry of 8 KiB so the header's
+        // declared size is honest and large enough to trip a 1 KiB cap.
+        let payload = vec![0u8; 8 * 1024];
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file(
+                    "declared.bin",
+                    SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+            writer.write_all(&payload).unwrap();
+            writer.finish().unwrap();
+        }
+
+        // 1 KiB per-entry cap: the 8 KiB declared size trips the
+        // pre-check, so the entry is skipped without touching disk.
+        let result = extract_zip_package_with_caps(&zip_path, &output_dir, 1024, u64::MAX);
+        assert!(
+            result.is_ok(),
+            "skip-on-declared-oversize should NOT abort the whole archive"
+        );
+        assert!(
+            !output_dir.join("declared.bin").exists(),
+            "no partial file must be written when the declared size exceeds the cap"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// The happy path remains unchanged for honest, in-bound archives.
+    /// Pins that the new caps are NOT triggering false positives on the
+    /// realistic dataset packages skill-veil already supports.
+    #[test]
+    fn extract_zip_package_preserves_honest_archives() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("ok.zip");
+        let output_dir = tmp.path().join("out");
+        std::fs::create_dir_all(&output_dir).unwrap();
+
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("README.md", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"# skill\n").unwrap();
+            writer
+                .start_file("script.sh", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"#!/bin/sh\necho ok\n").unwrap();
+            writer.finish().unwrap();
+        }
+
+        extract_zip_package(&zip_path, &output_dir).expect("honest zip must extract");
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("README.md")).unwrap(),
+            "# skill\n"
+        );
+        assert!(output_dir.join("script.sh").exists());
     }
 }
