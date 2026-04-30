@@ -19,8 +19,9 @@ use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestrator
 
 use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, volume_entry_string};
 use detectors::{
-    detect_env_file, detect_host_network, detect_host_volumes, detect_latest_image_tag,
-    detect_privileged, parse_compose_yaml, parse_failure_finding,
+    detect_dangerous_cap_add, detect_env_file, detect_host_network, detect_host_volumes,
+    detect_latest_image_tag, detect_privileged, mapping_declares_dangerous_cap, parse_compose_yaml,
+    parse_failure_finding,
 };
 
 pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding> {
@@ -41,6 +42,11 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
             &artifact_path,
         ));
         findings.extend(detect_privileged(service_name, mapping, &artifact_path));
+        findings.extend(detect_dangerous_cap_add(
+            service_name,
+            mapping,
+            &artifact_path,
+        ));
         findings.extend(detect_host_volumes(service_name, mapping, &artifact_path));
         findings.extend(detect_host_network(service_name, mapping, &artifact_path));
         findings.extend(detect_env_file(service_name, mapping, &artifact_path));
@@ -86,10 +92,18 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
     let mut capabilities: Vec<ArtifactCapabilityFact> = Vec::new();
 
     with_compose_services(content, |_, mapping| {
-        if mapping
+        let privileged = mapping
             .get(serde_yaml::Value::String("privileged".to_string()))
             .and_then(serde_yaml::Value::as_bool)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        // `cap_add: [SYS_ADMIN]` (or other entries from
+        // `DANGEROUS_LINUX_CAPABILITIES`) is treated as privileged for
+        // capability-inference purposes — the kernel surface a service
+        // can reach through those capabilities is equivalent to
+        // `privileged: true` for most container-escape vectors. Without
+        // this branch, `cap_add` was silently ignored and the verdict
+        // pipeline never escalated.
+        if (privileged || mapping_declares_dangerous_cap(mapping))
             && !capabilities.iter().any(|fact| {
                 fact.capability == ArtifactCapability::PrivilegedRuntime
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
@@ -505,5 +519,94 @@ services:
             finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT"),
             "exact `:/host` alias must still fire HOST_MOUNT; got {findings:?}",
         );
+    }
+
+    /// # Contract
+    ///
+    /// `cap_add: [SYS_ADMIN]` (or any other entry from
+    /// `DANGEROUS_LINUX_CAPABILITIES`) MUST raise `PrivilegedRuntime` and
+    /// emit `MANIFEST_DOCKER_COMPOSE_DANGEROUS_CAP_ADD`. Pre-fix the
+    /// detector inspected only `privileged: true`, so a service granted
+    /// `SYS_ADMIN` (full kernel API access) — equivalent to privileged
+    /// for most container-escape vectors — escaped detection entirely.
+    #[test]
+    fn docker_compose_cap_add_sys_admin_fires_finding_and_capability() {
+        let yaml = "\
+services:
+  app:
+    image: ubuntu:22.04
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        let caps = docker_compose_capabilities(yaml);
+        assert!(
+            finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_DANGEROUS_CAP_ADD"),
+            "expected DANGEROUS_CAP_ADD finding; got {findings:?}"
+        );
+        assert!(
+            capability_present(&caps, ArtifactCapability::PrivilegedRuntime),
+            "cap_add SYS_ADMIN must escalate PrivilegedRuntime; got {caps:?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `cap_add` accepts both bare CIS form (`SYS_ADMIN`) and kernel-prefixed
+    /// (`CAP_SYS_ADMIN`) interchangeably; both MUST fire. Pins the
+    /// canonical-form normalisation in `canonicalise_capability`.
+    #[test]
+    fn docker_compose_cap_add_accepts_cap_prefixed_form() {
+        let yaml = "\
+services:
+  app:
+    image: ubuntu:22.04
+    cap_add:
+      - CAP_SYS_ADMIN
+";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        let caps = docker_compose_capabilities(yaml);
+        assert!(finding_present(
+            &findings,
+            "MANIFEST_DOCKER_COMPOSE_DANGEROUS_CAP_ADD"
+        ));
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::PrivilegedRuntime
+        ));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Benign capabilities (`NET_BIND_SERVICE`, `CHOWN`, `KILL`,
+    /// `SETUID` — required by many legitimate workloads) MUST NOT fire
+    /// `DANGEROUS_CAP_ADD` or escalate `PrivilegedRuntime`. Pinned so a
+    /// future expansion of the dangerous-capability list does not
+    /// accidentally include common benign capabilities.
+    #[test]
+    fn docker_compose_cap_add_does_not_fire_on_benign_capabilities() {
+        let yaml = "\
+services:
+  app:
+    image: ubuntu:22.04
+    cap_add:
+      - NET_BIND_SERVICE
+      - CHOWN
+      - KILL
+";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        let caps = docker_compose_capabilities(yaml);
+        assert!(!finding_present(
+            &findings,
+            "MANIFEST_DOCKER_COMPOSE_DANGEROUS_CAP_ADD"
+        ));
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::PrivilegedRuntime
+        ));
     }
 }

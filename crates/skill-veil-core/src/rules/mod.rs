@@ -47,6 +47,7 @@ mod parser;
 mod schema;
 
 use crate::ports::{FileSystemError, FileSystemProvider, MarkdownParser, PatternMatcher};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -103,6 +104,147 @@ pub enum RuleError {
          already loaded; rename or remove the duplicate (strict mode)"
     )]
     DuplicateUserRule { id: String, path: String },
+    /// External rule pack body's SHA-256 digest does not match the value
+    /// recorded in the `<pack>.sha256` sidecar. The pack is rejected to
+    /// prevent silently loading tampered rules.
+    #[error(
+        "Rule pack `{path}` failed integrity check: \
+         expected sha256 `{expected}`, computed `{actual}` — \
+         the pack body changed since the sidecar was issued; \
+         re-issue the sidecar or revert the body"
+    )]
+    ChecksumMismatch {
+        path: String,
+        expected: String,
+        actual: String,
+    },
+    /// External rule pack has no `<pack>.sha256` sidecar and the engine is
+    /// running with `ChecksumPolicy::Required`. Operators who want to load
+    /// unsigned packs (development, ad-hoc tooling) can opt out via
+    /// `set_checksum_policy(ChecksumPolicy::Lenient)` or
+    /// `ChecksumPolicy::WarnOnMissing`.
+    #[error(
+        "Rule pack `{path}` has no sha256 sidecar and ChecksumPolicy::Required \
+         is in effect — generate `{path}.sha256` containing the hex digest \
+         of the pack body"
+    )]
+    MissingChecksum { path: String },
+}
+
+/// Suffix appended to a rule pack path to locate its SHA-256 sidecar.
+/// `<pack>.yaml` therefore resolves to `<pack>.yaml.sha256`. Mirrors the
+/// `sha256sum` convention so operators can issue and verify sidecars
+/// with stock tooling: `sha256sum pack.yaml > pack.yaml.sha256`.
+const RULE_PACK_CHECKSUM_SUFFIX: &str = ".sha256";
+
+/// Compute the SHA-256 hex digest of `bytes`. Used for both the
+/// integrity verification and the regression tests that pin the sidecar
+/// format. Pure; no allocation beyond the returned string.
+fn sha256_hex_of(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Parse the body of a `.sha256` sidecar. Accepts both the bare-digest
+/// form (`<hex>\n`) and the canonical `sha256sum` form (`<hex>  <name>\n`)
+/// — the latter is what stock `sha256sum > pack.yaml.sha256` produces.
+/// Returns `None` if no plausible 64-char hex digest is found.
+fn parse_checksum_sidecar(body: &str) -> Option<String> {
+    let first_token = body.split_whitespace().next()?;
+    if first_token.len() == 64 && first_token.chars().all(|c| c.is_ascii_hexdigit()) {
+        Some(first_token.to_ascii_lowercase())
+    } else {
+        None
+    }
+}
+
+/// Verify a rule pack body against its sidecar according to `policy`.
+///
+/// - [`ChecksumPolicy::Lenient`]: never reads the sidecar, never fails.
+/// - [`ChecksumPolicy::WarnOnMissing`]: if the sidecar exists, verify;
+///   if it is missing, emit a `tracing::warn!` and continue.
+/// - [`ChecksumPolicy::Required`]: the sidecar MUST exist and match;
+///   any other state surfaces as `RuleError::MissingChecksum` or
+///   `RuleError::ChecksumMismatch`.
+fn verify_pack_checksum<F: FileSystemProvider>(
+    fs: &F,
+    pack_path: &Path,
+    body: &[u8],
+    policy: ChecksumPolicy,
+) -> Result<(), RuleError> {
+    if matches!(policy, ChecksumPolicy::Lenient) {
+        return Ok(());
+    }
+    let sidecar_path = {
+        let mut buf = pack_path.as_os_str().to_os_string();
+        buf.push(RULE_PACK_CHECKSUM_SUFFIX);
+        std::path::PathBuf::from(buf)
+    };
+    let sidecar_bytes = match fs.read_file_bytes(&sidecar_path) {
+        Ok(bytes) => bytes,
+        Err(FileSystemError::PathNotFound(_)) => match policy {
+            ChecksumPolicy::Required => {
+                return Err(RuleError::MissingChecksum {
+                    path: pack_path.display().to_string(),
+                });
+            }
+            ChecksumPolicy::WarnOnMissing => {
+                warn!(
+                    pack = %pack_path.display(),
+                    sidecar = %sidecar_path.display(),
+                    "rule pack loaded without integrity verification — \
+                     issue a `<pack>.sha256` sidecar to silence this warning"
+                );
+                return Ok(());
+            }
+            ChecksumPolicy::Lenient => unreachable!("handled above"),
+        },
+        Err(FileSystemError::IoError(io)) => return Err(RuleError::IoError(io)),
+    };
+    let sidecar_text = String::from_utf8(sidecar_bytes.as_bytes().to_vec()).map_err(|err| {
+        RuleError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+    })?;
+    let expected = parse_checksum_sidecar(&sidecar_text).ok_or_else(|| {
+        RuleError::IoError(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "rule pack sidecar `{}` does not contain a 64-char hex SHA-256 digest",
+                sidecar_path.display()
+            ),
+        ))
+    })?;
+    let actual = sha256_hex_of(body);
+    if expected != actual {
+        return Err(RuleError::ChecksumMismatch {
+            path: pack_path.display().to_string(),
+            expected,
+            actual,
+        });
+    }
+    Ok(())
+}
+
+/// Verification policy applied to external rule pack bodies during
+/// `load_rules_file`. The default — [`ChecksumPolicy::WarnOnMissing`] —
+/// emits a `tracing::warn!` when a pack ships without a `<path>.sha256`
+/// sidecar but does not block the load. Operators running production
+/// scans against untrusted rule directories should flip to
+/// [`ChecksumPolicy::Required`] to enforce integrity verification at the
+/// boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChecksumPolicy {
+    /// Skip integrity verification entirely; do not warn on missing sidecars.
+    /// Use only for built-in / embedded packs that the binary itself ships.
+    Lenient,
+    /// Verify the sidecar when present; emit `tracing::warn!` when absent.
+    /// Default for runtime overlays so operators can incrementally adopt
+    /// signed packs without breaking existing deployments.
+    WarnOnMissing,
+    /// Verify the sidecar when present; reject the pack if the sidecar is
+    /// missing. Recommended for production scans against rule directories
+    /// that any user can write to.
+    Required,
 }
 
 /// Rule engine for loading and evaluating rules
@@ -160,6 +302,12 @@ pub struct RuleEngine<M: PatternMatcher> {
     /// `set_strict_mode(false)` explicitly. The opt-out is preserved so
     /// no consumer is forced to rename rules unilaterally.
     strict_mode: bool,
+    /// Integrity verification policy for external rule pack bodies. See
+    /// [`ChecksumPolicy`] for the three modes. Default is
+    /// `ChecksumPolicy::WarnOnMissing` so operators are informed about
+    /// unverified packs without breaking existing deployments that have
+    /// not yet shipped sidecars.
+    checksum_policy: ChecksumPolicy,
 }
 
 impl<M: PatternMatcher> RuleEngine<M> {
@@ -171,7 +319,15 @@ impl<M: PatternMatcher> RuleEngine<M> {
             rules_dir: None,
             matcher,
             strict_mode: true,
+            checksum_policy: ChecksumPolicy::WarnOnMissing,
         }
+    }
+
+    /// Override the integrity verification policy for external rule
+    /// pack bodies. See [`ChecksumPolicy`] for the three modes. Default
+    /// is `WarnOnMissing`.
+    pub fn set_checksum_policy(&mut self, policy: ChecksumPolicy) {
+        self.checksum_policy = policy;
     }
 
     /// Toggle strict mode. When enabled, loading an external pack with a
@@ -268,6 +424,7 @@ impl<M: PatternMatcher> RuleEngine<M> {
                 format!("path not found: {}", missing.display()),
             )),
         })?;
+        verify_pack_checksum(fs, path.as_ref(), bytes.as_bytes(), self.checksum_policy)?;
         let content = String::from_utf8(bytes.as_bytes().to_vec()).map_err(|err| {
             RuleError::IoError(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
         })?;

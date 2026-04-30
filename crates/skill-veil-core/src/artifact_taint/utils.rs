@@ -98,13 +98,28 @@ pub(super) fn node_has_sink(graph: &ArtifactGraph, node_path: &str, sink: TaintS
     }
 }
 
+/// `true` for edge relations that establish a parent → child structural
+/// link strong enough that taint can propagate across the boundary. Pre-fix
+/// only `References` and `Contains` formed clusters; `Loads` and `Mounts`
+/// were silently excluded, so a `skill.md --Loads--> plugin.wasm
+/// --ConnectsTo--> attacker` chain produced no cross-node taint finding
+/// even though the parent had `SecretAccess`. Both relations describe a
+/// runtime dependency the parent pulled in deliberately, so the parent's
+/// secrets are reachable from the child's network sinks.
+fn relation_forms_sibling_cluster(relation: ArtifactRelation) -> bool {
+    matches!(
+        relation,
+        ArtifactRelation::References
+            | ArtifactRelation::Contains
+            | ArtifactRelation::Loads
+            | ArtifactRelation::Mounts
+    )
+}
+
 pub(super) fn build_sibling_clusters(graph: &ArtifactGraph) -> Vec<BTreeSet<String>> {
     let mut parent_to_cluster: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for edge in &graph.edges {
-        if matches!(
-            edge.relation,
-            ArtifactRelation::References | ArtifactRelation::Contains
-        ) {
+        if relation_forms_sibling_cluster(edge.relation) {
             let cluster = parent_to_cluster.entry(edge.from.clone()).or_default();
             // Include the parent so parent→child taint paths are detected.
             // The cross-node loop skips source_node == sink_node, so
@@ -114,4 +129,83 @@ pub(super) fn build_sibling_clusters(graph: &ArtifactGraph) -> Vec<BTreeSet<Stri
         }
     }
     parent_to_cluster.into_values().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifact_graph::{ArtifactEdge, ArtifactNode, ArtifactRelation};
+    use crate::findings::ArtifactKind;
+
+    fn node(path: &str) -> ArtifactNode {
+        ArtifactNode {
+            path: path.to_string(),
+            kind: ArtifactKind::GenericArtifact,
+            capabilities: Vec::new(),
+        }
+    }
+
+    fn edge(from: &str, to: &str, relation: ArtifactRelation) -> ArtifactEdge {
+        ArtifactEdge {
+            from: from.to_string(),
+            to: to.to_string(),
+            relation,
+            endpoint_kind: None,
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `Loads` and `Mounts` MUST form sibling clusters alongside
+    /// `References` and `Contains`. Pre-fix only the latter two
+    /// participated, leaving the parent → loaded-plugin path off the
+    /// taint engine's radar so a `skill.md --Loads--> plugin.wasm`
+    /// chain never tainted the plugin from the parent's secrets.
+    #[test]
+    fn build_sibling_clusters_includes_loads_and_mounts() {
+        let graph = ArtifactGraph {
+            nodes: vec![node("skill.md"), node("plugin.wasm"), node("vol")],
+            edges: vec![
+                edge("skill.md", "plugin.wasm", ArtifactRelation::Loads),
+                edge("skill.md", "vol", ArtifactRelation::Mounts),
+            ],
+        };
+        let clusters = build_sibling_clusters(&graph);
+        assert!(
+            clusters
+                .iter()
+                .any(|c| c.contains("skill.md") && c.contains("plugin.wasm")),
+            "Loads edge must form a cluster; got {clusters:?}"
+        );
+        assert!(
+            clusters
+                .iter()
+                .any(|c| c.contains("skill.md") && c.contains("vol")),
+            "Mounts edge must form a cluster; got {clusters:?}"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Edge relations that do NOT establish a parent→child structural
+    /// link — e.g. `ConnectsTo`, `Reads`, `Writes` — MUST NOT form
+    /// sibling clusters; clustering them would produce spurious
+    /// cross-node taint findings. Pins the membership of the
+    /// `relation_forms_sibling_cluster` helper.
+    #[test]
+    fn build_sibling_clusters_excludes_non_structural_edges() {
+        let graph = ArtifactGraph {
+            nodes: vec![node("a"), node("b")],
+            edges: vec![
+                edge("a", "b", ArtifactRelation::ConnectsTo),
+                edge("a", "b", ArtifactRelation::Reads),
+                edge("a", "b", ArtifactRelation::Writes),
+            ],
+        };
+        let clusters = build_sibling_clusters(&graph);
+        assert!(
+            clusters.is_empty(),
+            "non-structural edges must NOT form clusters; got {clusters:?}"
+        );
+    }
 }

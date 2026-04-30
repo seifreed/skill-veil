@@ -112,6 +112,111 @@ pub(super) fn detect_privileged(
     )
 }
 
+/// Linux capabilities that grant kernel-level privileges equivalent to
+/// `privileged: true` for many container-escape vectors. Sourced from
+/// CIS Docker Benchmark §5.3 and the Trivy/Falco capability rationales:
+///
+/// - `SYS_ADMIN` — mount namespaces, eBPF, FUSE → full host kernel access.
+/// - `NET_ADMIN` — full network stack control (route tables, firewall).
+/// - `SYS_PTRACE` — ptrace any process; cross-container memory inspection.
+/// - `SYS_MODULE` — load kernel modules.
+/// - `DAC_OVERRIDE` / `DAC_READ_SEARCH` — bypass POSIX permission checks.
+/// - `SYS_RAWIO` — direct port I/O and raw memory access.
+/// - `SYS_BOOT` — reboot the host.
+/// - `SYS_TIME` — set the system clock (covert channel / break TLS time).
+/// - `MAC_ADMIN` / `MAC_OVERRIDE` — bypass MAC frameworks (SELinux, AppArmor).
+/// - `AUDIT_CONTROL` — disable kernel auditing (anti-forensics).
+const DANGEROUS_LINUX_CAPABILITIES: &[&str] = &[
+    "SYS_ADMIN",
+    "NET_ADMIN",
+    "SYS_PTRACE",
+    "SYS_MODULE",
+    "DAC_OVERRIDE",
+    "DAC_READ_SEARCH",
+    "SYS_RAWIO",
+    "SYS_BOOT",
+    "SYS_TIME",
+    "MAC_ADMIN",
+    "MAC_OVERRIDE",
+    "AUDIT_CONTROL",
+];
+
+/// Normalise a capability token from compose `cap_add`. Compose accepts
+/// both the bare CIS form (`SYS_ADMIN`) and the kernel-prefixed form
+/// (`CAP_SYS_ADMIN`) interchangeably; emit a canonical bare form for
+/// matching against [`DANGEROUS_LINUX_CAPABILITIES`].
+fn canonicalise_capability(raw: &str) -> String {
+    let stripped = raw
+        .trim()
+        .trim_start_matches("cap_")
+        .trim_start_matches("CAP_");
+    stripped.to_ascii_uppercase()
+}
+
+pub(super) fn detect_dangerous_cap_add(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let Some(cap_add) = mapping
+        .get(serde_yaml::Value::String("cap_add".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Vec::new();
+    };
+    cap_add
+        .iter()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter_map(|raw| {
+            let canonical = canonicalise_capability(raw);
+            DANGEROUS_LINUX_CAPABILITIES.contains(&canonical.as_str())
+                .then_some((raw, canonical))
+        })
+        .map(|(raw, canonical)| {
+            Finding::builder(
+                "MANIFEST_DOCKER_COMPOSE_DANGEROUS_CAP_ADD",
+                ThreatCategory::PrivilegeEscalation,
+            )
+            .severity(Severity::High)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .artifact(
+                ArtifactKind::PackageManifest,
+                Some(artifact_path.to_string()),
+            )
+            .match_value(format!("{service_name}: cap_add={raw}"))
+            .reason(format!(
+                "docker-compose service requests dangerous Linux capability {canonical} \
+                 — equivalent to privileged execution for container-escape vectors"
+            ))
+            .build()
+        })
+        .collect()
+}
+
+/// `true` when `mapping` declares any high-risk Linux capability via
+/// `cap_add`. Used by capability inference (`docker_compose_capabilities`)
+/// to raise `PrivilegedRuntime` so the verdict pipeline treats `cap_add:
+/// [SYS_ADMIN]` the same as `privileged: true`.
+pub(super) fn mapping_declares_dangerous_cap(mapping: &serde_yaml::Mapping) -> bool {
+    let Some(cap_add) = mapping
+        .get(serde_yaml::Value::String("cap_add".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return false;
+    };
+    cap_add
+        .iter()
+        .filter_map(serde_yaml::Value::as_str)
+        .any(|raw| {
+            let canonical = canonicalise_capability(raw);
+            DANGEROUS_LINUX_CAPABILITIES.contains(&canonical.as_str())
+        })
+}
+
 pub(super) fn detect_host_volumes(
     service_name: &str,
     mapping: &serde_yaml::Mapping,

@@ -186,6 +186,45 @@ fn detect_node_capability_combos(node: &ArtifactNode, acc: &mut CapabilityScoreA
     }
 }
 
+/// Detect capability combinations across the union of *all* nodes in the
+/// graph. Pre-fix `detect_node_capability_combos` only checked single
+/// nodes, so a package where `agent.md` declares `PrivilegedRuntime` and
+/// `docker-compose.yml` declares `HostFilesystemAccess` (the canonical
+/// container-escape pair, both reaching `Block` action) escaped the
+/// combo bonus entirely. The verdict pipeline then under-counted risk
+/// for split-manifest packages.
+///
+/// Single-capability weights are still applied per-node by the caller
+/// loop; combo dedup keeps the bonus from being applied twice when both
+/// per-node and package-level passes would match the same key.
+fn detect_package_capability_combos(graph: &ArtifactGraph, acc: &mut CapabilityScoreAccumulator) {
+    let package_caps: std::collections::HashSet<ArtifactCapability> = graph
+        .nodes
+        .iter()
+        .flat_map(|node| node.capabilities.iter().map(|fact| fact.capability))
+        .collect();
+    for spec in CAPABILITY_COMBOS {
+        if package_caps.contains(&spec.cap_a) && package_caps.contains(&spec.cap_b) {
+            let verb = match spec.action {
+                RecommendedAction::Block => "Block",
+                _ => "Approval",
+            };
+            let factor = format!("capability_combo:{}", spec.key);
+            acc.score_combo(
+                spec.key,
+                spec.action,
+                spec.weight,
+                &factor,
+                &format!("Package combines {}", spec.description),
+                &format!(
+                    "{verb} forced because the package combines {}",
+                    spec.description
+                ),
+            );
+        }
+    }
+}
+
 fn capability_score_params(
     capability: ArtifactCapability,
     source_label: &str,
@@ -275,5 +314,119 @@ pub(crate) fn graph_risk_context(
         detect_node_capability_combos(node, &mut acc);
     }
 
+    // Run the package-level pass after per-node combos. The accumulator
+    // dedups combo keys, so a combo already captured on a single node
+    // does not contribute twice; the package pass only adds bonuses for
+    // combos that span nodes — exactly the gap the per-node pass leaves.
+    detect_package_capability_combos(artifact_graph, &mut acc);
+
     acc.into_parts()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifact_graph::ArtifactCapabilityFact;
+    use crate::findings::ArtifactKind;
+
+    fn fact(capability: ArtifactCapability) -> ArtifactCapabilityFact {
+        ArtifactCapabilityFact {
+            capability,
+            source: ArtifactCapabilitySource::Declared,
+        }
+    }
+
+    fn node_with(path: &str, caps: &[ArtifactCapability]) -> ArtifactNode {
+        ArtifactNode {
+            path: path.to_string(),
+            kind: ArtifactKind::GenericArtifact,
+            capabilities: caps.iter().copied().map(fact).collect(),
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `graph_risk_context` MUST detect cross-node capability combinations.
+    /// Pre-fix the only combo pass was `detect_node_capability_combos`,
+    /// which inspected one node at a time, so a package where
+    /// `agent.md` declares `PrivilegedRuntime` and `docker-compose.yml`
+    /// declares `HostFilesystemAccess` never received the
+    /// `privileged_host_filesystem` bonus despite being the canonical
+    /// container-escape pair. The package-level pass closes that gap.
+    #[test]
+    fn graph_risk_context_detects_split_manifest_privileged_host_combo() {
+        let graph = ArtifactGraph {
+            nodes: vec![
+                node_with("agent.md", &[ArtifactCapability::PrivilegedRuntime]),
+                node_with(
+                    "docker-compose.yml",
+                    &[ArtifactCapability::HostFilesystemAccess],
+                ),
+            ],
+            edges: Vec::new(),
+        };
+        let (_score, action, factors, _triggers) = graph_risk_context(&graph);
+        assert!(
+            factors
+                .iter()
+                .any(|f| f.factor == "capability_combo:privileged_host_filesystem"),
+            "expected privileged_host_filesystem combo factor; got {:?}",
+            factors.iter().map(|f| &f.factor).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            action,
+            RecommendedAction::Block,
+            "Block must be enforced for cross-node privileged+host combo"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Combo dedup MUST hold across the per-node and package-level
+    /// passes — a single combo key contributes its weight at most once
+    /// per package. Pins the `scored_combos` invariant.
+    #[test]
+    fn graph_risk_context_does_not_double_count_combo_bonus() {
+        let graph = ArtifactGraph {
+            nodes: vec![node_with(
+                "agent.md",
+                &[
+                    ArtifactCapability::PrivilegedRuntime,
+                    ArtifactCapability::HostFilesystemAccess,
+                ],
+            )],
+            edges: Vec::new(),
+        };
+        let (_score, _action, factors, _triggers) = graph_risk_context(&graph);
+        let combo_count = factors
+            .iter()
+            .filter(|f| f.factor == "capability_combo:privileged_host_filesystem")
+            .count();
+        assert_eq!(
+            combo_count, 1,
+            "combo bonus must apply once even when per-node and package passes both match; got {factors:?}"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A graph where only one half of a combo pair is present MUST NOT
+    /// trigger the combo bonus.
+    #[test]
+    fn graph_risk_context_does_not_fire_combo_when_only_one_capability_present() {
+        let graph = ArtifactGraph {
+            nodes: vec![
+                node_with("agent.md", &[ArtifactCapability::PrivilegedRuntime]),
+                node_with("data.yaml", &[]),
+            ],
+            edges: Vec::new(),
+        };
+        let (_score, _action, factors, _triggers) = graph_risk_context(&graph);
+        assert!(
+            !factors
+                .iter()
+                .any(|f| f.factor == "capability_combo:privileged_host_filesystem"),
+            "must NOT fire combo when only one capability present; got {factors:?}"
+        );
+    }
 }

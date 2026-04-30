@@ -195,8 +195,15 @@
   category: persuasive_language
   severity: low
   confidence: 0.60
+  # `safe` was removed from the alternation. Even with `\bsafe\b`, the regex
+  # crate's `\b` matches at the `-` in `type-safe` / `thread-safe` because
+  # `-` is a non-word character — every skill documenting its own safety
+  # properties produced two `low` findings. The remaining arms (`just once`,
+  # `trust me`, `urgent`, `immediately`, `right now`, `don't worry`) are
+  # specific enough that pure substring matching does not collide with
+  # benign prose.
   when: !regex
-    pattern: "(?i)(just\\s+once|trust\\s+me|safe|don'?t\\s+worry|urgent|immediately|right\\s+now)"
+    pattern: "(?i)(just\\s+once|trust\\s+me|don'?t\\s+worry|urgent|immediately|right\\s+now)"
   action: log
   reason: "Persuasive or urgency language detected"
   enabled: true
@@ -697,8 +704,17 @@
   category: scope_creep
   severity: medium
   confidence: 0.75
+  # Pre-fix the alternation arms `scheduled\s+(task|job|execution)` and
+  # `(daily|weekly|hourly)\s+(purge|cleanup|check)` matched ubiquitous
+  # English phrasing — "Run a scheduled task", "weekly cleanup", "daily
+  # check of the API endpoint" — pushing benign automation skills toward
+  # `require_approval`. Only a real `crontab -e/add/install` invocation
+  # is a reliable persistence indicator at this severity. Other
+  # persistence mechanisms (launchctl, schtasks, cron file edits) are
+  # covered by adjacent rules; the over-broad scheduling-prose arms have
+  # been removed.
   when: !regex
-    pattern: "(?i)crontab\\s+(-e|add|install)|scheduled\\s+(task|job|execution)|(daily|weekly|hourly)\\s+(purge|cleanup|check)"
+    pattern: "(?i)crontab\\s+(-e|add|install)"
   action: require_approval
   reason: "Scheduled task persistence mechanism"
   shield:
@@ -996,8 +1012,18 @@
   category: privilege_escalation
   severity: critical
   confidence: 0.98
+  # The threat is *injection* of SSH keys (writing to `authorized_keys` or
+  # placing a private key on disk). Earlier versions matched the bare
+  # tokens `authorized_keys`, `.ssh/`, and `ssh-ed25519`, which fired on
+  # any documentation that mentioned SSH paths or recommended key types.
+  # The tightened pattern requires either:
+  # - a write/append shell idiom against `authorized_keys`, OR
+  # - actual key material (algorithm prefix + an `AAAA` base64 body of
+  #   plausible length).
+  # Prose like "make sure ~/.ssh/ has permission 700" or "ssh-ed25519
+  # keys are recommended" no longer matches.
   when: !regex
-    pattern: "(?i)(authorized_keys|\\.ssh/|ssh-rsa\\s+AAAA|ssh-ed25519)"
+    pattern: "(?i)(echo\\s+[^\\n]{0,200}>>\\s*[^\\n]{0,80}authorized_keys|cat\\s+[^\\n]{0,200}>>\\s*[^\\n]{0,80}authorized_keys|tee\\s+-a\\s+[^\\n]{0,80}authorized_keys|>\\s*~?/?\\.?ssh/authorized_keys|ssh-rsa\\s+AAAA[A-Za-z0-9+/=]{50,}|ssh-ed25519\\s+AAAA[A-Za-z0-9+/=]{30,})"
   action: block
   reason: "SSH key injection or authorized_keys modification"
   shield:
@@ -1012,8 +1038,14 @@
   category: remote_exec
   severity: high
   confidence: 0.85
+  # `def __init__` was removed: it is the standard Python OOP constructor and
+  # universally appears in any Python skill that defines a class. The
+  # warmup-hijack threat targets `warmup()` / `pre_run()` style entrypoints
+  # that execute before argument parsing — not generic OOP constructors —
+  # so dropping `__init__` removes a high-volume false positive without
+  # weakening the actual detection.
   when: !regex
-    pattern: "(?i)(warmup|init|setup)\\s*\\(\\s*\\)|def\\s+(warmup|__init__|pre_run)|function\\s+warmup"
+    pattern: "(?i)(warmup|setup)\\s*\\(\\s*\\)|def\\s+(warmup|pre_run)|function\\s+warmup"
   action: require_approval
   reason: "Initialization function that may execute before argument parsing"
   shield:
@@ -1043,8 +1075,13 @@
   category: remote_exec
   severity: critical
   confidence: 0.99
+  # Port `13338` is anchored as `:13338` — an actual port reference. Pre-fix
+  # the bare `13338` substring matched any document mentioning the digit
+  # sequence (`issue #13338`, `error 13338`, `processed 13338 records`) and
+  # produced a critical/block verdict. Requiring the `:` prefix limits
+  # matches to URL/host:port forms and the IP-with-port idiom.
   when: !regex
-    pattern: "(?i)(mydeadinternet\\.com|54\\.91\\.154\\.110|13338)"
+    pattern: "(?i)(mydeadinternet\\.com|54\\.91\\.154\\.110|:13338\\b)"
   action: block
   reason: "Known malicious C2 infrastructure from VirusTotal research"
   shield:
@@ -1740,8 +1777,15 @@
   category: remote_exec
   severity: critical
   confidence: 0.80
+  # Bash heredocs with a single-quoted (`<<'EOF'`) or double-quoted
+  # (`<<"EOF"`) delimiter suppress all variable expansion — `${VAR}` is
+  # treated as literal text, not an interpolation. Pre-fix the optional
+  # `['"]?` class accepted both quoted and unquoted forms, producing a
+  # false `command_injection` finding on safely-quoted payloads. The
+  # tightened pattern requires an unquoted delimiter (no leading `'` or
+  # `"`) to fire; here-strings (`<<<`) are unaffected.
   when: !regex
-    pattern: "(?is)(<<\\s*['\\\"]?[A-Z]+|<<<).{0,400}\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
+    pattern: "(?is)(<<\\s*[A-Z]+|<<<).{0,400}\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}"
   action: require_approval
   reason: "Unquoted variable interpolation inside heredoc — possible shell injection"
   shield:
