@@ -80,6 +80,16 @@ impl LlmProvider for OllamaProvider {
         &self.model
     }
 
+    fn sampling_fingerprint(&self) -> String {
+        // Ollama forwards model defaults: we never bake `temperature` /
+        // `max_tokens` into the request body. The static token below
+        // keeps `compute_cache_key`'s hashed-input shape uniform across
+        // providers — adding a sampling param to this provider in
+        // future just changes the fingerprint without needing a
+        // separate "is empty?" branch in the cache layer.
+        "ollama:no-sampling-overrides".to_string()
+    }
+
     fn probe_context_length(&self) -> Option<usize> {
         // POST /api/show returns model metadata including a `model_info` map
         // with `<family>.context_length` entries (e.g. `llama.context_length`)

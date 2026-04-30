@@ -71,6 +71,13 @@ impl LlmProvider for AnthropicProvider {
     fn model(&self) -> &str {
         &self.model
     }
+
+    fn sampling_fingerprint(&self) -> String {
+        format!(
+            "max_tokens={};temperature={}",
+            self.max_tokens, self.temperature
+        )
+    }
 }
 
 pub(crate) fn parse_messages_response(body: &str) -> Result<LlmRawResponse, LlmError> {

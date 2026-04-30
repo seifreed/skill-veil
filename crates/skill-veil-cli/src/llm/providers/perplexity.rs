@@ -76,6 +76,13 @@ impl LlmProvider for PerplexityProvider {
     fn model(&self) -> &str {
         &self.model
     }
+
+    fn sampling_fingerprint(&self) -> String {
+        format!(
+            "max_tokens={};temperature={}",
+            self.max_tokens, self.temperature
+        )
+    }
 }
 
 #[cfg(test)]

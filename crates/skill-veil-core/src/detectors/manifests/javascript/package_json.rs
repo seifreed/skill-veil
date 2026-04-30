@@ -19,12 +19,13 @@ pub(crate) fn analyze_package_json(
     content: &str,
     sibling_files: &[PathBuf],
 ) -> Vec<Finding> {
-    let Ok(json) = serde_json::from_str::<Value>(content) else {
-        return Vec::new();
+    let artifact_path = path.display().to_string();
+    let json = match serde_json::from_str::<Value>(content) {
+        Ok(value) => value,
+        Err(err) => return vec![package_json_parse_failure_finding(&artifact_path, &err)],
     };
 
     let mut findings = Vec::new();
-    let artifact_path = path.display().to_string();
 
     // Suppress unpinned dep findings when a lockfile exists, since the
     // lockfile pins exact versions regardless of the version specifier.
@@ -47,12 +48,7 @@ pub(crate) fn analyze_package_json(
                 continue;
             };
 
-            if !has_lockfile
-                && (version_str.starts_with('^')
-                    || version_str.starts_with('~')
-                    || version_str == "latest"
-                    || version_str == "*")
-            {
+            if !has_lockfile && is_unpinned_npm_version(version_str) {
                 findings.push(
                     Finding::builder(
                         "MANIFEST_PACKAGE_JSON_UNPINNED_DEP",
@@ -189,6 +185,81 @@ pub(crate) fn package_json_capabilities(content: &str) -> Vec<ArtifactCapability
     }
 
     capabilities
+}
+
+/// Whether a `package.json` dependency version specifier is anything
+/// other than a strictly-pinned exact version.
+///
+/// npm treats the empty string `""` and the bare wildcard `"*"` as "any
+/// version" (the SemVer `Any` set), and ranges starting with `^`, `~`,
+/// `>`, `<`, or `=` (other than the `=x.y.z` exact pin) all resolve to a
+/// floating set at install time. `"latest"` and `"*"` are explicit
+/// dist-tags for the most recent publish. Multi-version ranges (`||`,
+/// `-`) and hyphen ranges are also unpinned. Non-semver protocols
+/// (`git+`, `git://`, `file:`, `link:`, `http://`, `https://`) bypass
+/// the registry's integrity checks entirely and pin only by URL —
+/// which an attacker can mutate post-install — so they count as
+/// unpinned for hygiene purposes.
+///
+/// Pre-fix the check covered only `^`, `~`, `"latest"`, `"*"`, missing
+/// every other shape above. The most attacker-relevant gaps were the
+/// empty string (npm resolves `""` to `*`) and the URL protocols (which
+/// fetch from arbitrary endpoints with no version pinning at all).
+fn is_unpinned_npm_version(version: &str) -> bool {
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if trimmed == "latest" || trimmed == "*" {
+        return true;
+    }
+    if matches!(trimmed.as_bytes().first(), Some(b'^' | b'~' | b'>' | b'<')) {
+        return true;
+    }
+    if trimmed.contains("||") || trimmed.contains(" - ") {
+        return true;
+    }
+    const UNPINNED_PROTOCOLS: &[&str] =
+        &["git+", "git://", "file:", "link:", "http://", "https://"];
+    if UNPINNED_PROTOCOLS
+        .iter()
+        .any(|proto| trimmed.starts_with(proto))
+    {
+        return true;
+    }
+    false
+}
+
+/// A `package.json` whose body fails to parse is suspicious on its own:
+/// the rest of the analysis pipeline (install hooks, bin exposure,
+/// lockfile expectations, dependency pinning) silently drops it for lack
+/// of structure, and an attacker can intentionally craft "almost valid"
+/// JSON to bypass every package-json detector. Emit an explicit finding
+/// so the manifest's existence — and our inability to analyze it — is
+/// recorded in the audit output instead of being swallowed. Mirrors the
+/// contract pinned by `MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE` in
+/// `detectors/manifests/container/compose/detectors.rs`.
+fn package_json_parse_failure_finding(artifact_path: &str, err: &serde_json::Error) -> Finding {
+    Finding::builder(
+        "MANIFEST_PACKAGE_JSON_PARSE_FAILURE",
+        ThreatCategory::Generic,
+    )
+    .severity(Severity::Low)
+    .action(RecommendedAction::Log)
+    .evidence_kind(EvidenceKind::Context)
+    .matched_on(MatchTarget::ReferencedFile {
+        path: artifact_path.to_string(),
+    })
+    .artifact(
+        ArtifactKind::PackageManifest,
+        Some(artifact_path.to_string()),
+    )
+    .match_value(err.to_string())
+    .reason(
+        "package.json manifest is not valid JSON; install-hook, bin-exposure \
+         and dependency analyses cannot run against this file",
+    )
+    .build()
 }
 
 /// Whether `package.json`'s `bin` field exposes at least one executable.
@@ -411,6 +482,112 @@ mod tests {
         assert!(
             capability_present(&caps, ArtifactCapability::ExposesBinary),
             "real bin path must expose binary; got {caps:?}",
+        );
+    }
+
+    /// Contract: a `package.json` whose body fails to parse MUST emit
+    /// `MANIFEST_PACKAGE_JSON_PARSE_FAILURE`. Pre-fix the function silently
+    /// returned `Vec::new()`, so an attacker could ship intentionally-broken
+    /// JSON to suppress every install-hook / bin-exposure / dependency
+    /// detector without any audit trail. Mirrors the contract pinned by
+    /// `analyze_docker_compose_emits_parse_failure_finding_for_invalid_yaml`.
+    #[test]
+    fn analyze_package_json_emits_parse_failure_finding_for_invalid_json() {
+        // Trailing comma is unambiguous JSON syntax error in serde_json.
+        let bad = r#"{"name":"pkg","scripts":{"prepare":"x",}}"#;
+        let path = std::path::Path::new("/pkg/package.json");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_package_json(&service, path, bad, &[]);
+        assert!(
+            finding_present(&findings, "MANIFEST_PACKAGE_JSON_PARSE_FAILURE"),
+            "invalid JSON must produce a parse-failure finding; got {findings:?}",
+        );
+        let only_parse_failure = findings
+            .iter()
+            .all(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_PARSE_FAILURE");
+        assert!(
+            only_parse_failure,
+            "no other detector should fire on invalid JSON; got {findings:?}",
+        );
+    }
+
+    /// Contract: a valid `package.json` MUST NOT produce a parse-failure
+    /// finding. Negative case for the parse-failure detector.
+    #[test]
+    fn analyze_package_json_does_not_emit_parse_failure_for_valid_json() {
+        let good = r#"{"name":"pkg","dependencies":{"a":"1.2.3"}}"#;
+        let path = std::path::Path::new("/pkg/package.json");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_package_json(&service, path, good, &[]);
+        assert!(
+            !finding_present(&findings, "MANIFEST_PACKAGE_JSON_PARSE_FAILURE"),
+            "valid JSON must not produce a parse-failure finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: `is_unpinned_npm_version` MUST classify every npm
+    /// version specifier that resolves to a floating set as unpinned.
+    /// Pre-fix the check covered only `^`, `~`, `"latest"`, `"*"`,
+    /// missing the empty string (npm resolves `""` to `*`), comparator
+    /// ranges (`>=1.0`), multi-range OR (`1.0 || 2.0`), hyphen ranges
+    /// (`1.0 - 2.0`), and non-registry protocols (`git+`, `file:`,
+    /// `link:`, `http(s)://`) which an attacker can mutate post-install.
+    #[test]
+    fn is_unpinned_npm_version_classifies_all_floating_shapes() {
+        let unpinned = [
+            "",
+            "*",
+            "latest",
+            "^1.0.0",
+            "~1.0.0",
+            ">=1.0.0",
+            "<2.0.0",
+            ">1.0.0",
+            "1.0.0 || 2.0.0",
+            "1.0.0 - 2.0.0",
+            "git+https://github.com/x/y.git",
+            "git://github.com/x/y.git",
+            "file:../local/pkg",
+            "link:../sibling",
+            "http://example.com/pkg.tgz",
+            "https://example.com/pkg.tgz",
+        ];
+        for spec in unpinned {
+            assert!(
+                is_unpinned_npm_version(spec),
+                "{spec:?} must classify as unpinned",
+            );
+        }
+    }
+
+    /// Contract: a strictly-pinned exact-version specifier MUST NOT
+    /// classify as unpinned. Negative case so a future tightening of
+    /// the helper does not accidentally start flagging real pins.
+    #[test]
+    fn is_unpinned_npm_version_does_not_classify_exact_pins() {
+        let pinned = ["1.0.0", "1.2.3", "0.0.1-alpha.1", "=1.0.0"];
+        for spec in pinned {
+            assert!(
+                !is_unpinned_npm_version(spec),
+                "{spec:?} must NOT classify as unpinned",
+            );
+        }
+    }
+
+    /// Contract: an empty version string in `dependencies` MUST raise
+    /// `MANIFEST_PACKAGE_JSON_UNPINNED_DEP`. Pre-fix `""` slipped past
+    /// the `^/~/latest/*` check despite npm resolving it to `*`. End-
+    /// to-end pin against `analyze_package_json` so a future refactor
+    /// can't silently drop the helper's coverage.
+    #[test]
+    fn analyze_package_json_flags_empty_version_as_unpinned() {
+        let manifest = r#"{"name":"x","dependencies":{"a":""}}"#;
+        let path = std::path::Path::new("/pkg/package.json");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_package_json(&service, path, manifest, &[]);
+        assert!(
+            finding_present(&findings, "MANIFEST_PACKAGE_JSON_UNPINNED_DEP"),
+            "empty version must fire UNPINNED_DEP; got {findings:?}",
         );
     }
 }

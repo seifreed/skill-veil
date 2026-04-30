@@ -85,6 +85,13 @@ impl LlmProvider for LmStudioProvider {
         "lmstudio"
     }
 
+    fn sampling_fingerprint(&self) -> String {
+        format!(
+            "max_tokens={};temperature={}",
+            self.max_tokens, self.temperature
+        )
+    }
+
     fn model(&self) -> &str {
         &self.model
     }

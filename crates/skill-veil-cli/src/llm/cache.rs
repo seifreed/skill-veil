@@ -5,8 +5,13 @@
 //! and on-disk I/O. The contract is unchanged from the inline version:
 //!
 //! - **Cache keys are content-addressed.** A SHA-256 of `(provider, model,
-//!   system, user_json)` for turn-1; a follow-up variant additionally hashes
-//!   the requested file set, sorted by path.
+//!   sampling_fingerprint, system, user_json)` for turn-1; a follow-up
+//!   variant additionally hashes the requested file set, sorted by path.
+//!   The sampling fingerprint covers every per-call inference parameter
+//!   the provider bakes into outbound requests (temperature, max_tokens,
+//!   …). Without it, two scans with the same prompt but different
+//!   `temperature` config would share a key and the second scan would
+//!   reuse the first scan's verdict for the full `CACHE_TTL_DAYS` window.
 //! - **Successful results live for `CACHE_TTL_DAYS`.** Provider errors,
 //!   parse errors, and `BundleTooLarge` records expire after
 //!   `ERROR_CACHE_TTL` so a flapping provider does not silence enrichment
@@ -34,11 +39,25 @@ pub(crate) const CACHE_TTL_DAYS: i64 = 30;
 pub(crate) const ERROR_CACHE_TTL: Duration = Duration::minutes(5);
 
 /// Compute the content-addressed cache key for a turn-1 manifest prompt.
-pub(crate) fn compute_cache_key(provider: &str, model: &str, prompt: &LlmPrompt) -> String {
+///
+/// `sampling_fingerprint` MUST encode every per-call inference parameter
+/// the provider bakes into the outbound request (temperature, max_tokens,
+/// top_p, …). Two scans whose prompt content is identical but whose
+/// sampling parameters differ produce different keys, so a user who
+/// changed `temperature` between scans does not get served the prior
+/// verdict for the full `CACHE_TTL_DAYS` window.
+pub(crate) fn compute_cache_key(
+    provider: &str,
+    model: &str,
+    sampling_fingerprint: &str,
+    prompt: &LlmPrompt,
+) -> String {
     let mut h = Sha256::new();
     h.update(provider.as_bytes());
     h.update(b"|");
     h.update(model.as_bytes());
+    h.update(b"|sampling=");
+    h.update(sampling_fingerprint.as_bytes());
     h.update(b"|");
     h.update(prompt.system.as_bytes());
     h.update(b"|");
@@ -62,6 +81,7 @@ pub(crate) fn compute_cache_key(provider: &str, model: &str, prompt: &LlmPrompt)
 pub(crate) fn compute_cache_key_with_followup(
     provider: &str,
     model: &str,
+    sampling_fingerprint: &str,
     prompt: &LlmPrompt,
     followup: &[(PathBuf, String)],
 ) -> String {
@@ -69,6 +89,8 @@ pub(crate) fn compute_cache_key_with_followup(
     h.update(provider.as_bytes());
     h.update(b"|");
     h.update(model.as_bytes());
+    h.update(b"|sampling=");
+    h.update(sampling_fingerprint.as_bytes());
     h.update(b"|");
     h.update(prompt.system.as_bytes());
     h.update(b"|");
@@ -165,6 +187,8 @@ mod tests {
         }
     }
 
+    const TEST_SAMPLING_FP: &str = "max_tokens=1024;temperature=0.1";
+
     /// Contract: keys are deterministic SHA-256 hex digests (64 lowercase
     /// hex chars). Two calls with the same inputs MUST produce the same
     /// key — the cache reuse path depends on it.
@@ -174,8 +198,8 @@ mod tests {
             system: "s".into(),
             user_json: "u".into(),
         };
-        let k1 = compute_cache_key("openai", "gpt-4", &p);
-        let k2 = compute_cache_key("openai", "gpt-4", &p);
+        let k1 = compute_cache_key("openai", "gpt-4", TEST_SAMPLING_FP, &p);
+        let k2 = compute_cache_key("openai", "gpt-4", TEST_SAMPLING_FP, &p);
         assert_eq!(k1, k2);
         assert_eq!(k1.len(), 64);
         assert!(k1.chars().all(|c| c.is_ascii_hexdigit()));
@@ -191,8 +215,64 @@ mod tests {
             user_json: "u".into(),
         };
         assert_ne!(
-            compute_cache_key("openai", "gpt-4", &p),
-            compute_cache_key("openai", "gpt-4o", &p)
+            compute_cache_key("openai", "gpt-4", TEST_SAMPLING_FP, &p),
+            compute_cache_key("openai", "gpt-4o", TEST_SAMPLING_FP, &p)
+        );
+    }
+
+    /// Contract: the sampling fingerprint MUST participate in the key.
+    /// Two scans with identical prompt content but different
+    /// `temperature` / `max_tokens` config MUST hash to different keys —
+    /// without this, the second scan would receive the first scan's
+    /// verdict for the full `CACHE_TTL_DAYS` window despite the user
+    /// having deliberately changed inference behaviour. Pre-fix the
+    /// cache key omitted these values entirely.
+    #[test]
+    fn cache_key_changes_when_sampling_fingerprint_differs() {
+        let p = LlmPrompt {
+            system: "s".into(),
+            user_json: "u".into(),
+        };
+        let lo = compute_cache_key("openai", "gpt-4", "max_tokens=1024;temperature=0.1", &p);
+        let hi = compute_cache_key("openai", "gpt-4", "max_tokens=1024;temperature=0.7", &p);
+        assert_ne!(
+            lo, hi,
+            "different temperature MUST produce a different cache key",
+        );
+        let mt = compute_cache_key("openai", "gpt-4", "max_tokens=2048;temperature=0.1", &p);
+        assert_ne!(
+            lo, mt,
+            "different max_tokens MUST produce a different cache key",
+        );
+    }
+
+    /// Contract: same key applies to the turn-2 / follow-up variant —
+    /// changing `temperature` between scans MUST produce a different key
+    /// even when the manifest prompt and follow-up files are identical.
+    #[test]
+    fn cache_key_with_followup_changes_when_sampling_fingerprint_differs() {
+        let p = LlmPrompt {
+            system: "s".into(),
+            user_json: "u".into(),
+        };
+        let files = vec![(std::path::PathBuf::from("a.sh"), "x".into())];
+        let lo = compute_cache_key_with_followup(
+            "openai",
+            "gpt-4",
+            "max_tokens=1024;temperature=0.1",
+            &p,
+            &files,
+        );
+        let hi = compute_cache_key_with_followup(
+            "openai",
+            "gpt-4",
+            "max_tokens=1024;temperature=0.7",
+            &p,
+            &files,
+        );
+        assert_ne!(
+            lo, hi,
+            "different temperature MUST produce a different turn-2 cache key",
         );
     }
 
@@ -214,8 +294,10 @@ mod tests {
             std::path::PathBuf::from("scripts/install.sh"),
             "v2".to_string(),
         )];
-        let k1 = compute_cache_key_with_followup("openai", "gpt-4", &p, &files_v1);
-        let k2 = compute_cache_key_with_followup("openai", "gpt-4", &p, &files_v2);
+        let k1 =
+            compute_cache_key_with_followup("openai", "gpt-4", TEST_SAMPLING_FP, &p, &files_v1);
+        let k2 =
+            compute_cache_key_with_followup("openai", "gpt-4", TEST_SAMPLING_FP, &p, &files_v2);
         assert_ne!(k1, k2, "follow-up file content must change the cache key");
     }
 
@@ -236,8 +318,8 @@ mod tests {
             (std::path::PathBuf::from("b.sh"), "y".into()),
             (std::path::PathBuf::from("a.sh"), "x".into()),
         ];
-        let ka = compute_cache_key_with_followup("openai", "gpt-4", &p, &files_a);
-        let kb = compute_cache_key_with_followup("openai", "gpt-4", &p, &files_b);
+        let ka = compute_cache_key_with_followup("openai", "gpt-4", TEST_SAMPLING_FP, &p, &files_a);
+        let kb = compute_cache_key_with_followup("openai", "gpt-4", TEST_SAMPLING_FP, &p, &files_b);
         assert_eq!(ka, kb);
     }
 
@@ -250,8 +332,8 @@ mod tests {
             system: "s".into(),
             user_json: "u".into(),
         };
-        let k_t1 = compute_cache_key("openai", "gpt-4", &p);
-        let k_t2 = compute_cache_key_with_followup("openai", "gpt-4", &p, &[]);
+        let k_t1 = compute_cache_key("openai", "gpt-4", TEST_SAMPLING_FP, &p);
+        let k_t2 = compute_cache_key_with_followup("openai", "gpt-4", TEST_SAMPLING_FP, &p, &[]);
         assert_ne!(
             k_t1, k_t2,
             "empty followup is still a turn-2 result and must use a distinct key"

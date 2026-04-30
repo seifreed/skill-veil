@@ -26,6 +26,24 @@ pub(crate) trait LlmProvider: Send + Sync {
     fn probe_context_length(&self) -> Option<usize> {
         None
     }
+
+    /// Canonical fingerprint of every sampling parameter this provider
+    /// bakes into outbound requests (temperature, max_tokens, top_p, …).
+    ///
+    /// The cache layer hashes this string into the cache key alongside
+    /// `(provider, model, system, user_json)`. Without it, two scans
+    /// with the same prompt but different `temperature` config would
+    /// share a cache key — the second scan would return the first
+    /// scan's verdict for the full `CACHE_TTL_DAYS` window, masking the
+    /// user's deliberate change to inference behaviour.
+    ///
+    /// Providers that do not bake any sampling params into the request
+    /// (e.g. Ollama, which forwards model defaults) MUST still return a
+    /// stable, non-empty token here so the field is always present in
+    /// the hashed input — adding a new param later then trivially
+    /// changes the fingerprint without needing a separate "is empty?"
+    /// branch.
+    fn sampling_fingerprint(&self) -> String;
 }
 
 pub(crate) fn build_agent(timeout_secs: u64) -> ureq::Agent {

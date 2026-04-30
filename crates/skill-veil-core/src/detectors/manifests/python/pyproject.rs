@@ -20,11 +20,12 @@ pub(crate) fn analyze_pyproject_toml(
     content: &str,
     sibling_files: &[PathBuf],
 ) -> Vec<Finding> {
-    let Ok(toml) = content.parse::<TomlValue>() else {
-        return Vec::new();
+    let artifact_path = path.display().to_string();
+    let toml = match content.parse::<TomlValue>() {
+        Ok(value) => value,
+        Err(err) => return vec![pyproject_parse_failure_finding(&artifact_path, &err)],
     };
 
-    let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
 
     if let Some(dependencies) = toml
@@ -133,12 +134,90 @@ pub(crate) fn pyproject_expected_lockfiles(content: &str) -> Vec<&'static str> {
     Vec::new()
 }
 
+/// A `pyproject.toml` whose body fails to parse is suspicious on its own:
+/// the rest of the analysis pipeline (dependency pinning, lockfile
+/// expectations, network/exec capability inference) silently drops it for
+/// lack of structure, and an attacker can intentionally craft "almost
+/// valid" TOML to bypass every dependency detector. Emit an explicit
+/// finding so the manifest's existence — and our inability to analyze it
+/// — is recorded in the audit output instead of being swallowed. Mirrors
+/// the contract pinned by `MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE` in
+/// `detectors/manifests/container/compose/detectors.rs`.
+fn pyproject_parse_failure_finding(artifact_path: &str, err: &toml::de::Error) -> Finding {
+    Finding::builder("MANIFEST_PYPROJECT_PARSE_FAILURE", ThreatCategory::Generic)
+        .severity(Severity::Low)
+        .action(RecommendedAction::Log)
+        .evidence_kind(EvidenceKind::Context)
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
+        .match_value(err.to_string())
+        .reason(
+            "pyproject manifest is not valid TOML; dependency-pinning and \
+             lockfile analyses cannot run against this file",
+        )
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn capability_present(caps: &[ArtifactCapabilityFact], target: ArtifactCapability) -> bool {
         caps.iter().any(|fact| fact.capability == target)
+    }
+
+    fn finding_present(findings: &[Finding], rule_id: &str) -> bool {
+        findings.iter().any(|finding| finding.rule_id == rule_id)
+    }
+
+    /// Contract: a `pyproject.toml` whose body fails to parse MUST emit
+    /// `MANIFEST_PYPROJECT_PARSE_FAILURE`. Pre-fix the function silently
+    /// returned `Vec::new()`, so an attacker could ship intentionally
+    /// broken TOML to suppress every dependency-pinning / lockfile
+    /// detector without any audit trail. Mirrors the contract pinned by
+    /// `analyze_docker_compose_emits_parse_failure_finding_for_invalid_yaml`.
+    #[test]
+    fn analyze_pyproject_emits_parse_failure_finding_for_invalid_toml() {
+        // Unterminated string is unambiguous TOML syntax error.
+        let bad = "[project]\nname = \"";
+        let path = std::path::Path::new("/pkg/pyproject.toml");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_pyproject_toml(&service, path, bad, &[]);
+        assert!(
+            finding_present(&findings, "MANIFEST_PYPROJECT_PARSE_FAILURE"),
+            "invalid TOML must produce a parse-failure finding; got {findings:?}",
+        );
+        let only_parse_failure = findings
+            .iter()
+            .all(|f| f.rule_id == "MANIFEST_PYPROJECT_PARSE_FAILURE");
+        assert!(
+            only_parse_failure,
+            "no other detector should fire on invalid TOML; got {findings:?}",
+        );
+    }
+
+    /// Contract: a valid `pyproject.toml` MUST NOT produce a parse-failure
+    /// finding. Negative case for the parse-failure detector — pins that
+    /// the gate is on the TOML error, not on the absence of dependencies.
+    #[test]
+    fn analyze_pyproject_does_not_emit_parse_failure_for_valid_toml() {
+        let good = r#"[project]
+name = "x"
+version = "0"
+dependencies = ["requests==2.31.0"]
+"#;
+        let path = std::path::Path::new("/pkg/pyproject.toml");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_pyproject_toml(&service, path, good, &[]);
+        assert!(
+            !finding_present(&findings, "MANIFEST_PYPROJECT_PARSE_FAILURE"),
+            "valid TOML must not produce a parse-failure finding; got {findings:?}",
+        );
     }
 
     /// Contract: same VCS / PEP 508 recovery applies to `pyproject.toml`

@@ -260,7 +260,8 @@ fn enrich_one(
         ));
     }
 
-    let cache_key_t1 = compute_cache_key(provider_name, model_name, &manifest_prompt);
+    let sampling_fp = provider.sampling_fingerprint();
+    let cache_key_t1 = compute_cache_key(provider_name, model_name, &sampling_fp, &manifest_prompt);
     let cache_path_t1 = opts.cache_root.join(format!("{cache_key_t1}.json"));
     if let Some(fresh) = load_fresh(&cache_path_t1, Duration::days(CACHE_TTL_DAYS))? {
         return Ok(LlmPackageResult {
@@ -312,6 +313,7 @@ fn enrich_one(
         let key = compute_cache_key_with_followup(
             provider_name,
             model_name,
+            &sampling_fp,
             &manifest_prompt,
             &followup_files,
         );
