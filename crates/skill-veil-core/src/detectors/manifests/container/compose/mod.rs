@@ -1,16 +1,27 @@
-//! docker-compose manifest analysis: findings, capability inference, and
-//! artifact relations. Dockerfile logic lives in the sibling `dockerfile`
-//! module; volume + env_file classifiers shared by this module live in
-//! `volumes`.
+//! docker-compose manifest analysis: findings, capability inference,
+//! and artifact relations. The per-detector emission helpers
+//! (`detect_latest_image_tag`, `detect_privileged`, …) live in the
+//! sibling [`detectors`] submodule. This module owns the public API
+//! and the iteration helpers that walk the `services` mapping shared
+//! by all three entry points.
+//!
+//! Volume + env_file classifiers shared with these detectors live in
+//! `super::volumes`. Dockerfile logic lives in the parent
+//! `dockerfile` module.
 
-use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
-use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
+mod detectors;
+
 use std::path::Path;
 
-use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, render_env_file};
+use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
+use crate::findings::Finding;
+use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
+
+use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, volume_entry_string};
+use detectors::{
+    detect_env_file, detect_host_network, detect_host_volumes, detect_latest_image_tag,
+    detect_privileged, parse_compose_yaml, parse_failure_finding,
+};
 
 pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
@@ -23,11 +34,7 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
     };
 
     let mut findings = Vec::new();
-    for (raw_name, service) in services {
-        let service_name = raw_name.as_str().unwrap_or("unknown");
-        let Some(mapping) = service.as_mapping() else {
-            continue;
-        };
+    for_each_service(services, |service_name, mapping| {
         findings.extend(detect_latest_image_tag(
             service_name,
             mapping,
@@ -37,221 +44,48 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
         findings.extend(detect_host_volumes(service_name, mapping, &artifact_path));
         findings.extend(detect_host_network(service_name, mapping, &artifact_path));
         findings.extend(detect_env_file(service_name, mapping, &artifact_path));
-    }
+    });
     findings
 }
 
-fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, serde_yaml::Error> {
-    serde_yaml::from_str::<serde_yaml::Value>(content)
-}
-
-/// A `docker-compose.yml` whose YAML body is unparseable is suspicious on
-/// its own: the manifest is shipped, the rest of the analysis pipeline
-/// (capabilities, relations) silently drops it for lack of structure, and
-/// an attacker can intentionally craft "almost valid" YAML to bypass every
-/// host-mount / privilege / env_file detector. Emit an explicit finding so
-/// the manifest's existence — and our inability to analyze it — is recorded
-/// in the audit output instead of being swallowed.
-fn parse_failure_finding(artifact_path: &str, err: &serde_yaml::Error) -> Finding {
-    Finding::builder(
-        "MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE",
-        ThreatCategory::Generic,
-    )
-    .severity(Severity::Low)
-    .action(RecommendedAction::Log)
-    .evidence_kind(EvidenceKind::Context)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::PackageManifest,
-        Some(artifact_path.to_string()),
-    )
-    .match_value(err.to_string())
-    .reason(
-        "docker-compose manifest is not valid YAML; capability and \
-         volume/env analyses cannot run against this file",
-    )
-    .build()
-}
-
-fn detect_latest_image_tag(
-    service_name: &str,
-    mapping: &serde_yaml::Mapping,
-    artifact_path: &str,
-) -> Option<Finding> {
-    let image = mapping
-        .get(serde_yaml::Value::String("image".to_string()))
-        .and_then(serde_yaml::Value::as_str)?;
-    if !image.ends_with(":latest") {
-        return None;
-    }
-    Some(
-        Finding::builder(
-            "MANIFEST_DOCKER_COMPOSE_LATEST_TAG",
-            ThreatCategory::SupplyChain,
-        )
-        .severity(Severity::Low)
-        .action(RecommendedAction::RequireApproval)
-        .evidence_kind(EvidenceKind::Context)
-        .matched_on(MatchTarget::ReferencedFile {
-            path: artifact_path.to_string(),
-        })
-        .artifact(
-            ArtifactKind::PackageManifest,
-            Some(artifact_path.to_string()),
-        )
-        .match_value(format!("{service_name}: {image}"))
-        .reason("docker-compose service uses a mutable latest image tag")
-        .build(),
-    )
-}
-
-fn detect_privileged(
-    service_name: &str,
-    mapping: &serde_yaml::Mapping,
-    artifact_path: &str,
-) -> Option<Finding> {
-    let privileged = mapping
-        .get(serde_yaml::Value::String("privileged".to_string()))
-        .and_then(serde_yaml::Value::as_bool)?;
-    if !privileged {
-        return None;
-    }
-    Some(
-        Finding::builder(
-            "MANIFEST_DOCKER_COMPOSE_PRIVILEGED",
-            ThreatCategory::PrivilegeEscalation,
-        )
-        .severity(Severity::Medium)
-        .action(RecommendedAction::RequireApproval)
-        .evidence_kind(EvidenceKind::Behavior)
-        .artifact(
-            ArtifactKind::PackageManifest,
-            Some(artifact_path.to_string()),
-        )
-        .matched_on(MatchTarget::ReferencedFile {
-            path: artifact_path.to_string(),
-        })
-        .match_value(format!("{service_name}: privileged=true"))
-        .reason("docker-compose service requests privileged execution")
-        .build(),
-    )
-}
-
-fn detect_host_volumes(
-    service_name: &str,
-    mapping: &serde_yaml::Mapping,
-    artifact_path: &str,
-) -> Vec<Finding> {
-    let Some(volumes) = mapping
-        .get(serde_yaml::Value::String("volumes".to_string()))
-        .and_then(serde_yaml::Value::as_sequence)
-    else {
-        return Vec::new();
-    };
-    volumes
-        .iter()
-        .filter_map(serde_yaml::Value::as_str)
-        .filter(|volume| is_sensitive_host_volume(volume))
-        .map(|volume| {
-            Finding::builder(
-                "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT",
-                ThreatCategory::PrivilegeEscalation,
-            )
-            .severity(Severity::Medium)
-            .action(RecommendedAction::RequireApproval)
-            .evidence_kind(EvidenceKind::Behavior)
-            .artifact(
-                ArtifactKind::PackageManifest,
-                Some(artifact_path.to_string()),
-            )
-            .matched_on(MatchTarget::ReferencedFile {
-                path: artifact_path.to_string(),
-            })
-            .match_value(format!("{service_name}: {volume}"))
-            .reason("docker-compose service mounts sensitive host paths")
-            .build()
-        })
-        .collect()
-}
-
-fn detect_host_network(
-    service_name: &str,
-    mapping: &serde_yaml::Mapping,
-    artifact_path: &str,
-) -> Option<Finding> {
-    let network_mode = mapping
-        .get(serde_yaml::Value::String("network_mode".to_string()))
-        .and_then(serde_yaml::Value::as_str)?;
-    if !matches!(network_mode, "host" | "service:host") {
-        return None;
-    }
-    Some(
-        Finding::builder(
-            "MANIFEST_DOCKER_COMPOSE_HOST_NETWORK",
-            ThreatCategory::PrivilegeEscalation,
-        )
-        .severity(Severity::Medium)
-        .action(RecommendedAction::RequireApproval)
-        .evidence_kind(EvidenceKind::Behavior)
-        .matched_on(MatchTarget::ReferencedFile {
-            path: artifact_path.to_string(),
-        })
-        .artifact(
-            ArtifactKind::PackageManifest,
-            Some(artifact_path.to_string()),
-        )
-        .match_value(format!("{service_name}: network_mode={network_mode}"))
-        .reason("docker-compose service shares the host network namespace")
-        .build(),
-    )
-}
-
-fn detect_env_file(
-    service_name: &str,
-    mapping: &serde_yaml::Mapping,
-    artifact_path: &str,
-) -> Option<Finding> {
-    let env_file = mapping
-        .get(serde_yaml::Value::String("env_file".to_string()))
-        .filter(|value| env_file_has_real_paths(value))?;
-    Some(
-        Finding::builder(
-            "MANIFEST_DOCKER_COMPOSE_ENV_FILE",
-            ThreatCategory::CredentialExposure,
-        )
-        .severity(Severity::Low)
-        .action(RecommendedAction::RequireApproval)
-        .evidence_kind(EvidenceKind::Context)
-        .artifact(
-            ArtifactKind::PackageManifest,
-            Some(artifact_path.to_string()),
-        )
-        .matched_on(MatchTarget::ReferencedFile {
-            path: artifact_path.to_string(),
-        })
-        .match_value(format!("{service_name}: {}", render_env_file(env_file)))
-        .reason("docker-compose service loads environment files that may contain secrets")
-        .build(),
-    )
-}
-
-pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
+/// Parse the docker-compose YAML body and call `visit` once per service
+/// mapping. Silent on parse failure: callers that need to surface
+/// invalid YAML (such as [`analyze_docker_compose`]) should call
+/// [`detectors::parse_compose_yaml`] directly. Callers that only care
+/// about well-formed manifests (capabilities, relations) use this
+/// helper to avoid restating the parse + `services` lookup +
+/// per-service destructure boilerplate.
+fn with_compose_services<F: FnMut(&str, &serde_yaml::Mapping)>(content: &str, mut visit: F) {
     let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
-        return Vec::new();
+        return;
     };
-
-    let mut capabilities = Vec::new();
     let Some(services) = yaml.get("services").and_then(serde_yaml::Value::as_mapping) else {
-        return capabilities;
+        return;
     };
+    for_each_service(services, |service_name, mapping| {
+        visit(service_name, mapping);
+    });
+}
 
-    for (_, service) in services {
+/// Iterate the entries of an already-resolved `services` mapping,
+/// skipping entries whose value is not a mapping.
+fn for_each_service<F: FnMut(&str, &serde_yaml::Mapping)>(
+    services: &serde_yaml::Mapping,
+    mut visit: F,
+) {
+    for (raw_name, service) in services {
+        let service_name = raw_name.as_str().unwrap_or("unknown");
         let Some(mapping) = service.as_mapping() else {
             continue;
         };
+        visit(service_name, mapping);
+    }
+}
 
+pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
+    let mut capabilities: Vec<ArtifactCapabilityFact> = Vec::new();
+
+    with_compose_services(content, |_, mapping| {
         if mapping
             .get(serde_yaml::Value::String("privileged".to_string()))
             .and_then(serde_yaml::Value::as_bool)
@@ -270,14 +104,16 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
             .get(serde_yaml::Value::String("volumes".to_string()))
             .and_then(serde_yaml::Value::as_sequence)
         {
-            if volumes
-                .iter()
-                .any(|volume| volume.as_str().is_some_and(is_sensitive_host_volume))
-                && !capabilities.iter().any(|fact| {
-                    fact.capability == ArtifactCapability::HostFilesystemAccess
-                        && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
-                })
-            {
+            // Pre-fix this called `volume.as_str()` directly, missing
+            // long-syntax bind mounts; route through
+            // `volume_entry_string` so both shapes raise the
+            // capability consistently with the finding pass.
+            if volumes.iter().any(|volume| {
+                volume_entry_string(volume).is_some_and(|v| is_sensitive_host_volume(&v))
+            }) && !capabilities.iter().any(|fact| {
+                fact.capability == ArtifactCapability::HostFilesystemAccess
+                    && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
+            }) {
                 capabilities.push(ArtifactOrchestratorService::declared_capability(
                     ArtifactCapability::HostFilesystemAccess,
                 ));
@@ -322,23 +158,14 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
                 ArtifactCapability::ProcessExecution,
             ));
         }
-    }
+    });
 
     capabilities
 }
 
 pub(crate) fn docker_compose_relations(content: &str) -> Vec<ArtifactLink> {
-    let mut links = Vec::new();
-    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
-        return links;
-    };
-    let Some(services) = yaml.get("services").and_then(serde_yaml::Value::as_mapping) else {
-        return links;
-    };
-    for (_, service) in services {
-        let Some(mapping) = service.as_mapping() else {
-            continue;
-        };
+    let mut links: Vec<ArtifactLink> = Vec::new();
+    with_compose_services(content, |_, mapping| {
         if let Some(image) = mapping
             .get(serde_yaml::Value::String("image".to_string()))
             .and_then(serde_yaml::Value::as_str)
@@ -374,7 +201,7 @@ pub(crate) fn docker_compose_relations(content: &str) -> Vec<ArtifactLink> {
                 relation: ArtifactRelation::Executes,
             });
         }
-    }
+    });
     links
 }
 
@@ -551,6 +378,132 @@ mod tests {
         assert!(
             !finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE"),
             "valid YAML must not produce a parse-failure finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: the long-syntax bind mount MUST raise
+    /// `MANIFEST_DOCKER_COMPOSE_HOST_MOUNT` when its `source` is the
+    /// docker socket. Pre-fix `detect_host_volumes` filtered with
+    /// `Value::as_str`, silently skipping every long-syntax entry, so
+    /// an attacker could mount the host control plane via
+    /// `{type: bind, source: /var/run/docker.sock, target: ...}` and
+    /// bypass the finding entirely.
+    #[test]
+    fn analyze_docker_compose_detects_long_syntax_docker_socket_mount() {
+        let yaml = "\
+services:
+  app:
+    image: nginx
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(
+            finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT"),
+            "long-syntax docker-socket bind mount must fire HOST_MOUNT; got {findings:?}",
+        );
+    }
+
+    /// Contract: the long-syntax fix is mirrored on the capability
+    /// pass — `HostFilesystemAccess` and `FilesystemWrite` MUST both
+    /// escalate when a long-syntax bind mount targets a sensitive host
+    /// path. Pins both halves of the pre-fix bypass: not only did the
+    /// finding go missing, but the verdict pipeline also lost the
+    /// capability that drives blast-radius scoring.
+    #[test]
+    fn docker_compose_capabilities_detect_long_syntax_etc_mount() {
+        let yaml = "\
+services:
+  app:
+    image: nginx
+    volumes:
+      - type: bind
+        source: /etc
+        target: /host-etc
+";
+        let caps = docker_compose_capabilities(yaml);
+        assert!(
+            capability_present(&caps, ArtifactCapability::HostFilesystemAccess),
+            "long-syntax /etc bind mount must escalate HostFilesystemAccess; got {caps:?}",
+        );
+        assert!(
+            capability_present(&caps, ArtifactCapability::FilesystemWrite),
+            "long-syntax /etc bind mount must escalate FilesystemWrite; got {caps:?}",
+        );
+    }
+
+    /// Contract: long-syntax `type: volume` is a named docker volume,
+    /// NOT a host bind, and MUST NOT escalate `HostFilesystemAccess`
+    /// even when `source` happens to look like a host path. Pins the
+    /// negative half of the bug-1 fix so a future refactor can't widen
+    /// the classifier into named volumes.
+    #[test]
+    fn docker_compose_capabilities_skip_long_syntax_named_volume() {
+        let yaml = "\
+services:
+  app:
+    image: nginx
+    volumes:
+      - type: volume
+        source: db-data
+        target: /var/lib/db
+";
+        let caps = docker_compose_capabilities(yaml);
+        assert!(
+            !capability_present(&caps, ArtifactCapability::HostFilesystemAccess),
+            "named volume must not escalate HostFilesystemAccess; got {caps:?}",
+        );
+    }
+
+    /// Contract: a project-relative bind mount whose destination merely
+    /// *starts* with `host` (e.g. `:/hostname`) is NOT a host alias and
+    /// MUST NOT raise `MANIFEST_DOCKER_COMPOSE_HOST_MOUNT`. Pre-fix the
+    /// destination check was a `volume.contains(":/host")` substring
+    /// match, falsely classifying every legitimate `:/host*` mount as
+    /// sensitive.
+    #[test]
+    fn analyze_docker_compose_skips_host_alias_lookalike_destinations() {
+        let yaml = "\
+services:
+  app:
+    image: nginx
+    volumes:
+      - \"./data:/hostname\"
+      - \"./data:/host-backup\"
+      - \"./data:/hostpath\"
+";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(
+            !finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT"),
+            "`/host*` look-alike destinations on relative sources must not fire HOST_MOUNT; got {findings:?}",
+        );
+        let caps = docker_compose_capabilities(yaml);
+        assert!(
+            !capability_present(&caps, ArtifactCapability::HostFilesystemAccess),
+            "`/host*` look-alike destinations must not escalate HostFilesystemAccess; got {caps:?}",
+        );
+    }
+
+    /// Contract: the actual `:/host` alias still fires (positive
+    /// regression guard for the bounded destination check).
+    #[test]
+    fn analyze_docker_compose_detects_exact_host_alias_destination() {
+        let yaml = "\
+services:
+  app:
+    image: nginx
+    volumes:
+      - \"./data:/host:ro\"
+";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(
+            finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT"),
+            "exact `:/host` alias must still fire HOST_MOUNT; got {findings:?}",
         );
     }
 }

@@ -43,4 +43,39 @@ mod tests {
             "requests.get('http://service.internal/token')"
         ));
     }
+
+    /// Contract: IPv6 loopback (`::1`, `[::1]`) and IPv4-mapped IPv6
+    /// (`::ffff:127.0.0.1`, `[::ffff:169.254.169.254]`) MUST trigger
+    /// the same internal-action / SSRF detection as their IPv4
+    /// equivalents. Pre-fix the patterns listed only IPv4 forms, so a
+    /// script could swap its localhost or IMDS target into IPv6 form
+    /// (`http://[::1]/`, `http://[::ffff:169.254.169.254]/latest/...`)
+    /// and bypass detection while reaching the same sinks on a
+    /// dual-stack client.
+    #[test]
+    fn detect_internal_actions_covers_ipv6_loopback_and_ipv4_mapped() {
+        assert!(contains_internal_network_action(
+            "curl http://[::1]:8080/healthz"
+        ));
+        assert!(contains_internal_network_action(
+            "fetch('http://[::ffff:169.254.169.254]/latest/meta-data/iam/')"
+        ));
+        // Bare host form (no brackets) — appears in proxy-config strings.
+        assert!(contains_internal_network_action(
+            "POST ::1 with credentials"
+        ));
+    }
+
+    #[test]
+    fn detect_ssrf_like_fetches_covers_ipv6_loopback_and_ipv4_mapped() {
+        assert!(contains_ssrf_like_fetch_line(
+            "requests.get('http://[::1]:8080/admin')"
+        ));
+        assert!(contains_ssrf_like_fetch_line(
+            "axios.get('http://[::ffff:169.254.169.254]/latest/meta-data/')"
+        ));
+        assert!(contains_ssrf_like_fetch_line(
+            "httpx.get('http://[::ffff:10.0.0.1]/internal')"
+        ));
+    }
 }

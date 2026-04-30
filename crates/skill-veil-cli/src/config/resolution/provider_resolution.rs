@@ -66,7 +66,17 @@ fn build_provider_configs(
 ) -> Result<BTreeMap<LlmProviderKind, ProviderParams>> {
     let mut provider_configs: BTreeMap<LlmProviderKind, ProviderParams> = BTreeMap::new();
     for (name, params) in file_sections {
-        let kind = LlmProviderKind::from_str_ci(name).expect("validated by caller");
+        // Invariant: `validate_provider_section_keys` runs first in
+        // `resolve_llm`, so every key here parses to a known provider. Skip
+        // defensively rather than panic if a future refactor reorders the
+        // calls — the validator still owns the user-visible error path.
+        let Some(kind) = LlmProviderKind::from_str_ci(name) else {
+            debug_assert!(
+                false,
+                "build_provider_configs called without prior validate_provider_section_keys: {name}"
+            );
+            continue;
+        };
         if let Some(raw_url) = params.base_url.as_deref() {
             validate_provider_base_url(kind, raw_url)?;
         }

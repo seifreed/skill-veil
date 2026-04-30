@@ -2,3 +2,4 @@
 
 pub(crate) mod cache_io;
 pub(crate) mod secure_fs;
+pub(crate) mod terminal_safe;

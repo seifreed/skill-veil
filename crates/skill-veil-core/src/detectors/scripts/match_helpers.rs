@@ -40,7 +40,7 @@ pub(super) fn original_match_str(original: &str, lower: &str, matched: &PatternM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::pattern_helpers::try_compile;
+    use crate::patterns::try_compile;
 
     /// # Contract
     /// `original_match_str` must remain panic-free when ASCII-lowercase

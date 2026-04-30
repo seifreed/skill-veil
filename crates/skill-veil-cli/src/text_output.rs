@@ -6,6 +6,7 @@ use crate::color::ColorMode;
 
 mod diff;
 mod formats;
+mod limits;
 mod text;
 
 pub(crate) use diff::{format_diff_ci_summary, format_diff_text};

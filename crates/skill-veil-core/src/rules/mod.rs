@@ -7,13 +7,24 @@
 //! # Example
 //!
 //! ```
-//! use skill_veil_core::rules::RuleEngine;
+//! use skill_veil_core::rules::{default_external_rule_dirs, RuleEngine};
 //! use skill_veil_core::analyzer::SkillDocument;
-//! use skill_veil_core::adapters::PulldownMarkdownParser;
+//! use skill_veil_core::adapters::{
+//!     PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider,
+//! };
 //! use std::path::PathBuf;
+//! use std::sync::Arc;
 //!
-//! // Create a rule engine with default built-in rules
-//! let engine = RuleEngine::with_defaults().unwrap();
+//! // Compose adapters at the application boundary, then hand them to the
+//! // domain layer through the injected ports.
+//! let fs = StdFileSystemProvider::new();
+//! let runtime_dirs = default_external_rule_dirs();
+//! let engine = RuleEngine::with_defaults_and_matcher(
+//!     Arc::new(RegexPatternMatcher::new()),
+//!     &fs,
+//!     &runtime_dirs,
+//! )
+//! .unwrap();
 //! assert!(engine.rule_count() > 0);
 //!
 //! // Parse a skill document
@@ -35,8 +46,7 @@ mod ioc;
 mod parser;
 mod schema;
 
-use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
-use crate::ports::{FileSystemError, FileSystemProvider, PatternMatcher};
+use crate::ports::{FileSystemError, FileSystemProvider, MarkdownParser, PatternMatcher};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -103,13 +113,23 @@ pub enum RuleError {
 /// # Example
 ///
 /// ```
-/// use skill_veil_core::rules::RuleEngine;
+/// use skill_veil_core::rules::{default_external_rule_dirs, RuleEngine};
+/// use skill_veil_core::adapters::{RegexPatternMatcher, StdFileSystemProvider};
+/// use std::sync::Arc;
 ///
-/// // Create with default rules
-/// let engine = RuleEngine::with_defaults().unwrap();
+/// // Compose adapters at the application boundary; the engine receives
+/// // them through the injected ports.
+/// let fs = StdFileSystemProvider::new();
+/// let runtime_dirs = default_external_rule_dirs();
+/// let engine = RuleEngine::with_defaults_and_matcher(
+///     Arc::new(RegexPatternMatcher::new()),
+///     &fs,
+///     &runtime_dirs,
+/// )
+/// .unwrap();
 /// assert!(engine.rule_count() > 0);
 /// ```
-pub struct RuleEngine<M: PatternMatcher = RegexPatternMatcher> {
+pub struct RuleEngine<M: PatternMatcher> {
     rules: Vec<CompiledRule>,
     rules_dir: Option<std::path::PathBuf>,
     matcher: Arc<M>,
@@ -142,56 +162,6 @@ pub struct RuleEngine<M: PatternMatcher = RegexPatternMatcher> {
     strict_mode: bool,
 }
 
-impl RuleEngine<RegexPatternMatcher> {
-    /// Create a new empty rule engine with the default `RegexPatternMatcher`.
-    ///
-    /// The engine starts with no rules loaded. Use [`add_rule`], [`load_rules_file`],
-    /// or [`load_from_dir`] to add rules, or use [`with_defaults`] to start with
-    /// built-in rules.
-    ///
-    /// [`add_rule`]: RuleEngine::add_rule
-    /// [`load_rules_file`]: RuleEngine::load_rules_file
-    /// [`load_from_dir`]: RuleEngine::load_from_dir
-    /// [`with_defaults`]: RuleEngine::with_defaults
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            rules: Vec::new(),
-            rules_dir: None,
-            matcher: Arc::new(RegexPatternMatcher::new()),
-            strict_mode: true,
-        }
-    }
-
-    /// Create a rule engine with default rules and default `RegexPatternMatcher`.
-    ///
-    /// This is the recommended way to create a rule engine for most use cases.
-    /// It loads all built-in rules that detect common security patterns.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use skill_veil_core::rules::RuleEngine;
-    ///
-    /// let engine = RuleEngine::with_defaults().unwrap();
-    /// assert!(engine.rule_count() > 0);
-    /// ```
-    /// # Load order contract
-    ///
-    /// Builtin rules MUST be loaded BEFORE runtime defaults (`rules/official/`).
-    /// Non-strict mode silently skips duplicates, so inverting the order would
-    /// cause the canonical embedded ruleset to be discarded whenever the dev
-    /// directory `rules/official/` exists with overlapping IDs. Tests in
-    /// `tests::with_defaults_loads_full_builtin_set` guard this contract.
-    #[must_use = "RuleEngine::with_defaults() returns a Result that should be used"]
-    pub fn with_defaults() -> Result<Self, RuleError> {
-        let mut engine = Self::new();
-        engine.load_builtin_rules()?;
-        engine.load_runtime_default_rules()?;
-        Ok(engine)
-    }
-}
-
 impl<M: PatternMatcher> RuleEngine<M> {
     /// Create a new rule engine with a custom pattern matcher.
     #[must_use]
@@ -211,17 +181,31 @@ impl<M: PatternMatcher> RuleEngine<M> {
         self.strict_mode = strict;
     }
 
-    /// Create a rule engine with default rules and a custom pattern matcher.
+    /// Create a rule engine with built-in rules plus an optional runtime
+    /// overlay loaded through the injected `FileSystemProvider`.
+    ///
     /// # Load order contract
     ///
-    /// Same contract as `with_defaults`: builtin rules first, runtime
-    /// overrides second. The non-strict duplicate-skip means inverting the
-    /// order silently discards canonical detections.
+    /// Built-in rules are loaded first, runtime overrides second. The
+    /// non-strict duplicate-skip means inverting the order would silently
+    /// discard canonical detections.
+    ///
+    /// # Hexagonal boundary
+    ///
+    /// `runtime_overlay_fs` and `runtime_overlay_dirs` are injected so the
+    /// domain layer never instantiates a concrete adapter. Production
+    /// callers compose them in the application layer (typically
+    /// `Scanner::with_std_adapters`) by pairing `StdFileSystemProvider`
+    /// with `default_external_rule_dirs()`.
     #[must_use = "RuleEngine::with_defaults_and_matcher() returns a Result that should be used"]
-    pub fn with_defaults_and_matcher(matcher: Arc<M>) -> Result<Self, RuleError> {
+    pub fn with_defaults_and_matcher<F: FileSystemProvider>(
+        matcher: Arc<M>,
+        runtime_overlay_fs: &F,
+        runtime_overlay_dirs: &[std::path::PathBuf],
+    ) -> Result<Self, RuleError> {
         let mut engine = Self::with_matcher(matcher);
         engine.load_builtin_rules()?;
-        engine.load_runtime_default_rules()?;
+        engine.load_runtime_default_rules(runtime_overlay_fs, runtime_overlay_dirs)?;
         Ok(engine)
     }
 
@@ -362,16 +346,21 @@ impl<M: PatternMatcher> RuleEngine<M> {
     }
 
     /// Test a rule against sample content.
+    ///
+    /// The caller injects the `MarkdownParser` adapter so the domain layer
+    /// stays free of concrete adapter dependencies. Production callers in
+    /// the CLI pass `&PulldownMarkdownParser::new()`; tests pass whichever
+    /// parser their fixture exercises.
     pub fn test_rule(
         &self,
         rule_id: &str,
         content: &str,
+        parser: &dyn MarkdownParser,
     ) -> Result<Vec<crate::findings::Finding>, RuleError> {
-        let parser = PulldownMarkdownParser::new();
         let doc = crate::analyzer::SkillDocument::parse_with_parser(
             std::path::PathBuf::from("test.md"),
             content.to_string(),
-            &parser,
+            parser,
         )
         .map_err(|e| RuleError::InvalidRule(e.to_string()))?;
 
@@ -385,46 +374,66 @@ impl<M: PatternMatcher> RuleEngine<M> {
         Ok(findings)
     }
 
-    /// Load `rules/official/` overlays from the current working directory.
+    /// Load runtime overlay rule directories through the injected
+    /// `FileSystemProvider`. Each directory is loaded only if it exists;
+    /// non-existent paths are skipped silently so callers can pass a
+    /// canonical list (`default_external_rule_dirs()`) regardless of
+    /// whether the overlay is present in the current working directory.
     ///
-    /// The runtime overlay is a *development* copy of the embedded packs at
-    /// `crates/skill-veil-core/resources/official/`. When the binary runs from
-    /// the repo root (CI, `cargo run`, local dev) the overlay paths happen to
-    /// resolve and re-introduce IDs already loaded from the embedded packs.
-    /// Strict mode would surface those overlaps as `DuplicateUserRule` and
-    /// abort startup. The intent of the runtime overlay is "skip duplicates;
-    /// the embedded canonical version wins" (see `with_defaults` doc-comment),
-    /// so we run this stage with strict mode forced off and restore the
+    /// # Why strict mode is forced off
+    ///
+    /// The runtime overlay is a *development* copy of the embedded packs
+    /// at `crates/skill-veil-core/resources/official/`. When the binary
+    /// runs from the repo root (CI, `cargo run`, local dev) the overlay
+    /// paths happen to resolve and re-introduce IDs already loaded from
+    /// the embedded packs. Strict mode would surface those overlaps as
+    /// `DuplicateUserRule` and abort startup. The intent of the overlay
+    /// is "skip duplicates; the embedded canonical version wins", so we
+    /// run this stage with strict mode forced off and restore the
     /// caller's preference afterwards. Callers passing `--rules-dir` go
     /// through `load_from_dir` directly and keep whatever strict setting
     /// `set_strict_mode` last applied.
-    fn load_runtime_default_rules(&mut self) -> Result<bool, RuleError> {
-        let mut loaded = false;
-        let prev_strict = std::mem::replace(&mut self.strict_mode, false);
-        // Runtime defaults always read from the real filesystem (the
-        // `rules/official/` overlay shipped beside the binary). Pinning
-        // the std adapter here keeps `with_defaults_and_matcher` callable
-        // without forcing every consumer to thread an `&FileSystemProvider`
-        // through their constructor.
-        let fs = StdFileSystemProvider::new();
-        let result: Result<(), RuleError> = (|| {
-            for dir in default_external_rule_dirs() {
-                if dir.exists() {
-                    self.load_from_dir(&fs, &dir)?;
+    fn load_runtime_default_rules<F: FileSystemProvider>(
+        &mut self,
+        fs: &F,
+        dirs: &[std::path::PathBuf],
+    ) -> Result<bool, RuleError> {
+        self.with_strict_mode(false, |engine| {
+            let mut loaded = false;
+            for dir in dirs {
+                if fs.exists(dir) {
+                    engine.load_from_dir(fs, dir)?;
                     loaded = true;
                 }
             }
-            Ok(())
-        })();
-        self.strict_mode = prev_strict;
-        result?;
-        Ok(loaded)
+            Ok(loaded)
+        })
     }
-}
 
-impl Default for RuleEngine<RegexPatternMatcher> {
-    fn default() -> Self {
-        Self::new()
+    /// Run `f` with `self.strict_mode` temporarily set to `temporary`,
+    /// restoring the previous value before returning. The closure receives
+    /// `&mut self` so it can call existing `&mut self` methods that consult
+    /// `strict_mode` (e.g. `load_from_dir` → `add_rule`) and observe the
+    /// override.
+    ///
+    /// # Why a helper instead of inline mutation
+    ///
+    /// The previous implementation inlined `std::mem::replace` plus a
+    /// post-loop restore in the caller. Co-locating the override window
+    /// here makes the contract a named operation ("run this block with
+    /// `strict=false`") instead of an open-coded mutation pattern, in
+    /// keeping with the CLAUDE.md guidance to prefer explicit inputs
+    /// over hidden state. The restore happens on both success and error
+    /// paths, mirroring the previous behaviour.
+    fn with_strict_mode<R>(
+        &mut self,
+        temporary: bool,
+        f: impl FnOnce(&mut Self) -> Result<R, RuleError>,
+    ) -> Result<R, RuleError> {
+        let previous = std::mem::replace(&mut self.strict_mode, temporary);
+        let result = f(self);
+        self.strict_mode = previous;
+        result
     }
 }
 

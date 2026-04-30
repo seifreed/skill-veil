@@ -1,5 +1,14 @@
 use skill_veil_core::{BenchmarkHistory, CorpusEvaluation, Verdict};
 
+/// Top-N families with the weakest exact-label accuracy shown under
+/// "Families needing tuning". The same cap is used by both the markdown
+/// dashboard and the plain-text benchmark report so they stay aligned.
+const MAX_DISPLAY_WEAKEST_FAMILIES: usize = 4;
+
+/// Top-N signal-pair calibration buckets surfaced under "Strongest
+/// Signal Pairs" in the dashboard.
+const MAX_DISPLAY_SIGNAL_PAIRS: usize = 8;
+
 pub fn render_benchmark_dashboard(
     history: &BenchmarkHistory,
     evaluation: &CorpusEvaluation,
@@ -112,7 +121,7 @@ pub fn render_benchmark_dashboard(
                 })
         });
         output.push_str("### Families Needing Tuning\n\n");
-        for family in weakest_families.iter().take(4) {
+        for family in weakest_families.iter().take(MAX_DISPLAY_WEAKEST_FAMILIES) {
             output.push_str(&format!(
                 "- `{}`: exact_label={:.2} fpr={:.2} thresholds={}→{}\n",
                 family.family,
@@ -147,7 +156,7 @@ pub fn render_benchmark_dashboard(
             .confidence_calibration
             .by_signal_pair
             .iter()
-            .take(8)
+            .take(MAX_DISPLAY_SIGNAL_PAIRS)
         {
             output.push_str(&format!(
                 "- `{}`: findings={} observed_precision={:.2} recommended_confidence={:.2}\n",
@@ -253,21 +262,18 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
 
 pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
     let mut output = String::new();
-    let benign = evaluation
-        .samples
-        .iter()
-        .filter(|sample| sample.verdict == Verdict::Benign)
-        .count();
-    let suspicious = evaluation
-        .samples
-        .iter()
-        .filter(|sample| sample.verdict == Verdict::Suspicious)
-        .count();
-    let malicious = evaluation
-        .samples
-        .iter()
-        .filter(|sample| sample.verdict == Verdict::Malicious)
-        .count();
+    output.push_str("--- Benchmark ---\n");
+    append_overview_section(&mut output, evaluation);
+    append_coverage_buckets(&mut output, evaluation);
+    append_family_metrics(&mut output, evaluation);
+    append_dedup_line(&mut output, evaluation);
+    output
+}
+
+fn append_overview_section(output: &mut String, evaluation: &CorpusEvaluation) {
+    let benign = count_samples(evaluation, Verdict::Benign);
+    let suspicious = count_samples(evaluation, Verdict::Suspicious);
+    let malicious = count_samples(evaluation, Verdict::Malicious);
     let primary_findings: usize = evaluation
         .samples
         .iter()
@@ -278,7 +284,6 @@ pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
         .iter()
         .map(|sample| sample.supporting_finding_count)
         .sum();
-    output.push_str("--- Benchmark ---\n");
     output.push_str(&format!(
         "Precision: {:.2}\nRecall: {:.2}\nFalse positive rate: {:.2}\nAccuracy: {:.2}\nExact label accuracy: {:.2}\nVerdicts: benign={} suspicious={} malicious={}\nScope findings: primary={} supporting={}\nTP: {} FP: {} TN: {} FN: {}\n",
         evaluation.metrics.precision,
@@ -297,6 +302,17 @@ pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
         evaluation.metrics.false_negative
     ));
     output.push_str(&format!("Samples: {}\n", evaluation.coverage.total_samples));
+}
+
+fn count_samples(evaluation: &CorpusEvaluation, verdict: Verdict) -> usize {
+    evaluation
+        .samples
+        .iter()
+        .filter(|sample| sample.verdict == verdict)
+        .count()
+}
+
+fn append_coverage_buckets(output: &mut String, evaluation: &CorpusEvaluation) {
     for (title, buckets) in [
         ("Coverage by label", &evaluation.coverage.by_label),
         (
@@ -308,57 +324,62 @@ pub fn format_benchmark_text(evaluation: &CorpusEvaluation) -> String {
             &evaluation.coverage.by_attack_family,
         ),
     ] {
-        if !buckets.is_empty() {
-            output.push_str(&format!("{title}:\n"));
-            for bucket in buckets {
-                output.push_str(&format!("  - {}={}\n", bucket.key, bucket.samples));
-            }
+        if buckets.is_empty() {
+            continue;
+        }
+        output.push_str(&format!("{title}:\n"));
+        for bucket in buckets {
+            output.push_str(&format!("  - {}={}\n", bucket.key, bucket.samples));
         }
     }
-    if !evaluation.family_metrics.is_empty() {
-        output.push_str("Family metrics:\n");
-        for family in &evaluation.family_metrics {
-            output.push_str(&format!(
-                "  - {}: samples={} precision={:.2} recall={:.2} fpr={:.2} exact_label={:.2} thresholds={}→{}\n",
-                family.family,
-                family.sample_count,
-                family.metrics.precision,
-                family.metrics.recall,
-                family.metrics.false_positive_rate,
-                family.metrics.exact_label_accuracy,
-                family.threshold_recommendation.recommended_approval_threshold,
-                family.threshold_recommendation.recommended_block_threshold,
-            ));
-        }
-        let mut weakest_families = evaluation.family_metrics.clone();
-        weakest_families.sort_by(|left, right| {
-            left.metrics
-                .exact_label_accuracy
-                .partial_cmp(&right.metrics.exact_label_accuracy)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| {
-                    right
-                        .metrics
-                        .false_positive_rate
-                        .partial_cmp(&left.metrics.false_positive_rate)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-        });
-        output.push_str("Families needing tuning:\n");
-        for family in weakest_families.iter().take(4) {
-            output.push_str(&format!(
-                "  - {}: exact_label={:.2} fpr={:.2}\n",
-                family.family,
-                family.metrics.exact_label_accuracy,
-                family.metrics.false_positive_rate
-            ));
-        }
+}
+
+fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
+    if evaluation.family_metrics.is_empty() {
+        return;
     }
+    output.push_str("Family metrics:\n");
+    for family in &evaluation.family_metrics {
+        output.push_str(&format!(
+            "  - {}: samples={} precision={:.2} recall={:.2} fpr={:.2} exact_label={:.2} thresholds={}→{}\n",
+            family.family,
+            family.sample_count,
+            family.metrics.precision,
+            family.metrics.recall,
+            family.metrics.false_positive_rate,
+            family.metrics.exact_label_accuracy,
+            family.threshold_recommendation.recommended_approval_threshold,
+            family.threshold_recommendation.recommended_block_threshold,
+        ));
+    }
+    let mut weakest_families = evaluation.family_metrics.clone();
+    weakest_families.sort_by(|left, right| {
+        left.metrics
+            .exact_label_accuracy
+            .partial_cmp(&right.metrics.exact_label_accuracy)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                right
+                    .metrics
+                    .false_positive_rate
+                    .partial_cmp(&left.metrics.false_positive_rate)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    });
+    output.push_str("Families needing tuning:\n");
+    for family in weakest_families.iter().take(MAX_DISPLAY_WEAKEST_FAMILIES) {
+        output.push_str(&format!(
+            "  - {}: exact_label={:.2} fpr={:.2}\n",
+            family.family, family.metrics.exact_label_accuracy, family.metrics.false_positive_rate
+        ));
+    }
+}
+
+fn append_dedup_line(output: &mut String, evaluation: &CorpusEvaluation) {
     output.push_str(&format!(
         "Deduplication: original={} unique={} removed={}\n",
         evaluation.deduplication.original_findings,
         evaluation.deduplication.unique_findings,
         evaluation.deduplication.duplicates_removed
     ));
-    output
 }

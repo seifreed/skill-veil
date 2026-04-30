@@ -1,6 +1,6 @@
-use crate::adapters::pattern_helpers::compile_patterns;
 use crate::lazy_pattern;
 use crate::path_safety::path_stays_within_base;
+use crate::patterns::compile_patterns;
 use crate::ports::CompiledPattern;
 use std::path::{Path, PathBuf};
 

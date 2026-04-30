@@ -5,9 +5,12 @@ use crate::{
     color::ColorMode,
 };
 use anyhow::{Context, Result};
-use skill_veil_core::{ScanOptions, ScanTargetMode, Scanner, StdFileSystemProvider};
+use skill_veil_core::{
+    RegexPatternMatcher, ScanOptions, ScanTargetMode, Scanner, StdFileSystemProvider,
+};
 use std::io::IsTerminal;
 use std::path::Path;
+use std::sync::Arc;
 
 mod cache;
 mod llm;
@@ -33,8 +36,11 @@ const FINDING_LIMIT_ENTERPRISE: std::num::NonZeroUsize = match std::num::NonZero
     None => panic!("FINDING_LIMIT_ENTERPRISE must be non-zero"),
 };
 
-pub(crate) fn load_rule_engine_from_dir(rules_dir: &Path) -> Result<skill_veil_core::RuleEngine> {
-    let mut engine = skill_veil_core::RuleEngine::new();
+pub(crate) fn load_rule_engine_from_dir(
+    rules_dir: &Path,
+) -> Result<skill_veil_core::RuleEngine<RegexPatternMatcher>> {
+    let mut engine =
+        skill_veil_core::RuleEngine::with_matcher(Arc::new(RegexPatternMatcher::new()));
     let fs = StdFileSystemProvider::new();
     engine
         .load_from_dir(&fs, rules_dir)

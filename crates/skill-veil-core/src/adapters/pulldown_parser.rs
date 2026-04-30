@@ -156,8 +156,14 @@ fn code_block_language(kind: &pulldown_cmark::CodeBlockKind<'_>) -> Option<Strin
 mod tests {
     use super::*;
 
+    /// # Contract
+    /// `parse_sections` MUST emit one [`Section`] per heading (including
+    /// the document's H1 title) in document order, with each section's
+    /// fenced code blocks captured under [`Section::code_blocks`] and
+    /// section names lowercased. The whole rule pipeline keys off these
+    /// invariants — losing any of them silently breaks `match_targets`.
     #[test]
-    fn test_parse_simple_markdown() {
+    fn parse_sections_emits_lowercased_sections_with_code_blocks() {
         let parser = PulldownMarkdownParser::new();
         let content = r#"# My Skill
 
@@ -179,19 +185,25 @@ echo "hello"
         assert_eq!(sections[2].code_blocks[0].language.as_deref(), Some("bash"));
     }
 
+    /// # Contract
+    /// Empty input MUST return an empty `Vec<Section>`, not an error.
+    /// Callers (`SkillDocument::parse_*`) rely on this so a brand-new
+    /// skill template with only frontmatter or whitespace is still
+    /// scannable instead of producing a parser error.
     #[test]
-    fn test_parse_empty_content() {
+    fn parse_sections_returns_empty_vec_for_empty_input() {
         let parser = PulldownMarkdownParser::new();
         let sections = parser.parse_sections("").unwrap();
         assert!(sections.is_empty());
     }
 
-    /// Contract: a code-fence with an UPPERCASE language tag (`Python`)
-    /// is normalized to lowercase at the parser boundary, mirroring the
+    /// # Contract
+    /// A code-fence with an UPPERCASE language tag (`Python`) MUST be
+    /// normalized to lowercase at the parser boundary, mirroring the
     /// section-name convention. Without this, `has_code_language("python")`
     /// would silently miss skills that use `Python` / `PYTHON` fences.
     #[test]
-    fn test_parse_lowercases_uppercase_fence_language() {
+    fn parse_sections_lowercases_uppercase_fence_language() {
         let parser = PulldownMarkdownParser::new();
         let content = "## Setup\n```Python\nprint('hi')\n```\n";
         let sections = parser.parse_sections(content).unwrap();
@@ -199,9 +211,12 @@ echo "hello"
         assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
     }
 
-    /// Contract: SCREAMING_CASE fence langs also normalize.
+    /// # Contract
+    /// SCREAMING_CASE fence languages MUST normalize the same way as
+    /// title-case ones — the lowercasing is unconditional, not a
+    /// case-by-case heuristic.
     #[test]
-    fn test_parse_lowercases_screaming_fence_language() {
+    fn parse_sections_lowercases_screaming_fence_language() {
         let parser = PulldownMarkdownParser::new();
         let content = "## Setup\n```PYTHON\nprint('hi')\n```\n";
         let sections = parser.parse_sections(content).unwrap();
@@ -209,11 +224,12 @@ echo "hello"
         assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
     }
 
-    /// Contract: lowercase fence langs are unchanged (no-op case anchored
+    /// # Contract
+    /// Lowercase fence languages are unchanged (no-op case anchored
     /// alongside the normalization tests so a future "preserve casing"
     /// regression is caught).
     #[test]
-    fn test_parse_preserves_lowercase_fence_language() {
+    fn parse_sections_preserves_lowercase_fence_language() {
         let parser = PulldownMarkdownParser::new();
         let content = "## Setup\n```python\nprint('hi')\n```\n";
         let sections = parser.parse_sections(content).unwrap();
@@ -221,11 +237,13 @@ echo "hello"
         assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
     }
 
-    /// Contract: a fence with no language tag still produces `None`, not
-    /// an empty-string `Some("")`. Pins existing behavior under the new
-    /// lowercase guard.
+    /// # Contract
+    /// A fence with no language tag MUST still produce `None`, not an
+    /// empty-string `Some("")`. Pins existing behavior under the
+    /// lowercase guard above so an `is_some()` check downstream stays
+    /// equivalent to "fence had an explicit language".
     #[test]
-    fn test_parse_preserves_empty_fence_as_none() {
+    fn parse_sections_preserves_empty_fence_as_none() {
         let parser = PulldownMarkdownParser::new();
         let content = "## Setup\n```\nprint('hi')\n```\n";
         let sections = parser.parse_sections(content).unwrap();

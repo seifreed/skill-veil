@@ -1,7 +1,9 @@
 //! Benchmark and corpus evaluation helpers.
 
+mod calibration;
 mod evaluation;
 mod loader;
+mod thresholds;
 mod types;
 
 pub use evaluation::{classify_verdict, compute_metrics, evaluate_corpus};

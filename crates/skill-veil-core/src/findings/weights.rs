@@ -94,6 +94,22 @@ pub const SIGNAL_WEIGHT_MALICIOUS: f32 = 1.0;
 /// Dampening factor for generic review signals.
 pub const SIGNAL_WEIGHT_REVIEW: f32 = 0.5;
 
+// Confidence calibration blend coefficients. The calibrated confidence is
+// `raw * RAW_WEIGHT + baseline * BASELINE_WEIGHT`, then clamped to
+// [`CONFIDENCE_FLOOR`, `CONFIDENCE_CEILING`]. Weights MUST sum to 1.0; the
+// 70/30 split keeps the rule's authored confidence dominant while letting the
+// per-axis baseline pull weak signals up and saturate near-deterministic
+// evidence at the ceiling. Floor/ceiling avoid 0.0/1.0 since downstream
+// log-odds math relies on a strictly positive, sub-unit value.
+/// Weight applied to the rule-authored raw confidence in the blend.
+pub const CONFIDENCE_RAW_WEIGHT: f32 = 0.7;
+/// Weight applied to the per-axis baseline (evidence + category mean) in the blend.
+pub const CONFIDENCE_BASELINE_WEIGHT: f32 = 0.3;
+/// Lower clamp for calibrated confidence; keeps log-odds math finite.
+pub const CONFIDENCE_FLOOR: f32 = 0.1;
+/// Upper clamp for calibrated confidence; keeps log-odds math finite.
+pub const CONFIDENCE_CEILING: f32 = 0.99;
+
 // Confidence calibration baselines for evidence kinds
 /// Baseline confidence for IOC-backed findings.
 pub const EVIDENCE_BASELINE_IOC: f32 = 0.98;

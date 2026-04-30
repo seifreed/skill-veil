@@ -36,11 +36,40 @@ pub(crate) fn build_agent(timeout_secs: u64) -> ureq::Agent {
         .build()
 }
 
+/// Cap on the bytes from a provider error body that we keep for embedding
+/// in `LlmError::HttpStatus { body }`. Provider gateways commonly return
+/// multi-kilobyte HTML pages on 5xx, and a hostile MITM can return
+/// arbitrarily large bodies. Anything beyond this point is truncation noise
+/// for operator diagnostics, so we drop it before it reaches `tracing::warn`
+/// log aggregators or operator terminals.
+const ERROR_BODY_MAX_BYTES: usize = 512;
+
+/// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
+/// UTF-8 char boundary, appending `"...[truncated]"` when shortened. Lets
+/// the producer (`drain_error_body`) cap once at construction so every
+/// downstream consumer (`tracing::warn!`, `eprintln!`, structured-output
+/// formatters) inherits the bound for free.
+fn truncate_error_body(body: String) -> String {
+    if body.len() <= ERROR_BODY_MAX_BYTES {
+        return body;
+    }
+    let mut end = ERROR_BODY_MAX_BYTES;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(end + 14);
+    out.push_str(&body[..end]);
+    out.push_str("...[truncated]");
+    out
+}
+
 /// Drains an HTTP error response into a string for diagnostic reporting.
 ///
 /// # Contract
 ///
-/// Returns whatever bytes the provider sent in the body, even partial. If
+/// Returns whatever bytes the provider sent in the body, even partial,
+/// truncated to [`ERROR_BODY_MAX_BYTES`] so a hostile or misbehaving gateway
+/// cannot push multi-kilobyte HTML/script payloads into operator logs. If
 /// reading the body itself fails (transport error mid-stream, encoding
 /// issue), emits a `tracing::warn` describing the I/O error and returns an
 /// empty string. The pre-fix code used `unwrap_or_default()`, which silently
@@ -50,7 +79,7 @@ pub(crate) fn build_agent(timeout_secs: u64) -> ureq::Agent {
 /// was missing. The warning preserves that context.
 fn drain_error_body(status: u16, resp: ureq::Response) -> String {
     match resp.into_string() {
-        Ok(body) => body,
+        Ok(body) => truncate_error_body(body),
         Err(err) => {
             tracing::warn!(
                 "LLM provider returned HTTP {} but the response body could not be read: {}",
@@ -185,5 +214,53 @@ mod tests {
             .expect("synthetic response must parse");
         let body = drain_error_body(502, resp);
         assert_eq!(body, "failure-text");
+    }
+
+    /// Contract: a body shorter than [`ERROR_BODY_MAX_BYTES`] is preserved
+    /// verbatim. Pins the no-truncate branch so the cap doesn't silently
+    /// shorten ordinary error messages.
+    #[test]
+    fn truncate_error_body_keeps_short_payloads_intact() {
+        let body = "transient gateway timeout".to_string();
+        assert_eq!(truncate_error_body(body.clone()), body);
+    }
+
+    /// Contract: a body longer than [`ERROR_BODY_MAX_BYTES`] is truncated
+    /// and tagged with a visible suffix so log readers know the message
+    /// was shortened. Pre-fix `LlmError::HttpStatus` embedded the full
+    /// body uncapped, which let a hostile or misbehaving gateway push
+    /// multi-kilobyte HTML/script payloads into operator logs.
+    #[test]
+    fn truncate_error_body_caps_long_payloads_with_suffix() {
+        let huge = "X".repeat(ERROR_BODY_MAX_BYTES * 4);
+        let truncated = truncate_error_body(huge);
+        assert!(
+            truncated.len() <= ERROR_BODY_MAX_BYTES + "...[truncated]".len(),
+            "truncated body must be capped, got len={}",
+            truncated.len()
+        );
+        assert!(
+            truncated.ends_with("...[truncated]"),
+            "truncated body must carry the suffix; got tail: {:?}",
+            &truncated[truncated.len().saturating_sub(20)..]
+        );
+    }
+
+    /// Contract: truncation never splits a multi-byte UTF-8 character.
+    /// `is_char_boundary` walk-back guards against `String` slicing
+    /// panicking when `ERROR_BODY_MAX_BYTES` lands inside a codepoint —
+    /// pin that the result is valid UTF-8 (as `String` always is) and
+    /// the suffix is intact for a body whose cut point falls in the
+    /// middle of a multi-byte char.
+    #[test]
+    fn truncate_error_body_respects_utf8_char_boundary() {
+        let mut body = "a".repeat(ERROR_BODY_MAX_BYTES - 1);
+        body.push('é'); // 2 bytes — straddles ERROR_BODY_MAX_BYTES if cut naively
+        body.push_str(&"b".repeat(64));
+        let truncated = truncate_error_body(body);
+        assert!(
+            truncated.ends_with("...[truncated]"),
+            "must still emit the suffix when truncating"
+        );
     }
 }

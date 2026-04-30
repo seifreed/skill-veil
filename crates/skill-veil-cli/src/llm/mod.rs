@@ -11,6 +11,7 @@
 //! - OpenAI — `https://api.openai.com/v1`
 //! - Anthropic — `https://api.anthropic.com/v1`
 
+pub(crate) mod cache;
 pub(crate) mod client;
 pub(crate) mod enrich;
 pub(crate) mod prompt;

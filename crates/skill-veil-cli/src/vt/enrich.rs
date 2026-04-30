@@ -43,6 +43,11 @@ use std::thread::sleep;
 use std::time::Duration as StdDuration;
 
 use super::REQUEST_DELAY_MS;
+
+/// Maximum characters retained from a `submit_url_for_scan` response when
+/// stored as `EnrichmentStatus::Submitted::response_excerpt`. Bounds cache
+/// growth while leaving enough room to identify the VT analysis ID.
+const VT_RESPONSE_EXCERPT_MAX_CHARS: usize = 240;
 const FILE_CACHE_TTL_DAYS: i64 = 90;
 const DOMAIN_CACHE_TTL_DAYS: i64 = 7;
 const IP_CACHE_TTL_DAYS: i64 = 7;
@@ -171,7 +176,8 @@ pub(crate) fn enrich_iocs(
     }
 
     for domain in &iocs.domains {
-        let cache_path = cache_file_path(&opts.cache_root, "domains", domain);
+        let key = sha256_of_str(domain);
+        let cache_path = cache_file_path(&opts.cache_root, "domains", &key);
         if let Some(fresh) = load_fresh(&cache_path, Duration::days(DOMAIN_CACHE_TTL_DAYS))? {
             out.domains.push(fresh);
             continue;
@@ -182,7 +188,15 @@ pub(crate) fn enrich_iocs(
     }
 
     for ip in iocs.ipv4.iter().chain(iocs.ipv6.iter()) {
-        let cache_path = cache_file_path(&opts.cache_root, "ips", ip);
+        // IPv6 addresses contain `:` separators that `cache_file_path` folds
+        // to `_`, which can collide distinct addresses (e.g. `::1` vs `0:1`)
+        // onto the same cache file. Hash the canonical-form string with
+        // SHA-256 first so the on-disk key is collision-resistant, mirroring
+        // the URL path. The directory still segregates by kind so an
+        // operator inspecting the cache can tell ips from domains at a
+        // glance even if individual entries are no longer human-readable.
+        let key = sha256_of_str(ip);
+        let cache_path = cache_file_path(&opts.cache_root, "ips", &key);
         if let Some(fresh) = load_fresh(&cache_path, Duration::days(IP_CACHE_TTL_DAYS))? {
             out.ips.push(fresh);
             continue;
@@ -268,7 +282,10 @@ fn lookup_url(
                         cache_path: cache_path.to_path_buf(),
                         fetched_at: Utc::now(),
                         status: EnrichmentStatus::Submitted {
-                            response_excerpt: response.chars().take(240).collect(),
+                            response_excerpt: response
+                                .chars()
+                                .take(VT_RESPONSE_EXCERPT_MAX_CHARS)
+                                .collect(),
                         },
                         summary: None,
                     },
@@ -427,6 +444,44 @@ mod tests {
         let p = cache_file_path(Path::new("/tmp/x"), "urls", "https://foo.bar/path?q=1");
         assert!(p.to_string_lossy().contains("urls"));
         assert!(!p.to_string_lossy().contains("//"));
+    }
+
+    /// Contract: distinct IPv6 addresses MUST resolve to distinct cache
+    /// keys. Pre-fix the IP enrichment loop fed the raw address string into
+    /// `cache_file_path`, which folds `:` (and other non-alphanumeric
+    /// separators) to `_`, so distinct addresses sharing the same
+    /// alphanumeric segments collapsed onto the same cache file. The fix
+    /// hashes IP/domain keys with SHA-256 like the URL path already did.
+    #[test]
+    fn distinct_ipv6_addresses_hash_to_distinct_cache_keys() {
+        let a = sha256_of_str("::1");
+        let b = sha256_of_str("0:0:0:0:0:0:0:1");
+        let c = sha256_of_str("2001:db8::1");
+        let d = sha256_of_str("2001:db8:0:0:0:0:0:1");
+        assert_ne!(a, b, "::1 and 0:0:0:0:0:0:0:1 must hash distinctly");
+        assert_ne!(
+            c, d,
+            "compressed and uncompressed IPv6 must hash distinctly"
+        );
+        // Sanity: cache_file_path on a SHA-256 hex string produces a
+        // filesystem-safe filename (alphanumeric only, with `.json`).
+        let path_a = cache_file_path(Path::new("/tmp/x"), "ips", &a);
+        assert!(path_a.to_string_lossy().ends_with(".json"));
+        assert!(!path_a.to_string_lossy().contains("__"));
+    }
+
+    /// Contract: distinct domains MUST also hash to distinct cache keys.
+    /// Domains with `_` (RFC-1035 disallows it but DNS in the wild
+    /// permits it for service records) and `-` would otherwise be folded
+    /// onto each other by the lossy substitution.
+    #[test]
+    fn distinct_domains_hash_to_distinct_cache_keys() {
+        let a = sha256_of_str("example.com");
+        let b = sha256_of_str("example_com");
+        let c = sha256_of_str("evil.example.com");
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
     }
 
     #[test]

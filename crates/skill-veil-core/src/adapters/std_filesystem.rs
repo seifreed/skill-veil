@@ -5,6 +5,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use super::walk_helpers::{is_skipped_dir, lossy_filename_with_warning};
+
 /// File system provider implementation using the standard library
 #[derive(Debug, Default, Clone)]
 pub struct StdFileSystemProvider;
@@ -242,48 +244,19 @@ impl FileSystemProvider for StdFileSystemProvider {
     }
 }
 
-/// Filter helper: prune a directory subtree if its name matches one of
-/// `skip_dirs`. Mirrors the exclusion list used by file-discovery so
-/// the walker doesn't pay for vendored / generated trees on adversarial
-/// inputs.
-fn is_skipped_dir(entry: &walkdir::DirEntry, skip_dirs: &[&str]) -> bool {
-    if !entry.file_type().is_dir() {
-        return false;
-    }
-    entry
-        .file_name()
-        .to_str()
-        .is_some_and(|name| skip_dirs.contains(&name))
-}
-
-/// Match the entry's filename against the discovery pattern using a
-/// lossy `&str` view of its `OsStr`. Emits a `tracing::warn!` whenever
-/// the filename is not valid UTF-8 so operators can spot evasion
-/// attempts. Returning `Cow::Borrowed` for the common UTF-8 case keeps
-/// the hot path allocation-free.
-fn lossy_filename_with_warning<'a>(
-    filename: &'a std::ffi::OsStr,
-    full_path: &Path,
-) -> std::borrow::Cow<'a, str> {
-    match filename.to_str() {
-        Some(s) => std::borrow::Cow::Borrowed(s),
-        None => {
-            tracing::warn!(
-                "non-UTF-8 filename in {}; matched with lossy conversion (possible evasion attempt in untrusted package)",
-                full_path.display(),
-            );
-            filename.to_string_lossy()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// # Contract
+    /// `read_file_bytes` MUST return the file's raw bytes via the
+    /// [`FileContent`] wrapper without re-encoding or normalising line
+    /// endings. The hexagonal contract makes this the only way the core
+    /// reads bytes — any silent transformation would leak into every
+    /// downstream pattern match.
     #[test]
-    fn test_read_file() {
+    fn read_file_bytes_returns_raw_contents_through_port() {
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello world").unwrap();
@@ -293,18 +266,29 @@ mod tests {
         assert_eq!(content.as_bytes(), b"hello world");
     }
 
+    /// # Contract (negative)
+    /// A missing path MUST surface as
+    /// [`FileSystemError::PathNotFound`], not as a generic
+    /// [`FileSystemError::IoError`] or a panic. Callers (the scanner,
+    /// rule loaders, dataset preparation) discriminate on this variant
+    /// to decide between "skip and continue" and "abort the run".
     #[test]
-    fn test_read_nonexistent_file() {
+    fn read_file_bytes_returns_path_not_found_for_missing_path() {
         let fs = StdFileSystemProvider::new();
         let result = fs.read_file_bytes(Path::new("/nonexistent/path/file.txt"));
         assert!(matches!(result, Err(FileSystemError::PathNotFound(_))));
     }
 
+    /// # Contract
+    /// Non-recursive `list_files` MUST honour the glob pattern AND stay
+    /// within the supplied directory — a sibling directory's matches do
+    /// not leak in. This is the load-bearing invariant for skill
+    /// discovery, which lists the package root non-recursively to find
+    /// `SKILL.md` without walking vendored subtrees.
     #[test]
-    fn test_list_files_non_recursive() {
+    fn list_files_non_recursive_filters_by_glob_and_stays_in_dir() {
         let dir = TempDir::new().unwrap();
 
-        // Create test files
         std::fs::write(dir.path().join("test1.md"), "").unwrap();
         std::fs::write(dir.path().join("test2.md"), "").unwrap();
         std::fs::write(dir.path().join("test.txt"), "").unwrap();
@@ -316,8 +300,14 @@ mod tests {
         assert!(files.iter().all(|f| f.extension().unwrap() == "md"));
     }
 
+    /// # Contract
+    /// Recursive `list_files` MUST descend into subdirectories and apply
+    /// the glob to filenames at every depth. Discovery for "find every
+    /// `SKILL.md` in this package" relies on this; if recursion silently
+    /// stopped at the root, supporting artifacts in subdirectories would
+    /// never enter the scan graph.
     #[test]
-    fn test_list_files_recursive() {
+    fn list_files_recursive_descends_into_subdirectories() {
         let dir = TempDir::new().unwrap();
         let subdir = dir.path().join("subdir");
         std::fs::create_dir(&subdir).unwrap();
@@ -331,8 +321,13 @@ mod tests {
         assert_eq!(files.len(), 2);
     }
 
+    /// # Contract
+    /// `exists` MUST report `true` only for paths the OS resolves to a
+    /// real entry, and never panic on a non-existent path. The scanner
+    /// uses this as its cheap pre-flight before opening referenced
+    /// artifacts.
     #[test]
-    fn test_exists() {
+    fn exists_returns_true_only_for_real_paths() {
         let dir = TempDir::new().unwrap();
         let file_path = dir.path().join("exists.txt");
         std::fs::write(&file_path, "").unwrap();
@@ -342,8 +337,13 @@ mod tests {
         assert!(!fs.exists(&dir.path().join("does_not_exist.txt")));
     }
 
+    /// # Contract
+    /// `matches_pattern` MUST recognise the canonical glob shapes
+    /// (`*.ext`, `*`, `prefix*`) and reject mismatches. These are the
+    /// shapes the rule loader and discovery service emit — a silent
+    /// failure here breaks discovery without producing an error.
     #[test]
-    fn test_pattern_matching() {
+    fn matches_pattern_handles_canonical_glob_shapes() {
         assert!(StdFileSystemProvider::matches_pattern("test.md", "*.md"));
         assert!(StdFileSystemProvider::matches_pattern("test.md", "*"));
         assert!(StdFileSystemProvider::matches_pattern("test.md", "test*"));

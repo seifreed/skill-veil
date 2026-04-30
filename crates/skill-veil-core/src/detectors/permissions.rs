@@ -1,3 +1,77 @@
+use crate::findings::{
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+};
+
+/// Permission-rule count above which an artifact crosses into
+/// `SCOPE_OVERPROVISIONING`. Three is the empirical knee where benign
+/// "I declare browser + network + file write" overlaps with malicious
+/// over-provisioning patterns from the corpus; raising it lets
+/// over-broad declarations slip through, lowering it floods the verdict
+/// with hygiene-grade noise.
+pub(crate) const BROAD_PERMISSION_THRESHOLD: usize = 3;
+
+/// Emit `SCOPE_OVERPROVISIONING` when an artifact declares at least
+/// [`BROAD_PERMISSION_THRESHOLD`] distinct permission scopes. The check
+/// is purely on the count of declared rule kinds — the per-rule
+/// findings are emitted separately by the orchestration layer.
+pub(crate) fn over_provisioning_finding(
+    permission_rules: &[(&str, &str, &str)],
+    artifact_path: &str,
+    artifact_kind: ArtifactKind,
+) -> Option<Finding> {
+    (permission_rules.len() >= BROAD_PERMISSION_THRESHOLD).then(|| {
+        Finding::builder("SCOPE_OVERPROVISIONING", ThreatCategory::ScopeCreep)
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(artifact_kind, Some(artifact_path.to_string()))
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("broad declared permissions")
+            .reason("Artifact declares broad permissions or scopes relative to its apparent task")
+            .build()
+    })
+}
+
+/// Emit `CAPABILITY_PERMISSION_MISMATCH` when an artifact's declared
+/// intent is narrow but its declared permissions include one of the
+/// dangerous capability triggers (full browser, file write, shell exec).
+/// Mismatched intent vs. capability scope is the canonical "trojan
+/// helper" pattern — a tool that *says* it does one small thing but
+/// asks for broad authority.
+pub(crate) fn capability_permission_mismatch_finding(
+    permission_rules: &[(&str, &str, &str)],
+    content: &str,
+    artifact_path: &str,
+    artifact_kind: ArtifactKind,
+) -> Option<Finding> {
+    let (intent_kind, intent_strength) = infer_declared_intent(content);
+    let has_dangerous_permission_combo = permission_rules.iter().any(|(rule_id, _, _)| {
+        matches!(
+            *rule_id,
+            "DECLARED_PERMISSION_BROWSER_FULL"
+                | "DECLARED_PERMISSION_FILE_WRITE"
+                | "DECLARED_PERMISSION_SHELL_EXEC"
+        )
+    });
+    (intent_kind == "narrow" && intent_strength > 0 && has_dangerous_permission_combo).then(|| {
+        Finding::builder("CAPABILITY_PERMISSION_MISMATCH", ThreatCategory::ScopeCreep)
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Intent)
+            .artifact(artifact_kind, Some(artifact_path.to_string()))
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("narrow intent with broad capability request")
+            .reason(
+                "Artifact intent appears narrower than the capabilities or permissions it requests",
+            )
+            .build()
+    })
+}
+
 /// Build a context excerpt around any line that hints at permission or
 /// capability declarations.
 ///
@@ -142,12 +216,7 @@ pub(crate) fn explicit_declared_permission_rules(
             "Artifact declares file modification or deletion capability",
         ));
     }
-    if context.contains("shell")
-        || context.contains("terminal command")
-        || context.contains("run command")
-        || context.contains("execute command")
-        || context.contains("stdio")
-    {
+    if has_shell_exec_signal(&context) {
         rules.push((
             "DECLARED_PERMISSION_SHELL_EXEC",
             "shell exec",
@@ -178,13 +247,7 @@ pub(crate) fn explicit_declared_permission_rules(
             "Artifact declares access to secrets, tokens, or credentials",
         ));
     }
-    if context.contains("oauth")
-        || context.contains("scope")
-        || context.contains("calendar")
-        || context.contains("drive")
-        || context.contains("slack")
-        || context.contains("read/write")
-    {
+    if has_oauth_scope_signal(&context) {
         rules.push((
             "DECLARED_PERMISSION_OAUTH_SCOPES",
             "oauth scopes",
@@ -193,6 +256,67 @@ pub(crate) fn explicit_declared_permission_rules(
     }
 
     rules
+}
+
+/// Whether a permission-context buffer carries a real shell/exec
+/// declaration.
+///
+/// Pre-fix the trigger included `context.contains("shell")` as a bare
+/// substring, which fired on benign English prose: `"seashell"`,
+/// `"eggshell"`, `"in a nutshell"`, or `"Unlike a conventional shell
+/// script, this does not …"`. False positives here flow into both the
+/// per-rule finding and the cross-rule
+/// `CAPABILITY_PERMISSION_MISMATCH` / `SCOPE_OVERPROVISIONING`
+/// aggregates, so a single chatty sentence could push an artifact into
+/// `RequireApproval`.
+///
+/// The replacement requires either:
+///
+/// - a specific shell-execution phrase (`"shell exec"`, `"shell
+///   access"`, `"shell command"`, `"shell script"`, `"run shell"`,
+///   `"spawn shell"`, `"system shell"`, `"open shell"`, `"opens a
+///   shell"`, `"shell: true"`), or
+/// - one of the unambiguous non-`shell` synonyms that already shipped
+///   pre-fix (`"terminal command"`, `"run command"`, `"execute
+///   command"`, `"stdio"`).
+fn has_shell_exec_signal(context: &str) -> bool {
+    const SHELL_PHRASES: &[&str] = &[
+        "shell exec",
+        "shell access",
+        "shell command",
+        "shell script",
+        "run shell",
+        "spawn shell",
+        "system shell",
+        "open shell",
+        "opens a shell",
+        "shell: true",
+        "terminal command",
+        "run command",
+        "execute command",
+        "stdio",
+    ];
+    SHELL_PHRASES.iter().any(|phrase| context.contains(phrase))
+}
+
+/// Whether a permission-context buffer carries a real OAuth-scope or
+/// broad SaaS-permission declaration.
+///
+/// Pre-fix the trigger included `context.contains("scope")` as a bare
+/// substring, which fired on common prose: `"the scope of this tool"`,
+/// `"in scope"`, `"out of scope"`. Combined with two other declared
+/// rules this could escalate to `SCOPE_OVERPROVISIONING` on benign
+/// content. The new rule keeps the unambiguous SaaS triggers
+/// (`"oauth"`, `"calendar"`, `"drive"`, `"slack"`, `"read/write"`)
+/// and replaces bare `"scope"` with `"oauth scope"` (which also
+/// matches `"oauth scopes"`).
+fn has_oauth_scope_signal(context: &str) -> bool {
+    context.contains("oauth")
+        || context.contains("oauth scope")
+        || context.contains("calendar")
+        || context.contains("drive")
+        || context.contains("slack")
+        || context.contains("read/write")
 }
 
 #[cfg(test)]
@@ -249,6 +373,126 @@ mod tests {
         assert_eq!(
             occurrences, 1,
             "Overlapping window line must appear exactly once; buffer:\n{ctx}"
+        );
+    }
+
+    /// Contract: `has_shell_exec_signal` MUST NOT fire on common English
+    /// prose that incidentally contains the four bytes `shell`. Pre-fix
+    /// the substring trigger fired on `"seashell"`, `"eggshell"`, `"in a
+    /// nutshell"`, and `"shell script"` discussions even when the
+    /// artifact never asked for shell execution. The false positives
+    /// then propagated into `CAPABILITY_PERMISSION_MISMATCH` and
+    /// `SCOPE_OVERPROVISIONING`, pushing benign artifacts toward
+    /// `RequireApproval`.
+    #[test]
+    fn shell_exec_signal_does_not_fire_on_prose_lookalikes() {
+        let benign = [
+            "permissions: read seashells from the corpus",
+            "capabilities include eggshell calcium analysis",
+            "in a nutshell, this tool inspects logs",
+            "permission to summarise without a shell",
+            "* permissions: eggshell-thin error margins",
+        ];
+        for sample in benign {
+            assert!(
+                !has_shell_exec_signal(&sample.to_ascii_lowercase()),
+                "must NOT classify benign prose as shell-exec: {sample:?}"
+            );
+        }
+    }
+
+    /// Contract: `has_shell_exec_signal` MUST fire when an artifact
+    /// genuinely declares shell or command execution. Pin the canonical
+    /// declaration phrases so a future tightening doesn't silently lose
+    /// the positive signal.
+    #[test]
+    fn shell_exec_signal_fires_on_genuine_declarations() {
+        let positive = [
+            "- permissions: shell exec",
+            "capabilities: shell access on the host",
+            "- run shell commands as the agent",
+            "permissions: shell: true",
+            "capabilities: terminal command execution",
+            "- run command on the operator's machine",
+            "executes commands via stdio",
+        ];
+        for sample in positive {
+            assert!(
+                has_shell_exec_signal(&sample.to_ascii_lowercase()),
+                "must classify genuine declaration as shell-exec: {sample:?}"
+            );
+        }
+    }
+
+    /// Contract: `has_oauth_scope_signal` MUST NOT fire on common
+    /// English prose that uses `"scope"` in its everyday sense. Pre-fix
+    /// the substring trigger fired on `"in scope"`, `"out of scope"`,
+    /// `"the scope of this task"`, and would emit
+    /// `DECLARED_PERMISSION_OAUTH_SCOPES`. Combined with two other
+    /// declared rules this crossed `SCOPE_OVERPROVISIONING`'s threshold
+    /// from a single benign sentence.
+    #[test]
+    fn oauth_scope_signal_does_not_fire_on_prose_lookalikes() {
+        let benign = [
+            "this tool's scope is limited to read-only inspection",
+            "tasks that fall out of scope go to the human",
+            "the scope of work here is well-defined",
+            "permissions: in scope for review",
+        ];
+        for sample in benign {
+            assert!(
+                !has_oauth_scope_signal(&sample.to_ascii_lowercase()),
+                "must NOT classify benign prose as oauth-scopes: {sample:?}"
+            );
+        }
+    }
+
+    /// Contract: `has_oauth_scope_signal` MUST fire on genuine OAuth /
+    /// SaaS-permission declarations. Pin the unambiguous triggers that
+    /// shipped pre-fix so a future tightening of the heuristic does not
+    /// silently lose them.
+    #[test]
+    fn oauth_scope_signal_fires_on_genuine_declarations() {
+        let positive = [
+            "- permissions: oauth tokens",
+            "capabilities: oauth scope spreadsheets.readonly",
+            "permissions: calendar.read",
+            "capabilities: drive.file write",
+            "permissions: slack messages.write",
+            "capabilities: read/write to the user's vault",
+        ];
+        for sample in positive {
+            assert!(
+                has_oauth_scope_signal(&sample.to_ascii_lowercase()),
+                "must classify genuine declaration as oauth-scopes: {sample:?}"
+            );
+        }
+    }
+
+    /// End-to-end pin: the public `explicit_declared_permission_rules`
+    /// MUST NOT emit either `DECLARED_PERMISSION_SHELL_EXEC` or
+    /// `DECLARED_PERMISSION_OAUTH_SCOPES` on prose that uses `"shell"`
+    /// or `"scope"` only in their everyday English sense. Three such
+    /// false positives pre-fix would have crossed
+    /// `SCOPE_OVERPROVISIONING`'s threshold from a single benign block.
+    #[test]
+    fn explicit_declared_permission_rules_does_not_misclassify_benign_prose() {
+        let benign = "\
+# Capabilities
+
+- This tool's scope is limited to read-only inspection.
+- In a nutshell, no shell or browser access required.
+- Permissions: nothing more than reading the file index.
+";
+        let rules = explicit_declared_permission_rules(benign);
+        let ids: Vec<&str> = rules.iter().map(|(id, _, _)| *id).collect();
+        assert!(
+            !ids.contains(&"DECLARED_PERMISSION_SHELL_EXEC"),
+            "benign prose MUST NOT trigger SHELL_EXEC; got rules={ids:?}"
+        );
+        assert!(
+            !ids.contains(&"DECLARED_PERMISSION_OAUTH_SCOPES"),
+            "benign prose MUST NOT trigger OAUTH_SCOPES; got rules={ids:?}"
         );
     }
 }

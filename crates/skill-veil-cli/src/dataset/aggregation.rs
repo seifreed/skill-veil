@@ -4,6 +4,11 @@ use skill_veil_core::{
 };
 use std::collections::BTreeMap;
 
+/// Cap on the number of root-cause `(category/signal_class)` pairs surfaced
+/// per artifact scope inside a dataset summary. Three is enough to capture
+/// the dominant story while keeping the rendered table compact.
+const MAX_TOP_ROOT_CAUSE_GROUPS_PER_SCOPE: usize = 3;
+
 pub(super) fn aggregate_package_verdicts(
     entries: &[DatasetJsonEntry],
 ) -> Vec<DatasetPackageVerdictEntry> {
@@ -18,24 +23,26 @@ pub(super) fn aggregate_package_verdicts(
 
     let mut verdicts = Vec::new();
     for (key, group) in grouped {
-        let representative = group
-            .iter()
-            .max_by(|left, right| {
-                verdict_priority(&left.report.verdict)
-                    .cmp(&verdict_priority(&right.report.verdict))
-                    .then_with(|| {
-                        left.report
-                            .summary
-                            .risk_score
-                            .cmp(&right.report.summary.risk_score)
-                    })
-                    .then_with(|| {
-                        left.report
-                            .heuristic_score
-                            .cmp(&right.report.heuristic_score)
-                    })
-            })
-            .expect("group is not empty");
+        // `grouped.entry(...).or_default().push(entry)` above guarantees every
+        // group is non-empty, but iterate defensively so a future refactor that
+        // populates the map differently can never panic at runtime.
+        let Some(representative) = group.iter().max_by(|left, right| {
+            verdict_priority(&left.report.verdict)
+                .cmp(&verdict_priority(&right.report.verdict))
+                .then_with(|| {
+                    left.report
+                        .summary
+                        .risk_score
+                        .cmp(&right.report.summary.risk_score)
+                })
+                .then_with(|| {
+                    left.report
+                        .heuristic_score
+                        .cmp(&right.report.heuristic_score)
+                })
+        }) else {
+            continue;
+        };
 
         let final_verdict = group
             .iter()
@@ -189,5 +196,7 @@ fn summarize_scope(entries: &[&DatasetJsonEntry], scope: ArtifactScope) -> Vec<S
             }
         }
     }
-    seen.into_iter().take(3).collect()
+    seen.into_iter()
+        .take(MAX_TOP_ROOT_CAUSE_GROUPS_PER_SCOPE)
+        .collect()
 }

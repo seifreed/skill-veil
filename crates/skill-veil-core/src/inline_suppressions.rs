@@ -8,7 +8,23 @@ use std::path::Path;
 
 lazy_pattern!(
     STANDALONE_SUPPRESSION_REGEX,
-    r#"(?i)^\s*(?:(?:<!--|#|//|/\*+|\*|;|--)\s*(?:skill-veil:)?|skill-veil:)(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?"#
+    // The optional `skill-veil:` namespace prefix MUST be followed by
+    // optional whitespace before the directive kind. Pre-fix the
+    // pattern was `(?:skill-veil:)?(ignore...)` with no `\s*` between
+    // them, so the canonical user form `# skill-veil: ignore RULE_A`
+    // (with a space after the colon) silently failed to match — the
+    // suppression was simply discarded with no diagnostic, leaving the
+    // finding to fire as if the directive had never been written.
+    //
+    // The trailing `(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?`
+    // group mirrors `INLINE_SUPPRESSION_REGEX` so a standalone
+    // directive can carry the same `reason=...` payload as an inline
+    // one. Pre-fix the standalone regex had only two capture groups,
+    // so `capture.get(3)` in `add_suppressions_from_capture` always
+    // returned `None` for standalone directives — the reason was
+    // captured by the `{0,500}` cap on the inline branch but
+    // unconditionally dropped on the standalone branch.
+    r#"(?i)^\s*(?:(?:<!--|#|//|/\*+|\*|;|--)\s*(?:skill-veil:\s*)?|skill-veil:\s*)(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?"#
 );
 
 /// Maximum characters retained from the `reason=` / `because=` payload
@@ -25,7 +41,13 @@ const MAX_SUPPRESSION_REASON_CHARS: usize = 500;
 
 lazy_pattern!(
     INLINE_SUPPRESSION_REGEX,
-    r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?"#
+    // Mirrors the `skill-veil:\s*` whitespace fix in
+    // `STANDALONE_SUPPRESSION_REGEX`: `# skill-veil: ignore RULE_A`
+    // (with the canonical space after the namespace colon) was silently
+    // dropped on this branch too because `(?:skill-veil:)?` consumed
+    // `skill-veil:` and the kind capture then had to start on the
+    // following space character.
+    r#"(?i)(?:<!--|#|//|/\*+|;|--)\s*(?:skill-veil:\s*)?(ignore-next-line|ignore|nosemgrep-next-line|nosemgrep|nosem-next-line|nosem)\b(?:[:\s]+([A-Za-z0-9*_,.\-]+))?(?:\s+(?:because|reason)[:=]\s*([^#]{0,500}))?"#
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -414,6 +436,75 @@ mod tests {
             "reason MUST be capped at {} chars; got {}",
             MAX_SUPPRESSION_REASON_CHARS,
             reason.chars().count()
+        );
+    }
+
+    /// Contract: the canonical `# skill-veil: ignore RULE` form (with
+    /// a space after the namespace colon) MUST be recognised. Pre-fix
+    /// the standalone regex was `(?:skill-veil:)?(ignore...)` with no
+    /// `\s*` between them, so backtracking failed: with `skill-veil:`
+    /// consumed the next char was a space and the kind capture
+    /// couldn't match. The user's directive was silently dropped and
+    /// the underlying finding fired anyway. Pin every comment-marker
+    /// form a user is likely to write.
+    #[test]
+    fn standalone_namespaced_directive_with_space_after_colon_is_recognised() {
+        let path = std::path::PathBuf::from("/tmp/skill.md");
+        let cases: &[(&str, &str)] = &[
+            ("hash with skill-veil prefix", "# skill-veil: ignore RULE_A"),
+            (
+                "html with skill-veil prefix",
+                "<!-- skill-veil: ignore RULE_A -->",
+            ),
+            (
+                "slashes with skill-veil prefix",
+                "// skill-veil: ignore RULE_A",
+            ),
+            (
+                "semicolon with skill-veil prefix",
+                "; skill-veil: ignore RULE_A",
+            ),
+            ("hash without prefix (bare)", "# ignore RULE_A"),
+        ];
+        for (label, content) in cases {
+            // Standalone "ignore" without `next-line` targets the next
+            // significant line, so we add one for the directive to
+            // attach to.
+            let body = format!("{content}\nfoo bar baz\n");
+            let suppressions = collect_comment_suppressions(&path, &body);
+            assert!(
+                !suppressions.is_empty(),
+                "standalone form {label:?} ({content:?}) MUST be parsed; got 0 suppressions",
+            );
+            assert_eq!(
+                suppressions[0].rule_id, "RULE_A",
+                "rule_id MUST round-trip for {label:?}; got {:?}",
+                suppressions[0].rule_id,
+            );
+        }
+    }
+
+    /// Contract: a standalone directive may carry a `reason=` payload
+    /// like its inline counterpart. Pre-fix the standalone regex had
+    /// only two capture groups, so `capture.get(3)` always returned
+    /// `None` for standalone directives — the audit metadata the user
+    /// wrote was silently dropped from `SuppressionRecord.reason`.
+    #[test]
+    fn standalone_directive_captures_reason_payload() {
+        let path = std::path::PathBuf::from("/tmp/skill.md");
+        let body = "# skill-veil: ignore RULE_A reason=audited 2026-04-29\nfoo bar baz\n";
+        let suppressions = collect_comment_suppressions(&path, body);
+        assert_eq!(
+            suppressions.len(),
+            1,
+            "directive must parse; got {:?}",
+            suppressions,
+        );
+        assert_eq!(
+            suppressions[0].reason.as_deref(),
+            Some("audited 2026-04-29"),
+            "standalone reason MUST round-trip; got {:?}",
+            suppressions[0].reason,
         );
     }
 

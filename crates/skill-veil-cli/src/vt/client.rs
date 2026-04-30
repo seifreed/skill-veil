@@ -26,6 +26,29 @@ const INITIAL_BACKOFF_MS: u64 = 2_000;
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 60;
 const DOWNLOAD_HTTP_TIMEOUT_SECS: u64 = 300;
 
+/// Cap on the bytes from a VT error body that we keep for embedding in
+/// `VtError::HttpStatus { body }`. VT gateways return multi-kilobyte HTML
+/// pages on 5xx, and a hostile MITM can return arbitrarily large bodies.
+/// Anything beyond this point is truncation noise for operator diagnostics,
+/// so we drop it before it reaches log aggregators or operator terminals.
+const ERROR_BODY_MAX_BYTES: usize = 512;
+
+/// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
+/// UTF-8 char boundary, appending `"...[truncated]"` when shortened.
+fn truncate_error_body(body: String) -> String {
+    if body.len() <= ERROR_BODY_MAX_BYTES {
+        return body;
+    }
+    let mut end = ERROR_BODY_MAX_BYTES;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(end + 14);
+    out.push_str(&body[..end]);
+    out.push_str("...[truncated]");
+    out
+}
+
 /// Drain `resp` into a string for embedding in an error.
 ///
 /// Mirrors `crate::llm::client::drain_error_body`: pre-fix the call sites
@@ -33,10 +56,12 @@ const DOWNLOAD_HTTP_TIMEOUT_SECS: u64 = 300;
 /// errors and operators saw `VtError::HttpStatus { status, body: "" }`
 /// with no clue why the body was missing (gateway 502s, mid-stream
 /// disconnects). The warning preserves that diagnostic context while
-/// keeping the public error shape unchanged.
+/// keeping the public error shape unchanged. Bodies are truncated to
+/// [`ERROR_BODY_MAX_BYTES`] so a hostile gateway cannot push large blobs
+/// into operator logs.
 fn drain_error_body(status: u16, resp: ureq::Response) -> String {
     match resp.into_string() {
-        Ok(body) => body,
+        Ok(body) => truncate_error_body(body),
         Err(err) => {
             tracing::warn!(
                 "VT returned HTTP {} but the response body could not be read: {}",
@@ -234,28 +259,20 @@ impl VtClient {
     /// Submit a URL to VT for scanning. Returns the raw JSON response. This
     /// is the *only* method in the client that uploads data to VT and is
     /// gated behind the `--vt-submit-unknown` CLI flag.
+    ///
+    /// Goes through [`Self::post_form_with_retry`] so transient 429/5xx
+    /// responses get the same exponential-backoff treatment as the read
+    /// path (`request_with_retry`). Pre-fix this method issued a single
+    /// `send_string` and a 429 from VT's submission endpoint silently
+    /// failed, then got cached as `EnrichmentStatus::Error` for 5 minutes —
+    /// exactly the window when `--vt-submit-unknown` is most useful.
     pub(crate) fn submit_url_for_scan(&self, url: &str) -> Result<String, VtError> {
         let encoded: String = url::form_urlencoded::byte_serialize(url.as_bytes()).collect();
         let body = format!("url={encoded}");
-        let resp = self
-            .agent
-            .post(&format!("{BASE_URL}/urls"))
-            .set("x-apikey", &self.apikey)
-            .set("content-type", "application/x-www-form-urlencoded")
-            .send_string(&body);
-        match resp {
-            Ok(r) => {
-                let txt = r
-                    .into_string()
-                    .map_err(|e| VtError::Decode(e.to_string()))?;
-                Ok(txt)
-            }
-            Err(ureq::Error::Status(s, r)) => {
-                let body = drain_error_body(s, r);
-                Err(VtError::HttpStatus { status: s, body })
-            }
-            Err(ureq::Error::Transport(e)) => Err(VtError::Network(e.to_string())),
-        }
+        let endpoint = format!("{BASE_URL}/urls");
+        let resp = self.post_form_with_retry(&endpoint, &body)?;
+        resp.into_string()
+            .map_err(|e| VtError::Decode(e.to_string()))
     }
 
     /// Download the raw file bytes to `dest`. `dest`'s parent must already
@@ -363,6 +380,85 @@ impl VtClient {
             .into_string()
             .map_err(|err| VtError::Decode(err.to_string()))?;
         serde_json::from_str::<T>(&text).map_err(|err| VtError::Decode(err.to_string()))
+    }
+
+    /// POST a form-encoded body with retry semantics matching
+    /// [`Self::request_with_retry`]. Used by `submit_url_for_scan` so write
+    /// paths share the same 429/5xx exponential-backoff envelope as the
+    /// read paths instead of failing on the first transient error.
+    fn post_form_with_retry(&self, url: &str, body: &str) -> Result<ureq::Response, VtError> {
+        let mut attempt: u32 = 0;
+        loop {
+            let resp = self
+                .agent
+                .post(url)
+                .set("x-apikey", &self.apikey)
+                .set("content-type", "application/x-www-form-urlencoded")
+                .send_string(body);
+            match resp {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if !(200..300).contains(&status) {
+                        let drained = drain_error_body(status, resp);
+                        return Err(VtError::HttpStatus {
+                            status,
+                            body: drained,
+                        });
+                    }
+                    return Ok(resp);
+                }
+                Err(ureq::Error::Status(status, resp)) => {
+                    if status == 401 || status == 403 {
+                        return Err(VtError::Unauthorized);
+                    }
+                    let is_retryable = status == 429 || (500..600).contains(&status);
+                    if is_retryable {
+                        if attempt >= MAX_RETRIES {
+                            return if status == 429 {
+                                Err(VtError::RateLimited { retries: attempt })
+                            } else {
+                                let drained = drain_error_body(status, resp);
+                                Err(VtError::HttpStatus {
+                                    status,
+                                    body: drained,
+                                })
+                            };
+                        }
+                        let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                        tracing::warn!(
+                            "VT POST returned status {} (attempt {}/{}), sleeping {:?}",
+                            status,
+                            attempt + 1,
+                            MAX_RETRIES,
+                            delay
+                        );
+                        std::thread::sleep(delay);
+                        attempt += 1;
+                        continue;
+                    }
+                    let drained = drain_error_body(status, resp);
+                    return Err(VtError::HttpStatus {
+                        status,
+                        body: drained,
+                    });
+                }
+                Err(ureq::Error::Transport(err)) => {
+                    if attempt >= MAX_RETRIES {
+                        return Err(VtError::Network(err.to_string()));
+                    }
+                    let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                    tracing::warn!(
+                        "VT POST transport error {:?} (attempt {}/{}), sleeping {:?}",
+                        err,
+                        attempt + 1,
+                        MAX_RETRIES,
+                        delay
+                    );
+                    std::thread::sleep(delay);
+                    attempt += 1;
+                }
+            }
+        }
     }
 
     fn request_with_retry(
@@ -517,5 +613,43 @@ mod redirect_tests {
         );
 
         let _ = server.join();
+    }
+}
+
+#[cfg(test)]
+mod truncate_error_body_tests {
+    use super::*;
+
+    /// Contract: a body shorter than [`ERROR_BODY_MAX_BYTES`] is preserved
+    /// verbatim. Pins the no-truncate branch so the cap doesn't silently
+    /// shorten ordinary VT error messages (operator diagnostics need
+    /// the gateway's actual hint when it's already small).
+    #[test]
+    fn truncate_keeps_short_payloads_intact() {
+        let body = "VT quota exceeded for this hour".to_string();
+        assert_eq!(truncate_error_body(body.clone()), body);
+    }
+
+    /// Contract: a body longer than [`ERROR_BODY_MAX_BYTES`] is truncated
+    /// with a visible suffix. Pre-fix `VtError::HttpStatus` embedded the
+    /// full body uncapped, so an attacker-controlled MITM (or a VT gateway
+    /// outage page) could push multi-KB HTML into operator logs and
+    /// terminals. The cap is enforced at the producer (`drain_error_body`)
+    /// so every downstream consumer (`tracing::warn`, `eprintln!`,
+    /// structured-output formatters) inherits the bound.
+    #[test]
+    fn truncate_caps_long_payloads_with_suffix() {
+        let huge = "Y".repeat(ERROR_BODY_MAX_BYTES * 4);
+        let truncated = truncate_error_body(huge);
+        assert!(
+            truncated.len() <= ERROR_BODY_MAX_BYTES + "...[truncated]".len(),
+            "truncated body must be capped, got len={}",
+            truncated.len()
+        );
+        assert!(
+            truncated.ends_with("...[truncated]"),
+            "truncated body must carry the suffix; got tail: {:?}",
+            &truncated[truncated.len().saturating_sub(20)..]
+        );
     }
 }

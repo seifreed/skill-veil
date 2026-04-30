@@ -1,9 +1,13 @@
 use super::*;
 
-/// Ensure CALIBRATED_RULE_IDS stays in sync with the rules that
-/// calibration actually checks. Every rule referenced by
-/// `is_permission_model_rule` that has its own calibration branch,
-/// `is_mcp_no_auth_rule`, and directly named rules must appear.
+/// Contract: `CALIBRATED_RULE_IDS` is the single source of truth used by
+/// both the calibration pipeline AND the compound verdict detector in
+/// `verdict.rs` to guard against checking a calibrated rule's raw action.
+/// Adding a new branch to `calibrate_verdict_inputs` without registering
+/// the rule here lets the verdict detector treat the post-calibration
+/// finding as if calibration never ran. This test pins the round-trip:
+/// every calibration target appears in the constant, and every entry in
+/// the constant is a real calibration target.
 #[test]
 fn calibrated_rule_ids_covers_all_calibration_targets() {
     // Rules that have explicit calibration branches in calibrate_verdict_inputs
@@ -32,6 +36,13 @@ fn calibrated_rule_ids_covers_all_calibration_targets() {
     }
 }
 
+/// Contract: when a co-resident finding qualifies as "stronger behavior"
+/// (RequireApproval-or-stronger action, SuspiciousPackageBehavior /
+/// MaliciousBehavior class, NOT a permission-model rule), the Tier 1
+/// `DECLARED_PERMISSION_NETWORK_ACCESS` calibration gate STAYS CLOSED.
+/// The group must remain at its original action with no calibration note
+/// emitted — otherwise a real exfiltration co-resident with a benign
+/// network declaration would be silently downgraded.
 #[test]
 fn stronger_behavior_prevents_network_downgrade() {
     use crate::findings::{
@@ -91,6 +102,14 @@ fn stronger_behavior_prevents_network_downgrade() {
     );
 }
 
+/// Contract: an isolated `INTERNAL_NETWORK_ACCESS` finding (no network
+/// chain co-resident) MUST reclassify the surviving group's
+/// `signal_class` to `ReviewSignal`. Tier 3 sets `reclassify_signal =
+/// true` precisely so `verdict::predicates::is_isolated_weak_package_root_signal`
+/// recognises the finding as review-only and emits Benign.
+/// Without the reclassification, an isolated loopback hit would still
+/// present as `MaliciousBehavior` to verdict.rs, bypassing the Benign
+/// downgrade path Tier 3 was designed to enable.
 #[test]
 fn internal_network_reclassifies_to_review_signal() {
     use crate::findings::{
@@ -216,6 +235,12 @@ fn note_deduplication_keeps_per_group_notes() {
     assert!(categories.contains(&ThreatCategory::SupplyChain));
 }
 
+/// Contract: when a calibration rule fires on a group whose
+/// `strongest_action` is already `Log`, the emitted note must record
+/// `effect_unchanged` (`remains_context_only`), NOT `effect_downgraded`.
+/// Conflating the two would make the SHIELD audit trail claim a
+/// downgrade that never happened, which masks calibration regressions
+/// during a corpus rebaseline.
 #[test]
 fn effect_unchanged_when_action_already_at_minimum() {
     use crate::findings::{
@@ -258,6 +283,12 @@ fn effect_unchanged_when_action_already_at_minimum() {
     );
 }
 
+/// Contract: when calibration excludes every finding in a group, the
+/// post-calibration `finding_count` is 0 and the group MUST be pruned
+/// from `root_cause_groups`. Phantom groups with zero remaining findings
+/// inflate verdict-reason counts and surface confusing "0 finding(s)"
+/// entries in SHIELD output. The retain step in
+/// `calibrate_verdict_inputs` is what guards against that regression.
 #[test]
 fn calibration_updates_finding_count_when_excluding_rules() {
     use crate::findings::{
@@ -358,6 +389,12 @@ fn dedup_notes_preserves_per_group_distinctions() {
     assert!(scopes.contains(&ArtifactScope::PackageRootArtifact));
 }
 
+/// Contract: two notes that match on the FULL identity tuple
+/// `(scope, category, rule_id, effect, rationale)` MUST collapse to a
+/// single entry. This is the legitimate dedup path — without it, a rule
+/// that fires twice within the same group would emit duplicate audit
+/// entries in SHIELD output. The companion test
+/// `dedup_notes_preserves_per_group_distinctions` guards the inverse.
 #[test]
 fn dedup_notes_collapses_per_group_duplicates_within_same_group() {
     use crate::findings::{ArtifactScope, ThreatCategory, VerdictCalibrationNote};

@@ -1,7 +1,12 @@
 use skill_veil_core::{RecommendedAction, ScanResult};
 
+use super::limits::{
+    MAX_DISPLAY_NETWORK_TARGETS, MAX_DISPLAY_POLICY_TRIGGERS, MAX_DISPLAY_ROOT_CAUSE_GROUPS,
+    MAX_DISPLAY_TOP_FACTORS, MAX_DISPLAY_VERDICT_REASONS,
+};
 use super::TextOutputOptions;
 use crate::color::ColorMode;
+use crate::util::terminal_safe::sanitise_for_terminal;
 
 pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOptions) -> String {
     let mut output = String::new();
@@ -84,7 +89,12 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
     }
 
     output.push_str("  Why:\n");
-    for reason in result.verdict_report.verdict_reasons.iter().take(3) {
+    for reason in result
+        .verdict_report
+        .verdict_reasons
+        .iter()
+        .take(MAX_DISPLAY_VERDICT_REASONS)
+    {
         output.push_str(&format!(
             "    - {} / {} / {}: {}\n",
             reason.scope, reason.category, reason.signal_class, reason.rationale
@@ -93,7 +103,12 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
 
     if !result.verdict_report.root_cause_groups.is_empty() {
         output.push_str("  Root causes:\n");
-        for group in result.verdict_report.root_cause_groups.iter().take(3) {
+        for group in result
+            .verdict_report
+            .root_cause_groups
+            .iter()
+            .take(MAX_DISPLAY_ROOT_CAUSE_GROUPS)
+        {
             output.push_str(&format!(
                 "    - {} / {} / {} => {} finding(s), strongest action {}\n",
                 group.scope,
@@ -161,7 +176,7 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
                     .blast_radius_summary
                     .network_targets
                     .iter()
-                    .take(3)
+                    .take(MAX_DISPLAY_NETWORK_TARGETS)
                     .cloned()
                     .collect::<Vec<_>>()
                     .join(",")
@@ -193,27 +208,42 @@ fn append_findings_by_scope(
     append_scope_counts(output, result);
     output.push('\n');
 
+    // `finding_limit` is a per-package budget shared across the
+    // `primary` and `supporting` scopes. Pre-fix the same limit was
+    // passed independently to both calls, so a package with N findings
+    // in each scope rendered up to `2 * finding_limit` entries —
+    // breaking the documented per-package log-size cap of `--preset
+    // ci` (`FINDING_LIMIT_CI = 10`). We thread the remaining budget
+    // through both calls so the cap holds at the package level.
+    let mut remaining = finding_limit;
+
     if result.primary_findings.is_empty() {
         output.push_str("  Main artifact findings: none\n\n");
     } else {
         output.push_str("  Main artifact findings:\n");
-        append_findings(output, &result.primary_findings, finding_limit, color);
+        let displayed = append_findings(output, &result.primary_findings, remaining, color);
+        remaining = remaining.map(|r| r.saturating_sub(displayed));
     }
 
     if result.supporting_findings.is_empty() {
         output.push_str("  Supporting artifact findings: none\n\n");
     } else {
         output.push_str("  Supporting artifact findings:\n");
-        append_findings(output, &result.supporting_findings, finding_limit, color);
+        append_findings(output, &result.supporting_findings, remaining, color);
     }
 }
 
+/// Render up to `finding_limit` findings into `output`. Returns the
+/// number actually rendered so the caller can decrement a shared
+/// per-package budget — when `finding_limit` is `Some(0)`, none are
+/// rendered but the trailing "... N more finding(s) omitted" note
+/// still surfaces so the operator sees the silenced count.
 fn append_findings(
     output: &mut String,
     findings: &[skill_veil_core::Finding],
     finding_limit: Option<usize>,
     color: ColorMode,
-) {
+) -> usize {
     let display_limit = finding_limit.unwrap_or(findings.len());
     for finding in findings.iter().take(display_limit) {
         output.push_str(&format!(
@@ -222,14 +252,23 @@ fn append_findings(
             color.rule(&finding.rule_id),
             finding.category
         ));
+        // `reason` and `remediation` are author-controlled strings on the
+        // rule definition (built-in YAML or signed external pack), so
+        // they live on our trusted-input boundary and don't need
+        // sanitising. `match_value` and `artifact_path` come from the
+        // scanned package — attacker-controlled — and MUST be filtered
+        // before reaching the TTY.
         output.push_str(&format!("      {}\n", finding.reason));
         output.push_str(&format!("      Remediation: {}\n", finding.remediation));
-        output.push_str(&format!("      Match: \"{}\"\n", finding.match_value));
+        output.push_str(&format!(
+            "      Match: \"{}\"\n",
+            sanitise_for_terminal(&finding.match_value),
+        ));
         output.push_str(&format!("      Evidence: {}\n", finding.evidence_kind));
         output.push_str(&format!("      Action: {}\n", finding.recommended_action));
         output.push_str(&format!("      Artifact: {}", finding.artifact_kind));
         if let Some(path) = &finding.artifact_path {
-            output.push_str(&format!(" ({})", path));
+            output.push_str(&format!(" ({})", sanitise_for_terminal(path)));
         }
         output.push('\n');
         if let Some(line) = finding.line_number {
@@ -237,12 +276,14 @@ fn append_findings(
         }
         output.push('\n');
     }
-    if findings.len() > display_limit {
+    let displayed = display_limit.min(findings.len());
+    if findings.len() > displayed {
         output.push_str(&format!(
             "      ... {} more finding(s) omitted\n\n",
-            findings.len() - display_limit
+            findings.len() - displayed
         ));
     }
+    displayed
 }
 
 fn append_policy_reasons(output: &mut String, result: &ScanResult) {
@@ -323,39 +364,27 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
 }
 
 fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutputOptions) {
+    append_verdict_counts(output, results);
+    append_suppression_line(output, results);
+    append_overrides_line(output, results);
+    if options.explain_policy {
+        append_final_action(output, results);
+    } else {
+        append_top_factors(output, results);
+    }
+    append_top_triggers(output, results);
+    append_context_coverage(output, results);
+}
+
+fn append_verdict_counts(output: &mut String, results: &[ScanResult]) {
     let total_findings: usize = results.iter().map(|r| r.findings.len()).sum();
     let critical: usize = results.iter().map(|r| r.summary.by_severity.critical).sum();
     let high: usize = results.iter().map(|r| r.summary.by_severity.high).sum();
     let medium: usize = results.iter().map(|r| r.summary.by_severity.medium).sum();
     let low: usize = results.iter().map(|r| r.summary.by_severity.low).sum();
-    let total_baseline_suppressed: usize = results
-        .iter()
-        .map(|r| r.suppression_summary.baseline_suppressed)
-        .sum();
-    let total_waiver_suppressed: usize = results
-        .iter()
-        .map(|r| r.suppression_summary.waiver_suppressed)
-        .sum();
-    let total_inline_suppressed: usize = results
-        .iter()
-        .map(|r| r.suppression_summary.inline_suppressed)
-        .sum();
-    let total_overrides: usize = results
-        .iter()
-        .map(|r| r.policy_audit.applied_overrides.len())
-        .sum();
-    let malicious_verdicts = results
-        .iter()
-        .filter(|r| r.verdict == skill_veil_core::Verdict::Malicious)
-        .count();
-    let suspicious_verdicts = results
-        .iter()
-        .filter(|r| r.verdict == skill_veil_core::Verdict::Suspicious)
-        .count();
-    let benign_verdicts = results
-        .iter()
-        .filter(|r| r.verdict == skill_veil_core::Verdict::Benign)
-        .count();
+    let benign_verdicts = count_verdicts(results, skill_veil_core::Verdict::Benign);
+    let suspicious_verdicts = count_verdicts(results, skill_veil_core::Verdict::Suspicious);
+    let malicious_verdicts = count_verdicts(results, skill_veil_core::Verdict::Malicious);
 
     output.push_str(&format!(
         "\n--- Summary ---\nFiles scanned: {}\nVerdicts: benign={} suspicious={} malicious={}\nTotal findings: {} (Critical: {}, High: {}, Medium: {}, Low: {})\n",
@@ -369,41 +398,76 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
         medium,
         low
     ));
-    if total_baseline_suppressed > 0 || total_waiver_suppressed > 0 || total_inline_suppressed > 0 {
-        output.push_str(&format!(
-            "Suppressed findings: baseline={} waiver={} inline={}\n",
-            total_baseline_suppressed, total_waiver_suppressed, total_inline_suppressed
-        ));
-    }
-    if total_overrides > 0 {
-        output.push_str(&format!("Applied overrides: {}\n", total_overrides));
-    }
+}
 
-    if options.explain_policy {
-        let final_action = results
-            .iter()
-            .fold(RecommendedAction::Log, |current, result| {
-                skill_veil_core::RecommendedAction::max(current, result.summary.recommended_action)
-            });
-        output.push_str(&format!("Final recommended action: {}\n", final_action));
-    }
+fn count_verdicts(results: &[ScanResult], verdict: skill_veil_core::Verdict) -> usize {
+    results.iter().filter(|r| r.verdict == verdict).count()
+}
 
+fn append_suppression_line(output: &mut String, results: &[ScanResult]) {
+    let total_baseline_suppressed: usize = results
+        .iter()
+        .map(|r| r.suppression_summary.baseline_suppressed)
+        .sum();
+    let total_waiver_suppressed: usize = results
+        .iter()
+        .map(|r| r.suppression_summary.waiver_suppressed)
+        .sum();
+    let total_inline_suppressed: usize = results
+        .iter()
+        .map(|r| r.suppression_summary.inline_suppressed)
+        .sum();
+    if total_baseline_suppressed == 0
+        && total_waiver_suppressed == 0
+        && total_inline_suppressed == 0
+    {
+        return;
+    }
+    output.push_str(&format!(
+        "Suppressed findings: baseline={} waiver={} inline={}\n",
+        total_baseline_suppressed, total_waiver_suppressed, total_inline_suppressed
+    ));
+}
+
+fn append_overrides_line(output: &mut String, results: &[ScanResult]) {
+    let total_overrides: usize = results
+        .iter()
+        .map(|r| r.policy_audit.applied_overrides.len())
+        .sum();
+    if total_overrides == 0 {
+        return;
+    }
+    output.push_str(&format!("Applied overrides: {}\n", total_overrides));
+}
+
+fn append_final_action(output: &mut String, results: &[ScanResult]) {
+    let final_action = results
+        .iter()
+        .fold(RecommendedAction::Log, |current, result| {
+            skill_veil_core::RecommendedAction::max(current, result.summary.recommended_action)
+        });
+    output.push_str(&format!("Final recommended action: {}\n", final_action));
+}
+
+fn append_top_factors(output: &mut String, results: &[ScanResult]) {
     let mut factor_totals = std::collections::BTreeMap::new();
     for result in results {
         for factor in &result.summary.score_breakdown {
             *factor_totals.entry(factor.factor.clone()).or_insert(0_u32) += factor.contribution;
         }
     }
-
-    if !options.explain_policy && !factor_totals.is_empty() {
-        output.push_str("Top score factors:\n");
-        let mut ranked_factors: Vec<_> = factor_totals.into_iter().collect();
-        ranked_factors.sort_by_key(|right| std::cmp::Reverse(right.1));
-        for (factor, contribution) in ranked_factors.into_iter().take(5) {
-            output.push_str(&format!("  - {} ({})\n", factor, contribution));
-        }
+    if factor_totals.is_empty() {
+        return;
     }
+    output.push_str("Top score factors:\n");
+    let mut ranked_factors: Vec<_> = factor_totals.into_iter().collect();
+    ranked_factors.sort_by_key(|right| std::cmp::Reverse(right.1));
+    for (factor, contribution) in ranked_factors.into_iter().take(MAX_DISPLAY_TOP_FACTORS) {
+        output.push_str(&format!("  - {} ({})\n", factor, contribution));
+    }
+}
 
+fn append_top_triggers(output: &mut String, results: &[ScanResult]) {
     let mut trigger_counts = std::collections::BTreeMap::new();
     for result in results {
         for trigger in &result.summary.action_triggers {
@@ -412,16 +476,21 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
                 .or_insert(0_usize) += 1;
         }
     }
-
-    if !trigger_counts.is_empty() {
-        output.push_str("Policy escalation triggers:\n");
-        let mut ranked_triggers: Vec<_> = trigger_counts.into_iter().collect();
-        ranked_triggers.sort_by_key(|right| std::cmp::Reverse(right.1));
-        for (factor, count) in ranked_triggers.into_iter().take(5) {
-            output.push_str(&format!("  - {} ({} file(s))\n", factor, count));
-        }
+    if trigger_counts.is_empty() {
+        return;
     }
+    output.push_str("Policy escalation triggers:\n");
+    let mut ranked_triggers: Vec<_> = trigger_counts.into_iter().collect();
+    ranked_triggers.sort_by_key(|right| std::cmp::Reverse(right.1));
+    for (factor, count) in ranked_triggers
+        .into_iter()
+        .take(MAX_DISPLAY_POLICY_TRIGGERS)
+    {
+        output.push_str(&format!("  - {} ({} file(s))\n", factor, count));
+    }
+}
 
+fn append_context_coverage(output: &mut String, results: &[ScanResult]) {
     let mut context_counts = std::collections::BTreeMap::new();
     for result in results {
         for policy in &result.policy_generator().generate_context_policies() {
@@ -435,17 +504,22 @@ fn append_summary(output: &mut String, results: &[ScanResult], options: TextOutp
                 .or_insert(0_usize) += 1;
         }
     }
-    if !context_counts.is_empty() {
-        output.push_str("Context coverage:\n");
-        // Match the rendering of `factor_totals` and `trigger_counts` above:
-        // descending by count, alphabetical tie-breaker. Iterating the
-        // BTreeMap directly previously forced lexicographic order, burying
-        // the highest-frequency contexts.
-        let mut ranked_contexts: Vec<_> = context_counts.into_iter().collect();
-        ranked_contexts
-            .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
-        for (context, count) in ranked_contexts {
-            output.push_str(&format!("  - {} ({} file(s))\n", context, count));
-        }
+    if context_counts.is_empty() {
+        return;
+    }
+    output.push_str("Context coverage:\n");
+    // Match the rendering of `factor_totals` and `trigger_counts` above:
+    // descending by count, alphabetical tie-breaker. Iterating the
+    // BTreeMap directly previously forced lexicographic order, burying
+    // the highest-frequency contexts.
+    let mut ranked_contexts: Vec<_> = context_counts.into_iter().collect();
+    ranked_contexts.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
+    for (context, count) in ranked_contexts {
+        output.push_str(&format!("  - {} ({} file(s))\n", context, count));
     }
 }
+
+// Sanitiser-level contract tests live with the helper itself in
+// `crate::util::terminal_safe::tests` — pinning the byte-class filter
+// at the boundary where attacker bytes cannot reach the TTY. The
+// formatter-level tests below stay focused on the rendering contract.

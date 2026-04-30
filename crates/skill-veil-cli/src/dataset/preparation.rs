@@ -138,7 +138,7 @@ fn extract_zip_package(zip_path: &Path, output_dir: &Path) -> Result<()> {
         // an exotic path encoding could still produce a destination outside
         // `output_dir` after `Path::join`. Compare lexically so the check
         // applies before the file is created.
-        if !skill_veil_core::path_safety::path_stays_within_base(&destination, output_dir) {
+        if !skill_veil_core::path_stays_within_base(&destination, output_dir) {
             tracing::warn!(
                 zip = %zip_path.display(),
                 entry = %relative_path.display(),

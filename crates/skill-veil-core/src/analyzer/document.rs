@@ -31,7 +31,7 @@ impl SkillDocument {
         })
     }
 
-    pub fn parse_with_parser<P: MarkdownParser>(
+    pub fn parse_with_parser<P: MarkdownParser + ?Sized>(
         path: PathBuf,
         content: String,
         parser: &P,

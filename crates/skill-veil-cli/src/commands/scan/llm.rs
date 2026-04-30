@@ -5,10 +5,29 @@ use crate::llm::enrich::{
     enrich_scan_result as llm_enrich_scan_result, LlmEnrichOptions, LlmEnrichment,
     LlmPackageResult, LlmStatus, PreparedBundle,
 };
+use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use skill_veil_core::PackageScanResult;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+
+/// Truncate by char-count and strip terminal control bytes from an
+/// LLM-provider-controlled string before it reaches the operator's
+/// TTY.
+///
+/// Every field flowing out of [`LlmStatus`] (`verdict`, `analysis`,
+/// `key_signals`, `raw_response_excerpt`, error `message`) is shaped
+/// by the LLM provider's response body. A compromised endpoint
+/// (Ollama-Cloud, LMStudio remote, MITM'd Anthropic / OpenAI) can
+/// embed CSI / OSC-8 sequences in any of those fields to clear the
+/// terminal, repaint a fake `Benign` verdict, or render an attacker
+/// hyperlink that opens when the operator clicks the finding.
+/// Mirrors the sanitisation that `commands/scan/vt.rs` applies to all
+/// VirusTotal-derived strings — the LLM formatter must not be the
+/// weak link in that contract.
+fn safe_truncated(value: &str, max_chars: usize) -> String {
+    sanitise_for_terminal(&value.chars().take(max_chars).collect::<String>())
+}
 
 /// Maximum chars of the SHA-256 package id rendered next to the package
 /// path. 12 hex chars give ~6 bytes of entropy — enough to disambiguate
@@ -246,21 +265,24 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
                     }
                     None => "<unspecified>",
                 };
+                // `v.verdict` is provider-controlled prose with a
+                // recommended schema (`Benign|Suspicious|Malicious`)
+                // but no enforcement at parse time, so it must be
+                // sanitised before reaching the TTY.
                 let _ = writeln!(
                     out,
                     "    llm verdict  : {} (confidence {:.2}) agreement={agreement}{turns_tag}{cached_tag}",
-                    v.verdict, v.confidence
+                    sanitise_for_terminal(&v.verdict),
+                    v.confidence
                 );
                 if !v.key_signals.is_empty() {
-                    let _ = writeln!(out, "    key signals  : {}", v.key_signals.join("; "));
+                    let joined = v.key_signals.join("; ");
+                    let _ = writeln!(out, "    key signals  : {}", sanitise_for_terminal(&joined));
                 }
                 let _ = writeln!(
                     out,
                     "    analysis     : {}",
-                    v.analysis
-                        .chars()
-                        .take(LLM_ANALYSIS_DISPLAY_CHARS)
-                        .collect::<String>()
+                    safe_truncated(&v.analysis, LLM_ANALYSIS_DISPLAY_CHARS)
                 );
             }
         }
@@ -268,19 +290,13 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
             let _ = writeln!(
                 out,
                 "    llm verdict  : <parse-error: {}>{cached_tag}",
-                message
-                    .chars()
-                    .take(ERROR_MESSAGE_DISPLAY_CHARS)
-                    .collect::<String>()
+                safe_truncated(message, ERROR_MESSAGE_DISPLAY_CHARS)
             );
             if let Some(excerpt) = &pkg.raw_response_excerpt {
                 let _ = writeln!(
                     out,
                     "    raw excerpt  : {}",
-                    excerpt
-                        .chars()
-                        .take(LLM_RAW_EXCERPT_DISPLAY_CHARS)
-                        .collect::<String>()
+                    safe_truncated(excerpt, LLM_RAW_EXCERPT_DISPLAY_CHARS)
                 );
             }
         }
@@ -288,10 +304,7 @@ fn format_llm_pkg(pkg: &LlmPackageResult, out: &mut String) {
             let _ = writeln!(
                 out,
                 "    llm verdict  : <error: {}>{cached_tag}",
-                message
-                    .chars()
-                    .take(LLM_PROVIDER_ERROR_DISPLAY_CHARS)
-                    .collect::<String>()
+                safe_truncated(message, LLM_PROVIDER_ERROR_DISPLAY_CHARS)
             );
         }
         LlmStatus::BundleTooLarge {
@@ -372,5 +385,119 @@ mod tests {
             super::read_primary_contents_for_paths([a.as_path(), b.as_path()].iter().copied())
                 .expect("both files exist");
         assert_eq!(contents, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    use crate::llm::types::LlmVerdict;
+
+    /// Helper: build an `LlmPackageResult` with every provider-controlled
+    /// string field carrying terminal control bytes. Used by the
+    /// sanitisation regression tests below.
+    fn poisoned_pkg(
+        status: super::LlmStatus,
+        verdict: Option<LlmVerdict>,
+    ) -> super::LlmPackageResult {
+        use chrono::Utc;
+        super::LlmPackageResult {
+            package_id: Some("0123456789abcdef".to_string()),
+            primary_path: std::path::PathBuf::from("/tmp/pkg/SKILL.md"),
+            verdict,
+            status,
+            cached: false,
+            prompt_chars: 0,
+            raw_response_excerpt: Some("EXCERPT \x1b[2J\x1b[H FAKE OK".to_string()),
+            fetched_at: Utc::now(),
+            turns_used: 1,
+        }
+    }
+
+    /// Contract: every provider-controlled string in a successful LLM
+    /// verdict (`verdict`, `analysis`, joined `key_signals`) MUST be
+    /// stripped of terminal control bytes before reaching the TTY.
+    /// Pre-fix `format_llm_pkg` wrote these fields raw, so a
+    /// compromised LLM endpoint (Ollama-Cloud, MITM'd OpenAI, poisoned
+    /// LMStudio) could embed CSI / OSC-8 sequences to clear the
+    /// terminal and repaint a fake `Benign` verdict over the operator's
+    /// real output. The VT formatter already enforces this contract;
+    /// the LLM formatter must mirror it.
+    #[test]
+    fn format_llm_pkg_strips_control_bytes_from_ok_verdict_fields() {
+        let verdict = LlmVerdict {
+            verdict: "malicious\x1b[2J".to_string(),
+            confidence: 0.9,
+            analysis: "looks bad\x07\x00 with \x1b[31m red\x1b[0m alert".to_string(),
+            key_signals: vec![
+                "exfil to attacker.invalid\x1b[2J".to_string(),
+                "OSC8 \x1b]8;;https://evil.invalid\x07click\x1b]8;;\x07".to_string(),
+            ],
+            agreement_with_scanner: Some("agree".to_string()),
+            insufficient_context: Vec::new(),
+        };
+        let pkg = poisoned_pkg(super::LlmStatus::Ok, Some(verdict));
+        let mut out = String::new();
+        super::format_llm_pkg(&pkg, &mut out);
+        assert!(
+            !out.contains('\x1b'),
+            "ESC byte must not reach TTY: {out:?}"
+        );
+        assert!(
+            !out.contains('\x07'),
+            "BEL byte must not reach TTY: {out:?}"
+        );
+        assert!(
+            !out.contains('\x00'),
+            "NUL byte must not reach TTY: {out:?}"
+        );
+        // Printable content survives.
+        assert!(out.contains("malicious"), "verdict text must remain: {out}");
+        assert!(
+            out.contains("looks bad"),
+            "analysis text must remain: {out}"
+        );
+        assert!(
+            out.contains("exfil to attacker.invalid"),
+            "key signal text must remain: {out}"
+        );
+    }
+
+    /// Contract: a `ParseError` branch renders the parser message AND
+    /// the `raw_response_excerpt` — the excerpt is the raw provider
+    /// body, so it MUST be sanitised. Pre-fix the excerpt was printed
+    /// char-truncated but not control-stripped, so a malformed
+    /// response whose first 160 chars carried CSI bytes would clear
+    /// the terminal on every parse failure.
+    #[test]
+    fn format_llm_pkg_strips_control_bytes_from_parse_error_excerpt() {
+        let pkg = poisoned_pkg(
+            super::LlmStatus::ParseError {
+                message: "bad json \x1b[31m at offset 12".to_string(),
+            },
+            None,
+        );
+        let mut out = String::new();
+        super::format_llm_pkg(&pkg, &mut out);
+        assert!(!out.contains('\x1b'));
+        assert!(!out.contains('\x07'));
+        assert!(out.contains("parse-error"));
+        assert!(out.contains("EXCERPT"));
+    }
+
+    /// Contract: a `ProviderError` branch renders an error string
+    /// derived from HTTP response bodies (`err.to_string()` →
+    /// includes `body` from `LlmError::HttpStatus`). A hostile
+    /// endpoint can return a 500 whose body is pure ANSI escapes;
+    /// pre-fix this would land verbatim on the operator's TTY.
+    #[test]
+    fn format_llm_pkg_strips_control_bytes_from_provider_error_message() {
+        let pkg = poisoned_pkg(
+            super::LlmStatus::ProviderError {
+                message: "HTTP 500\x1b[2J body=\x1b]8;;evil\x07click\x1b]8;;\x07".to_string(),
+            },
+            None,
+        );
+        let mut out = String::new();
+        super::format_llm_pkg(&pkg, &mut out);
+        assert!(!out.contains('\x1b'));
+        assert!(!out.contains('\x07'));
+        assert!(out.contains("error"));
     }
 }

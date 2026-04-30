@@ -6,7 +6,7 @@ use crate::{
     },
 };
 use anyhow::{Context, Result};
-use skill_veil_core::{Scanner, Severity};
+use skill_veil_core::{PulldownMarkdownParser, Scanner, Severity};
 use std::path::PathBuf;
 
 pub(crate) fn run_rules(action: RulesAction) -> Result<()> {
@@ -123,8 +123,9 @@ fn rules_test(
     };
 
     let engine = super::scan::load_rule_engine_from_dir(&rules_dir)?;
+    let parser = PulldownMarkdownParser::new();
     let findings = engine
-        .test_rule(&rule_id, &test_content)
+        .test_rule(&rule_id, &test_content, &parser)
         .with_context(|| format!("Failed to test rule {rule_id}"))?;
     let case = RuleFixtureCase {
         name: Some(rule_id.clone()),
@@ -165,10 +166,11 @@ fn rules_test_pack(rules_dir: PathBuf, fixtures: PathBuf) -> Result<()> {
     let fixture_pack: RuleFixtureFile =
         serde_yaml::from_str(&fixture_content).context("Failed to parse rule fixtures")?;
 
+    let parser = PulldownMarkdownParser::new();
     let mut failures = Vec::new();
     for case in fixture_pack.cases {
         let findings = engine
-            .test_rule(&case.rule_id, &case.content)
+            .test_rule(&case.rule_id, &case.content, &parser)
             .with_context(|| format!("Failed to test rule {}", case.rule_id))?;
         if let Err(err) = validate_fixture_case(&case, &findings) {
             failures.push(format!(

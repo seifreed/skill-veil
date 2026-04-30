@@ -2,6 +2,11 @@ use std::collections::BTreeMap;
 
 use crate::findings::{ArtifactScope, Finding, HygieneSummary, SignalClass};
 
+/// Cap on the number of hygiene rule ids surfaced in `HygieneSummary::top_rules`.
+/// Keeps the verdict report's hygiene preview compact for downstream
+/// renderers (text, SARIF, SHIELD) without losing the dominant signal.
+const MAX_HYGIENE_TOP_RULES: usize = 5;
+
 pub(super) fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
     let mut top_rules = BTreeMap::<String, usize>::new();
     let mut package_root_findings = 0_usize;
@@ -31,7 +36,7 @@ pub(super) fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
         top_rules: top_rules
             .into_iter()
             .map(|(rule, _)| rule)
-            .take(5)
+            .take(MAX_HYGIENE_TOP_RULES)
             .collect(),
     }
 }

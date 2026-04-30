@@ -7,6 +7,7 @@ pub mod pattern_helpers;
 mod pulldown_parser;
 mod regex_matcher;
 mod std_filesystem;
+mod walk_helpers;
 
 pub use pulldown_parser::PulldownMarkdownParser;
 pub use regex_matcher::RegexPatternMatcher;

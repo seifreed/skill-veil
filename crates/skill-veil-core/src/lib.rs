@@ -66,7 +66,8 @@ mod detectors;
 pub mod findings;
 mod inline_suppressions;
 pub mod ioc_extraction;
-pub mod path_safety;
+pub(crate) mod path_safety;
+pub(crate) mod patterns;
 pub mod policy;
 pub mod ports;
 pub mod rules;
@@ -98,9 +99,10 @@ pub use findings::{
     BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission, DeduplicationSummary, EvidenceKind,
     Finding, FindingSummary, HygieneSummary, MatchTarget, OperationalContext, PackageHealth,
     PackageVerdictReport, RecommendedAction, RiskFactor, RootCauseGroup, Severity, SeverityCounts,
-    SignalClass, ThreatCategory, Verdict, VerdictReason,
+    SignalClass, ThreatCategory, Verdict, VerdictReason, RISK_THRESHOLD_BLOCK,
 };
 pub use ioc_extraction::{ExtractedIocs, FileHash};
+pub use path_safety::path_stays_within_base;
 pub use policy::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
     baseline_from_reports, count_baseline_matches, diff_reports, diff_reports_with_policy_state,

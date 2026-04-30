@@ -27,8 +27,13 @@ fn make_temp_rules_dir() -> PathBuf {
     dir
 }
 
+/// # Contract
+/// `format_text_output` MUST surface every entry from
+/// `summary.action_triggers` under the "Policy escalation reasons"
+/// header so analysts see why an action was upgraded. Hiding triggers
+/// would silently turn the CLI into a pure-verdict reporter.
 #[test]
-fn test_format_text_output_includes_policy_escalation_reasons() {
+fn format_text_output_includes_policy_escalation_reasons() {
     let findings = vec![
         skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
             .matched_on(MatchTarget::Document)
@@ -105,8 +110,14 @@ fn test_format_text_output_includes_policy_escalation_reasons() {
     assert!(output.contains("Policy escalation triggers:"));
 }
 
+/// # Contract
+/// `--quiet-summary` MUST emit the per-scope counts but suppress
+/// per-finding match/evidence/action lines. Operators rely on this
+/// for CI logs to stay readable when running across hundreds of
+/// packages — restoring the verbose output silently regresses log
+/// hygiene.
 #[test]
-fn test_format_text_output_quiet_summary_hides_detailed_findings() {
+fn format_text_output_quiet_summary_hides_detailed_findings() {
     let findings = vec![
         skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
             .matched_on(MatchTarget::Document)
@@ -176,8 +187,14 @@ fn test_format_text_output_quiet_summary_hides_detailed_findings() {
     assert!(!output.contains("Match: \"note\""));
 }
 
+/// # Contract
+/// `--explain-policy` MUST surface the final aggregated action and
+/// the policy-escalation reasons while suppressing the score-factor
+/// preview (which belongs to the default summary). Pre-fix the
+/// formatter rendered both, hiding why a policy decision was made
+/// behind unrelated risk-factor noise.
 #[test]
-fn test_format_text_output_explain_policy_focuses_on_policy_section() {
+fn format_text_output_explain_policy_focuses_on_policy_section() {
     let findings = vec![
         skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::Generic)
             .matched_on(MatchTarget::Document)
@@ -263,8 +280,14 @@ fn test_format_text_output_explain_policy_focuses_on_policy_section() {
     assert!(!output.contains("Top score factors:"));
 }
 
+/// # Contract
+/// The CI diff summary MUST emit a single line in the form
+/// `DIFF new_active=N resolved=N waived=N baselined=N unchanged=N`.
+/// CI gates parse this exact shape — adding fields, reordering, or
+/// switching separators silently breaks integrators that grep for
+/// `new_active=`.
 #[test]
-fn test_format_diff_ci_summary_is_compact() {
+fn format_diff_ci_summary_is_compact() {
     let diff = skill_veil_core::DiffReport {
         new_findings: vec![skill_veil_core::DiffEntry {
             fingerprint: "a".to_string(),
@@ -304,8 +327,13 @@ fn test_format_diff_ci_summary_is_compact() {
     );
 }
 
+/// # Contract
+/// `validate_rules_directory` MUST report duplicate rule ids across
+/// pack files with the conflicting pack paths so the maintainer can
+/// resolve the collision deterministically. Silent acceptance would
+/// mean one pack's rule wins arbitrarily under load order.
 #[test]
-fn test_validate_rule_pack_reports_duplicates() {
+fn validate_rule_pack_reports_duplicates() {
     let dir = make_temp_rules_dir();
     fs::write(
         dir.join("rules.yaml"),
@@ -342,8 +370,14 @@ rules:
     assert_eq!(report.duplicate_rule_ids, vec!["DUP_RULE".to_string()]);
 }
 
+/// # Contract
+/// `build_rule_pack_info` MUST aggregate per-rule metadata into the
+/// rule-count and category-distribution summary used by the CLI
+/// `rules info` subcommand. The category bucket counts feed
+/// dashboards downstream — losing the breakdown breaks coverage
+/// reporting silently.
 #[test]
-fn test_build_rule_pack_info_summarizes_rules() {
+fn build_rule_pack_info_summarizes_rules() {
     let dir = make_temp_rules_dir();
     fs::write(
         dir.join("rules.yaml"),
@@ -378,8 +412,14 @@ rules:
     assert!(info.tags.contains("official_pack"));
 }
 
+/// # Contract
+/// `validate_fixture_case` MUST verify the rule fired exactly once,
+/// matched the expected target type, and produced the expected match
+/// value. Relaxing any of these into "any finding from this rule"
+/// would let a refactor that misclassifies severity or target slip
+/// through the rule-pack regression suite.
 #[test]
-fn test_validate_fixture_case_checks_full_expectations() {
+fn validate_fixture_case_checks_full_expectations() {
     let findings = vec![
         skill_veil_core::Finding::builder("TEST_RULE", ThreatCategory::ToolAbuse)
             .severity(Severity::High)
@@ -404,8 +444,13 @@ fn test_validate_fixture_case_checks_full_expectations() {
     validate_fixture_case(&case, &findings).unwrap();
 }
 
+/// # Contract
+/// `update_benchmark_history` MUST replace an existing entry with
+/// the same `release_id` instead of duplicating it. Otherwise a
+/// repeated benchmark run on the same release produces stacked
+/// history entries that distort the trend dashboards.
 #[test]
-fn test_update_benchmark_history_replaces_same_release() {
+fn update_benchmark_history_replaces_same_release() {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -539,8 +584,13 @@ fn test_update_benchmark_history_replaces_same_release() {
     let _ = fs::remove_file(history_path);
 }
 
+/// # Contract
+/// The "analyst" rendering of dataset verdicts MUST stay terse:
+/// per-package one-liners with verdict/risk/action only. Detail
+/// fields belong to the "full" rendering — leaking them here makes
+/// the analyst summary unscannable on large datasets.
 #[test]
-fn test_format_dataset_verdicts_text_analyst_summary_is_compact() {
+fn format_dataset_verdicts_text_analyst_summary_is_compact() {
     let entry = DatasetPackageVerdictEntry {
         package_id: Some("abc123".to_string()),
         final_verdict: skill_veil_core::Verdict::Suspicious,
@@ -575,8 +625,14 @@ fn test_format_dataset_verdicts_text_analyst_summary_is_compact() {
     assert!(!output.contains("path="));
 }
 
+/// # Contract
+/// The "full" rendering MUST include score breakdowns,
+/// root-cause groups, and policy audit details for every entry.
+/// These are the fields that distinguish the full rendering from
+/// the compact analyst variant; dropping any of them collapses the
+/// two outputs into one.
 #[test]
-fn test_format_dataset_verdicts_text_full_includes_detailed_fields() {
+fn format_dataset_verdicts_text_full_includes_detailed_fields() {
     let entry = DatasetPackageVerdictEntry {
         package_id: Some("pkg001".to_string()),
         final_verdict: skill_veil_core::Verdict::Malicious,
@@ -602,4 +658,240 @@ fn test_format_dataset_verdicts_text_full_includes_detailed_fields() {
     assert!(output.contains("blast_radius=medium"));
     assert!(output.contains("declared_permissions=shell_exec"));
     assert!(output.contains("main=remote_exec/malicious_behavior"));
+}
+
+/// # Contract
+/// `finding_limit` is a **per-package** display budget shared across the
+/// `primary` and `supporting` scopes — NOT a per-scope cap. Pre-fix the
+/// same limit was passed independently to both `append_findings` calls
+/// in `append_findings_by_scope`, so a package with N findings in each
+/// scope rendered up to `2 * finding_limit` entries. With
+/// `--preset ci` (`FINDING_LIMIT_CI = 10`), the documented per-package
+/// log-size cap broke whenever both scopes had findings.
+///
+/// We pin the contract by feeding a result with 4 primary + 4
+/// supporting findings, asking for `finding_limit = 5`, and asserting
+/// exactly 5 finding blocks land in the output. The remaining 3 must
+/// surface as the trailing "... N more finding(s) omitted" trailer
+/// under the supporting scope (because the primary scope consumes the
+/// first 4 of the 5-budget, leaving 1 for supporting).
+#[test]
+fn format_text_output_finding_limit_is_a_per_package_budget() {
+    fn make_finding(id: &str) -> skill_veil_core::Finding {
+        skill_veil_core::Finding::builder(id, ThreatCategory::Generic)
+            .matched_on(MatchTarget::Document)
+            .match_value("payload")
+            .reason("test")
+            .action(RecommendedAction::Log)
+            .build()
+    }
+
+    let primary = vec![
+        make_finding("RULE_PRIMARY_1"),
+        make_finding("RULE_PRIMARY_2"),
+        make_finding("RULE_PRIMARY_3"),
+        make_finding("RULE_PRIMARY_4"),
+    ];
+    let supporting = vec![
+        make_finding("RULE_SUPPORTING_1"),
+        make_finding("RULE_SUPPORTING_2"),
+        make_finding("RULE_SUPPORTING_3"),
+        make_finding("RULE_SUPPORTING_4"),
+    ];
+
+    let primary_summary = skill_veil_core::FindingSummary::from_findings(&primary);
+    let supporting_summary = skill_veil_core::FindingSummary::from_findings(&supporting);
+    let mut all_findings = primary.clone();
+    all_findings.extend(supporting.clone());
+    let summary = skill_veil_core::FindingSummary::from_findings(&all_findings);
+
+    let result = ScanResult {
+        metadata: ArtifactMetadata {
+            path: PathBuf::from("SKILL.md"),
+            name: "skill".to_string(),
+            extension_kind: skill_veil_core::AgentExtensionKind::Skill,
+            classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
+            package_id: None,
+            identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
+            structural_validity: skill_veil_core::StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+        },
+        findings: all_findings,
+        suppressed_findings: vec![],
+        primary_findings: primary,
+        supporting_findings: supporting,
+        primary_summary,
+        supporting_summary,
+        summary,
+        verdict: skill_veil_core::Verdict::Suspicious,
+        verdict_report: skill_veil_core::PackageVerdictReport {
+            verdict: skill_veil_core::Verdict::Suspicious,
+            package_health: skill_veil_core::PackageHealth::Healthy,
+            hygiene_summary: skill_veil_core::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        },
+        deduplication_summary: Default::default(),
+        artifact_graph: ArtifactGraph::new(),
+        profile: None,
+        policy: None,
+        suppression_summary: Default::default(),
+        policy_audit: Default::default(),
+        should_fail: false,
+        extracted_iocs: Default::default(),
+    };
+
+    let output = format_text_output(
+        &[result],
+        TextOutputOptions {
+            quiet_summary: false,
+            explain_policy: false,
+            finding_limit: Some(5),
+            color: ColorMode::from_choice(ColorChoiceArg::Never, false),
+        },
+    );
+
+    // Each rendered finding emits exactly one `      Match: "..."`
+    // line. Counting these gives the exact rendered total without
+    // depending on heading text.
+    let rendered = output.matches("      Match:").count();
+    assert_eq!(
+        rendered, 5,
+        "with finding_limit=5 and 4+4 findings, exactly 5 entries must render \
+         (per-package budget); pre-fix this would have rendered 8 (5+3 capped \
+         per scope) or all 8 with limit applied independently. Output:\n{output}"
+    );
+
+    // The omitted-trailer count must be the remaining 3 — pinning
+    // that the operator still sees the silenced count under the
+    // supporting scope and is not misled into thinking only 5 of 5
+    // findings exist.
+    assert!(
+        output.contains("... 3 more finding(s) omitted"),
+        "trailing omitted count must surface remaining findings; output:\n{output}"
+    );
+
+    // Pin which scope consumed the budget: primary is rendered
+    // first, so the four primary rule_ids must all appear; the
+    // supporting scope only has budget for one.
+    for id in [
+        "RULE_PRIMARY_1",
+        "RULE_PRIMARY_2",
+        "RULE_PRIMARY_3",
+        "RULE_PRIMARY_4",
+    ] {
+        assert!(
+            output.contains(id),
+            "primary scope MUST consume budget first; missing {id}. Output:\n{output}"
+        );
+    }
+    let supporting_rendered = [
+        "RULE_SUPPORTING_1",
+        "RULE_SUPPORTING_2",
+        "RULE_SUPPORTING_3",
+        "RULE_SUPPORTING_4",
+    ]
+    .iter()
+    .filter(|id| output.contains(**id))
+    .count();
+    assert_eq!(
+        supporting_rendered, 1,
+        "supporting scope must render exactly the 1 remaining budget slot; got {supporting_rendered}. Output:\n{output}"
+    );
+}
+
+/// # Contract
+/// When `finding_limit` is `None` (no cap), every finding from both
+/// scopes MUST render. Pin the no-cap case so the per-package-budget
+/// fix doesn't accidentally introduce a hidden ceiling when the
+/// operator opted into full output.
+#[test]
+fn format_text_output_finding_limit_none_renders_every_finding() {
+    fn make_finding(id: &str) -> skill_veil_core::Finding {
+        skill_veil_core::Finding::builder(id, ThreatCategory::Generic)
+            .matched_on(MatchTarget::Document)
+            .match_value("payload")
+            .reason("test")
+            .action(RecommendedAction::Log)
+            .build()
+    }
+
+    let primary = vec![make_finding("RULE_P_1"), make_finding("RULE_P_2")];
+    let supporting = vec![make_finding("RULE_S_1"), make_finding("RULE_S_2")];
+
+    let primary_summary = skill_veil_core::FindingSummary::from_findings(&primary);
+    let supporting_summary = skill_veil_core::FindingSummary::from_findings(&supporting);
+    let mut all_findings = primary.clone();
+    all_findings.extend(supporting.clone());
+    let summary = skill_veil_core::FindingSummary::from_findings(&all_findings);
+
+    let result = ScanResult {
+        metadata: ArtifactMetadata {
+            path: PathBuf::from("SKILL.md"),
+            name: "skill".to_string(),
+            extension_kind: skill_veil_core::AgentExtensionKind::Skill,
+            classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
+            package_id: None,
+            identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
+            structural_validity: skill_veil_core::StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+        },
+        findings: all_findings,
+        suppressed_findings: vec![],
+        primary_findings: primary,
+        supporting_findings: supporting,
+        primary_summary,
+        supporting_summary,
+        summary,
+        verdict: skill_veil_core::Verdict::Suspicious,
+        verdict_report: skill_veil_core::PackageVerdictReport {
+            verdict: skill_veil_core::Verdict::Suspicious,
+            package_health: skill_veil_core::PackageHealth::Healthy,
+            hygiene_summary: skill_veil_core::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        },
+        deduplication_summary: Default::default(),
+        artifact_graph: ArtifactGraph::new(),
+        profile: None,
+        policy: None,
+        suppression_summary: Default::default(),
+        policy_audit: Default::default(),
+        should_fail: false,
+        extracted_iocs: Default::default(),
+    };
+
+    let output = format_text_output(
+        &[result],
+        TextOutputOptions {
+            quiet_summary: false,
+            explain_policy: false,
+            finding_limit: None,
+            color: ColorMode::from_choice(ColorChoiceArg::Never, false),
+        },
+    );
+
+    let rendered = output.matches("      Match:").count();
+    assert_eq!(
+        rendered, 4,
+        "finding_limit=None must render every finding. Output:\n{output}"
+    );
+    assert!(
+        !output.contains("more finding(s) omitted"),
+        "no findings should be omitted when limit is None; output:\n{output}"
+    );
 }

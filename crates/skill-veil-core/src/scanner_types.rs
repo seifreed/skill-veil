@@ -7,7 +7,9 @@ use crate::findings::{
     ArtifactKind, DeduplicationSummary, Finding, FindingSummary, PackageVerdictReport, Severity,
     Verdict,
 };
-use crate::policy::{PolicyAudit, PolicyFile, PolicyGenerator, PolicyProfile, SuppressionSummary};
+use crate::policy::{
+    PolicyAudit, PolicyFile, PolicyGenerator, PolicyLoadError, PolicyProfile, SuppressionSummary,
+};
 use crate::rules::RuleError;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -19,6 +21,8 @@ pub enum ScanError {
     Analyzer(#[from] AnalyzerError),
     #[error("Rule error: {0}")]
     Rule(#[from] RuleError),
+    #[error("Policy load error: {0}")]
+    Policy(#[from] PolicyLoadError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Path not found: {0}")]

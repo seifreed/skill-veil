@@ -1,5 +1,6 @@
 use super::cache::cache_root_for;
 use super::ERROR_MESSAGE_DISPLAY_CHARS;
+use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::vt::client::VtClient;
 use crate::vt::config::VtConfig;
 use crate::vt::enrich::{self, EnrichOptions, EnrichedIndicator, EnrichmentStatus, VtEnrichment};
@@ -127,6 +128,18 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
         }
         let _ = writeln!(out, "\n  {label}:");
         for ind in items {
+            // `ind.indicator` is a URL/domain/IP/hash extracted from
+            // attacker-controlled skill content. The error `message`,
+            // VT `ai_verdicts.source` and `verdict` strings come from
+            // a remote provider that the operator does not fully
+            // control. Both have to pass `sanitise_for_terminal` before
+            // hitting the TTY — pre-fix a crafted URL embedding
+            // `\x1b[2J\x1b[H` could clear the terminal and repaint a
+            // fake verdict, and the same vector reached the operator
+            // through `ai_verdicts` from a compromised provider
+            // response. The text-output formatter already enforced
+            // this for `finding.match_value` / `finding.artifact_path`;
+            // VT enrichment was the parallel surface that bypassed it.
             let status = match &ind.status {
                 EnrichmentStatus::Found => "found".to_string(),
                 EnrichmentStatus::NotFound => "not_found".to_string(),
@@ -134,10 +147,12 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
                 EnrichmentStatus::Error { message } => {
                     format!(
                         "error: {}",
-                        message
-                            .chars()
-                            .take(ERROR_MESSAGE_DISPLAY_CHARS)
-                            .collect::<String>()
+                        sanitise_for_terminal(
+                            &message
+                                .chars()
+                                .take(ERROR_MESSAGE_DISPLAY_CHARS)
+                                .collect::<String>()
+                        )
                     )
                 }
             };
@@ -149,7 +164,13 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
                     let ai = s
                         .ai_verdicts
                         .iter()
-                        .map(|a| format!("{}={}", a.source, a.verdict))
+                        .map(|a| {
+                            format!(
+                                "{}={}",
+                                sanitise_for_terminal(&a.source),
+                                sanitise_for_terminal(&a.verdict),
+                            )
+                        })
                         .collect::<Vec<_>>()
                         .join(",");
                     let rep = s
@@ -170,7 +191,12 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
                     )
                 })
                 .unwrap_or_default();
-            let _ = writeln!(out, "    - {} [{status}]{}", ind.indicator, summary);
+            let _ = writeln!(
+                out,
+                "    - {} [{status}]{}",
+                sanitise_for_terminal(&ind.indicator),
+                summary
+            );
         }
     }
 
@@ -186,6 +212,111 @@ mod tests {
     use super::*;
     use skill_veil_core::{ExtractedIocs, FileHash};
     use std::path::PathBuf;
+
+    use crate::vt::enrich::VtIndicatorSummary;
+    use crate::vt::types::{CrowdsourcedAiResult, LastAnalysisStats};
+
+    fn enriched_url(indicator: &str, message: Option<&str>) -> EnrichedIndicator {
+        EnrichedIndicator {
+            indicator: indicator.to_string(),
+            cache_path: PathBuf::from("/tmp/x"),
+            fetched_at: chrono::Utc::now(),
+            status: match message {
+                Some(m) => EnrichmentStatus::Error {
+                    message: m.to_string(),
+                },
+                None => EnrichmentStatus::Found,
+            },
+            summary: None,
+        }
+    }
+
+    /// Contract: `format_vt_enrichment` MUST run every
+    /// attacker-controlled string through `sanitise_for_terminal`
+    /// before it reaches the operator's TTY. Pre-fix `ind.indicator`,
+    /// the truncated error `message`, and the VT-supplied
+    /// `ai_verdicts.{source, verdict}` strings were written verbatim,
+    /// so a crafted IOC like
+    /// `https://evil.invalid/\x1b[2J\x1b[H` would clear the terminal
+    /// and let an attacker repaint a fake passing verdict. The
+    /// text-output formatter already enforced the boundary for
+    /// `finding.match_value` / `finding.artifact_path`; VT enrichment
+    /// was the parallel surface that bypassed it.
+    #[test]
+    fn format_vt_enrichment_strips_ansi_control_bytes_from_indicators() {
+        let agg = VtEnrichment {
+            files: Vec::new(),
+            domains: vec![enriched_url("evil.invalid\x1b[2J\x1b[H", None)],
+            ips: Vec::new(),
+            urls: vec![enriched_url("https://e\x07vil.invalid/x", None)],
+        };
+        let rendered = format_vt_enrichment(&agg);
+        assert!(
+            !rendered.contains('\x1b'),
+            "ESC byte must not reach the terminal stream; got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\x07'),
+            "BEL byte must not reach the terminal stream; got: {rendered:?}"
+        );
+        // Visible content is preserved (just neutralised) so the
+        // operator still sees the indicator.
+        assert!(rendered.contains("evil.invalid"));
+    }
+
+    /// Contract: error messages and AI verdicts coming back from VT
+    /// (semi-trusted) MUST also pass through the sanitiser. A
+    /// compromised provider response embedding control bytes would
+    /// otherwise bypass the same protection at a different code
+    /// path. Pin the contract here so a future refactor that adds a
+    /// new VT-derived display string is forced to route it through
+    /// the same boundary.
+    #[test]
+    fn format_vt_enrichment_strips_control_bytes_from_provider_strings() {
+        let stats = LastAnalysisStats {
+            malicious: 1,
+            ..LastAnalysisStats::default()
+        };
+        let ai_verdict = CrowdsourcedAiResult {
+            source: "src\x1b[H".to_string(),
+            verdict: "malicious\x07".to_string(),
+            ..CrowdsourcedAiResult::default()
+        };
+        let summary = VtIndicatorSummary {
+            last_analysis_stats: Some(stats),
+            reputation: None,
+            categories: std::collections::BTreeMap::new(),
+            meaningful_name: None,
+            type_description: None,
+            ai_verdicts: vec![ai_verdict],
+            vt_malicious_engine_count: 1,
+            vt_suspicious_engine_count: 0,
+        };
+
+        let agg = VtEnrichment {
+            files: Vec::new(),
+            domains: vec![EnrichedIndicator {
+                indicator: "evil.invalid".to_string(),
+                cache_path: PathBuf::from("/tmp/x"),
+                fetched_at: chrono::Utc::now(),
+                status: EnrichmentStatus::Error {
+                    message: "boom\x1b[31m".to_string(),
+                },
+                summary: Some(summary),
+            }],
+            ips: Vec::new(),
+            urls: Vec::new(),
+        };
+        let rendered = format_vt_enrichment(&agg);
+        assert!(
+            !rendered.contains('\x1b'),
+            "ESC bytes from VT response must be sanitised; got: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\x07'),
+            "BEL bytes from VT response must be sanitised; got: {rendered:?}"
+        );
+    }
 
     #[test]
     fn consolidate_iocs_deduplicates_across_results() {

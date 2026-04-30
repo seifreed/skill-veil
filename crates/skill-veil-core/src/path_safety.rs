@@ -30,7 +30,7 @@ use std::path::{Component, Path};
 ///
 /// ```
 /// use std::path::Path;
-/// use skill_veil_core::path_safety::path_stays_within_base;
+/// use skill_veil_core::path_stays_within_base;
 ///
 /// let base = Path::new("/pkg");
 /// assert!(path_stays_within_base(&base.join("scripts/ok.sh"), base));

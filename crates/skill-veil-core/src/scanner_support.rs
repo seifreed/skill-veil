@@ -14,17 +14,8 @@ const JSON_MANIFEST_NAMES: &[&str] = &["package.json", "package-lock.json"];
 pub(crate) fn read_text_file_lossy<F: FileSystemProvider>(
     path: &Path,
     fs: &F,
-) -> Result<(String, bool), std::io::Error> {
-    let bytes = fs
-        .read_file_bytes(path)
-        .map_err(|e| match e {
-            FileSystemError::IoError(io) => io,
-            FileSystemError::PathNotFound(p) => {
-                std::io::Error::new(std::io::ErrorKind::NotFound, p.display().to_string())
-            }
-        })?
-        .as_bytes()
-        .to_vec();
+) -> Result<(String, bool), FileSystemError> {
+    let bytes = fs.read_file_bytes(path)?.as_bytes().to_vec();
     let decode_warning = std::str::from_utf8(&bytes).is_err();
     Ok((String::from_utf8_lossy(&bytes).into_owned(), decode_warning))
 }
@@ -150,7 +141,7 @@ pub(crate) fn load_optional_baseline<F: FileSystemProvider>(
 ) -> Result<Option<BaselineFile>, ScanError> {
     path.map(|p| load_baseline(fs, p))
         .transpose()
-        .map_err(ScanError::Io)
+        .map_err(ScanError::Policy)
 }
 
 pub(crate) fn load_optional_waivers<F: FileSystemProvider>(
@@ -159,7 +150,7 @@ pub(crate) fn load_optional_waivers<F: FileSystemProvider>(
 ) -> Result<Option<WaiverFile>, ScanError> {
     path.map(|p| load_waivers(fs, p))
         .transpose()
-        .map_err(ScanError::Io)
+        .map_err(ScanError::Policy)
 }
 
 pub(crate) fn load_optional_policy<F: FileSystemProvider>(
@@ -168,5 +159,5 @@ pub(crate) fn load_optional_policy<F: FileSystemProvider>(
 ) -> Result<Option<PolicyFile>, ScanError> {
     path.map(|p| load_policy(fs, p))
         .transpose()
-        .map_err(ScanError::Io)
+        .map_err(ScanError::Policy)
 }

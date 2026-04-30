@@ -3,6 +3,13 @@
 //! Each loader reads through a `FileSystemProvider` so the domain layer
 //! never reaches `std::fs` directly. The contract is documented in
 //! `CLAUDE.md`: domain types depend ONLY on `ports.rs` traits.
+//!
+//! Errors surface as [`PolicyLoadError`] (a `thiserror`-typed domain
+//! error) instead of `std::io::Error`. Routing schema-mismatch and
+//! validation failures through a dedicated variant keeps the library
+//! API free of infrastructure types — `std::io::Error` only appears
+//! inside the `FileSystemError::IoError` payload, never in the loader's
+//! return type.
 
 use crate::policy::baseline::{BaselineFile, WaiverFile};
 use crate::policy::types::PolicyFile;
@@ -11,62 +18,147 @@ use std::path::Path;
 
 use super::validators::{validate_baseline, validate_policy, validate_waivers};
 
+/// Errors surfaced by the policy/baseline/waiver loaders.
+///
+/// Variants partition the failure modes the loaders can report so callers
+/// can distinguish "file missing / IO failure" from "schema mismatch" from
+/// "validation rule rejected the contents". Pre-fix the loaders returned
+/// `std::io::Error` for all three, forcing callers to inspect
+/// `ErrorKind` to discriminate.
+#[derive(Debug, thiserror::Error)]
+pub enum PolicyLoadError {
+    /// Filesystem failure (path missing, permission denied, …).
+    #[error("filesystem error: {0}")]
+    Io(#[from] FileSystemError),
+    /// File contents are not valid UTF-8.
+    #[error("file is not valid UTF-8: {0}")]
+    InvalidUtf8(#[from] std::string::FromUtf8Error),
+    /// Deserialisation (JSON or YAML) failed.
+    #[error("malformed file: {0}")]
+    Parse(String),
+    /// File parsed but failed schema/semantic validation.
+    #[error("validation failed: {0}")]
+    Validation(String),
+}
+
 /// Read a file's contents through a `FileSystemProvider`, decoding strictly
-/// as UTF-8. Mirrors the behaviour of `std::fs::read_to_string` while
-/// keeping the dependency on the port. Returned as `std::io::Error` so
-/// callers preserve the existing `Result<_, std::io::Error>` API.
+/// as UTF-8. Errors surface as [`PolicyLoadError`] so loader signatures
+/// stay free of `std::io::Error`.
 fn read_text_through_port<F: FileSystemProvider>(
     fs: &F,
     path: &Path,
-) -> Result<String, std::io::Error> {
-    let bytes = fs.read_file_bytes(path).map_err(|err| match err {
-        FileSystemError::IoError(io) => io,
-        FileSystemError::PathNotFound(missing) => std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("path not found: {}", missing.display()),
-        ),
-    })?;
-    String::from_utf8(bytes.as_bytes().to_vec())
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+) -> Result<String, PolicyLoadError> {
+    let bytes = fs.read_file_bytes(path)?;
+    Ok(String::from_utf8(bytes.as_bytes().to_vec())?)
 }
 
+/// Determine which parser produced the more meaningful error for the given
+/// content. Returns the JSON error when the content begins with a JSON
+/// sentinel (`{` / `[`) — otherwise the YAML diagnostic dominates because
+/// YAML accepts almost-anything-as-a-scalar and its error messages on broken
+/// JSON are notoriously misleading ("mapping values are not allowed here"
+/// for a missing comma). For genuine YAML the JSON parser fails fast, so we
+/// pick the YAML error in every other case.
+fn select_parser_error(
+    content: &str,
+    json_err: serde_json::Error,
+    yaml_err: serde_yaml::Error,
+) -> String {
+    let trimmed = content.trim_start();
+    let looks_like_json = trimmed.starts_with('{') || trimmed.starts_with('[');
+    if looks_like_json {
+        json_err.to_string()
+    } else {
+        yaml_err.to_string()
+    }
+}
+
+fn parse_json_or_yaml<T>(content: &str) -> Result<T, PolicyLoadError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    match serde_json::from_str::<T>(content) {
+        Ok(value) => Ok(value),
+        Err(json_err) => match serde_yaml::from_str::<T>(content) {
+            Ok(value) => Ok(value),
+            Err(yaml_err) => Err(PolicyLoadError::Parse(select_parser_error(
+                content, json_err, yaml_err,
+            ))),
+        },
+    }
+}
+
+/// Read a file through `fs`, deserialise it as `T` (JSON or YAML), and run
+/// `validate` against the parsed value. Centralises the read → parse →
+/// validate pipeline that all three policy loaders share so a future fix
+/// to the ordering or error mapping touches one place instead of three.
+fn load_validated<F, T>(
+    fs: &F,
+    path: &Path,
+    validate: fn(&T) -> Result<(), String>,
+) -> Result<T, PolicyLoadError>
+where
+    F: FileSystemProvider,
+    T: serde::de::DeserializeOwned,
+{
+    let content = read_text_through_port(fs, path)?;
+    let value: T = parse_json_or_yaml(&content)?;
+    validate(&value).map_err(PolicyLoadError::Validation)?;
+    Ok(value)
+}
+
+/// Load a baseline file from disk and validate it against the current
+/// baseline schema.
+///
+/// # Errors
+///
+/// - [`PolicyLoadError::Io`] if `path` is unreadable through `fs`.
+/// - [`PolicyLoadError::InvalidUtf8`] if the bytes are not valid UTF-8.
+/// - [`PolicyLoadError::Parse`] if the contents are not valid JSON or YAML.
+/// - [`PolicyLoadError::Validation`] if the file parses but its
+///   `schema_version` is unknown or any entry fails the baseline
+///   semantic checks (empty fingerprint, empty reason, etc.).
 pub fn load_baseline<F: FileSystemProvider>(
     fs: &F,
     path: &Path,
-) -> Result<BaselineFile, std::io::Error> {
-    let content = read_text_through_port(fs, path)?;
-    let baseline: BaselineFile = serde_json::from_str(&content)
-        .or_else(|_| serde_yaml::from_str(&content))
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    validate_baseline(&baseline)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    Ok(baseline)
+) -> Result<BaselineFile, PolicyLoadError> {
+    load_validated(fs, path, validate_baseline)
 }
 
+/// Load a waivers file from disk and validate it against the current
+/// waivers schema.
+///
+/// # Errors
+///
+/// - [`PolicyLoadError::Io`] if `path` is unreadable through `fs`.
+/// - [`PolicyLoadError::InvalidUtf8`] if the bytes are not valid UTF-8.
+/// - [`PolicyLoadError::Parse`] if the contents are not valid JSON or YAML.
+/// - [`PolicyLoadError::Validation`] if the file parses but its
+///   `schema_version` is unknown or any waiver entry has no selectors
+///   (`rule_id`, `artifact_path`, `context` are all absent).
 pub fn load_waivers<F: FileSystemProvider>(
     fs: &F,
     path: &Path,
-) -> Result<WaiverFile, std::io::Error> {
-    let content = read_text_through_port(fs, path)?;
-    let waivers: WaiverFile = serde_json::from_str(&content)
-        .or_else(|_| serde_yaml::from_str(&content))
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    validate_waivers(&waivers)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    Ok(waivers)
+) -> Result<WaiverFile, PolicyLoadError> {
+    load_validated(fs, path, validate_waivers)
 }
 
+/// Load a policy file from disk and validate it against the current
+/// policy schema.
+///
+/// # Errors
+///
+/// - [`PolicyLoadError::Io`] if `path` is unreadable through `fs`.
+/// - [`PolicyLoadError::InvalidUtf8`] if the bytes are not valid UTF-8.
+/// - [`PolicyLoadError::Parse`] if the contents are not valid JSON or YAML.
+/// - [`PolicyLoadError::Validation`] if the file parses but fails the
+///   policy semantic checks (unknown schema version, malformed
+///   override, …).
 pub fn load_policy<F: FileSystemProvider>(
     fs: &F,
     path: &Path,
-) -> Result<PolicyFile, std::io::Error> {
-    let content = read_text_through_port(fs, path)?;
-    let policy = serde_json::from_str(&content)
-        .or_else(|_| serde_yaml::from_str(&content))
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    validate_policy(&policy)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-    Ok(policy)
+) -> Result<PolicyFile, PolicyLoadError> {
+    load_validated(fs, path, validate_policy)
 }
 
 #[cfg(test)]
@@ -91,7 +183,7 @@ mod load_waivers_tests {
     /// # Contract
     ///
     /// `load_waivers` MUST run `validate_waivers` after deserialising and
-    /// surface a schema-mismatch as `io::ErrorKind::InvalidData`. Mirrors
+    /// surface a schema-mismatch as [`PolicyLoadError::Validation`]. Mirrors
     /// `load_policy` (which already validates) so callers cannot end up
     /// with a `WaiverFile` whose `schema_version` is unknown to the
     /// matching pipeline. Pre-fix: load_waivers silently accepted any
@@ -104,7 +196,10 @@ mod load_waivers_tests {
         let err = load_waivers(&fs(), file.path()).expect_err(
             "waiver file with unknown schema_version MUST fail validation at load time",
         );
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(err, PolicyLoadError::Validation(_)),
+            "schema mismatch must surface as PolicyLoadError::Validation; got: {err:?}"
+        );
         let msg = err.to_string();
         assert!(
             msg.contains("schema_version") || msg.contains("Unsupported"),
@@ -128,7 +223,10 @@ mod load_waivers_tests {
 
         let err = load_waivers(&fs(), file.path())
             .expect_err("waiver entry with no rule_id/artifact_path/context MUST fail validation");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(err, PolicyLoadError::Validation(_)),
+            "missing-selector failure must surface as PolicyLoadError::Validation; got: {err:?}"
+        );
         assert!(
             err.to_string().contains("selector"),
             "error must mention the missing selector requirement; got: {err}"
@@ -188,7 +286,10 @@ mod load_baseline_tests {
         let err = load_baseline(&fs(), file.path()).expect_err(
             "baseline file with unknown schema_version MUST fail validation at load time",
         );
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(err, PolicyLoadError::Validation(_)),
+            "schema mismatch must surface as PolicyLoadError::Validation; got: {err:?}"
+        );
         let msg = err.to_string();
         assert!(
             msg.contains("schema_version") || msg.contains("Unsupported"),
@@ -210,7 +311,10 @@ mod load_baseline_tests {
 
         let err = load_baseline(&fs(), file.path())
             .expect_err("baseline entry with empty fingerprint MUST fail validation");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(err, PolicyLoadError::Validation(_)),
+            "empty-fingerprint rejection must surface as PolicyLoadError::Validation; got: {err:?}"
+        );
         assert!(
             err.to_string().contains("fingerprint"),
             "error must mention the empty fingerprint; got: {err}"
@@ -231,7 +335,10 @@ mod load_baseline_tests {
 
         let err = load_baseline(&fs(), file.path())
             .expect_err("baseline entry with empty reason MUST fail validation");
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            matches!(err, PolicyLoadError::Validation(_)),
+            "empty-reason rejection must surface as PolicyLoadError::Validation; got: {err:?}"
+        );
         assert!(
             err.to_string().contains("reason"),
             "error must mention the empty reason; got: {err}"
@@ -254,5 +361,75 @@ mod load_baseline_tests {
         assert_eq!(loaded.entries.len(), 1);
         assert_eq!(loaded.entries[0].rule_id, "RULE_A");
         assert_eq!(loaded.entries[0].fingerprint, "sha256:abc");
+    }
+}
+
+#[cfg(test)]
+mod parser_error_selection_tests {
+    use super::*;
+
+    /// Contract: when content begins with a JSON sentinel (`{` / `[`), a
+    /// parse failure surfaces the **JSON** parser's diagnostic — not the
+    /// YAML parser's. Pre-fix `parse_json_or_yaml` discarded `json_err` and
+    /// always reported `yaml_err` on failure, so an operator with a
+    /// `policy.json` containing a trailing comma saw `mapping values are
+    /// not allowed here` (a YAML grammar error against JSON content),
+    /// which gave no actionable hint about the actual problem.
+    #[test]
+    fn parse_error_for_json_shaped_content_surfaces_json_diagnostic() {
+        // Bracket mismatch — invalid both as JSON and as YAML. Fed through
+        // serde_yaml the canonical message is "did not find expected ',' or
+        // '}'", which does not match the JSON message and lets us assert
+        // which parser produced the diagnostic.
+        let bad_json = "{\"key\": \"value\" \"oops\"}";
+        let err: PolicyLoadError = parse_json_or_yaml::<serde_json::Value>(bad_json)
+            .expect_err("invalid JSON-shaped content must fail to parse");
+        let msg = match err {
+            PolicyLoadError::Parse(s) => s,
+            other => panic!("expected Parse error, got {other:?}"),
+        };
+        // serde_json's error for this input: "expected `,` or `}`" — the
+        // YAML parser's diagnostic for the same content reads "did not find
+        // expected" or "mapping values are not allowed here". Assert the
+        // operator-facing message has the JSON shape so a `.json` file with
+        // a syntax bug doesn't surface a YAML-grammar complaint.
+        assert!(
+            msg.contains("expected `,` or `}`") || msg.contains("expected value"),
+            "JSON-shaped content must surface JSON diagnostic, not YAML; got: {msg}"
+        );
+    }
+
+    /// Contract: when content does not look like JSON, the YAML diagnostic
+    /// dominates. This is the original behavior — pinned to ensure the new
+    /// JSON-bias does not over-fire on genuine YAML input.
+    #[test]
+    fn parse_error_for_yaml_shaped_content_surfaces_yaml_diagnostic() {
+        // Indentation-broken YAML; not even JSON-shaped (no leading `{`/`[`).
+        let bad_yaml = "key: value\n  bad: : indent\n";
+        let err: PolicyLoadError = parse_json_or_yaml::<serde_yaml::Value>(bad_yaml)
+            .expect_err("invalid YAML-shaped content must fail to parse");
+        assert!(
+            matches!(err, PolicyLoadError::Parse(_)),
+            "expected Parse error; got {err:?}"
+        );
+    }
+
+    /// Contract: a leading-whitespace JSON document still triggers the
+    /// JSON-bias. The selector trims start so a file produced by an editor
+    /// with a BOM-less leading newline (or indented JSON) does not silently
+    /// fall through to the YAML branch.
+    #[test]
+    fn parse_error_for_indented_json_still_reports_json() {
+        let bad_json = "  \n{\"oops\": \"missing-close\"\n";
+        let err: PolicyLoadError = parse_json_or_yaml::<serde_json::Value>(bad_json)
+            .expect_err("invalid leading-whitespace JSON must fail");
+        let msg = match err {
+            PolicyLoadError::Parse(s) => s,
+            other => panic!("expected Parse error, got {other:?}"),
+        };
+        assert!(
+            !msg.contains("mapping values are not allowed"),
+            "leading-whitespace JSON must NOT surface YAML's mapping error; got: {msg}"
+        );
     }
 }

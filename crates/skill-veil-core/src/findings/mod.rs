@@ -13,7 +13,6 @@ mod summary;
 mod types;
 mod weights;
 
-pub(crate) use crate::verdict::derive_package_verdict;
 pub use builder::FindingBuilder;
 pub use calibration::default_operational_contexts;
 pub(crate) use calibration::{calibrate_confidence, default_remediation};

@@ -1,10 +1,11 @@
 use super::condition::RuleCondition;
 use super::schema::Rule;
 use super::RuleError;
-use crate::adapters::pattern_helpers::try_compile;
 use crate::analyzer::SkillDocument;
 use crate::findings::{ArtifactKind, EvidenceKind, Finding, MatchTarget, ThreatCategory};
-use crate::ports::PatternMatcher;
+use crate::patterns::try_compile;
+use crate::ports::{CompiledPattern, PatternMatcher};
+use std::collections::HashMap;
 
 /// Hard cap on the number of literal values a single `SectionContains`
 /// condition may declare. Each value is wrapped in `regex::escape` and
@@ -17,13 +18,33 @@ const MAX_SECTION_CONTAINS_VALUES: usize = 200;
 
 /// Compiled version of a rule for efficient matching
 ///
-/// Contains the original rule along with pre-extracted pattern strings
-/// for efficient matching against documents.
+/// Contains the original rule along with pre-compiled pattern handles
+/// keyed by the source pattern string from the condition tree.
+///
+/// # Performance contract
+///
+/// Patterns are compiled once at rule load time (in [`CompiledRule::compile`])
+/// and reused across every document and section evaluation. Pre-fix the
+/// engine recompiled each `RuleCondition::Regex { pattern }` on every call
+/// because `check_regex_condition` invoked `matcher.find_matches(pattern,
+/// text)` — and the `RegexPatternMatcher` trait method goes through
+/// `Regex::new(pattern)` per invocation. For N documents × R rules with
+/// regex conditions this was O(N·R) regex compilations per scan; on a
+/// large corpus with the shipped 78+ built-in rules that dominated wall
+/// time and made user-supplied alternations a DoS amplifier.
+///
+/// `compiled_patterns` is keyed by the literal pattern string so the
+/// rule engine can look up the pre-compiled handle directly from each
+/// `RuleCondition::Regex { pattern }` or `RuleCondition::SectionRegex
+/// { pattern, .. }` node at match time.
 pub struct CompiledRule {
     /// The original rule definition
     pub rule: Rule,
-    /// Pattern strings extracted from the rule condition
-    pub pattern_strings: Vec<String>,
+    /// Pre-compiled handles for every regex pattern referenced by the
+    /// rule's condition tree. Built once in [`CompiledRule::compile`]
+    /// and consulted via lookup at match time so [`PatternMatcher`]'s
+    /// per-call `Regex::new` path is never on the hot path.
+    compiled_patterns: HashMap<String, CompiledPattern>,
 }
 
 fn calculate_line_number(content: &str, offset: usize) -> usize {
@@ -73,20 +94,30 @@ pub(super) fn artifact_kind_for_document(doc: &SkillDocument) -> ArtifactKind {
 impl CompiledRule {
     /// Compile a rule for matching
     ///
-    /// This validates all regex patterns in the rule condition and returns an error
-    /// if any pattern has invalid regex syntax.
+    /// This validates all regex patterns in the rule condition AND
+    /// caches the compiled handles for reuse across every subsequent
+    /// document evaluation. Returns an error if any pattern has invalid
+    /// regex syntax.
+    ///
+    /// Compilation goes through `try_compile`, which wraps the matcher
+    /// port so the rule loader never names the concrete adapter.
     pub fn compile(rule: Rule) -> Result<Self, RuleError> {
         Self::validate_value_caps(&rule.condition)?;
         let pattern_strings = Self::extract_pattern_strings(&rule.condition);
-        // Validate all regex patterns at compile time to catch syntax errors
-        // early. Validation goes through `try_compile`, which wraps the
-        // matcher port so the rule loader never names the concrete adapter.
-        for pattern in &pattern_strings {
-            try_compile(pattern)?;
+        let mut compiled_patterns = HashMap::with_capacity(pattern_strings.len());
+        for pattern in pattern_strings {
+            // Skip duplicates: a rule with `Any([Regex {p}, Regex {p}])`
+            // would otherwise compile the same pattern twice. The first
+            // compilation governs.
+            if compiled_patterns.contains_key(&pattern) {
+                continue;
+            }
+            let handle = try_compile(&pattern)?;
+            compiled_patterns.insert(pattern, handle);
         }
         Ok(Self {
             rule,
-            pattern_strings,
+            compiled_patterns,
         })
     }
 
@@ -151,15 +182,26 @@ impl CompiledRule {
         patterns
     }
 
-    /// Check if this rule matches the document using the provided matcher
-    pub fn matches<M: PatternMatcher>(&self, doc: &SkillDocument, matcher: &M) -> Vec<Finding> {
+    /// Check if this rule matches the document.
+    ///
+    /// The `matcher` argument is preserved for API stability — pre-fix
+    /// the engine called `matcher.find_matches(pattern, ...)` per
+    /// document, which forced [`PatternMatcher::find_matches`] to
+    /// recompile the pattern on every call. Compiled handles now live
+    /// inside [`CompiledRule::compiled_patterns`] and the matcher is
+    /// only consulted at rule load time, so this argument is unused on
+    /// the hot path. Keeping it in the signature lets external rule
+    /// engines that hold a custom matcher continue to work, and lets a
+    /// future `Yara` or feature-flagged matcher plug back in without
+    /// another API break.
+    pub fn matches<M: PatternMatcher>(&self, doc: &SkillDocument, _matcher: &M) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         if !self.rule.enabled {
             return findings;
         }
 
-        self.check_condition(&self.rule.condition, doc, matcher, &mut findings);
+        self.check_condition(&self.rule.condition, doc, &mut findings);
         findings
     }
 
@@ -222,14 +264,24 @@ impl CompiledRule {
         EvidenceKind::Behavior
     }
 
-    fn check_regex_condition<M: PatternMatcher>(
+    fn check_regex_condition(
         &self,
         pattern: &str,
         doc: &SkillDocument,
-        matcher: &M,
         findings: &mut Vec<Finding>,
     ) -> bool {
-        let matches = matcher.find_matches(pattern, &doc.raw_content);
+        let Some(compiled) = self.compiled_patterns.get(pattern) else {
+            // Unreachable on well-formed rules — `compile()` populates
+            // the cache from the same condition tree we're walking. A
+            // miss would only happen if the cache was bypassed by an
+            // out-of-band mutation, which the API surface doesn't allow.
+            tracing::warn!(
+                rule_id = %self.rule.id,
+                "regex pattern missing from compiled-pattern cache; this is a bug"
+            );
+            return false;
+        };
+        let matches = compiled.find_matches(&doc.raw_content);
 
         let initial_count = findings.len();
         for mat in matches {
@@ -271,19 +323,25 @@ impl CompiledRule {
         matched
     }
 
-    fn check_section_regex_condition<M: PatternMatcher>(
+    fn check_section_regex_condition(
         &self,
         section: &str,
         pattern: &str,
         doc: &SkillDocument,
-        matcher: &M,
         findings: &mut Vec<Finding>,
     ) -> bool {
         let Some(sec) = doc.get_section(section) else {
             return false;
         };
 
-        let matches = matcher.find_matches(pattern, &sec.content);
+        let Some(compiled) = self.compiled_patterns.get(pattern) else {
+            tracing::warn!(
+                rule_id = %self.rule.id,
+                "section regex pattern missing from compiled-pattern cache; this is a bug"
+            );
+            return false;
+        };
+        let matches = compiled.find_matches(&sec.content);
         let initial_count = findings.len();
         for mat in matches {
             findings.push(self.create_finding(
@@ -333,17 +391,16 @@ impl CompiledRule {
         matched
     }
 
-    fn check_any_conditions<M: PatternMatcher>(
+    fn check_any_conditions(
         &self,
         conditions: &[RuleCondition],
         doc: &SkillDocument,
-        matcher: &M,
         findings: &mut Vec<Finding>,
     ) -> bool {
         let mut matched = false;
         for cond in conditions {
             let mut branch_findings = Vec::new();
-            if self.check_condition(cond, doc, matcher, &mut branch_findings) {
+            if self.check_condition(cond, doc, &mut branch_findings) {
                 findings.extend(branch_findings);
                 matched = true;
             }
@@ -351,16 +408,15 @@ impl CompiledRule {
         matched
     }
 
-    fn check_all_conditions<M: PatternMatcher>(
+    fn check_all_conditions(
         &self,
         conditions: &[RuleCondition],
         doc: &SkillDocument,
-        matcher: &M,
         findings: &mut Vec<Finding>,
     ) -> bool {
         let mut branch_findings = Vec::new();
         for cond in conditions {
-            if !self.check_condition(cond, doc, matcher, &mut branch_findings) {
+            if !self.check_condition(cond, doc, &mut branch_findings) {
                 return false;
             }
         }
@@ -369,22 +425,19 @@ impl CompiledRule {
         true
     }
 
-    fn check_condition<M: PatternMatcher>(
+    fn check_condition(
         &self,
         condition: &RuleCondition,
         doc: &SkillDocument,
-        matcher: &M,
         findings: &mut Vec<Finding>,
     ) -> bool {
         match condition {
-            RuleCondition::Regex { pattern } => {
-                self.check_regex_condition(pattern, doc, matcher, findings)
-            }
+            RuleCondition::Regex { pattern } => self.check_regex_condition(pattern, doc, findings),
             RuleCondition::SectionContains { section, values } => {
                 self.check_section_condition(section, values, doc, findings)
             }
             RuleCondition::SectionRegex { section, pattern } => {
-                self.check_section_regex_condition(section, pattern, doc, matcher, findings)
+                self.check_section_regex_condition(section, pattern, doc, findings)
             }
             RuleCondition::ArtifactKind { kinds } => {
                 self.check_artifact_kind_condition(kinds, doc, findings)
@@ -392,12 +445,8 @@ impl CompiledRule {
             RuleCondition::CodeLanguage { languages } => {
                 self.check_code_language_condition(languages, doc, findings)
             }
-            RuleCondition::Any(conditions) => {
-                self.check_any_conditions(conditions, doc, matcher, findings)
-            }
-            RuleCondition::All(conditions) => {
-                self.check_all_conditions(conditions, doc, matcher, findings)
-            }
+            RuleCondition::Any(conditions) => self.check_any_conditions(conditions, doc, findings),
+            RuleCondition::All(conditions) => self.check_all_conditions(conditions, doc, findings),
             #[cfg(feature = "yara")]
             RuleCondition::Yara { .. } => {
                 // YARA matching is handled by the yara_engine module

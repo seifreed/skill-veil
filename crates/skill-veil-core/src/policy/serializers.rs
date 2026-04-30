@@ -5,9 +5,9 @@ use super::{
     ShieldPolicy,
 };
 use crate::findings::{
-    derive_package_verdict, Finding, FindingSummary, PackageVerdictReport, RecommendedAction,
-    Severity, Verdict,
+    Finding, FindingSummary, PackageVerdictReport, RecommendedAction, Severity, Verdict,
 };
+use crate::verdict::derive_package_verdict;
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 

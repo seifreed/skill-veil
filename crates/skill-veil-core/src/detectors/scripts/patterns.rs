@@ -1,4 +1,4 @@
-use crate::adapters::pattern_helpers::compile_patterns;
+use crate::patterns::compile_patterns;
 use crate::ports::CompiledPattern;
 use std::sync::LazyLock;
 

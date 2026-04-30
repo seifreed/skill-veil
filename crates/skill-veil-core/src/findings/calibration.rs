@@ -2,9 +2,14 @@ use super::{
     ArtifactKind, EvidenceKind, OperationalContext, ThreatCategory, CATEGORY_BASELINE_AUTONOMY,
     CATEGORY_BASELINE_GENERIC, CATEGORY_BASELINE_HIGH_RISK, CATEGORY_BASELINE_OBFUSCATION,
     CATEGORY_BASELINE_SOCIAL, CATEGORY_BASELINE_SUPPLY_CHAIN, CATEGORY_BASELINE_TOOL_ABUSE,
+    CONFIDENCE_BASELINE_WEIGHT, CONFIDENCE_CEILING, CONFIDENCE_FLOOR, CONFIDENCE_RAW_WEIGHT,
     EVIDENCE_BASELINE_BEHAVIOR, EVIDENCE_BASELINE_CONTEXT, EVIDENCE_BASELINE_INTENT,
     EVIDENCE_BASELINE_IOC,
 };
+
+/// Divisor for the arithmetic mean of the evidence and category baselines.
+/// Hardcoded to 2 because the blend mixes exactly those two axes.
+const BASELINE_AXIS_COUNT: f32 = 2.0;
 
 pub(crate) fn calibrate_confidence(
     raw_confidence: f32,
@@ -36,11 +41,14 @@ pub(crate) fn calibrate_confidence(
         ThreatCategory::Obfuscation => CATEGORY_BASELINE_OBFUSCATION,
         ThreatCategory::Generic => CATEGORY_BASELINE_GENERIC,
     };
-    let baseline = ((evidence_baseline + category_baseline) / 2.0).clamp(0.1, 0.99);
+    let baseline = ((evidence_baseline + category_baseline) / BASELINE_AXIS_COUNT)
+        .clamp(CONFIDENCE_FLOOR, CONFIDENCE_CEILING);
     // `clamp` propagates NaN, but `raw_confidence` is already sanitized at
     // the single call site `FindingBuilder::confidence` (see `builder.rs`),
     // so we never see NaN here.
-    let calibrated = ((raw_confidence * 0.7) + (baseline * 0.3)).clamp(0.1, 0.99);
+    let calibrated = ((raw_confidence * CONFIDENCE_RAW_WEIGHT)
+        + (baseline * CONFIDENCE_BASELINE_WEIGHT))
+        .clamp(CONFIDENCE_FLOOR, CONFIDENCE_CEILING);
     let rationale = format!(
         "Calibrated from raw {:.2} using evidence={} baseline {:.2} and category={} baseline {:.2}",
         raw_confidence, evidence_kind, evidence_baseline, category, category_baseline
@@ -166,59 +174,61 @@ mod tests {
     }
 
     /// Contract: `calibrate_confidence` blends the raw value with a per-axis
-    /// baseline using `0.7 * raw + 0.3 * baseline`. The baseline is the
-    /// arithmetic mean of `EVIDENCE_BASELINE_*` and `CATEGORY_BASELINE_*`,
-    /// then clamped to `[0.1, 0.99]`. This test pins the formula on a
-    /// concrete (raw, evidence, category) triple so a refactor that
-    /// reorders or reweights the blend cannot regress silently.
+    /// baseline using the named weight constants `CONFIDENCE_RAW_WEIGHT` and
+    /// `CONFIDENCE_BASELINE_WEIGHT`. The baseline is the arithmetic mean of
+    /// `EVIDENCE_BASELINE_*` and `CATEGORY_BASELINE_*`, then clamped to the
+    /// `CONFIDENCE_FLOOR` / `CONFIDENCE_CEILING` interval. This test pins the
+    /// formula on a concrete (raw, evidence, category) triple so a refactor
+    /// that reorders or reweights the blend cannot regress silently.
     #[test]
     fn calibrate_confidence_uses_documented_blend_formula() {
         let raw = 0.50;
         let (calibrated, _rationale) =
             calibrate_confidence(raw, EvidenceKind::Behavior, ThreatCategory::RemoteExec);
-        let evidence_baseline = EVIDENCE_BASELINE_BEHAVIOR; // 0.92
-        let category_baseline = CATEGORY_BASELINE_HIGH_RISK; // 0.94
-        let expected_baseline = (evidence_baseline + category_baseline) / 2.0;
-        let expected = (raw * 0.7 + expected_baseline * 0.3).clamp(0.1, 0.99);
+        let evidence_baseline = EVIDENCE_BASELINE_BEHAVIOR;
+        let category_baseline = CATEGORY_BASELINE_HIGH_RISK;
+        let expected_baseline = (evidence_baseline + category_baseline) / BASELINE_AXIS_COUNT;
+        let expected = (raw * CONFIDENCE_RAW_WEIGHT
+            + expected_baseline * CONFIDENCE_BASELINE_WEIGHT)
+            .clamp(CONFIDENCE_FLOOR, CONFIDENCE_CEILING);
         assert!(
             approx_eq(calibrated, expected),
             "blend formula regressed: got {calibrated}, expected {expected}",
         );
     }
 
-    /// Contract: the calibrated value MUST never exceed the `0.99` ceiling.
-    /// The blend `0.7*raw + 0.3*baseline` with raw=1.0 and the highest
-    /// possible baselines (Ioc=0.98, HighRisk=0.94) yields ~0.988, which
-    /// already sits below 0.99 — pinning `<= 0.99` confirms the clamp
-    /// semantics without depending on the exact arithmetic. If a future
-    /// constant change pushes the unclamped result above 0.99, the clamp
-    /// MUST hold and this test pins that contract.
+    /// Contract: the calibrated value MUST never exceed `CONFIDENCE_CEILING`.
+    /// With raw=1.0 and the highest possible baselines (Ioc + HighRisk) the
+    /// unclamped blend already sits below the ceiling, so this test pins the
+    /// clamp semantics rather than the exact arithmetic — if a future constant
+    /// change pushes the unclamped result above the ceiling, the clamp MUST
+    /// still hold.
     #[test]
-    fn calibrate_confidence_never_exceeds_zero_point_99_ceiling() {
+    fn calibrate_confidence_never_exceeds_ceiling() {
         let (calibrated, _) =
             calibrate_confidence(1.0, EvidenceKind::Ioc, ThreatCategory::RemoteExec);
         assert!(
-            calibrated <= 0.99 + f32::EPSILON,
-            "calibrated must respect the 0.99 ceiling; got {calibrated}",
+            calibrated <= CONFIDENCE_CEILING + f32::EPSILON,
+            "calibrated must respect CONFIDENCE_CEILING ({CONFIDENCE_CEILING}); got {calibrated}",
         );
         assert!(
-            calibrated >= 0.1 - f32::EPSILON,
-            "calibrated must respect the 0.1 floor; got {calibrated}",
+            calibrated >= CONFIDENCE_FLOOR - f32::EPSILON,
+            "calibrated must respect CONFIDENCE_FLOOR ({CONFIDENCE_FLOOR}); got {calibrated}",
         );
     }
 
-    /// Contract: the calibrated value MUST clamp to the `0.1` lower bound,
-    /// even when raw is 0.0 and the baseline blend would compute lower.
-    /// Pre-clamp behavior: `0.0 * 0.7 + min_baseline * 0.3 = 0.3 * 0.76 ≈ 0.228`,
-    /// which is above 0.1, so the clamp is exercised by checking the
-    /// non-zero floor. Use a low-baseline category to confirm behavior.
+    /// Contract: the calibrated value MUST respect `CONFIDENCE_FLOOR` even
+    /// when raw is 0.0. Pre-clamp behavior with raw=0.0 and the lowest
+    /// baselines is `BASELINE_WEIGHT * min_baseline`, which currently sits
+    /// above the floor, so the clamp is exercised by asserting the floor
+    /// bound rather than the exact arithmetic.
     #[test]
-    fn calibrate_confidence_clamps_lower_to_zero_point_one() {
+    fn calibrate_confidence_clamps_to_floor() {
         let (calibrated, _) =
             calibrate_confidence(0.0, EvidenceKind::Context, ThreatCategory::Generic);
         assert!(
-            calibrated >= 0.1 - f32::EPSILON,
-            "calibrated must respect the 0.1 floor; got {calibrated}",
+            calibrated >= CONFIDENCE_FLOOR - f32::EPSILON,
+            "calibrated must respect CONFIDENCE_FLOOR ({CONFIDENCE_FLOOR}); got {calibrated}",
         );
     }
 

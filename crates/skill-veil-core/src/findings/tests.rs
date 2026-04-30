@@ -2,6 +2,7 @@ use super::*;
 use crate::artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactGraph,
 };
+use crate::verdict::derive_package_verdict;
 
 /// Contract: a finding whose `artifact_path` lives in a sibling
 /// subdirectory MUST classify as supporting, never as primary, even

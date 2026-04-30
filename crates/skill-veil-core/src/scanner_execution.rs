@@ -32,8 +32,7 @@
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{
-    deduplicate_findings, derive_package_verdict, ArtifactKind, Finding, FindingSummary,
-    MatchTarget, PackageVerdictReport,
+    deduplicate_findings, ArtifactKind, Finding, FindingSummary, MatchTarget, PackageVerdictReport,
 };
 use crate::policy::{
     AppliedPolicyOverride, PolicyAudit, SuppressionSummary, POLICY_AUDIT_PRECEDENCE,
@@ -45,6 +44,7 @@ use crate::scanner_support::{
     parse_warning_finding, read_text_file_lossy, structured_parse_warning,
 };
 use crate::services::file_discovery::FileDiscoveryService;
+use crate::verdict::derive_package_verdict;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
