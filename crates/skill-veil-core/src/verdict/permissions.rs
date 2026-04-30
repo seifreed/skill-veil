@@ -64,6 +64,11 @@ pub(super) fn infer_permissions_from_keywords(
         ]),
         DeclaredPermission::BrowserFull,
     );
+    // Natural-language synonyms for file modification / deletion. The
+    // commit-47839ce fix introduced `delete file/files`; subsequent
+    // synonyms (`remove`, `wipe`, `erase`, `unlink`) had been omitted,
+    // letting a skill that declared "remove files from workspace"
+    // escape inference. Symmetric with `detectors::permissions`.
     add_if(
         &mut permissions,
         matches_any(&[
@@ -73,6 +78,14 @@ pub(super) fn infer_permissions_from_keywords(
             "modify file",
             "modify disk",
             "modify local",
+            "remove file",
+            "remove files",
+            "wipe file",
+            "wipe files",
+            "erase file",
+            "erase files",
+            "unlink file",
+            "unlink files",
         ]),
         DeclaredPermission::FileWrite,
     );
@@ -178,6 +191,37 @@ mod tests {
     #[test]
     fn infer_keywords_classifies_delete_file_phrases_as_file_write() {
         for value in ["delete file", "delete files"] {
+            let findings = vec![finding_with_match_value("DECLARED_PERMISSION_X", value)];
+            let permissions =
+                infer_permissions_from_keywords(&findings, &FindingSummary::from_findings(&[]));
+            assert!(
+                permissions.contains(&DeclaredPermission::FileWrite),
+                "match_value {value:?} MUST infer FileWrite; got {permissions:?}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `infer_permissions_from_keywords` MUST classify natural-language
+    /// synonyms for file modification / deletion (`remove`, `wipe`,
+    /// `erase`, `unlink`) as [`DeclaredPermission::FileWrite`]. The
+    /// previous fix only added `delete file/files`, leaving an asymmetric
+    /// gap where a skill declaring `"remove files from workspace"` did
+    /// not infer the FileWrite permission and the verdict layer missed
+    /// the file-mutation capability.
+    #[test]
+    fn infer_keywords_classifies_file_write_synonyms() {
+        for value in [
+            "remove file",
+            "remove files",
+            "wipe file",
+            "wipe files",
+            "erase file",
+            "erase files",
+            "unlink file",
+            "unlink files",
+        ] {
             let findings = vec![finding_with_match_value("DECLARED_PERMISSION_X", value)];
             let permissions =
                 infer_permissions_from_keywords(&findings, &FindingSummary::from_findings(&[]));

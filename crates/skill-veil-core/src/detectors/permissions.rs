@@ -205,11 +205,25 @@ pub(crate) fn explicit_declared_permission_rules(
             "Artifact declares broad browser automation permissions",
         ));
     }
+    // Natural-language synonyms for file modification / deletion. The
+    // commit-47839ce fix introduced `delete file/files`; subsequent
+    // synonyms (`remove`, `wipe`, `erase`, `unlink`) had been omitted,
+    // letting a skill that declared "remove files from workspace"
+    // escape `DECLARED_PERMISSION_FILE_WRITE`. The keyword surface is
+    // now symmetric with the verdict layer (`verdict::permissions`).
     if context.contains("write file")
         || context.contains("write files")
         || context.contains("modify files")
         || context.contains("delete file")
         || context.contains("delete files")
+        || context.contains("remove file")
+        || context.contains("remove files")
+        || context.contains("wipe file")
+        || context.contains("wipe files")
+        || context.contains("erase file")
+        || context.contains("erase files")
+        || context.contains("unlink file")
+        || context.contains("unlink files")
     {
         rules.push((
             "DECLARED_PERMISSION_FILE_WRITE",

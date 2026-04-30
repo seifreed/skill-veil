@@ -324,17 +324,46 @@ fn build_verdict_and_summaries(
 
 /// Collect IOCs from the primary document and every supporting artifact. Runs
 /// offline (no network) and feeds downstream enrichment tooling.
+///
+/// # Hash-fidelity contract
+///
+/// The primary artifact MUST be hashed over its raw on-disk bytes, NOT
+/// over the lossy-decoded UTF-8 string in `doc.raw_content`. The lossy
+/// decode replaces every invalid byte with U+FFFD (`0xEF 0xBF 0xBD` in
+/// UTF-8), so a binary-disguised skill (ZIP/PE/ELF embedded in `.md`)
+/// would otherwise hash to a digest that disagrees with `sha256sum` on
+/// disk and breaks VT cross-check exactly when it matters most. The
+/// fix re-reads the raw bytes through the `FileSystemProvider` port so
+/// the SHA-256 in `ExtractedIocs.file_hashes` round-trips with stock
+/// hashing tools.
 fn collect_extracted_iocs<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     doc: &SkillDocument,
     primary_path: &Path,
     primary_content: &str,
 ) -> crate::ioc_extraction::ExtractedIocs {
-    let mut iocs =
-        crate::ioc_extraction::extract_from_artifact(primary_path, primary_content.as_bytes());
+    let fs = scanner.file_discovery().fs_provider();
+    // IOC extraction has two output groups:
+    //  - URL/IP/domain tokens, which can come from the lossy-decoded
+    //    string without changing the result (they're ASCII-only).
+    //  - File hashes, which MUST be computed over the on-disk bytes.
+    // We re-read the primary file once: the cost is one extra
+    // `read_file_bytes` per scan and the digest is correct.
+    let primary_bytes = match fs.read_file_bytes(primary_path) {
+        Ok(file) => file.as_bytes().to_vec(),
+        Err(err) => {
+            tracing::warn!(
+                path = %primary_path.display(),
+                error = %err,
+                "IOC extraction: failed to re-read primary artifact for SHA-256; \
+                 falling back to lossy-decoded content (digest may not match sha256sum)"
+            );
+            primary_content.as_bytes().to_vec()
+        }
+    };
+    let mut iocs = crate::ioc_extraction::extract_from_artifact(primary_path, &primary_bytes);
 
     let supporting = collect_supporting_artifact_paths(scanner, doc);
-    let fs = scanner.file_discovery().fs_provider();
     for path in supporting {
         if let Ok(file) = fs.read_file_bytes(&path) {
             let bytes = file.as_bytes();

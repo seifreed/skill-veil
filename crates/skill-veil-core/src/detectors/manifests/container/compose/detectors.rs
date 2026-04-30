@@ -169,7 +169,8 @@ pub(super) fn detect_dangerous_cap_add(
         .filter_map(serde_yaml::Value::as_str)
         .filter_map(|raw| {
             let canonical = canonicalise_capability(raw);
-            DANGEROUS_LINUX_CAPABILITIES.contains(&canonical.as_str())
+            DANGEROUS_LINUX_CAPABILITIES
+                .contains(&canonical.as_str())
                 .then_some((raw, canonical))
         })
         .map(|(raw, canonical)| {

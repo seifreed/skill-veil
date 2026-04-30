@@ -18,10 +18,19 @@ pub(crate) fn format_sarif_output(results: &[ScanResult]) -> Result<String> {
             if let Some(run) = sarif.runs.first_mut() {
                 if let Some(other_run) = other.runs.first() {
                     run.results.extend(other_run.results.clone());
-                    let existing_rule_ids: std::collections::HashSet<_> =
-                        run.tool.driver.rules.iter().map(|r| r.id.clone()).collect();
+                    // Pre-fix this snapshotted `run.tool.driver.rules` into a
+                    // `HashSet` once before the loop. New rules pushed inside
+                    // the loop did not update the snapshot, so an
+                    // `other_run` that itself contained the same rule id
+                    // twice (or a future caller batching multiple scans
+                    // into one merge) produced duplicate rule entries in
+                    // `tool.driver.rules`. The SARIF 2.1.0 schema requires
+                    // `tool.driver.rules[].id` to be unique within a run;
+                    // GitHub Code Scanning rejects the document otherwise.
+                    // The .any() check looks at the live Vec so each push
+                    // is immediately visible.
                     for rule in &other_run.tool.driver.rules {
-                        if !existing_rule_ids.contains(&rule.id) {
+                        if !run.tool.driver.rules.iter().any(|r| r.id == rule.id) {
                             run.tool.driver.rules.push(rule.clone());
                         }
                     }

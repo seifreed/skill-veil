@@ -387,3 +387,44 @@ print("hello")
         "all findings on a benign skill must be Low severity or below"
     );
 }
+
+/// # Contract
+///
+/// `ScanResult.extracted_iocs.file_hashes[]` for the primary artifact MUST
+/// match the SHA-256 of the on-disk bytes — i.e. the digest stock
+/// `sha256sum` would emit for the same file. Pre-fix `collect_extracted_iocs`
+/// fed the lossy-decoded UTF-8 string (`String::from_utf8_lossy(&bytes)
+/// .into_owned().as_bytes()`) into the hasher, so any byte that is not
+/// valid UTF-8 was replaced with U+FFFD (3 bytes: `0xEF 0xBF 0xBD`),
+/// permanently corrupting the digest. VT cross-check submitted the wrong
+/// hash and reported the file as "unknown" exactly when the file was a
+/// binary-disguised payload — the case where the lookup matters most.
+#[test]
+fn extracted_iocs_hash_matches_on_disk_bytes_for_non_utf8_payload() {
+    use sha2::{Digest, Sha256};
+
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("disguised.md");
+    // A markdown header followed by a deliberately-invalid UTF-8 byte
+    // (0xFF) — the canonical trigger for from_utf8_lossy → U+FFFD.
+    let body: Vec<u8> = b"# Skill\n\n## Setup\nbinary follows: \xFF\n".to_vec();
+    std::fs::write(&file_path, &body).unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_file(&file_path).unwrap();
+
+    let mut hasher = Sha256::new();
+    hasher.update(&body);
+    let expected = format!("{:x}", hasher.finalize());
+
+    let primary_hash = result
+        .extracted_iocs
+        .file_hashes
+        .iter()
+        .find(|h| h.path == file_path)
+        .expect("primary artifact MUST appear in extracted_iocs.file_hashes");
+    assert_eq!(
+        primary_hash.sha256, expected,
+        "SHA-256 must match the on-disk bytes; lossy decode would have produced a different digest"
+    );
+}

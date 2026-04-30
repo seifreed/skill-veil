@@ -131,6 +131,16 @@ const KEEP_SPECIAL_IPV4: &[&str] = &[
     "169.254.169.254", // cloud metadata service
 ];
 
+/// Hard upper bound on the number of distinct IOC strings of any single
+/// kind (URLs, domains, IPv4, IPv6) extracted from one artifact.
+/// Mitigates a memory-exhaustion vector where a crafted artifact ships
+/// millions of unique URLs / IPs and the unbounded `BTreeSet`s grow
+/// to several GB before returning. The limit is generous enough that
+/// a real package with hundreds of unique IOCs is unaffected, while a
+/// 50 MB synthetic file with a million unique URLs is truncated with
+/// a `tracing::warn` so operators see the cap was hit.
+pub const MAX_IOCS_PER_KIND_PER_ARTIFACT: usize = 4_096;
+
 /// Extract IOCs from a single artifact's textual content plus its path.
 /// `path` is used for (a) computing the file hash and (b) attaching to the
 /// returned FileHash record.
@@ -150,34 +160,62 @@ pub fn extract_from_artifact(path: &Path, content: &[u8]) -> ExtractedIocs {
 }
 
 /// Extract URL/domain/IP indicators from a string (no file-hash computed).
+///
+/// Each output kind is capped at [`MAX_IOCS_PER_KIND_PER_ARTIFACT`].
+/// Reaching the cap emits a `tracing::warn!` so operators can tell when
+/// truncation occurred. Pre-fix the `BTreeSet`s grew without bound, so
+/// a crafted 50 MB artifact with millions of unique URLs / IPs caused
+/// several-GB heap growth before returning.
 pub fn extract_from_text(text: &str) -> ExtractedIocs {
     let mut urls: BTreeSet<String> = BTreeSet::new();
     let mut domains: BTreeSet<String> = BTreeSet::new();
     let mut ipv4: BTreeSet<String> = BTreeSet::new();
     let mut ipv6: BTreeSet<String> = BTreeSet::new();
 
+    /// Insert into a bounded IOC set; returns `false` once the set is
+    /// at capacity. Callers stop their inner loop on `false` so they
+    /// do not keep allocating regex matches into a discarded value.
+    fn try_insert_bounded(set: &mut BTreeSet<String>, value: String, kind: &'static str) -> bool {
+        if set.len() >= MAX_IOCS_PER_KIND_PER_ARTIFACT {
+            tracing::warn!(
+                kind,
+                cap = MAX_IOCS_PER_KIND_PER_ARTIFACT,
+                "ioc_extraction: per-artifact IOC cap reached; truncating further matches"
+            );
+            return false;
+        }
+        set.insert(value);
+        true
+    }
+
     for m in URL_PATTERN.find_matches(text) {
         let raw = m.matched_text.as_str();
         let trimmed = raw.trim_end_matches([',', '.', ';', ':', ')', ']', '}', '!', '?']);
-        urls.insert(trimmed.to_string());
+        if !try_insert_bounded(&mut urls, trimmed.to_string(), "url") {
+            break;
+        }
         if let Some(host) = extract_host_from_url(trimmed) {
-            if !is_noise_domain(&host) && !is_ipv4(&host) && !is_ipv6(&host) {
-                domains.insert(host);
+            if !is_noise_domain(&host)
+                && !is_ipv4(&host)
+                && !is_ipv6(&host)
+                && !try_insert_bounded(&mut domains, host, "domain")
+            {
+                break;
             }
         }
     }
 
     for m in HOST_MENTION_PATTERN.find_matches(text) {
         let host = m.matched_text.to_ascii_lowercase();
-        if !is_noise_domain(&host) {
-            domains.insert(host);
+        if !is_noise_domain(&host) && !try_insert_bounded(&mut domains, host, "domain") {
+            break;
         }
     }
 
     for m in IPV4_PATTERN.find_matches(text) {
         let ip = m.matched_text.as_str();
-        if !is_noise_ipv4(ip) {
-            ipv4.insert(ip.to_string());
+        if !is_noise_ipv4(ip) && !try_insert_bounded(&mut ipv4, ip.to_string(), "ipv4") {
+            break;
         }
     }
 
@@ -188,8 +226,11 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
         // accepted hex-colon tokens (e.g. 4-group session IDs without `::`
         // and without 8 groups) that `is_ipv6` would reject — leaking
         // false-positive IOCs into VT lookups and finding evidence.
-        if ip.matches(':').count() >= 2 && is_plausible_ipv6(&ip) {
-            ipv6.insert(ip);
+        if ip.matches(':').count() >= 2
+            && is_plausible_ipv6(&ip)
+            && !try_insert_bounded(&mut ipv6, ip, "ipv6")
+        {
+            break;
         }
     }
 
@@ -294,6 +335,32 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// # Contract
+    ///
+    /// `extract_from_text` MUST cap each IOC kind at
+    /// `MAX_IOCS_PER_KIND_PER_ARTIFACT`. Pre-fix the `BTreeSet`s grew
+    /// without bound, so a crafted artifact with millions of unique
+    /// URLs caused multi-GB heap growth before returning. The cap is
+    /// generous enough that real packages (hundreds of unique IOCs)
+    /// are unaffected; we hit it only on synthetic adversarial input.
+    #[test]
+    fn extract_from_text_caps_url_count_per_artifact() {
+        let mut text = String::new();
+        // Synthesise more URLs than the cap so we know truncation fires.
+        let target = MAX_IOCS_PER_KIND_PER_ARTIFACT + 256;
+        for n in 0..target {
+            use std::fmt::Write;
+            let _ = writeln!(text, "see https://example-{n}.test/ for details");
+        }
+        let iocs = extract_from_text(&text);
+        assert!(
+            iocs.urls.len() <= MAX_IOCS_PER_KIND_PER_ARTIFACT,
+            "URL set must be capped at {}; got {}",
+            MAX_IOCS_PER_KIND_PER_ARTIFACT,
+            iocs.urls.len()
+        );
+    }
 
     #[test]
     fn extracts_urls_and_domains_from_script() {

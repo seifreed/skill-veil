@@ -22,11 +22,26 @@ lazy_pattern!(
     r"\b[a-z0-9][a-z0-9-]{0,62}\.internal(?:[^a-z0-9-]|$)"
 );
 
+// IPv6 loopback in any of its canonical forms. Pre-fix the classifier
+// covered IPv4 only (`127.0.0.1`, RFC1918), so a request like
+// `requests.get('http://[::1]:8080/admin')` did not produce
+// `INTERNAL_NETWORK_ACCESS` or `SSRF_LIKE_FETCH` — both rules gated on
+// `has_internal_target` which was driven by `classify_internal_network_target`.
+// Recognised forms: `::1` (canonical), `[::1]` (URL bracket form),
+// `0:0:0:0:0:0:0:1` (full uncompressed), and `::ffff:127.0.0.1`
+// (IPv4-mapped IPv6 loopback). All require non-identifier-byte
+// boundaries on either side so identifiers like `foo::1` or
+// `bar::1abc` do not match.
+lazy_pattern!(
+    RE_IPV6_LOOPBACK,
+    r"(?:^|[^A-Za-z0-9_:])(?:\[::1\]|::1|0:0:0:0:0:0:0:1|::ffff:127\.0\.0\.1)(?:[^A-Za-z0-9_:]|$)"
+);
+
 fn classify_internal_network_target(content: &str) -> Option<NetworkTarget> {
     let lower = content.to_ascii_lowercase();
     if lower.contains("169.254.169.254") {
         Some(NetworkTarget::MetadataService)
-    } else if lower.contains("127.0.0.1") {
+    } else if lower.contains("127.0.0.1") || RE_IPV6_LOOPBACK.is_match(&lower) {
         Some(NetworkTarget::Loopback)
     } else if lower.contains("localhost") {
         Some(NetworkTarget::Localhost)
@@ -105,5 +120,52 @@ mod tests {
             contains_internal_network_target("ssh user@build.local /tmp"),
             Some(NetworkTarget::LocalDomain)
         );
+    }
+
+    /// # Contract
+    ///
+    /// IPv6 loopback in every canonical form MUST classify as
+    /// `Loopback`. Pre-fix the classifier handled IPv4 only, so an
+    /// HTTP request to `[::1]:8080` did not produce
+    /// `INTERNAL_NETWORK_ACCESS` or `SSRF_LIKE_FETCH` because
+    /// `has_internal_target` (driven by this classifier) was `false`.
+    /// IPv6-only deployments and dual-stack hosts that prefer `::1`
+    /// over `127.0.0.1` were silently exempt from the internal-network
+    /// detector.
+    #[test]
+    fn classify_recognises_ipv6_loopback_forms() {
+        for sample in [
+            "requests.get('http://[::1]:8080/admin')",
+            "curl http://[::1]/health",
+            "fetch('http://0:0:0:0:0:0:0:1/x')",
+            "curl http://[::ffff:127.0.0.1]/x",
+            "ssh ::1",
+        ] {
+            assert_eq!(
+                contains_internal_network_target(sample),
+                Some(NetworkTarget::Loopback),
+                "IPv6 loopback in {sample:?} must classify as Loopback"
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Identifier-shaped substrings that contain `::1` as a fragment
+    /// of a larger token (Rust paths like `module::foo::1` are not
+    /// possible because numeric segments are illegal there, but
+    /// configuration tokens like `foo::1abc` exist in some YAMLs)
+    /// MUST NOT classify as Loopback. Pins the boundary check on
+    /// `RE_IPV6_LOOPBACK` so a future loosening cannot accidentally
+    /// re-introduce identifier collisions.
+    #[test]
+    fn classify_does_not_treat_identifier_substrings_as_ipv6_loopback() {
+        for sample in ["tag = foo::1abc", "version = ::1xy", "let x = id::1234"] {
+            assert_eq!(
+                contains_internal_network_target(sample),
+                None,
+                "identifier substring {sample:?} must NOT classify as Loopback"
+            );
+        }
     }
 }

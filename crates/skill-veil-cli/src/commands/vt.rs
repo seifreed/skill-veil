@@ -43,9 +43,24 @@ fn run_download(args: VtDownloadArgs) -> Result<()> {
 
 fn run_report(args: VtReportArgs) -> Result<()> {
     let client = build_client()?;
-    let envelope = client
-        .get_file_report(&args.sha256)
-        .with_context(|| format!("fetching VT report for {}", args.sha256))?;
+    // Route through `lookup_file_report` (Ok(None) on HTTP 404) rather
+    // than `get_file_report` (errors on 404). A user looking up a
+    // legitimate-but-not-yet-published hash should see a clean
+    // "not found" message and exit 0, not a confusing
+    // `HttpStatus { status: 404 }` error and exit 2.
+    let envelope = match client
+        .lookup_file_report(&args.sha256)
+        .with_context(|| format!("fetching VT report for {}", args.sha256))?
+    {
+        Some(envelope) => envelope,
+        None => {
+            eprintln!(
+                "VT has no report for {} (404 — file unknown to VirusTotal)",
+                args.sha256
+            );
+            return Ok(());
+        }
+    };
     let cached = CachedReport {
         sha256: envelope.data.id.clone(),
         fetched_at: chrono::Utc::now().to_rfc3339(),
@@ -55,7 +70,8 @@ fn run_report(args: VtReportArgs) -> Result<()> {
     match args.output {
         Some(path) => {
             std::fs::write(&path, &json).with_context(|| format!("writing {}", path.display()))?;
-            println!("wrote VT report to {}", path.display());
+            // Status to stderr so stdout stays clean for piped consumers.
+            eprintln!("wrote VT report to {}", path.display());
         }
         None => println!("{json}"),
     }
@@ -82,9 +98,15 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
         Some(path) => {
             std::fs::write(&path, &rendered)
                 .with_context(|| format!("writing {}", path.display()))?;
+            // Status + summary go to STDERR so STDOUT stays empty when
+            // `--output` is set. Pre-fix this `println!` wrote the text
+            // summary to STDOUT regardless of the user's chosen
+            // `--format`, so a pipeline running
+            //   `skill-veil vt cross-check --format json --output out.json`
+            // and reading STDOUT (expecting JSON) instead received the
+            // text summary, breaking any JSON-parser-based consumer.
             eprintln!("wrote cross-check to {}", path.display());
-            // Always also print the one-line summary for quick feedback.
-            println!("{}", cross_check::render_text(&summary));
+            eprintln!("{}", cross_check::render_text(&summary));
         }
         None => println!("{rendered}"),
     }

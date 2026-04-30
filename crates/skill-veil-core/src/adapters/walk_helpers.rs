@@ -28,12 +28,19 @@ use std::path::Path;
 /// for files. A tarball can ship a `node_modules` rendering with a
 /// stray non-UTF-8 byte; without lossy matching the walker would
 /// recurse into it instead of pruning.
+///
+/// The comparison is **case-insensitive** (ASCII): on case-sensitive
+/// filesystems (Linux ext4, the canonical CI target) a malicious package
+/// shipping `Node_Modules/` or `VENV/` would otherwise bypass the prune
+/// list verbatim and have its contents scanned. macOS HFS+/APFS folds
+/// case in the filesystem itself, so the gap was Linux-only — exactly
+/// where adversarial scans run.
 pub(super) fn is_skipped_dir(entry: &walkdir::DirEntry, skip_dirs: &[&str]) -> bool {
     if !entry.file_type().is_dir() {
         return false;
     }
     let name = entry.file_name().to_string_lossy();
-    skip_dirs.contains(&name.as_ref())
+    skip_dirs.iter().any(|skip| name.eq_ignore_ascii_case(skip))
 }
 
 /// Match the entry's filename against the discovery pattern using a
@@ -53,6 +60,62 @@ pub(super) fn lossy_filename_with_warning<'a>(
                 full_path.display(),
             );
             filename.to_string_lossy()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// # Contract
+    ///
+    /// `is_skipped_dir` MUST be case-insensitive (ASCII). On Linux ext4
+    /// — the canonical CI target — directory names are case-sensitive,
+    /// so a malicious package shipping `Node_Modules/` or `VENV/`
+    /// would otherwise bypass the prune list verbatim. The comparison
+    /// must therefore fold case before matching against the registered
+    /// skip-list entries.
+    #[test]
+    fn is_skipped_dir_matches_skip_list_entries_case_insensitively() {
+        let dir = tempdir().expect("tempdir");
+        for name in ["Node_Modules", "VENV", ".GIT", "Target", "DiSt"] {
+            let path = dir.path().join(name);
+            fs::create_dir_all(&path).expect("create dir");
+        }
+        let skip_dirs = &["node_modules", "venv", ".git", "target", "dist"];
+        let walker = walkdir::WalkDir::new(dir.path()).min_depth(1).max_depth(1);
+        for entry in walker.into_iter().filter_map(Result::ok) {
+            assert!(
+                is_skipped_dir(&entry, skip_dirs),
+                "{} must be pruned (case-insensitive); skip_dirs={skip_dirs:?}",
+                entry.file_name().to_string_lossy()
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// `is_skipped_dir` MUST NOT prune directories whose names are
+    /// unrelated to the skip-list. Pins the tightening so a future
+    /// regression that over-broadens the comparison (e.g. substring
+    /// match instead of equality) gets caught here.
+    #[test]
+    fn is_skipped_dir_does_not_prune_unrelated_directories() {
+        let dir = tempdir().expect("tempdir");
+        for name in ["src", "scripts", "tests", "docs", "node_modules_backup"] {
+            fs::create_dir_all(dir.path().join(name)).expect("create dir");
+        }
+        let skip_dirs = &["node_modules", "venv", ".git", "target", "dist"];
+        let walker = walkdir::WalkDir::new(dir.path()).min_depth(1).max_depth(1);
+        for entry in walker.into_iter().filter_map(Result::ok) {
+            assert!(
+                !is_skipped_dir(&entry, skip_dirs),
+                "{} must NOT be pruned; skip_dirs={skip_dirs:?}",
+                entry.file_name().to_string_lossy()
+            );
         }
     }
 }

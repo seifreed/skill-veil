@@ -372,7 +372,16 @@ fn append_shield_policy(output: &mut String, policy: &ShieldPolicy) {
         let _ = writeln!(output, "  - {rec}");
     }
     if let Some(expires) = &policy.expires_at {
-        let _ = writeln!(output, "expires_at: {}", expires.format("%Y-%m-%d"));
+        // RFC 3339 (instead of date-only) preserves the full `DateTime<Utc>`
+        // precision so SHIELD output round-trips through any consumer that
+        // parses `expires_at` as a timestamp. Pre-fix `%Y-%m-%d` truncated
+        // hours / minutes / seconds, which:
+        //   1) lost the precision present in the underlying `DateTime`,
+        //   2) made SHIELD inconsistent with the JSON path (chrono emits
+        //      RFC 3339 by default), and
+        //   3) reconstructed values at midnight UTC on round-trip,
+        //      silently extending or shortening the actual expiration.
+        let _ = writeln!(output, "expires_at: {}", expires.to_rfc3339());
     }
     let _ = writeln!(output, "revoked: {}", policy.revoked);
     output.push_str("```\n\n");
