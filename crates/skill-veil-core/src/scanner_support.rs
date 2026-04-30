@@ -9,7 +9,14 @@ use crate::scanner::ScanError;
 use crate::services::{DOCKER_COMPOSE_NAMES, MCP_NAMES, TOML_ARTIFACT_NAMES};
 use std::path::Path;
 
-const JSON_MANIFEST_NAMES: &[&str] = &["package.json", "package-lock.json"];
+/// JSON-shaped manifest filenames recognised by `structured_parse_warning`.
+/// `npm-shrinkwrap.json` is included because it is a semantic alternative
+/// to `package-lock.json` (both produced by npm; both consumed by the
+/// `lockfiles::analyze_package_lock` analyzer per dispatch.rs:53). Pre-fix
+/// the list omitted it, so a malformed `npm-shrinkwrap.json` never emitted
+/// `ARTIFACT_PARSE_WARNING` even though the dispatcher routed it to the
+/// same lockfile analyzer.
+const JSON_MANIFEST_NAMES: &[&str] = &["package.json", "package-lock.json", "npm-shrinkwrap.json"];
 
 pub(crate) fn read_text_file_lossy<F: FileSystemProvider>(
     path: &Path,

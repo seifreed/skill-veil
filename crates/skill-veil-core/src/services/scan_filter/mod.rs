@@ -146,21 +146,39 @@ impl ScanFilterService {
         true
     }
 
-    /// Check if any findings should trigger a failure based on fail_on threshold
+    /// Check if any findings should trigger a failure based on fail_on threshold.
     ///
     /// # Arguments
     /// * `findings` - The findings to check
     ///
     /// # Returns
-    /// `true` if any finding meets or exceeds the fail_on severity threshold
+    ///
+    /// `false` when no `fail_on` threshold is configured (no profile, no
+    /// `--fail-on` flag).
+    ///
+    /// Otherwise `true` when any finding either:
+    /// - meets or exceeds the `fail_on` severity threshold (and is not a
+    ///   `Log`-action finding), OR
+    /// - carries a [`RecommendedAction::Block`] action regardless of
+    ///   severity.
+    ///
+    /// The second clause closes a real CI-bypass: a `High`-severity finding
+    /// whose action was *escalated to `Block`* by a policy override under a
+    /// `Personal` profile (`fail_on = Critical`) used to silently pass
+    /// because `High < Critical`. `Block` encodes operator intent — "halt
+    /// on this rule" — that the severity gate alone cannot represent.
+    /// Confining the new clause to the `fail_on.is_some()` branch preserves
+    /// the historical "no threshold → never fail" contract for callers that
+    /// deliberately scan with `fail_on = None` (informational scans, IDE
+    /// integrations).
     pub fn should_fail(&self, findings: &[Finding]) -> bool {
-        self.fail_on()
-            .map(|sev| {
-                findings
-                    .iter()
-                    .any(|f| f.severity >= sev && f.recommended_action != RecommendedAction::Log)
-            })
-            .unwrap_or(false)
+        let Some(sev) = self.fail_on() else {
+            return false;
+        };
+        findings.iter().any(|f| {
+            f.recommended_action == RecommendedAction::Block
+                || (f.severity >= sev && f.recommended_action != RecommendedAction::Log)
+        })
     }
 
     /// Get the minimum severity threshold

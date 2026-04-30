@@ -54,7 +54,14 @@ pub(super) fn prepare_dataset_packages(root: &Path) -> Result<DatasetPreparation
         .collect();
     if !archive_files.is_empty() {
         let cache_root = root.join(".skill-veil-cache").join("extracted");
-        fs::create_dir_all(&cache_root)
+        // `create_dir_secure` (owner-only `0o700` on Unix) instead of
+        // `create_dir_all` so the extracted-package cache is not
+        // world-readable on shared workstations / CI runners. The cache
+        // contains fully-extracted skill packages — possibly proprietary
+        // content of the package being scanned. The VT and LLM caches
+        // already use this helper; the dataset cache falls into the
+        // same threat model.
+        crate::util::secure_fs::create_dir_secure(&cache_root)
             .with_context(|| format!("Failed to create {}", cache_root.display()))?;
 
         let extraction_results: Vec<_> = archive_files

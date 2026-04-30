@@ -279,7 +279,20 @@ fn add_inferred_relations<F: FileSystemProvider>(
         );
     }
     for link in artifact_orchestration.infer_relations(path, &decoded.text) {
-        graph.add_node(link.target.clone(), ArtifactKind::GenericArtifact);
+        // Classify the inferred target by its path before inserting it
+        // into the graph. Pre-fix every inferred target was registered
+        // as `ArtifactKind::GenericArtifact`; if the target was, say,
+        // an `mcp.json` discovered only through a relation (not as a
+        // sibling manifest), the graph never recorded it as
+        // `McpServerManifest` and downstream taint rules / blast-radius
+        // rules that key on `ArtifactKind` were silently skipped.
+        // `add_node_with_capabilities`'s specificity-promotion rule
+        // means a later, better-typed insertion can still upgrade the
+        // node, but for inferred-only targets that never get a second
+        // insertion, this is the only chance to classify them correctly.
+        let target_path = std::path::PathBuf::from(&link.target);
+        let target_kind = artifact_kind_for_path::<F>(&target_path);
+        graph.add_node(link.target.clone(), target_kind);
         graph.add_edge(source_path.to_string(), link.target, link.relation);
     }
 }

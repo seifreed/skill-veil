@@ -34,7 +34,7 @@ const HASH_COMMENT_LANGUAGES: &[&str] = &[
 /// pattern matching is normalised here. JS / TS / Node files are left
 /// alone — their comment marker is `//` and would require a different
 /// stripper that doesn't collide with `https://`.
-fn strip_comments_for_detection(content: &str, language: &str) -> String {
+pub(super) fn strip_comments_for_detection(content: &str, language: &str) -> String {
     if !HASH_COMMENT_LANGUAGES.contains(&language) {
         return content.to_string();
     }

@@ -8,7 +8,14 @@
 use super::types::{LlmError, LlmPrompt, LlmRawResponse};
 use std::time::Duration;
 
-const MAX_RETRIES: u32 = 2;
+/// Maximum number of *additional* attempts after the initial request
+/// fails on a transient error (network, 429, 5xx). Total request count
+/// is therefore `MAX_ADDITIONAL_ATTEMPTS + 1` = 3. Pre-fix the constant
+/// was named `MAX_RETRIES = 2`, leading operators reading the source
+/// to expect exactly 2 total attempts when in fact 3 were issued. The
+/// new name matches the loop's `attempt >= MAX_ADDITIONAL_ATTEMPTS`
+/// guard semantics.
+const MAX_ADDITIONAL_ATTEMPTS: u32 = 2;
 const INITIAL_BACKOFF_MS: u64 = 1_500;
 
 /// Implemented by every concrete provider (OpenAI, Anthropic, Ollama, …).
@@ -145,7 +152,7 @@ pub(crate) fn post_json_with_retry(
                 // retried — the request will fail the same way every time.
                 let is_retryable = status == 429 || (500..600).contains(&status);
                 if is_retryable {
-                    if attempt >= MAX_RETRIES {
+                    if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                         return if status == 429 {
                             Err(LlmError::RateLimited { retries: attempt })
                         } else {
@@ -159,7 +166,7 @@ pub(crate) fn post_json_with_retry(
                         status,
                         delay,
                         attempt + 1,
-                        MAX_RETRIES
+                        MAX_ADDITIONAL_ATTEMPTS
                     );
                     std::thread::sleep(delay);
                     attempt += 1;
@@ -169,7 +176,7 @@ pub(crate) fn post_json_with_retry(
                 return Err(LlmError::HttpStatus { status, body });
             }
             Err(ureq::Error::Transport(err)) => {
-                if attempt >= MAX_RETRIES {
+                if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                     return Err(LlmError::Network(err.to_string()));
                 }
                 let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
@@ -177,7 +184,7 @@ pub(crate) fn post_json_with_retry(
                     "LLM transport error, sleeping {:?} (attempt {}/{})",
                     delay,
                     attempt + 1,
-                    MAX_RETRIES
+                    MAX_ADDITIONAL_ATTEMPTS
                 );
                 std::thread::sleep(delay);
                 attempt += 1;

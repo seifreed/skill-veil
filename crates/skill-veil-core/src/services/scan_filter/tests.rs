@@ -153,6 +153,62 @@ fn test_should_fail_respects_overridden_action() {
     );
 }
 
+/// # Contract
+///
+/// `should_fail` MUST treat a [`RecommendedAction::Block`] finding as
+/// CI-failing whenever a `fail_on` threshold is configured, *regardless*
+/// of whether the finding's severity meets the threshold. Pre-fix a
+/// High-severity Block-escalated finding under `Personal` profile
+/// (`fail_on = Critical`) silently passed CI because `High < Critical`.
+/// `Block` is a fail-stop signal that policy overrides use to force halt
+/// on rules whose native severity is below the operator's chosen
+/// threshold.
+#[test]
+fn should_fail_treats_block_action_below_threshold_as_failing() {
+    let options = ScanOptions {
+        fail_on: Some(Severity::Critical),
+        ..Default::default()
+    };
+    let filter = ScanFilterService::new(options);
+
+    // High-severity finding whose action was escalated to Block by a
+    // policy override.
+    let mut finding = create_finding("R1", Severity::High);
+    finding.recommended_action = RecommendedAction::Block;
+    assert!(
+        filter.should_fail(&[finding]),
+        "Block-escalated finding below severity threshold MUST trigger should_fail"
+    );
+
+    // Symmetric: a Medium-severity Block-escalated finding (e.g. a custom
+    // pack that promotes a low-severity rule to Block) also fails.
+    let mut medium = create_finding("R2", Severity::Medium);
+    medium.recommended_action = RecommendedAction::Block;
+    assert!(
+        filter.should_fail(&[medium]),
+        "Medium Block-escalated finding MUST trigger should_fail when fail_on=Critical"
+    );
+}
+
+/// # Contract (negative)
+///
+/// `should_fail` MUST preserve the historical "no threshold → never
+/// fail" contract for informational scans where `fail_on` is `None`. A
+/// Block-action finding alone (without a configured threshold) does NOT
+/// flip the gate — operators using IDE / editor integrations that scan
+/// without a CI threshold should not see exit-code failure.
+#[test]
+fn should_fail_keeps_no_threshold_contract_even_with_block_action() {
+    let options = ScanOptions::default();
+    let filter = ScanFilterService::new(options);
+    let mut finding = create_finding("R1", Severity::Critical);
+    finding.recommended_action = RecommendedAction::Block;
+    assert!(
+        !filter.should_fail(&[finding]),
+        "Without fail_on configured, Block-action finding must NOT trigger should_fail"
+    );
+}
+
 #[test]
 fn test_filter_with_summary_counts_waivers_and_baseline() {
     let finding = create_finding("R1", Severity::High).with_artifact(

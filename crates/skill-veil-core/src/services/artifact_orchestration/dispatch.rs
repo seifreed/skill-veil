@@ -5,6 +5,16 @@ use crate::detectors::{lockfiles, mcp};
 use crate::findings::Finding;
 use std::path::{Path, PathBuf};
 
+/// Returns the script-language token used by `strip_comments_for_detection`.
+/// Mirrors the extraction in `analyze_script` so the `infer_*` paths apply
+/// the same comment-stripping rule (no FP on commented-out tokens).
+fn script_language_for(path: &Path) -> String {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default()
+}
+
 pub(crate) const MCP_NAMES: &[&str] = &["mcp.json", "mcp.yaml", "mcp.yml"];
 pub(crate) const DOCKER_COMPOSE_NAMES: &[&str] = &["docker-compose.yml", "docker-compose.yaml"];
 pub(crate) const TOML_ARTIFACT_NAMES: &[&str] = &["cargo.toml", "pyproject.toml"];
@@ -92,6 +102,13 @@ pub(super) fn infer_relations(
 
     let name = file_name.to_ascii_lowercase();
     let name = name.as_str();
+    // `skill.md` and `*.skill.md` MUST share the instructions analyzer
+    // with `analyze`. Pre-fix only `INSTRUCTION_NAMES`
+    // (`agents.md/claude.md/system.md/persona.md/soul.md`) routed here,
+    // so the artifact graph received zero edges/capabilities for the
+    // primary skill artifact and composite capabilities
+    // (`SecretExfiltration`, `ShellDownloadExec`) were silently
+    // suppressed for skill documents.
     match name {
         _ if MCP_NAMES.contains(&name) => mcp::mcp_manifest_relations(service, content),
         _ if DOCKER_COMPOSE_NAMES.contains(&name) => manifests::docker_compose_relations(content),
@@ -101,11 +118,23 @@ pub(super) fn infer_relations(
         "makefile" => manifests::makefile_relations(content),
         ".npmrc" => manifests::npmrc_relations(content),
         "pip.conf" => manifests::pip_conf_relations(content),
+        "skill.md" => instructions::instruction_relations(service, content),
         _ if INSTRUCTION_NAMES.contains(&name) => {
             instructions::instruction_relations(service, content)
         }
+        _ if name.ends_with(".skill.md") => instructions::instruction_relations(service, content),
         _ if is_prompt_pack_document(path) => instructions::instruction_relations(service, content),
-        _ if looks_like_script(path) => scripts::script_relations(content),
+        _ if looks_like_script(path) => {
+            // Same comment-stripping rule as `analyze_script` (scripts/mod.rs):
+            // pre-fix the infer-path passed raw `content` to
+            // `script_relations`, so a commented-out URL like
+            // `echo ok # https://evil/x` produced a `ConnectsTo` edge that
+            // `analyze_script` correctly omits. The asymmetry let
+            // commented-out code raise capability facts in the artifact graph.
+            let stripped =
+                scripts::strip_comments_for_detection(content, &script_language_for(path));
+            scripts::script_relations(&stripped)
+        }
         _ => Vec::new(),
     }
 }
@@ -123,6 +152,9 @@ pub(super) fn infer_capabilities(
 
     let name = file_name.to_ascii_lowercase();
     let name = name.as_str();
+    // Same skill.md / *.skill.md routing as `infer_relations`. See the
+    // comment block there for rationale; without these arms, capability
+    // facts for the primary skill artifact never reach the artifact graph.
     match name {
         "package.json" => manifests::package_json_capabilities(content),
         _ if MCP_NAMES.contains(&name) => mcp::mcp_manifest_capabilities(service, content),
@@ -136,14 +168,24 @@ pub(super) fn infer_capabilities(
         "makefile" => manifests::makefile_capabilities(content),
         ".npmrc" => manifests::npmrc_capabilities(content),
         "pip.conf" => manifests::pip_conf_capabilities(content),
+        "skill.md" => instructions::instruction_capabilities(service, content),
         _ if INSTRUCTION_NAMES.contains(&name) => {
+            instructions::instruction_capabilities(service, content)
+        }
+        _ if name.ends_with(".skill.md") => {
             instructions::instruction_capabilities(service, content)
         }
         _ if is_prompt_pack_document(path) => {
             instructions::instruction_capabilities(service, content)
         }
         _ if LOCKFILE_NAMES.contains(&name) => lockfiles::lockfile_capabilities(content),
-        _ if looks_like_script(path) => scripts::script_capabilities(content),
+        _ if looks_like_script(path) => {
+            // See the matching branch in `infer_relations` for the
+            // comment-stripping rationale.
+            let stripped =
+                scripts::strip_comments_for_detection(content, &script_language_for(path));
+            scripts::script_capabilities(&stripped)
+        }
         _ => Vec::new(),
     }
 }

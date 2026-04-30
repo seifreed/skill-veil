@@ -165,17 +165,60 @@ impl ArtifactGraph {
             endpoint_kind,
         };
 
-        if self.edges.iter().any(|existing| {
+        // Edge identity is `(from, to, relation)` — `endpoint_kind` is an
+        // *annotation* on the edge, not a discriminator. Pre-fix the dedup
+        // also required `existing.endpoint_kind == edge.endpoint_kind`,
+        // so two calls adding the same `(from, to, relation)` triple with
+        // different annotations (e.g. `Some(Remote)` vs `Some(Registry)`)
+        // both survived and produced two distinct edges. The taint engine
+        // and capability scoring then double-counted the same logical edge.
+        // The fix dedupes on the triple and *upgrades* the existing
+        // annotation to the more-adversarial value when a duplicate fires.
+        if let Some(existing) = self.edges.iter_mut().find(|existing| {
             existing.from == edge.from
                 && existing.to == edge.to
                 && std::mem::discriminant(&existing.relation)
                     == std::mem::discriminant(&edge.relation)
-                && existing.endpoint_kind == edge.endpoint_kind
         }) {
+            existing.endpoint_kind =
+                upgrade_endpoint_kind(existing.endpoint_kind, edge.endpoint_kind);
             return;
         }
 
         self.edges.push(edge);
+    }
+}
+
+/// Pick the higher-priority annotation when two edges with the same
+/// `(from, to, relation)` triple converge. Used by
+/// [`ArtifactGraph::add_edge_with_endpoint`] to keep edge identity stable
+/// while preserving the most-adversarial annotation. Priority (highest
+/// first):
+///
+/// 1. [`EndpointKind::ControlPlane`] — cloud metadata (IMDS), highest signal.
+/// 2. [`EndpointKind::Transient`] — ngrok / trycloudflare tunnels.
+/// 3. [`EndpointKind::Remote`] — public attacker-controlled.
+/// 4. [`EndpointKind::Local`] — loopback / LAN.
+/// 5. [`EndpointKind::Registry`] — known package registry, lowest concern.
+/// 6. `None` — unknown, lowest priority.
+fn upgrade_endpoint_kind(
+    existing: Option<EndpointKind>,
+    incoming: Option<EndpointKind>,
+) -> Option<EndpointKind> {
+    fn rank(kind: Option<EndpointKind>) -> u8 {
+        match kind {
+            Some(EndpointKind::ControlPlane) => 5,
+            Some(EndpointKind::Transient) => 4,
+            Some(EndpointKind::Remote) => 3,
+            Some(EndpointKind::Local) => 2,
+            Some(EndpointKind::Registry) => 1,
+            None => 0,
+        }
+    }
+    if rank(incoming) > rank(existing) {
+        incoming
+    } else {
+        existing
     }
 }
 
@@ -241,5 +284,107 @@ mod tests {
         g.add_node("/pkg/x", ArtifactKind::McpServerManifest); // tier 4
         let node = g.nodes.iter().find(|n| n.path == "/pkg/x").unwrap();
         assert_eq!(node.kind, ArtifactKind::PackageManifest);
+    }
+
+    /// # Contract
+    ///
+    /// Two `add_edge_with_endpoint` calls with the same
+    /// `(from, to, relation)` triple but different `endpoint_kind`
+    /// annotations MUST collapse to a single edge whose annotation is
+    /// upgraded to the more-adversarial value. Pre-fix the dedup
+    /// included `endpoint_kind` in the equality, so the same logical
+    /// download edge appeared twice when one detector annotated it
+    /// `Some(Remote)` and another annotated it `Some(Registry)`,
+    /// inflating taint-engine path counts and capability scoring.
+    #[test]
+    fn add_edge_dedupes_on_triple_and_upgrades_endpoint_annotation() {
+        let mut g = ArtifactGraph::new();
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::Registry),
+        );
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::Remote),
+        );
+        assert_eq!(
+            g.edges.len(),
+            1,
+            "duplicate (from,to,relation) MUST NOT produce two edges; got {:?}",
+            g.edges
+        );
+        assert_eq!(
+            g.edges[0].endpoint_kind,
+            Some(EndpointKind::Remote),
+            "annotation must upgrade to the more-adversarial value (Remote > Registry)"
+        );
+    }
+
+    /// # Contract (priority order)
+    ///
+    /// Higher-priority annotations win regardless of insertion order.
+    /// ControlPlane (IMDS) is the highest priority; Transient (ngrok),
+    /// Remote, Local, and Registry follow in descending order. `None`
+    /// is the lowest priority.
+    #[test]
+    fn add_edge_endpoint_priority_order_preserves_highest() {
+        let mut g = ArtifactGraph::new();
+        // Insert in reverse priority — the final annotation must still
+        // be ControlPlane.
+        g.add_edge_with_endpoint("a", "b", ArtifactRelation::Downloads, None);
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::Registry),
+        );
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::Local),
+        );
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::Remote),
+        );
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::Transient),
+        );
+        g.add_edge_with_endpoint(
+            "a",
+            "b",
+            ArtifactRelation::Downloads,
+            Some(EndpointKind::ControlPlane),
+        );
+        assert_eq!(g.edges.len(), 1);
+        assert_eq!(
+            g.edges[0].endpoint_kind,
+            Some(EndpointKind::ControlPlane),
+            "ControlPlane (IMDS) MUST be the surviving annotation"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Edges with different `relation` MUST stay distinct even when
+    /// `(from, to)` matches — a `Downloads` and a `Reads` edge between
+    /// the same pair encode different semantics and the taint engine
+    /// distinguishes them.
+    #[test]
+    fn add_edge_keeps_different_relations_distinct() {
+        let mut g = ArtifactGraph::new();
+        g.add_edge("a", "b", ArtifactRelation::Downloads);
+        g.add_edge("a", "b", ArtifactRelation::Reads);
+        assert_eq!(g.edges.len(), 2);
     }
 }
