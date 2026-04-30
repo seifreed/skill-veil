@@ -132,7 +132,7 @@ mod tests {
     /// was the source while `matched_on` was the sink, so a single
     /// finding referenced two different files in its evidence trail
     /// — confusing for auditors and breaking suppression
-    /// path-matching (`policy::state::paths_match` keys on
+    /// path-matching (`policy::fingerprint::paths_match` keys on
     /// `artifact_path`). The source/sink relationship is preserved
     /// verbatim in `match_value` so no information is lost.
     #[test]

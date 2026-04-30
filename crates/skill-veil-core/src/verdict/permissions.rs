@@ -68,7 +68,8 @@ pub(super) fn infer_permissions_from_keywords(
         &mut permissions,
         matches_any(&[
             "write file",
-            "delete work",
+            "delete file",
+            "delete files",
             "modify file",
             "modify disk",
             "modify local",
@@ -152,4 +153,62 @@ pub(super) fn derive_declared_permissions(
     }
     permissions.sort();
     permissions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::findings::{MatchTarget, ThreatCategory};
+
+    fn finding_with_match_value(rule_id: &str, match_value: &str) -> Finding {
+        Finding::builder(rule_id, ThreatCategory::Generic)
+            .matched_on(MatchTarget::Document)
+            .match_value(match_value)
+            .reason("test")
+            .build()
+    }
+
+    /// Contract: `infer_permissions_from_keywords` MUST classify
+    /// `match_value`s carrying genuine file-deletion phrases (`"delete
+    /// file"`, `"delete files"`) as [`DeclaredPermission::FileWrite`].
+    /// Pre-fix the keyword list contained the nonsense `"delete work"`
+    /// (apparent typo), so a finding whose `match_value` was `"delete
+    /// files"` never triggered the inferred FileWrite permission and the
+    /// downstream verdict missed the file-mutation capability.
+    #[test]
+    fn infer_keywords_classifies_delete_file_phrases_as_file_write() {
+        for value in ["delete file", "delete files"] {
+            let findings = vec![finding_with_match_value("DECLARED_PERMISSION_X", value)];
+            let permissions =
+                infer_permissions_from_keywords(&findings, &FindingSummary::from_findings(&[]));
+            assert!(
+                permissions.contains(&DeclaredPermission::FileWrite),
+                "match_value {value:?} MUST infer FileWrite; got {permissions:?}"
+            );
+        }
+    }
+
+    /// Contract: `infer_permissions_from_keywords` MUST NOT classify
+    /// match values whose `"delete"` verb targets a non-filesystem noun
+    /// as [`DeclaredPermission::FileWrite`]. Pre-fix the keyword
+    /// `"delete work"` matched any prose containing that substring —
+    /// `"delete work items"`, `"delete workflow steps"`,
+    /// `"delete workspace"` — so unrelated workflow-management
+    /// declarations falsely escalated the verdict to FileWrite.
+    #[test]
+    fn infer_keywords_does_not_classify_delete_work_prose_as_file_write() {
+        for value in [
+            "delete work items in the queue",
+            "delete workflow steps owned by the user",
+            "delete workspace metadata via the API",
+        ] {
+            let findings = vec![finding_with_match_value("DECLARED_PERMISSION_X", value)];
+            let permissions =
+                infer_permissions_from_keywords(&findings, &FindingSummary::from_findings(&[]));
+            assert!(
+                !permissions.contains(&DeclaredPermission::FileWrite),
+                "match_value {value:?} MUST NOT infer FileWrite; got {permissions:?}"
+            );
+        }
+    }
 }

@@ -26,6 +26,23 @@ use super::types::DiffEntry;
 use crate::findings::Finding;
 use sha2::{Digest, Sha256};
 
+/// Minimum component count for a relative path suffix to count as a logical
+/// match against another path.
+///
+/// Two-component paths like `"config/settings.py"` silently suppressed
+/// findings across unrelated packages in monorepo / dataset scans (e.g. a
+/// waiver authored for `/repo-a/config/settings.py` would also suppress
+/// `/repo-b/config/settings.py`). Three components gives reasonable
+/// specificity (`pkg/src/main.rs`) without forcing every waiver to be fully
+/// qualified.
+///
+/// This constant is the single source of truth for the cross-package safety
+/// floor used by both [`paths_match`] (waiver / baseline / override matching)
+/// and `findings::dedup::primary_path_matches` (scope-splitting). Keep them
+/// aligned: divergence between the two would let waiver suppression and
+/// scope attribution disagree on what "the same artifact" means.
+pub(crate) const MIN_RELATIVE_SUFFIX_COMPONENTS: usize = 3;
+
 /// Stable identity hash for a finding, used by baseline/waiver matching.
 ///
 /// The hash mixes only the fields that identify *which* finding this is:
@@ -86,7 +103,6 @@ pub(crate) fn paths_match(a: &str, b: &str) -> bool {
     if pa.is_absolute() && pb.is_absolute() {
         return false;
     }
-    const MIN_RELATIVE_SUFFIX_COMPONENTS: usize = 3;
     let a_components = pa.components().count();
     let b_components = pb.components().count();
     if b_components >= MIN_RELATIVE_SUFFIX_COMPONENTS && pa.ends_with(pb) {

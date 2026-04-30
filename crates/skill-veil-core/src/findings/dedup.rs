@@ -1,4 +1,5 @@
 use super::{ArtifactKind, ArtifactScope, Finding};
+use crate::policy::fingerprint::MIN_RELATIVE_SUFFIX_COMPONENTS;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::path::Path;
@@ -30,18 +31,6 @@ struct FindingDedupKey {
     artifact_path: Option<String>,
 }
 
-/// Minimum component count for a relative artifact suffix to be allowed to match
-/// the primary path. Mirrors `crate::policy::state::MIN_RELATIVE_SUFFIX_COMPONENTS`
-/// (see `policy/state.rs:430`). Two-component paths like `"config/skill.md"` are
-/// rejected because they silently collide with sibling packages in monorepo or
-/// dataset scans (e.g. `/repo-a/config/skill.md` vs `/repo-b/config/skill.md`).
-///
-/// `split_findings_by_scope` deliberately diverges from `paths_match` by also
-/// allowing 1-component bare filenames (e.g. `"skill.md"`): within a single-document
-/// scan the primary path is fixed, so a bare filename matching the primary's
-/// filename unambiguously identifies the primary artifact.
-const MIN_RELATIVE_SUFFIX_COMPONENTS: usize = 3;
-
 /// Whether `artifact_path` should be considered to identify the same artifact as
 /// `primary` for scope-splitting purposes.
 ///
@@ -50,9 +39,11 @@ const MIN_RELATIVE_SUFFIX_COMPONENTS: usize = 3;
 /// - Exact `Path` equality always matches.
 /// - One-component bare filenames match when `primary.ends_with(artifact_path)`
 ///   (single-document scan invariant).
-/// - Multi-component relative suffixes match only when `>= 3` components, to
-///   prevent 2-component cross-package collisions (parallel to
-///   `crate::policy::state::paths_match`).
+/// - Multi-component relative suffixes match only when the shorter side has
+///   `>= MIN_RELATIVE_SUFFIX_COMPONENTS` components. The threshold is shared
+///   with `crate::policy::fingerprint::paths_match` (waiver / baseline /
+///   override matching) — keep them aligned so scope attribution and waiver
+///   suppression agree on what "the same artifact" means.
 /// - Other cases (including 2-component relatives, mixed absolute/relative
 ///   non-equal pairs) do not match.
 fn primary_path_matches(primary: &Path, artifact_path: &str) -> bool {
@@ -68,7 +59,7 @@ fn primary_path_matches(primary: &Path, artifact_path: &str) -> bool {
     if ap_components == 1 {
         return primary.ends_with(ap);
     }
-    // Mirror `policy::state::paths_match`: both directions of the suffix
+    // Mirror `policy::fingerprint::paths_match`: both directions of the suffix
     // relation are valid when the shorter side has ≥ MIN_RELATIVE_SUFFIX_COMPONENTS
     // components. Pre-fix only `primary.ends_with(ap)` was considered, so a
     // primary captured at the relative end (`pkg/src/main.rs`) and an artifact
@@ -265,7 +256,7 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
 mod tests {
     use super::*;
 
-    /// Contract: `primary_path_matches` mirrors `policy::state::paths_match`
+    /// Contract: `primary_path_matches` mirrors `policy::fingerprint::paths_match`
     /// when the artifact path is a relative suffix (≥3 components) of the
     /// primary. This is the case the pre-fix code already covered.
     #[test]
@@ -277,7 +268,7 @@ mod tests {
     /// Contract: the inverse direction must also match — when the *primary*
     /// is the relative suffix and the *artifact_path* is the longer absolute.
     /// Pre-fix only `primary.ends_with(ap)` was checked, so this case
-    /// silently failed even though `policy::state::paths_match` (used for
+    /// silently failed even though `policy::fingerprint::paths_match` (used for
     /// waiver matching) treated them as equivalent. The mismatch produced
     /// scope-splitting / waiver-suppression drift.
     #[test]

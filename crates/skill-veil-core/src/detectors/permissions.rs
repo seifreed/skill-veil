@@ -208,7 +208,8 @@ pub(crate) fn explicit_declared_permission_rules(
     if context.contains("write file")
         || context.contains("write files")
         || context.contains("modify files")
-        || context.contains("delete work")
+        || context.contains("delete file")
+        || context.contains("delete files")
     {
         rules.push((
             "DECLARED_PERMISSION_FILE_WRITE",
@@ -494,5 +495,57 @@ mod tests {
             !ids.contains(&"DECLARED_PERMISSION_OAUTH_SCOPES"),
             "benign prose MUST NOT trigger OAUTH_SCOPES; got rules={ids:?}"
         );
+    }
+
+    /// Contract: `DECLARED_PERMISSION_FILE_WRITE` MUST fire on canonical
+    /// file-deletion declarations. Pre-fix the substring trigger was the
+    /// nonsense `"delete work"` (apparent typo) which never matched any
+    /// real artifact prose, so a skill that genuinely declared "delete
+    /// files" or "delete file" silently slipped past the FileWrite gate.
+    /// The replacement keeps both phrasings; pin them so a future
+    /// tightening of the keyword list cannot silently drop the signal.
+    #[test]
+    fn file_write_signal_fires_on_genuine_file_deletion_declarations() {
+        let positive = [
+            "permissions: delete file from disk",
+            "capabilities: delete files in the workspace",
+            "- permissions: write files and delete file entries",
+            "- capabilities: modify files; delete files when required",
+        ];
+        for sample in positive {
+            let rules = explicit_declared_permission_rules(sample);
+            let ids: Vec<&str> = rules.iter().map(|(id, _, _)| *id).collect();
+            assert!(
+                ids.contains(&"DECLARED_PERMISSION_FILE_WRITE"),
+                "must classify genuine file-deletion declaration as FileWrite: {sample:?} \
+                 (got rules={ids:?})"
+            );
+        }
+    }
+
+    /// Contract: `DECLARED_PERMISSION_FILE_WRITE` MUST NOT fire on prose
+    /// that uses the verb "delete" against a non-filesystem noun. Pre-fix
+    /// the substring trigger was `"delete work"`, so prose like
+    /// `"delete work items in Jira"` or `"delete workflow steps"` falsely
+    /// flagged FileWrite even though no filesystem mutation was implied.
+    /// The fix narrows to `"delete file"` / `"delete files"` so unrelated
+    /// "delete work …" prose no longer triggers the rule.
+    #[test]
+    fn file_write_signal_does_not_fire_on_delete_work_prose() {
+        let benign = [
+            "capabilities: delete work items from the Jira backlog",
+            "permissions: delete workflow steps owned by the user",
+            "- this skill helps delete work orders in the queue",
+            "capabilities: delete workspace metadata via the API",
+        ];
+        for sample in benign {
+            let rules = explicit_declared_permission_rules(sample);
+            let ids: Vec<&str> = rules.iter().map(|(id, _, _)| *id).collect();
+            assert!(
+                !ids.contains(&"DECLARED_PERMISSION_FILE_WRITE"),
+                "benign 'delete work …' prose MUST NOT trigger FileWrite: {sample:?} \
+                 (got rules={ids:?})"
+            );
+        }
     }
 }
