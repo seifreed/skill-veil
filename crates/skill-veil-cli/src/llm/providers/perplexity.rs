@@ -79,8 +79,8 @@ impl LlmProvider for PerplexityProvider {
 
     fn sampling_fingerprint(&self) -> String {
         format!(
-            "max_tokens={};temperature={}",
-            self.max_tokens, self.temperature
+            "base_url={};max_tokens={};temperature={}",
+            self.base_url, self.max_tokens, self.temperature
         )
     }
 }

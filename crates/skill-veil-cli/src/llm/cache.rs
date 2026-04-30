@@ -246,6 +246,39 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// `base_url` MUST participate in the sampling fingerprint of every
+    /// HTTP-based provider. Two scans against the same model at different
+    /// endpoints (cloud vs a `127.0.0.1` mitm proxy, two Ollama daemons)
+    /// MUST hash to different keys — otherwise a developer who reconfigures
+    /// `base_url` to inspect prompts via a local proxy receives the prior
+    /// run's cloud verdict for the full TTL window, defeating the proxy
+    /// entirely. Pre-fix `sampling_fingerprint` covered only `max_tokens`
+    /// and `temperature`. The fingerprints below mirror the values produced
+    /// by the production providers; this test pins that future refactors
+    /// do not silently drop `base_url` from the fingerprint.
+    #[test]
+    fn cache_key_changes_when_base_url_differs() {
+        let p = LlmPrompt {
+            system: "s".into(),
+            user_json: "u".into(),
+        };
+        let cloud = "base_url=https://api.anthropic.com/v1;max_tokens=1024;temperature=0.1";
+        let proxy = "base_url=http://127.0.0.1:8080;max_tokens=1024;temperature=0.1";
+        assert_ne!(
+            compute_cache_key("anthropic", "claude-sonnet-4-5", cloud, &p),
+            compute_cache_key("anthropic", "claude-sonnet-4-5", proxy, &p),
+            "different base_url MUST produce a different cache key",
+        );
+        // Same contract holds for the follow-up variant.
+        assert_ne!(
+            compute_cache_key_with_followup("anthropic", "claude-sonnet-4-5", cloud, &p, &[]),
+            compute_cache_key_with_followup("anthropic", "claude-sonnet-4-5", proxy, &p, &[]),
+            "different base_url MUST produce a different turn-2 cache key",
+        );
+    }
+
     /// Contract: same key applies to the turn-2 / follow-up variant —
     /// changing `temperature` between scans MUST produce a different key
     /// even when the manifest prompt and follow-up files are identical.

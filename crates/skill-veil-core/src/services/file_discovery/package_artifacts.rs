@@ -19,6 +19,58 @@ use super::classification::{
 };
 use super::{FileDiscoveryService, MAX_DISCOVERY_DEPTH};
 
+/// Filenames recognised as package manifests by
+/// [`FileDiscoveryService::discover_package_manifests`]. Lifted to a module-
+/// level constant (instead of nested inside the discovery method) so that
+/// [`FileDiscoveryService::discover_package_data_files`] can exclude these
+/// filenames from data-file results — without the exclusion, files like
+/// `docker-compose.yaml` and `mcp.yaml` (which match the data-file glob
+/// `*.yaml` AND the manifest name list) appear in BOTH discovery streams,
+/// producing duplicate artifact entries in the artifact graph and
+/// double-weighting any finding attached to them.
+const MANIFEST_NAMES: &[&str] = &[
+    "package.json",
+    "mcp.json",
+    "mcp.yaml",
+    "mcp.yml",
+    "requirements.txt",
+    "pyproject.toml",
+    "cargo.toml",
+    "dockerfile",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "makefile",
+    ".npmrc",
+    "pip.conf",
+];
+
+/// Filenames recognised as lockfiles. Same dedup contract as
+/// [`MANIFEST_NAMES`]: lifted to module scope so data-file discovery can
+/// avoid double-counting `pnpm-lock.yaml` (matches `*.yaml` glob) and
+/// similar overlaps.
+const LOCKFILE_NAMES: &[&str] = &[
+    "package-lock.json",
+    "cargo.lock",
+    "poetry.lock",
+    "uv.lock",
+    "pipfile.lock",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "npm-shrinkwrap.json",
+];
+
+/// `true` when `path`'s lowercased filename matches an entry in
+/// [`MANIFEST_NAMES`] or [`LOCKFILE_NAMES`]. Used to filter the data-file
+/// discovery stream so a single physical file cannot appear under two
+/// artifact roles at once.
+fn is_manifest_or_lockfile(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let lowered = name.to_ascii_lowercase();
+    MANIFEST_NAMES.contains(&lowered.as_str()) || LOCKFILE_NAMES.contains(&lowered.as_str())
+}
+
 impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// Discover executable/script files co-located with a skill package.
     ///
@@ -50,6 +102,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// Uses the same directory scope as [`Self::discover_package_scripts`] and
     /// additionally skips files exceeding [`MAX_DATA_FILE_BYTES`] to avoid
     /// paying parse cost on legitimate bulk datasets.
+    ///
+    /// Filenames that also match a manifest or lockfile name are excluded
+    /// here so they are not double-counted: `docker-compose.yaml` and
+    /// `pnpm-lock.yaml` belong to [`Self::discover_package_manifests`] /
+    /// [`Self::discover_lockfiles`] and would otherwise produce a second
+    /// artifact entry through the `*.yaml` glob path.
     pub fn discover_package_data_files(&self, package_root: &Path) -> Vec<PathBuf> {
         self.discover_by_patterns(
             package_root,
@@ -57,6 +115,9 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             MAX_DISCOVERED_DATA_FILES,
             Some(MAX_DATA_FILE_BYTES),
         )
+        .into_iter()
+        .filter(|path| !is_manifest_or_lockfile(path))
+        .collect()
     }
 
     fn discover_by_patterns(
@@ -134,21 +195,6 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// contract (services MUST depend only on ports, not on concrete
     /// filesystem libraries).
     pub(crate) fn discover_package_manifests(&self, path: &Path) -> Vec<PathBuf> {
-        const MANIFEST_NAMES: &[&str] = &[
-            "package.json",
-            "mcp.json",
-            "mcp.yaml",
-            "mcp.yml",
-            "requirements.txt",
-            "pyproject.toml",
-            "cargo.toml",
-            "dockerfile",
-            "docker-compose.yml",
-            "docker-compose.yaml",
-            "makefile",
-            ".npmrc",
-            "pip.conf",
-        ];
         self.discover_files_by_name(path, MANIFEST_NAMES)
     }
 
@@ -156,16 +202,6 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// anywhere under `path`. Same port-routed walk as
     /// [`Self::discover_package_manifests`].
     pub(crate) fn discover_lockfiles(&self, path: &Path) -> Vec<PathBuf> {
-        const LOCKFILE_NAMES: &[&str] = &[
-            "package-lock.json",
-            "cargo.lock",
-            "poetry.lock",
-            "uv.lock",
-            "pipfile.lock",
-            "yarn.lock",
-            "pnpm-lock.yaml",
-            "npm-shrinkwrap.json",
-        ];
         self.discover_files_by_name(path, LOCKFILE_NAMES)
     }
 
@@ -414,6 +450,105 @@ mod tests {
         assert!(
             skips.iter().all(|recorded| recorded == &expected_skip),
             "every walk_files call must forward SKIP_DISCOVERY_DIRS verbatim; got {skips:?}",
+        );
+    }
+
+    /// In-memory `FileSystemProvider` that returns a curated file list for
+    /// the data-file glob expansion. Used to verify cross-discovery dedup:
+    /// `docker-compose.yaml` matches the `*.yaml` glob AND the manifest
+    /// name list, and pre-fix appeared in BOTH discovery streams.
+    struct FixedListFs {
+        per_pattern: Vec<(String, Vec<PathBuf>)>,
+    }
+
+    impl FileSystemProvider for FixedListFs {
+        fn read_file_bytes(
+            &self,
+            _path: &Path,
+        ) -> Result<crate::ports::FileContent, crate::ports::FileSystemError> {
+            Err(crate::ports::FileSystemError::PathNotFound(PathBuf::new()))
+        }
+        fn list_files(
+            &self,
+            _path: &Path,
+            pattern: &str,
+            _recursive: bool,
+        ) -> Result<Vec<PathBuf>, crate::ports::FileSystemError> {
+            for (registered, files) in &self.per_pattern {
+                if registered == pattern {
+                    return Ok(files.clone());
+                }
+            }
+            Ok(Vec::new())
+        }
+        fn exists(&self, _path: &Path) -> bool {
+            true
+        }
+        fn metadata(
+            &self,
+            _path: &Path,
+        ) -> Result<crate::ports::FileMeta, crate::ports::FileSystemError> {
+            // Stay well under MAX_DATA_FILE_BYTES so the discovery does
+            // not skip the file as oversized.
+            Ok(crate::ports::FileMeta { len: 1024 })
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `discover_package_data_files` MUST NOT return filenames that are
+    /// owned by the manifest or lockfile discovery streams. Pre-fix
+    /// `docker-compose.yaml` appeared in BOTH `discover_package_manifests`
+    /// (by name match) AND `discover_package_data_files` (by `*.yaml`
+    /// glob), producing duplicate artifact-graph entries for a single
+    /// physical file. Cross-discovery dedup requires excluding the
+    /// manifest/lockfile names from data-file results.
+    #[test]
+    fn data_file_discovery_excludes_manifest_and_lockfile_names() {
+        let pkg_root = PathBuf::from("/virtual/pkg");
+        let yaml_files = vec![
+            pkg_root.join("docker-compose.yaml"),
+            pkg_root.join("pnpm-lock.yaml"),
+            pkg_root.join("mcp.yaml"),
+            pkg_root.join("benign-data.yaml"),
+        ];
+        let json_files = vec![
+            pkg_root.join("package.json"),
+            pkg_root.join("package-lock.json"),
+            pkg_root.join("data.json"),
+        ];
+        let fs = FixedListFs {
+            per_pattern: vec![
+                ("*.yaml".to_string(), yaml_files.clone()),
+                ("*.json".to_string(), json_files.clone()),
+            ],
+        };
+        let service = FileDiscoveryService::with_fs_provider(false, fs);
+        let results = service.discover_package_data_files(&pkg_root);
+
+        for excluded in [
+            "docker-compose.yaml",
+            "pnpm-lock.yaml",
+            "mcp.yaml",
+            "package.json",
+            "package-lock.json",
+        ] {
+            assert!(
+                !results.iter().any(|p| p.file_name().and_then(|n| n.to_str()) == Some(excluded)),
+                "data-file discovery must NOT return manifest/lockfile name {excluded}; got {results:?}"
+            );
+        }
+        assert!(
+            results
+                .iter()
+                .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("benign-data.yaml")),
+            "data-file discovery must STILL return non-manifest YAML files; got {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|p| p.file_name().and_then(|n| n.to_str()) == Some("data.json")),
+            "data-file discovery must STILL return non-manifest JSON files; got {results:?}"
         );
     }
 }

@@ -73,9 +73,14 @@ impl LlmProvider for AnthropicProvider {
     }
 
     fn sampling_fingerprint(&self) -> String {
+        // `base_url` participates in the fingerprint so that pointing the
+        // provider at a local proxy (loopback HTTP is explicitly allowed by
+        // `provider_resolution`) does NOT serve the cached verdict from the
+        // cloud endpoint. Without this, mitm/dev-proxy workflows are
+        // invisible because the cache key collides across endpoints.
         format!(
-            "max_tokens={};temperature={}",
-            self.max_tokens, self.temperature
+            "base_url={};max_tokens={};temperature={}",
+            self.base_url, self.max_tokens, self.temperature
         )
     }
 }

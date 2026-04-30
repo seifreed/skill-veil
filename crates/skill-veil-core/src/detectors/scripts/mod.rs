@@ -19,6 +19,7 @@
 //!   pair regex matches against lowercased content with original-cased
 //!   evidence.
 
+mod dotenv;
 mod exec;
 mod install;
 mod match_helpers;
@@ -26,6 +27,8 @@ mod network;
 pub(crate) mod patterns;
 mod persistence;
 mod secrets;
+
+pub(crate) use dotenv::references_dotenv_file;
 
 pub(crate) use exec::{
     detect_injection_patterns, detect_node_process_exec, detect_powershell_dynamic_exec,

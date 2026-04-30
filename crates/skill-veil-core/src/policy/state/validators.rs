@@ -68,6 +68,15 @@ pub fn validate_waivers(waivers: &WaiverFile) -> Result<(), String> {
                     .to_string(),
             );
         }
+        // Symmetric with `validate_policy` and `validate_baseline`: a waiver
+        // applied without a reason defeats the audit-trail intent of the
+        // policy state machine. Pre-fix the empty-reason check was only
+        // enforced for policy overrides and baseline entries; waivers
+        // silently accepted blank reasons, allowing operators to stash a
+        // suppression in the file with no paper trail of why.
+        if waiver.reason.trim().is_empty() {
+            return Err("Waivers must define a non-empty reason".to_string());
+        }
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}",
             waiver.rule_id, waiver.artifact_path, waiver.context, waiver.expires_at
@@ -160,6 +169,59 @@ mod validate_policy_tests {
             ov(Some("b"), Some("RULE_A"), RecommendedAction::Log),
         ];
         assert!(validate_policy(&policy).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod validate_waivers_tests {
+    use super::*;
+    use crate::policy::baseline::WaiverEntry;
+    use crate::policy::POLICY_SCHEMA_VERSION;
+
+    fn waiver_with_reason(reason: &str) -> WaiverEntry {
+        WaiverEntry {
+            rule_id: Some("RULE_A".to_string()),
+            artifact_path: None,
+            context: None,
+            reason: reason.to_string(),
+            expires_at: None,
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `validate_waivers` MUST reject any waiver whose `reason` is empty
+    /// or whitespace-only. Symmetric with `validate_policy` (which already
+    /// rejected empty override reasons) and `validate_baseline` (which
+    /// rejected empty baseline-entry reasons). Pre-fix the asymmetry let
+    /// operators ship waivers with no rationale, defeating the audit-trail
+    /// requirement that the rest of the policy state machine upholds.
+    #[test]
+    fn validate_waivers_rejects_empty_reason() {
+        for blank in ["", "   ", "\t\n"] {
+            let waivers = WaiverFile {
+                schema_version: POLICY_SCHEMA_VERSION.to_string(),
+                waivers: vec![waiver_with_reason(blank)],
+            };
+            assert!(
+                validate_waivers(&waivers).is_err(),
+                "must reject blank reason {blank:?}"
+            );
+        }
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Non-empty reasons pass — pins the negative case so a future
+    /// tightening of the validator cannot accidentally reject legitimate
+    /// waivers.
+    #[test]
+    fn validate_waivers_accepts_non_empty_reason() {
+        let waivers = WaiverFile {
+            schema_version: POLICY_SCHEMA_VERSION.to_string(),
+            waivers: vec![waiver_with_reason("upstream patch tracked in issue 42")],
+        };
+        assert!(validate_waivers(&waivers).is_ok());
     }
 }
 

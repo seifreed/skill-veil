@@ -7,7 +7,7 @@ use crate::detectors::scripts::{
     detect_node_process_exec, detect_node_secret_fs_access, detect_powershell_dynamic_exec,
     detect_powershell_persistence, detect_python_exec_network, detect_python_secret_system_access,
     detect_remote_binary_downloads, detect_shell_persistence_write, detect_shell_side_effects,
-    detect_typosquatted_install,
+    detect_typosquatted_install, references_dotenv_file,
 };
 use crate::findings::ArtifactKind;
 use crate::services::ArtifactOrchestratorService;
@@ -216,7 +216,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
 
     if lower.contains("writefilesync(")
         || lower.contains("tee ")
-        || lower.contains(">>")
+        || contains_shell_append_redirect(&lower)
         || lower.contains("> /etc/")
         || lower.contains("set-content")
     {
@@ -226,6 +226,61 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
     }
 
     capabilities
+}
+
+/// `true` when `lower` contains a shell **append-redirect** (`>>`) followed
+/// by a filename rather than a bitshift / right-shift operand.
+///
+/// Pre-fix the orchestrator used a bare `lower.contains(">>")`, which fired
+/// on perfectly benign code paths in any language: Python `flags >> 3`,
+/// Rust `x >> 2`, JavaScript `value >> 8`, Markdown blockquote-style prose
+/// like `>> note: …`. The spurious `FilesystemWrite` capability inflated
+/// the artifact graph and, when the same script also had `SecretAccess`,
+/// produced false `SecretExfiltration` taint chains that pushed Benign
+/// packages toward Malicious — a weaponisable false positive.
+///
+/// Heuristic: a real shell append-redirect is followed (after optional
+/// whitespace) by a *non-digit* character — typically `/`, `~`, `$`,
+/// `"`, `'`, or an identifier byte. Bitshift right is, by contrast,
+/// always followed by a numeric literal or an identifier-as-operand
+/// pattern that starts with a digit-or-let-binding (`x >> 2`,
+/// `flags >> SHIFT_BITS`). The let-binding case (`>> SHIFT_BITS`) cannot
+/// be disambiguated lexically, so we accept that residual FP — it is
+/// orders of magnitude rarer than `>> filename`. When the next char is
+/// a digit OR end-of-input we drop the match. When the next char is
+/// alphabetic, we additionally require that the byte before `>>` is NOT
+/// an identifier byte; a true shell redirect either follows whitespace
+/// (`echo x >> file`) or end-of-line, never `value>>shift` style code.
+fn contains_shell_append_redirect(lower: &str) -> bool {
+    let bytes = lower.as_bytes();
+    let mut search_start = 0;
+    while let Some(rel) = lower[search_start..].find(">>") {
+        let abs = search_start + rel;
+        let after_idx = abs + 2;
+        let before = bytes.get(abs.wrapping_sub(1)).copied();
+        let after_run = lower[after_idx..]
+            .bytes()
+            .find(|b| *b != b' ' && *b != b'\t');
+        match after_run {
+            // End-of-input or newline ⇒ inconclusive, treat as bitshift-like.
+            None | Some(b'\n') | Some(b'\r') => {}
+            // Digit ⇒ definitely a bitshift right (e.g. `x >> 8`).
+            Some(b'0'..=b'9') => {}
+            // Path-like / quoted / variable / leading-tilde / leading-slash ⇒
+            // unambiguous shell append-redirect.
+            Some(b'/' | b'~' | b'$' | b'"' | b'\'' | b'.') => return true,
+            // Identifier byte ⇒ only treat as redirect when the byte BEFORE
+            // `>>` is whitespace or start-of-input. `value>>shift` (no
+            // surrounding spaces) is bitshift; `echo x >> file` is redirect.
+            Some(b) if b.is_ascii_alphabetic() || b == b'_' => match before {
+                None | Some(b' ' | b'\t' | b'\n' | b'\r') => return true,
+                _ => {}
+            },
+            _ => {}
+        }
+        search_start = abs + 2;
+    }
+    false
 }
 
 pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
@@ -292,7 +347,7 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     }
     if lower.contains("writefilesync(")
         || lower.contains("tee ")
-        || lower.contains(">>")
+        || contains_shell_append_redirect(&lower)
         || lower.contains("set-content")
     {
         links.push(ArtifactLink {
@@ -311,74 +366,6 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         });
     }
     links
-}
-
-/// Whether `lower` (an already-`to_ascii_lowercase()`-d slice of script
-/// content) references a `.env` *dotenv file* — as opposed to incidentally
-/// containing the four bytes `.env` inside a longer identifier or
-/// filename.
-///
-/// Pre-fix the script orchestrator triggered `SecretAccess` /
-/// `AccessesSecrets` on `lower.contains(".env")`, which fired on a wide
-/// surface of benign content:
-///
-/// - sibling stems like `.envrc` (direnv config), `.envelope`,
-///   `.environment/...`, `.envconfig`, where `.env` is a prefix of the
-///   real filename;
-/// - identifiers like `MY_DOTENV_VAR=` or `_dotenv_path` that contain
-///   `.env` inside a larger word;
-/// - documentation prose like `"the .env file"` (which DOES indicate a
-///   dotenv reference, but only in narrative, not in executable code).
-///
-/// `process.env.X` and `os.environ` are already covered by their own
-/// substring branches in [`script_capabilities`] and [`script_relations`],
-/// so this helper only has to recognise the **dotenv file form**: an
-/// explicit `dotenv` library call OR the filename `.env` anchored as a
-/// path or quoted literal.
-///
-/// We require one of:
-///
-/// - `dotenv` / `load_dotenv` (the explicit library names),
-/// - `.env` immediately followed by a separator that ends the filename
-///   (`"`, `'`, end-of-string, whitespace, `:`, `,`, `)`, `;`),
-/// - `/.env` or `\.env` (an absolute or POSIX-style path),
-/// - `read .env` / `cat .env` (shell-form references),
-///
-/// none of which are produced by `.envrc`, `.envelope`, etc.
-fn references_dotenv_file(lower: &str) -> bool {
-    if lower.contains("dotenv") || lower.contains("load_dotenv") {
-        return true;
-    }
-    let mut search_start = 0;
-    while let Some(rel) = lower[search_start..].find(".env") {
-        let abs = search_start + rel;
-        let after = abs + ".env".len();
-        let next = lower[after..].chars().next();
-        let is_terminator = match next {
-            None => true,
-            Some(c) => matches!(
-                c,
-                '"' | '\'' | ' ' | '\t' | '\n' | ':' | ',' | ')' | ';' | '`'
-            ),
-        };
-        if is_terminator {
-            // Require either a path separator, a quote, or whitespace
-            // immediately before `.env` so we accept things like
-            // `"/.env"`, `'.env'`, `cat .env`, `read .env`, `open(".env")`,
-            // and reject `MY.ENV` style identifiers (also rejected on the
-            // suffix side above).
-            let before = lower[..abs].chars().next_back();
-            let before_ok = matches!(
-                before,
-                None | Some('"' | '\'' | '/' | '\\' | ' ' | '\t' | '(' | ',' | ':' | '`')
-            );
-            if before_ok {
-                return true;
-            }
-        }
-        search_start = abs + 1;
-    }
-    false
 }
 
 #[cfg(test)]
@@ -724,5 +711,64 @@ mod tests {
 
         let links = script_relations(content);
         assert!(relation_target_present(&links, "secrets"));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Bitshift right (`>>`) in Python / Rust / JavaScript / C-family code
+    /// MUST NOT raise `FilesystemWrite`. Pre-fix `lower.contains(">>")`
+    /// fired on `flags >> 3`, `value >> 8`, `logits >> 2`, etc., inflating
+    /// the artifact graph with spurious `Writes → filesystem` edges. When
+    /// the same script also accessed secrets, those spurious edges
+    /// produced false `SecretExfiltration` taint chains that escalated
+    /// Benign packages toward Malicious.
+    #[test]
+    fn script_capabilities_does_not_fire_filesystem_write_on_bitshift() {
+        for sample in [
+            "shift = flags >> 3\n",
+            "let x = value >> 8;\n",
+            "result = num >> 2",
+            "logits >> 2",
+            "x>>shift", // tight C-style without spaces — also bitshift
+        ] {
+            let caps = script_capabilities(sample);
+            assert!(
+                !capability_present(&caps, ArtifactCapability::FilesystemWrite),
+                "must NOT raise FilesystemWrite on bitshift: {sample:?} -> {caps:?}"
+            );
+            let links = script_relations(sample);
+            assert!(
+                !relation_target_present(&links, "filesystem"),
+                "must NOT raise filesystem Writes edge on bitshift: {sample:?} -> {links:?}"
+            );
+        }
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Genuine shell append-redirects MUST still raise `FilesystemWrite`.
+    /// Pins the desired behavior so a future tightening of
+    /// `contains_shell_append_redirect` cannot silently kill the legitimate
+    /// signal — the original purpose of the `>>` token in this layer.
+    #[test]
+    fn script_capabilities_fires_filesystem_write_on_shell_append() {
+        for sample in [
+            "echo done >> /tmp/log.txt\n",
+            "cat /etc/passwd >> dump.log\n",
+            "echo $payload >> ~/.bashrc",
+            "echo done >> \"$HOME/.zshrc\"\n",
+            "echo data >>'/tmp/out'",
+        ] {
+            let caps = script_capabilities(sample);
+            assert!(
+                capability_present(&caps, ArtifactCapability::FilesystemWrite),
+                "must raise FilesystemWrite on shell append: {sample:?} -> {caps:?}"
+            );
+            let links = script_relations(sample);
+            assert!(
+                relation_target_present(&links, "filesystem"),
+                "must raise filesystem Writes edge on shell append: {sample:?} -> {links:?}"
+            );
+        }
     }
 }

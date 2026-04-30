@@ -77,6 +77,19 @@ fn parse_json_or_yaml<T>(content: &str) -> Result<T, PolicyLoadError>
 where
     T: serde::de::DeserializeOwned,
 {
+    // Pre-fix: an empty (or whitespace-only) `.policy.json` file falls
+    // through `serde_json` -> `serde_yaml`, where `serde_yaml` happily
+    // returns the all-fields-defaulted struct (every collection becomes
+    // `[]`). The truncation case ⇒ `Ok(PolicyFile { overrides: [] })` ⇒ the
+    // caller silently loses every suppression instead of surfacing a clear
+    // error. This guard refuses the empty document explicitly so a partial
+    // write or `Ctrl-C` mid-edit cannot zero out the policy state.
+    if content.trim().is_empty() {
+        return Err(PolicyLoadError::Parse(
+            "policy file is empty (whitespace only); refusing to silently apply defaulted fields"
+                .to_string(),
+        ));
+    }
     match serde_json::from_str::<T>(content) {
         Ok(value) => Ok(value),
         Err(json_err) => match serde_yaml::from_str::<T>(content) {
@@ -248,6 +261,34 @@ mod load_waivers_tests {
         let loaded = load_waivers(&fs(), file.path()).expect("well-formed waiver file must load");
         assert_eq!(loaded.waivers.len(), 1);
         assert_eq!(loaded.waivers[0].rule_id.as_deref(), Some("RULE_A"));
+    }
+
+    /// # Contract
+    ///
+    /// An empty (or whitespace-only) policy file MUST surface as
+    /// `PolicyLoadError::Parse`, never silently parse to a defaulted
+    /// `WaiverFile`. Pre-fix `serde_json` rejected the empty document but
+    /// the loader fell through to `serde_yaml`, which returns the all-
+    /// fields-defaulted struct (`waivers: []`). A `.policy.json` truncated
+    /// by `Ctrl-C` mid-edit therefore looked like a deliberate "no
+    /// suppressions" file, silently dropping every previously declared
+    /// waiver.
+    #[test]
+    fn load_waivers_rejects_empty_or_whitespace_file() {
+        for blank in ["", "   ", "\n\n\t\n  \n"] {
+            let file = write_yaml(blank);
+            let err = load_waivers(&fs(), file.path()).expect_err(
+                "empty/whitespace policy file MUST fail at load time, not silently default",
+            );
+            assert!(
+                matches!(err, PolicyLoadError::Parse(_)),
+                "must surface as Parse error; got {err:?}"
+            );
+            assert!(
+                err.to_string().contains("empty"),
+                "error must mention emptiness; got {err}"
+            );
+        }
     }
 }
 

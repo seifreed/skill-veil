@@ -91,8 +91,16 @@ pub(super) const MAX_DATA_FILE_BYTES: u64 = 512 * 1024;
 ///
 /// Matches the canonical list (`SKILL.md`, `AGENTS.md`, `CLAUDE.md`,
 /// `SYSTEM.md`, `PERSONA.md`, `SOUL.md`, `mcp.{json,yaml,yml}`), the
-/// `.skill.md` and `.prompt.md` suffixes, and any markdown file sitting
-/// directly under a `prompts/` parent.
+/// `.skill.md` and `.prompt.md` suffixes, and a markdown file sitting
+/// directly under a `prompts/` parent — provided no ancestor component is in
+/// [`SKIP_DISCOVERY_DIRS`].
+///
+/// Pre-fix the `prompts/` rule accepted *any* file (not only markdown) under
+/// *any* `prompts/` parent regardless of where it lived — including
+/// `node_modules/some-pkg/prompts/foo.txt`. That over-broad match let
+/// discovery elevate vendored or generated content to "explicit
+/// entrypoint" status, changing downstream verdict behavior. The fix
+/// requires a markdown extension and rejects ancestors in the skip-list.
 ///
 /// Pure: no I/O. Used by `FileDiscoveryService::is_explicit_skill_file`
 /// (kept as a static-method shim for back-compat) and directly by
@@ -114,11 +122,54 @@ pub(super) fn is_explicit_skill_file(path: &Path) -> bool {
         || file_name_lower == MCP_YML_FILE_NAME
         || file_name_lower.ends_with(SKILL_FILE_SUFFIX)
         || file_name_lower.ends_with(PROMPT_FILE_SUFFIX)
-        || path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("prompts"))
+        || is_markdown_under_prompts_dir(path, &file_name_lower)
+}
+
+/// Markdown file extensions accepted by the `prompts/` heuristic. `.mdx`
+/// is included because Claude skill packs increasingly use MDX prompts.
+const PROMPT_DIR_MARKDOWN_SUFFIXES: &[&str] = &[".md", ".mdx"];
+
+/// `true` iff `path` is a markdown file with `prompts/` as its immediate
+/// parent and no ancestor component is a directory in [`SKIP_DISCOVERY_DIRS`].
+/// The skip-list check prevents vendored content like
+/// `node_modules/<pkg>/prompts/x.md` from being lifted to explicit-entrypoint
+/// status by the discovery layer.
+fn is_markdown_under_prompts_dir(path: &Path, file_name_lower: &str) -> bool {
+    if !PROMPT_DIR_MARKDOWN_SUFFIXES
+        .iter()
+        .any(|suffix| file_name_lower.ends_with(suffix))
+    {
+        return false;
+    }
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let parent_is_prompts = parent
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("prompts"));
+    if !parent_is_prompts {
+        return false;
+    }
+    !path_traverses_skip_dir(path)
+}
+
+/// `true` when any ancestor component (other than the file leaf) of `path`
+/// matches a name in [`SKIP_DISCOVERY_DIRS`] case-insensitively. Used to
+/// gate the `prompts/` heuristic so vendored or generated subtrees do not
+/// get classified as explicit skill entrypoints when an external caller
+/// passes a path that bypasses the discovery walker's prune list.
+fn path_traverses_skip_dir(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    parent.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|comp| {
+            SKIP_DISCOVERY_DIRS
+                .iter()
+                .any(|skip| comp.eq_ignore_ascii_case(skip))
+        })
+    })
 }
 
 /// Directory names whose subtrees the discovery walker MUST prune.
@@ -197,5 +248,81 @@ mod tests {
     fn is_explicit_skill_file_rejects_arbitrary_markdown() {
         assert!(!is_explicit_skill_file(Path::new("/repo/README.md")));
         assert!(!is_explicit_skill_file(Path::new("/repo/docs/notes.md")));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// The `prompts/` heuristic MUST NOT classify non-markdown files as
+    /// explicit skill entrypoints. Pre-fix any file (not only `.md`) under
+    /// any `prompts/` parent matched, so a co-located `payload.txt` or
+    /// `binary.bin` could be lifted into the skill scan stream.
+    #[test]
+    fn is_explicit_skill_file_rejects_non_markdown_under_prompts() {
+        assert!(!is_explicit_skill_file(Path::new(
+            "/repo/prompts/payload.txt"
+        )));
+        assert!(!is_explicit_skill_file(Path::new(
+            "/repo/prompts/data.json"
+        )));
+        assert!(!is_explicit_skill_file(Path::new(
+            "/repo/prompts/script.sh"
+        )));
+    }
+
+    /// # Contract (positive)
+    ///
+    /// `.mdx` is accepted under `prompts/` because the Claude skill ecosystem
+    /// increasingly uses MDX prompts. Pinned so a future contraction does
+    /// not accidentally drop MDX support.
+    #[test]
+    fn is_explicit_skill_file_accepts_mdx_under_prompts() {
+        assert!(is_explicit_skill_file(Path::new(
+            "/repo/prompts/Review.mdx"
+        )));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A `prompts/` directory living inside a vendored / generated subtree
+    /// (`node_modules/`, `.venv/`, `target/`, …) MUST NOT promote files
+    /// underneath it to explicit-entrypoint status. The heuristic is
+    /// conservative because external callers may pass a raw path that
+    /// bypasses the discovery walker's prune list, and we still want
+    /// vendored prompts to be ignored.
+    #[test]
+    fn is_explicit_skill_file_rejects_prompts_under_skipped_directory() {
+        for path in [
+            "/repo/node_modules/some-pkg/prompts/payload.md",
+            "/repo/.venv/lib/site-packages/foo/prompts/cmd.md",
+            "/repo/target/debug/build/x/prompts/n.md",
+            "/repo/__pycache__/prompts/n.md",
+            "/repo/.git/prompts/n.md",
+        ] {
+            assert!(
+                !is_explicit_skill_file(Path::new(path)),
+                "must not classify {path} as explicit; sits under skipped subtree"
+            );
+        }
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Legitimate `prompts/` placements at any depth NOT inside a skipped
+    /// subtree MUST still be accepted. This pins the bound: the fix
+    /// constrains the heuristic's scope without crippling its core use case
+    /// in repos that nest `prompts/` under `docs/`, `examples/`, etc.
+    #[test]
+    fn is_explicit_skill_file_accepts_prompts_at_legitimate_depth() {
+        for path in [
+            "/repo/prompts/review.md",
+            "/repo/docs/prompts/review.md",
+            "/repo/examples/skill-pack/prompts/plan.md",
+            "/repo/Prompts/Plan.md",
+        ] {
+            assert!(
+                is_explicit_skill_file(Path::new(path)),
+                "must classify {path} as explicit; not under any skipped subtree"
+            );
+        }
     }
 }

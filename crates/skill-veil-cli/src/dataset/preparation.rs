@@ -176,6 +176,35 @@ const EXTRACTION_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
 /// finishes, but not so short that contention burns CPU.
 const EXTRACTION_LOCK_POLL: Duration = Duration::from_millis(100);
 
+/// Fallback package name when a ZIP filename's stem is unsafe to use as a
+/// path component (pure-dot names like `..`, components containing path
+/// separators on the host platform). See [`sanitize_package_name`].
+const FALLBACK_PACKAGE_NAME: &str = "package";
+
+/// Reduce a ZIP filename stem to a path component that is safe to join onto
+/// `cache_root`. Returns [`FALLBACK_PACKAGE_NAME`] when the stem is empty,
+/// composed entirely of `.` characters (so `Path::join` would resolve to
+/// the parent of `cache_root`), or contains a path separator. Without this,
+/// a ZIP literally named `...zip` produces `Path::file_stem == ".."` and
+/// `cache_root.join("..")` walks above the cache, which then participates
+/// in `fs::remove_dir_all`/`fs::rename` on a path the caller never intended.
+fn sanitize_package_name(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return FALLBACK_PACKAGE_NAME;
+    }
+    if trimmed.bytes().all(|b| b == b'.') {
+        return FALLBACK_PACKAGE_NAME;
+    }
+    if trimmed.contains(std::path::MAIN_SEPARATOR)
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+    {
+        return FALLBACK_PACKAGE_NAME;
+    }
+    trimmed
+}
+
 /// RAII lockfile sentinel: holds the lock for its lifetime and removes
 /// the path on drop. Used by `extract_zip_package_cached` to prevent two
 /// concurrent invocations (typically from parallel `scan-dataset` runs
@@ -246,11 +275,24 @@ fn wait_for_peer_or_take_lock(
 }
 
 fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> {
-    let package_name = zip_path
+    let raw_stem = zip_path
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .unwrap_or("package");
+        .unwrap_or(FALLBACK_PACKAGE_NAME);
+    let package_name = sanitize_package_name(raw_stem);
     let output_dir = cache_root.join(package_name);
+    // Defence in depth: the lexical check guarantees that even if a future
+    // refactor weakens `sanitize_package_name`, an output path that escapes
+    // `cache_root` cannot be silently used in destructive `remove_dir_all`/
+    // `rename` operations below.
+    if !skill_veil_core::path_stays_within_base(&output_dir, cache_root) {
+        anyhow::bail!(
+            "Refusing to extract {}: derived cache path {} escapes cache root {}",
+            zip_path.display(),
+            output_dir.display(),
+            cache_root.display()
+        );
+    }
     let marker_path = output_dir.join(".skill-veil-source");
     let source_signature = zip_source_signature(zip_path)?;
 
@@ -517,6 +559,108 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(output_dir.join("file.txt")).unwrap(),
             "hello"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `sanitize_package_name` MUST replace pure-dot stems (`.`, `..`,
+    /// `...`, …) with [`FALLBACK_PACKAGE_NAME`]. Without this, a ZIP literally
+    /// named `...zip` produces `Path::file_stem == ".."`; joining `..` onto
+    /// the cache root resolves to the cache root's *parent*, which then
+    /// participates in `fs::remove_dir_all` and `fs::rename` inside
+    /// `extract_zip_package_cached`. That is a path-traversal vector that
+    /// deletes data outside the cache.
+    #[test]
+    fn sanitize_package_name_replaces_pure_dot_stems() {
+        assert_eq!(sanitize_package_name(".."), FALLBACK_PACKAGE_NAME);
+        assert_eq!(sanitize_package_name("..."), FALLBACK_PACKAGE_NAME);
+        assert_eq!(sanitize_package_name("....."), FALLBACK_PACKAGE_NAME);
+        assert_eq!(sanitize_package_name("."), FALLBACK_PACKAGE_NAME);
+        assert_eq!(sanitize_package_name(""), FALLBACK_PACKAGE_NAME);
+        assert_eq!(sanitize_package_name("   "), FALLBACK_PACKAGE_NAME);
+    }
+
+    /// # Contract
+    ///
+    /// `sanitize_package_name` MUST replace any stem containing a path
+    /// separator (`/` or platform-native `\`) with the fallback. This blocks
+    /// the secondary path-injection vector where an attacker uses creative
+    /// encoding to smuggle a separator through `Path::file_stem`.
+    #[test]
+    fn sanitize_package_name_replaces_stems_with_separators() {
+        assert_eq!(sanitize_package_name("evil/payload"), FALLBACK_PACKAGE_NAME);
+        assert_eq!(
+            sanitize_package_name("evil\\payload"),
+            FALLBACK_PACKAGE_NAME
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Benign stems pass through unchanged. This pins the negative case so a
+    /// future tightening of `sanitize_package_name` cannot accidentally
+    /// rewrite legitimate package names.
+    #[test]
+    fn sanitize_package_name_passes_through_benign_stems() {
+        assert_eq!(sanitize_package_name("normal"), "normal");
+        assert_eq!(sanitize_package_name("with-dash"), "with-dash");
+        assert_eq!(sanitize_package_name("with.dots"), "with.dots");
+        assert_eq!(sanitize_package_name(".hidden"), ".hidden");
+        assert_eq!(sanitize_package_name("v1.2.3"), "v1.2.3");
+    }
+
+    /// # Contract
+    ///
+    /// `extract_zip_package_cached` MUST refuse to operate on a ZIP whose
+    /// derived `output_dir` escapes the cache root. The `path_stays_within_base`
+    /// guard is defence in depth on top of `sanitize_package_name`. This test
+    /// uses a real `...zip` filename — the most direct path-traversal
+    /// trigger — and asserts the function errors out before any destructive
+    /// I/O hits the cache root's parent.
+    #[test]
+    fn extract_zip_package_cached_rejects_dotted_filenames() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_root = tmp.path().join("cache");
+        std::fs::create_dir_all(&cache_root).unwrap();
+        // Sentinel sibling: would be deleted by `remove_dir_all(cache/..)`
+        // if the traversal succeeded.
+        let sibling = tmp.path().join("sibling");
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(sibling.join("keep.txt"), b"do not delete").unwrap();
+
+        let zip_path = tmp.path().join("...zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("payload.txt", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"OWNED").unwrap();
+            writer.finish().unwrap();
+        }
+
+        // Sanity: `Path::file_stem` actually does return ".." for "...zip"
+        // on this platform — without this, the test would pass for the
+        // wrong reason.
+        assert_eq!(
+            zip_path.file_stem().and_then(|s| s.to_str()),
+            Some(".."),
+            "test premise broken: file_stem of ...zip should be .."
+        );
+
+        // With the sanitizer in place the call falls back to the safe name
+        // and extracts under cache_root/package, so it succeeds; without the
+        // sanitizer it would have called `remove_dir_all(cache_root/..)` and
+        // `rename(staging, cache_root/..)`, escaping the cache.
+        extract_zip_package_cached(&zip_path, &cache_root).unwrap();
+        assert!(
+            sibling.join("keep.txt").exists(),
+            "cache_root sibling must not be touched by extraction"
+        );
+        assert!(
+            cache_root.join(FALLBACK_PACKAGE_NAME).is_dir(),
+            "extraction must materialise under the sanitized fallback name"
         );
     }
 }

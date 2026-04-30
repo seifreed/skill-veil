@@ -74,9 +74,11 @@ impl LlmProvider for OpenAiProvider {
     }
 
     fn sampling_fingerprint(&self) -> String {
+        // `base_url` participates so reconfiguring the endpoint to a local
+        // proxy does not return the cloud endpoint's cached verdict.
         format!(
-            "max_tokens={};temperature={}",
-            self.max_tokens, self.temperature
+            "base_url={};max_tokens={};temperature={}",
+            self.base_url, self.max_tokens, self.temperature
         )
     }
 }

