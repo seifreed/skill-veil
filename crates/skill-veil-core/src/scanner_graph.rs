@@ -186,7 +186,13 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
 
     fs_provider
         .list_files(parent, "*", false)
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                "I/O error listing files in {}: {e}; sibling detection skipped",
+                parent.display()
+            );
+            Vec::new()
+        })
         .into_iter()
         .filter(|p| {
             let file_name = p
@@ -316,7 +322,13 @@ fn sibling_package_manifests<F: FileSystemProvider>(fs_provider: &F, path: &Path
 
     fs_provider
         .list_files(path, "*", false)
-        .unwrap_or_default()
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                "I/O error listing files in {}: {e}; manifest detection skipped",
+                path.display()
+            );
+            Vec::new()
+        })
         .into_iter()
         .filter(|p| {
             p.file_name()

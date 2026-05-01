@@ -74,7 +74,13 @@ fn has_url_scheme(candidate: &str) -> bool {
 /// cases like example references in documentation).
 pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf> {
     let mut references = Vec::new();
-    let base_dir = base_path.parent().unwrap_or(Path::new("."));
+    let base_dir = base_path.parent().unwrap_or_else(|| {
+        tracing::debug!(
+            "extract_references: `{}` has no parent; resolving references relative to CWD",
+            base_path.display()
+        );
+        Path::new(".")
+    });
 
     let link_pattern = format!(r#"\[.*?\]\((\.?/?[^\)]+\.({}))\)"#, ALL_EXT_PATTERN);
     let command_pattern = format!(

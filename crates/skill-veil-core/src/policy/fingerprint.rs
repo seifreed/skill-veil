@@ -66,7 +66,7 @@ pub fn finding_fingerprint(finding: &Finding) -> String {
         finding
             .artifact_path
             .as_deref()
-            .unwrap_or_default()
+            .unwrap_or("\0<missing-path>")
             .as_bytes(),
     );
     hasher.update(b"\0");
@@ -365,12 +365,13 @@ mod fingerprint_tests {
         assert_ne!(finding_fingerprint(&a), finding_fingerprint(&b));
     }
 
-    /// Contract: missing `artifact_path` collapses to the empty string in
-    /// the hash input — but two findings with `None` paths still hash
-    /// equal, so a baseline entry with no path can pin them. Guards
-    /// against a previous bug where `Option::None` was hashed as the
-    /// debug literal `"None"`, accidentally allowing `match_value="None"`
-    /// to collide with a path-less finding.
+    /// Contract: missing `artifact_path` uses a sentinel `\0<missing-path>`
+    /// in the hash input so `None` cannot collide with `Some("")`. Two
+    /// findings with `None` paths still hash equal, so a baseline entry
+    /// with no path can pin them. Guards against a previous bug where
+    /// `Option::None` was hashed as the debug literal `"None"`,
+    /// accidentally allowing `match_value="None"` to collide with a
+    /// path-less finding.
     #[test]
     fn finding_fingerprint_handles_missing_artifact_path() {
         let a = finding("RULE_A", None, "x", "r", MatchTarget::Document);

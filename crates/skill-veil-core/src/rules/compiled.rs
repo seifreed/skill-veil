@@ -87,6 +87,15 @@ pub(super) fn artifact_kind_for_document(doc: &SkillDocument) -> ArtifactKind {
         Some(name) if name.ends_with(".prompt.md") => ArtifactKind::PromptPackDocument,
         Some("skill.md") => ArtifactKind::SkillDocument,
         Some(name) if name.ends_with(".skill.md") => ArtifactKind::SkillDocument,
+        _ if doc
+            .path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("prompts")) =>
+        {
+            ArtifactKind::PromptPackDocument
+        }
         _ => ArtifactKind::ReferencedArtifact,
     }
 }
