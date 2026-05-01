@@ -160,7 +160,9 @@ pub(crate) fn post_json_with_retry(
                             Err(LlmError::HttpStatus { status, body })
                         };
                     }
-                    let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                    let delay = Duration::from_millis(
+                        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
+                    );
                     tracing::warn!(
                         "LLM provider returned status {}, sleeping {:?} (attempt {}/{})",
                         status,
@@ -179,7 +181,9 @@ pub(crate) fn post_json_with_retry(
                 if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                     return Err(LlmError::Network(err.to_string()));
                 }
-                let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                let delay = Duration::from_millis(
+                    INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
+                );
                 tracing::warn!(
                     "LLM transport error, sleeping {:?} (attempt {}/{})",
                     delay,

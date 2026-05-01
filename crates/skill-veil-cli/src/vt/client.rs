@@ -493,7 +493,9 @@ impl VtClient {
                                 })
                             };
                         }
-                        let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                        let delay = Duration::from_millis(
+                            INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
+                        );
                         tracing::warn!(
                             "VT POST returned status {} (attempt {}/{}), sleeping {:?}",
                             status,
@@ -515,7 +517,9 @@ impl VtClient {
                     if attempt >= MAX_RETRIES {
                         return Err(VtError::Network(err.to_string()));
                     }
-                    let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                    let delay = Duration::from_millis(
+                        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
+                    );
                     tracing::warn!(
                         "VT POST transport error {:?} (attempt {}/{}), sleeping {:?}",
                         err,
@@ -579,7 +583,9 @@ impl VtClient {
                                 Err(VtError::HttpStatus { status, body })
                             };
                         }
-                        let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                        let delay = Duration::from_millis(
+                            INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
+                        );
                         tracing::warn!(
                             "VT returned status {} (attempt {}/{}), sleeping {:?}",
                             status,
@@ -598,7 +604,9 @@ impl VtClient {
                     if attempt >= MAX_RETRIES {
                         return Err(VtError::Network(err.to_string()));
                     }
-                    let delay = Duration::from_millis(INITIAL_BACKOFF_MS * 2u64.pow(attempt));
+                    let delay = Duration::from_millis(
+                        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
+                    );
                     tracing::warn!(
                         "VT transport error {:?} (attempt {}/{}), sleeping {:?}",
                         err,

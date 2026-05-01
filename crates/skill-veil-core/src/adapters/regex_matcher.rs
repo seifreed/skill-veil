@@ -61,11 +61,20 @@ impl RegexPatternMatcher {
     /// [`REGEX_DFA_SIZE_LIMIT`]; the trait methods then fall back to
     /// returning empty results to keep the rest of the rule pass alive.
     fn cached(&self, pattern: &str) -> Option<Arc<Regex>> {
+        // Recover from poison: a panicked thread holding the lock should
+        // not permanently degrade the cache from O(1) lookup to O(n)
+        // recompilation per call. The data inside is still valid —
+        // poison only signals that a thread panicked *while* holding
+        // the lock, not that the HashMap is corrupt.
+        let recover_poison = |e: std::sync::PoisonError<_>| e.into_inner();
         // Quick read path: most requests hit an already-compiled entry.
-        if let Ok(map) = self.cache.lock() {
-            if let Some(re) = map.get(pattern) {
-                return Some(Arc::clone(re));
-            }
+        if let Some(re) = self
+            .cache
+            .lock()
+            .unwrap_or_else(recover_poison)
+            .get(pattern)
+        {
+            return Some(Arc::clone(re));
         }
         // Cold path: compile through the bounded builder, then insert
         // into the cache so subsequent calls hit the warm path. We
@@ -79,17 +88,17 @@ impl RegexPatternMatcher {
                 return None;
             }
         };
-        if let Ok(mut map) = self.cache.lock() {
-            // If a concurrent compile inserted between our read and
-            // write, the existing entry wins — both compiles produce
-            // semantically identical `Regex` values, but reusing the
-            // existing Arc keeps reference counts predictable.
-            return Some(Arc::clone(
-                map.entry(pattern.to_string())
-                    .or_insert_with(|| Arc::clone(&re)),
-            ));
-        }
-        Some(re)
+        // If a concurrent compile inserted between our read and write,
+        // the existing entry wins — both compiles produce semantically
+        // identical `Regex` values, but reusing the existing Arc keeps
+        // reference counts predictable.
+        Some(Arc::clone(
+            self.cache
+                .lock()
+                .unwrap_or_else(recover_poison)
+                .entry(pattern.to_string())
+                .or_insert_with(|| Arc::clone(&re)),
+        ))
     }
 }
 
@@ -306,5 +315,48 @@ mod tests {
         assert_eq!(caps.len(), 2);
         assert_eq!(caps[0].get(1).unwrap().matched_text, "user");
         assert_eq!(caps[1].get(1).unwrap().matched_text, "admin");
+    }
+
+    /// # Contract
+    ///
+    /// After a thread panics while holding the cache mutex, `cached` MUST
+    /// recover from the poisoned lock rather than permanently degrading to
+    /// recompiling every pattern on every call. Pre-fix the `if let Ok(map)`
+    /// guards silently skipped both reads and writes on `Err(PoisonError)`,
+    /// causing an O(n×rules) recompilation per scan instead of O(n) total.
+    #[test]
+    fn cached_recovers_from_poisoned_mutex() {
+        let matcher = RegexPatternMatcher::new();
+        // Warm the cache with a pattern.
+        matcher.find_matches(r"\d+", "abc 123");
+        assert_eq!(
+            matcher
+                .cache
+                .lock()
+                .expect("cache should be healthy after warm-up")
+                .len(),
+            1,
+            "one pattern should be cached after first lookup"
+        );
+        // Poison the mutex by causing a panic while holding it.
+        let cache_clone = Arc::clone(&matcher.cache);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cache_clone.lock().expect("lock before poison");
+            panic!("intentional test panic to poison mutex");
+        }));
+        assert!(result.is_err(), "inner panic should have propagated");
+        // Verify the mutex is poisoned.
+        assert!(
+            matcher.cache.is_poisoned(),
+            "mutex must be poisoned after a panic while holding it"
+        );
+        // `cached` must still return a valid result despite the poison.
+        let matches = matcher.find_matches(r"\d+", "xyz 456");
+        assert_eq!(matches.len(), 1, "cached must recover from poison");
+        assert_eq!(matches[0].matched_text, "456");
+        // A new pattern must also work post-poison.
+        let alpha_matches = matcher.find_matches(r"[a-z]+", "abc");
+        assert_eq!(alpha_matches.len(), 1);
+        assert_eq!(alpha_matches[0].matched_text, "abc");
     }
 }

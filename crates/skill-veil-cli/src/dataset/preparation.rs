@@ -332,7 +332,7 @@ fn wait_for_peer_or_take_lock(
         // Peer may have completed: check cache hit conditions again.
         if output_dir.is_dir()
             && marker_path.exists()
-            && fs::read_to_string(marker_path).ok().as_deref() == Some(source_signature)
+            && read_marker_bounded(marker_path).as_deref() == Some(source_signature)
         {
             return Ok(None);
         }
@@ -351,6 +351,20 @@ fn wait_for_peer_or_take_lock(
                 EXTRACTION_LOCK_TIMEOUT
             )
         })
+}
+
+/// Maximum marker file size to read. Marker files contain short signatures
+/// (zip path + mtime), so 4 KiB is generous. Unbounded reads could OOM on
+/// a maliciously large marker written by a compromised same-UID process.
+const MAX_MARKER_BYTES: u64 = 4096;
+
+/// Read the extraction marker file with a size cap, returning `None` if the
+/// file is missing or exceeds `MAX_MARKER_BYTES`. Uses bounded I/O to
+/// prevent OOM from a maliciously large marker.
+fn read_marker_bounded(path: &Path) -> Option<String> {
+    use crate::util::cache_io::read_cache_file_with_cap;
+    let bytes = read_cache_file_with_cap(path, MAX_MARKER_BYTES).ok()??;
+    String::from_utf8(bytes).ok()
 }
 
 fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> {
@@ -377,7 +391,7 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
 
     if output_dir.is_dir()
         && marker_path.exists()
-        && fs::read_to_string(&marker_path).ok().as_deref() == Some(source_signature.as_str())
+        && read_marker_bounded(&marker_path).as_deref() == Some(source_signature.as_str())
     {
         return Ok(());
     }
@@ -410,7 +424,7 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
     // populated the cache between our pre-lock probe and the lock grab.
     if output_dir.is_dir()
         && marker_path.exists()
-        && fs::read_to_string(&marker_path).ok().as_deref() == Some(source_signature.as_str())
+        && read_marker_bounded(&marker_path).as_deref() == Some(source_signature.as_str())
     {
         return Ok(());
     }

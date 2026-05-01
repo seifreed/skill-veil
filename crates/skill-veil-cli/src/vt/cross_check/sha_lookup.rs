@@ -9,6 +9,7 @@
 //! 3. Hash the primary artifact on disk (last resort; only meaningful
 //!    for direct-file corpora).
 
+use crate::util::cache_io::read_cache_file_with_cap;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -61,13 +62,23 @@ pub(super) fn sha_for_lookup(package_id: &Option<String>, path: &Path) -> Option
     compute_file_sha256(path).ok()
 }
 
-/// Recover a SHA-256 from any ancestor directory whose name is a 64-hex
+/// Recover a SHA-256 from a nearby ancestor directory whose name is a 64-hex
 /// string, optionally with a recognised extraction suffix. Mirrors the
 /// "directory named after sha" convention used by `vt download` and the
 /// dataset extractor.
+///
+/// Only the immediate parent and grandparent are inspected. Walking ALL
+/// ancestors would match any coincidentally 64-hex-char directory name
+/// (e.g. git object paths) far up the tree, causing a spurious VT lookup.
+/// `take(3)` covers the file itself, its parent, and its grandparent —
+/// enough for `/<sha>/SKILL.md` and `/<sha>/subdir/SKILL.md` while
+/// rejecting SHAs deeper in the tree.
+const SHA_ANCESTOR_DEPTH: usize = 3;
+
 fn sha_from_ancestors(path: &Path) -> Option<String> {
     const EXTRACTION_SUFFIXES: &[&str] = &["_extracted", ".extracted", "-extracted"];
     path.ancestors()
+        .take(SHA_ANCESTOR_DEPTH)
         .filter_map(|a| a.file_name().and_then(|n| n.to_str()))
         .filter_map(|name| {
             if is_sha256_hex(name) {
@@ -90,16 +101,15 @@ fn sha_from_ancestors(path: &Path) -> Option<String> {
 const MAX_HASH_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 fn compute_file_sha256(path: &Path) -> Result<String> {
-    let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
-    if meta.len() > MAX_HASH_FILE_BYTES {
-        anyhow::bail!(
-            "refusing to hash {}: size {} exceeds MAX_HASH_FILE_BYTES ({})",
-            path.display(),
-            meta.len(),
-            MAX_HASH_FILE_BYTES
-        );
-    }
-    let bytes = std::fs::read(path).with_context(|| format!("hashing {}", path.display()))?;
+    let bytes = read_cache_file_with_cap(path, MAX_HASH_FILE_BYTES)
+        .with_context(|| format!("reading file for hashing {}", path.display()))?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "refusing to hash {}: file exceeds size cap ({} bytes)",
+                path.display(),
+                MAX_HASH_FILE_BYTES
+            )
+        })?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     Ok(format!("{:x}", hasher.finalize()))
@@ -193,5 +203,31 @@ mod tests {
         let path = std::path::PathBuf::from(format!("/nonexistent/{bogus}/SKILL.md"));
         // No package_id, no valid ancestor sha, file doesn't exist → None.
         assert!(sha_for_lookup(&None, &path).is_none());
+    }
+
+    /// # Contract
+    ///
+    /// `sha_from_ancestors` MUST only inspect the immediate parent and
+    /// grandparent directories. A 64-hex-char directory name deeper in the
+    /// ancestor chain (e.g. at depth 4+) must NOT be matched, preventing
+    /// spurious VT lookups from coincidentally-named directories like git
+    /// object paths.
+    #[test]
+    fn sha_from_ancestors_ignores_deep_ancestors() {
+        let sha = "a".repeat(64);
+        // Depth 4: /<sha>/deep/nested/sub/SKILL.md — sha is
+        // great-great-grandparent, too deep.
+        let deep_path = std::path::PathBuf::from(format!("/{sha}/deep/nested/sub/SKILL.md"));
+        assert!(
+            sha_from_ancestors(&deep_path).is_none(),
+            "SHA from great-great-grandparent must be ignored (depth > 3)"
+        );
+        // Depth 2: /<sha>/nested/SKILL.md — sha is grandparent, must match.
+        let ok_path = std::path::PathBuf::from(format!("/{sha}/nested/SKILL.md"));
+        assert_eq!(
+            sha_from_ancestors(&ok_path).unwrap(),
+            sha,
+            "SHA from grandparent must be recovered"
+        );
     }
 }

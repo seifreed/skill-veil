@@ -94,10 +94,14 @@ pub(crate) fn read_cache_file_with_cap(path: &Path, cap: u64) -> Result<Option<V
         );
         return Ok(None);
     }
-    // `metadata().len()` is racy with concurrent writers, so still cap
-    // the read with `take(cap)` to bound memory even if the file grew
-    // between the stat and the read.
-    let mut buf = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    // `metadata().len()` is racy with concurrent writers, so cap both
+    // the pre-allocation AND the read. Without the `min(cap, len)`,
+    // a file that grew between the stat and the read could cause a
+    // pre-allocation far exceeding the intended cap, even though
+    // `take(cap)` later limits how many bytes are actually read into
+    // the buffer.
+    let alloc_cap = usize::try_from(len.min(cap)).unwrap_or(0);
+    let mut buf = Vec::with_capacity(alloc_cap);
     file.by_ref()
         .take(cap)
         .read_to_end(&mut buf)
@@ -229,5 +233,30 @@ mod tests {
 
         assert!(!tmp.exists(), "tmp must be gone after overwrite");
         assert_eq!(std::fs::read(&dest).unwrap(), b"NEW-and-longer");
+    }
+
+    /// # Contract
+    ///
+    /// The buffer pre-allocation in `read_cache_file_with_cap` MUST be
+    /// capped at `min(len, cap)` rather than `len` alone. Without this
+    /// cap, a file that grew between the `metadata().len()` check and
+    /// the actual read could cause a pre-allocation far exceeding the
+    /// intended bound, even though `take(cap)` limits the bytes read.
+    /// The `take(cap)` still prevents reading beyond the cap, but the
+    /// memory would already have been allocated.
+    #[test]
+    fn read_cache_file_with_cap_pre_allocation_is_capped() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("boundary.json");
+        // Write a 16-byte file.
+        std::fs::write(&path, vec![0u8; 16]).unwrap();
+
+        // With a cap of 8, the file is over cap and should return None.
+        let result = read_cache_file_with_cap(&path, 8).unwrap();
+        assert!(result.is_none(), "over-cap file must be a cache miss");
+
+        // With a cap of 32, the file is under cap and should be read fully.
+        let result = read_cache_file_with_cap(&path, 32).unwrap().unwrap();
+        assert_eq!(result.len(), 16, "under-cap file must be read in full");
     }
 }
