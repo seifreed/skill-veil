@@ -80,7 +80,7 @@ impl CapabilityScoreAccumulator {
     ) {
         self.action = self.action.max(combo_action);
         if self.scored_combos.insert(key) {
-            self.total_score += weight;
+            self.total_score = self.total_score.saturating_add(weight);
             self.factors.push(RiskFactor {
                 factor: factor_label.to_string(),
                 contribution: weight,

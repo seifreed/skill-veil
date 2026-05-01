@@ -87,8 +87,10 @@ fn finalize_calibration_buckets(buckets: BTreeMap<String, Vec<bool>>) -> Vec<Cal
     buckets
         .into_iter()
         .map(|(key, labels)| {
-            let findings = labels.len() as u32;
-            let true_positive = labels.iter().filter(|is_positive| **is_positive).count() as u32;
+            let findings = u32::try_from(labels.len()).unwrap_or(u32::MAX);
+            let true_positive =
+                u32::try_from(labels.iter().filter(|is_positive| **is_positive).count())
+                    .unwrap_or(u32::MAX);
             let false_positive = findings.saturating_sub(true_positive);
             let observed_precision = if findings == 0 {
                 0.0

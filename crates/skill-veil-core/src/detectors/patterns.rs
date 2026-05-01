@@ -31,16 +31,17 @@ lazy_pattern!(pub(crate) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 
 /// Whether `line` invokes a shell or interpreter as a command — `bash`, `sh`,
 /// `dash`, `zsh`, `pwsh`, `powershell`, `python`, or `node`. Detection looks
-/// at whitespace-delimited tokens and compares the basename (stripped of a
-/// trailing `.exe`, leading `/` or `\` path components) against a known set.
+/// at whitespace-delimited tokens and compares the lowercased basename
+/// (stripped of a case-insensitive `.exe` suffix, leading `/` or `\` path
+/// components) against a known set.
 ///
 /// Avoids false positives on English words ending in "-sh" like `publish`,
 /// `finish`, `wash`, `polish` — those words appear inside a single token
 /// (e.g. `"publish"`) whose basename is the word itself, which is not in the
 /// matched set. Handles `bash`, `/bin/bash`, `\tbash`,
-/// `C:\Windows\System32\bash.exe`. Does not match `python3` or `node22`
-/// (basename comparison is exact) — consistent with the prior
-/// `contains("python ")` substring behavior.
+/// `C:\Windows\System32\bash.exe`, `POWERSHELL.EXE`. Does not match
+/// `python3` or `node22` (basename comparison is exact) — consistent with the
+/// prior `contains("python ")` substring behavior.
 ///
 /// Acceptable misses: quoted commands like `"bash" install.sh` (rare in
 /// real fixtures) and backtick command substitution. Comments containing
@@ -49,9 +50,14 @@ lazy_pattern!(pub(crate) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
     line.split_whitespace().any(|token| {
         let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
-        let basename = basename.strip_suffix(".exe").unwrap_or(basename);
+        let basename = basename
+            .strip_suffix(".exe")
+            .or_else(|| basename.strip_suffix(".EXE"))
+            .or_else(|| basename.strip_suffix(".Exe"))
+            .unwrap_or(basename);
+        let basename_lower = basename.to_ascii_lowercase();
         matches!(
-            basename,
+            basename_lower.as_str(),
             "bash" | "sh" | "dash" | "zsh" | "pwsh" | "powershell" | "python" | "node"
         )
     })
@@ -88,6 +94,19 @@ mod tests {
         assert!(line_invokes_shell_or_interpreter(
             "c:\\windows\\python.exe -c x"
         ));
+    }
+
+    /// Contract: case-insensitive `.exe` stripping. Windows filenames commonly
+    /// use `.EXE` or `.Exe`; an attacker can evade detection by using an
+    /// uppercase extension. Pre-fix `strip_suffix(".exe")` was case-sensitive
+    /// and missed `POWERSHELL.EXE`, `bash.EXE`, etc.
+    #[test]
+    fn line_invokes_shell_or_interpreter_strips_exe_suffix_case_insensitive() {
+        assert!(line_invokes_shell_or_interpreter(
+            "C:\\Windows\\System32\\POWERSHELL.EXE -c x"
+        ));
+        assert!(line_invokes_shell_or_interpreter("bash.EXE script.sh"));
+        assert!(line_invokes_shell_or_interpreter("python.Exe -c x"));
     }
 
     /// Contract: Windows backslash separators are handled in addition to `/`.

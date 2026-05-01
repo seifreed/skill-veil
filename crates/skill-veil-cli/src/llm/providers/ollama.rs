@@ -139,7 +139,7 @@ pub(crate) fn parse_ollama_context_length(body: &str) -> Option<usize> {
         for (key, value) in info {
             if key.ends_with(".context_length") {
                 if let Some(n) = value.as_u64() {
-                    return Some(usize::try_from(n).unwrap_or(usize::MAX));
+                    return usize::try_from(n).ok();
                 }
             }
         }

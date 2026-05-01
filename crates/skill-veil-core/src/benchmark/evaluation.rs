@@ -104,7 +104,7 @@ pub fn evaluate_corpus<F: FileSystemProvider>(
     }
 
     let metrics = compute_metrics(&expected, &actual);
-    let coverage = coverage.finalize(samples.len() as u32);
+    let coverage = coverage.finalize(u32::try_from(samples.len()).unwrap_or(u32::MAX));
     let confidence_calibration = calibrate_confidence(&all_findings);
     let threshold_recommendation = recommend_thresholds(&samples);
     let family_metrics = build_family_metrics(&samples);
@@ -231,9 +231,15 @@ fn accumulate_deduplication_metrics(
     label: SampleLabel,
 ) {
     for result in results {
-        deduplication.original_findings += result.deduplication_summary.original_findings as u32;
-        deduplication.unique_findings += result.deduplication_summary.unique_findings as u32;
-        deduplication.duplicates_removed += result.deduplication_summary.duplicates_removed as u32;
+        deduplication.original_findings = deduplication
+            .original_findings
+            .saturating_add(result.deduplication_summary.original_findings as u32);
+        deduplication.unique_findings = deduplication
+            .unique_findings
+            .saturating_add(result.deduplication_summary.unique_findings as u32);
+        deduplication.duplicates_removed = deduplication
+            .duplicates_removed
+            .saturating_add(result.deduplication_summary.duplicates_removed as u32);
         all_findings.extend(
             result
                 .findings
@@ -293,7 +299,7 @@ fn build_family_metrics(samples: &[SampleEvaluation]) -> Vec<AttackFamilyMetrics
             let threshold_recommendation = recommend_thresholds(&family_samples);
             AttackFamilyMetrics {
                 family,
-                sample_count: family_samples.len() as u32,
+                sample_count: u32::try_from(family_samples.len()).unwrap_or(u32::MAX),
                 metrics,
                 threshold_recommendation,
             }
