@@ -376,7 +376,11 @@ fn load_fresh(path: &Path, ttl: Duration) -> Result<Option<EnrichedIndicator>> {
         return Ok(None);
     };
     let age = Utc::now() - record.fetched_at;
-    if age > ttl {
+    // A future-dated fetched_at (clock skew or tampering) produces a
+    // negative age, which never exceeds the TTL — freezing the entry
+    // forever. Treat negative ages as expired (fail-closed), matching
+    // the LLM cache's guard in llm/cache.rs.
+    if age > ttl || age < chrono::Duration::zero() {
         return Ok(None);
     }
     // Don't poison the cache with transient failures: a single 5xx or network
@@ -560,6 +564,32 @@ mod tests {
         assert!(
             load_fresh(&path, Duration::days(7)).unwrap().is_some(),
             "Error records younger than ERROR_CACHE_TTL must hit the cache"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `load_fresh` MUST treat future-dated `fetched_at` values as expired.
+    /// A clock-skewed or tampered `fetched_at` that is in the future produces
+    /// a negative `age`, which never exceeds the TTL — without this guard
+    /// the entry would be cached forever. Mirrors the LLM cache's guard in
+    /// `llm/cache.rs`.
+    #[test]
+    fn load_fresh_treats_future_dated_records_as_expired() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("future.json");
+        let future = EnrichedIndicator {
+            indicator: "future".into(),
+            cache_path: path.clone(),
+            // 1 hour in the future — clock skew scenario.
+            fetched_at: Utc::now() + Duration::hours(1),
+            status: EnrichmentStatus::Found,
+            summary: None,
+        };
+        std::fs::write(&path, serde_json::to_string(&future).unwrap()).unwrap();
+        assert!(
+            load_fresh(&path, Duration::days(90)).unwrap().is_none(),
+            "future-dated records must be treated as expired (fail-closed)"
         );
     }
 

@@ -518,14 +518,28 @@ fn finalize_extraction(staging_dir: &Path, output_dir: &Path) -> Result<()> {
 /// Content-addressed signature: SHA-256 of the zip bytes. Stable across
 /// renames and identical-content copies at different paths, unlike the
 /// previous `path:len:mtime` triple which forced re-extraction whenever
-/// the file moved. Trade-off: one full read of the archive on every
-/// signature computation; the extraction cost would dominate this anyway.
+/// the file moved.
+///
+/// Streams the file in 64 KiB chunks instead of loading the entire archive
+/// into memory. Pre-fix this used `fs::read`, which allocates the full file
+/// size — a 10 GB archive would OOM the process before the hash was ever
+/// computed. The streaming approach keeps peak memory bounded regardless of
+/// archive size.
 fn zip_source_signature(zip_path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
-    let bytes = fs::read(zip_path)
-        .with_context(|| format!("Failed to read {} for signature", zip_path.display()))?;
+    use std::io::Read;
+    let file = fs::File::open(zip_path)
+        .with_context(|| format!("Failed to open {} for signature", zip_path.display()))?;
+    let mut reader = std::io::BufReader::new(file);
     let mut hasher = Sha256::new();
-    hasher.update(&bytes);
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -872,5 +886,39 @@ mod tests {
             "# skill\n"
         );
         assert!(output_dir.join("script.sh").exists());
+    }
+
+    /// # Contract
+    ///
+    /// `zip_source_signature` MUST produce a stable SHA-256 hex digest without
+    /// loading the entire file into memory. Pre-fix the function used `fs::read`
+    /// which allocated the full archive size — a 10 GB archive would OOM before
+    /// the hash was ever computed. The streaming approach reads in 64 KiB chunks
+    /// and keeps peak memory bounded. This test pins that the streaming hash
+    /// matches the all-at-once hash for a realistic zip archive.
+    #[test]
+    fn zip_source_signature_streams_stable_hash() {
+        use sha2::Digest;
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("sig_test.zip");
+        let payload = b"skill-veil signature streaming test payload";
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("data.bin", SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(payload).unwrap();
+            writer.finish().unwrap();
+        }
+
+        let sig = zip_source_signature(&zip_path).expect("streaming hash must succeed");
+
+        // Verify against all-at-once hash to confirm the streaming
+        // implementation produces identical output.
+        let bytes = fs::read(&zip_path).unwrap();
+        let expected = format!("{:x}", sha2::Sha256::digest(&bytes));
+        assert_eq!(sig, expected, "streaming hash must match all-at-once hash");
+        assert_eq!(sig.len(), 64, "signature must be 64-char hex SHA-256");
     }
 }
