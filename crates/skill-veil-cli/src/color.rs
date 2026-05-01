@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn no_color_env_disables_auto_mode_on_tty() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         std::env::set_var("NO_COLOR", "1");
         let mode = ColorMode::from_choice(ColorChoiceArg::Auto, /* is_terminal */ true);
         assert!(!mode.enabled, "NO_COLOR must disable Auto on a TTY");
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn empty_no_color_does_not_disable() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         std::env::set_var("NO_COLOR", "");
         let mode = ColorMode::from_choice(ColorChoiceArg::Auto, true);
         assert!(mode.enabled, "empty NO_COLOR is documented as not enabled");
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn always_overrides_no_color() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         std::env::set_var("NO_COLOR", "1");
         let mode = ColorMode::from_choice(ColorChoiceArg::Always, false);
         assert!(
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn never_forces_disabled_regardless_of_env() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = ENV_LOCK.lock().expect("ENV_LOCK poisoned");
         std::env::remove_var("NO_COLOR");
         let mode = ColorMode::from_choice(ColorChoiceArg::Never, true);
         assert!(!mode.enabled);
