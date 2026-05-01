@@ -49,7 +49,13 @@ fn read_text_through_port<F: FileSystemProvider>(
     path: &Path,
 ) -> Result<String, PolicyLoadError> {
     let bytes = fs.read_file_bytes(path)?;
-    Ok(String::from_utf8(bytes.as_bytes().to_vec())?)
+    String::from_utf8(bytes.as_bytes().to_vec()).map_err(|e| {
+        PolicyLoadError::Parse(format!(
+            "{}: file contains invalid UTF-8: {}",
+            path.display(),
+            e
+        ))
+    })
 }
 
 /// Determine which parser produced the more meaningful error for the given

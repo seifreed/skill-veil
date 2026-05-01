@@ -93,8 +93,20 @@ pub(super) fn try_enrich_with_llm(
             // PathBuf equality misses the case where `hash.path` is
             // `SKILL.md` (relative) and `metadata.path` is the absolute
             // form — letting the primary content slip into `supporting`
-            // and doubling the bundle size.
-            let primary_canon = res.metadata.path.canonicalize().ok();
+            // and doubling the bundle size. When canonicalization fails
+            // (e.g. PermissionDenied on a restricted path), we log a
+            // warning rather than silently discarding the error, since
+            // the fallback path still works for exact matches.
+            let primary_canon = match res.metadata.path.canonicalize() {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::warn!(
+                        "llm-enrich: cannot canonicalize {}: {e}; primary dedup may be incomplete",
+                        res.metadata.path.display()
+                    );
+                    None
+                }
+            };
             for hash in &res.extracted_iocs.file_hashes {
                 if is_primary_artifact_path(
                     &hash.path,
@@ -110,6 +122,12 @@ pub(super) fn try_enrich_with_llm(
                         read_ok = true;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        tracing::error!(
+                            "llm-enrich: permission denied reading {}: {e}",
+                            hash.path.display()
+                        );
+                    }
                     Err(e) => {
                         tracing::warn!("llm-enrich: skipping {}: {e}", hash.path.display());
                     }
@@ -123,6 +141,12 @@ pub(super) fn try_enrich_with_llm(
                     match std::fs::read_to_string(&abs) {
                         Ok(c) => supporting.push((abs, c)),
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            tracing::error!(
+                                "llm-enrich: permission denied reading {}: {e}",
+                                abs.display()
+                            );
+                        }
                         Err(e) => {
                             tracing::warn!("llm-enrich: skipping {}: {e}", abs.display());
                         }

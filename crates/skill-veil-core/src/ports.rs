@@ -311,14 +311,11 @@ pub trait FileSystemProvider: Send + Sync {
 
     /// Look up the size (and other minimal metadata) for a path.
     ///
-    /// Adapters MUST resolve this through the same backing store as
-    /// `read_file_bytes` and `list_files` so test doubles see consistent
-    /// behaviour. The default implementation here delegates to
-    /// `read_file_bytes` and reports the resulting byte length, which lets
-    /// every existing adapter pick up the new method without code changes
-    /// while keeping the contract honoured. Adapters with cheaper metadata
-    /// access (real filesystem, mocks with explicit metadata) should
-    /// override this method.
+    /// Adapters with direct filesystem access (the std adapter, mocks with
+    /// explicit metadata) MUST override this method to avoid the default
+    /// implementation, which reads the entire file via `read_file_bytes`
+    /// just to obtain the length. The `StdFileSystemProvider` override uses
+    /// `std::fs::metadata` (a single stat syscall) instead.
     ///
     /// # Errors
     /// Returns [`FileSystemError::PathNotFound`] when the path does not

@@ -66,6 +66,14 @@ impl RegexPatternMatcher {
         // recompilation per call. The data inside is still valid —
         // poison only signals that a thread panicked *while* holding
         // the lock, not that the HashMap is corrupt.
+        //
+        // NOTE: We deliberately use `into_inner()` without clearing the
+        // poison flag. Rust's `Mutex` does not expose `clear_poison()`
+        // on the guard, and `std::sync::RecoverableError` is unstable.
+        // After recovery, subsequent lock acquisitions will also recover
+        // via `into_inner()`, which is correct but takes the slow path.
+        // A true poison-clear would require `parking_lot::Mutex` or the
+        // unstable `std::sync::RecoverableError` API.
         let recover_poison = |e: std::sync::PoisonError<_>| e.into_inner();
         // Quick read path: most requests hit an already-compiled entry.
         if let Some(re) = self

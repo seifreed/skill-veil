@@ -98,10 +98,36 @@ fn is_local_only_target(value: &str) -> bool {
 }
 
 fn is_token_external(token: &str) -> bool {
-    let is_local = LOCAL_INDICATORS.iter().any(|ind| token.contains(ind));
+    let is_local = LOCAL_INDICATORS
+        .iter()
+        .any(|ind| is_exact_local_indicator(token, ind));
     let is_external = EXTERNAL_PROTOCOLS.iter().any(|ind| token.contains(ind))
         || (token.contains("://") && !is_local);
     is_external && !is_local
+}
+
+/// Check whether `token` contains `indicator` as a genuine local-only marker
+/// rather than a substring of an external domain. The local indicators
+/// (`localhost`, `127.0.0.1`, etc.) are meaningful only when they appear as
+/// a hostname — i.e. followed by a domain boundary (`:`, `/`, `?`, `#`,
+/// end-of-string, or whitespace) rather than as a prefix of an external
+/// domain like `localhost.evil.com`.
+fn is_exact_local_indicator(token: &str, indicator: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    let mut start = 0;
+    while let Some(pos) = lower[start..].find(indicator) {
+        let abs_pos = start + pos;
+        let indicator_end = abs_pos + indicator.len();
+        let followed_by_boundary = lower
+            .get(indicator_end..)
+            .and_then(|rest| rest.chars().next())
+            .is_none_or(|c| matches!(c, ':' | '/' | '?' | '#' | ' ' | '\t' | '\n' | '\r'));
+        if followed_by_boundary {
+            return true;
+        }
+        start = indicator_end;
+    }
+    false
 }
 
 // A token like "http://localhost/redirect?to=https://evil.com" is local by hostname
@@ -113,7 +139,7 @@ fn token_has_embedded_external_url(token: &str) -> bool {
     let lower = token.to_ascii_lowercase();
     let after_local = LOCAL_INDICATORS
         .iter()
-        .filter_map(|ind| lower.find(ind).map(|pos| pos + ind.len()))
+        .filter_map(|ind| lower.rfind(ind).map(|pos| pos + ind.len()))
         .max()
         .unwrap_or(0);
     let remainder = &lower[after_local..];

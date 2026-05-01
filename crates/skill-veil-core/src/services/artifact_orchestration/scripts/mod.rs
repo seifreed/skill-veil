@@ -259,13 +259,20 @@ fn contains_shell_append_redirect(lower: &str) -> bool {
     while let Some(rel) = lower[search_start..].find(">>") {
         let abs = search_start + rel;
         let after_idx = abs + 2;
-        let before = bytes.get(abs.wrapping_sub(1)).copied();
+        // Use checked_sub instead of wrapping_sub: when `>>` appears at
+        // position 0, there is no preceding byte, and `checked_sub(1)`
+        // correctly returns `None` rather than wrapping to `usize::MAX`.
+        let before = abs.checked_sub(1).and_then(|i| bytes.get(i).copied());
         let after_run = lower[after_idx..]
             .bytes()
             .find(|b| *b != b' ' && *b != b'\t');
         match after_run {
-            // End-of-input or newline ⇒ inconclusive, treat as bitshift-like.
-            None | Some(b'\n') | Some(b'\r') => {}
+            // End-of-input: `>>` with no following non-whitespace is a shell
+            // redirect (it would be a syntax error as a bitshift, since
+            // there is no right operand). Newline after `>>` followed by
+            // whitespace is ambiguous, so we still treat it as bitshift-like.
+            None => return true,
+            Some(b'\n') | Some(b'\r') => {}
             // Digit ⇒ definitely a bitshift right (e.g. `x >> 8`).
             Some(b'0'..=b'9') => {}
             // Path-like / quoted / variable / leading-tilde / leading-slash ⇒

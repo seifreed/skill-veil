@@ -62,7 +62,7 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
 /// helper to avoid restating the parse + `services` lookup +
 /// per-service destructure boilerplate.
 fn with_compose_services<F: FnMut(&str, &serde_yaml::Mapping)>(content: &str, mut visit: F) {
-    let Ok(yaml) = serde_yaml::from_str::<serde_yaml::Value>(content) else {
+    let Ok(yaml) = parse_compose_yaml(content) else {
         return;
     };
     let Some(services) = yaml.get("services").and_then(serde_yaml::Value::as_mapping) else {

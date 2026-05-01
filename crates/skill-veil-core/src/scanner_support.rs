@@ -126,7 +126,16 @@ pub(crate) fn structured_parse_warning(
     let parse_failed = if is_json {
         serde_json::from_str::<serde_json::Value>(content).is_err()
     } else if is_yaml {
-        serde_yaml::from_str::<serde_yaml::Value>(content).is_err()
+        // Defence against YAML parsing bombs: reject oversized inputs before
+        // they reach the recursive deserializer. A 4 MiB limit is generous
+        // for YAML manifests but prevents stack overflow from adversarially
+        // nested YAML.
+        const MAX_YAML_PARSE_BYTES: usize = 4 * 1024 * 1024;
+        if content.len() > MAX_YAML_PARSE_BYTES {
+            true
+        } else {
+            serde_yaml::from_str::<serde_yaml::Value>(content).is_err()
+        }
     } else if TOML_ARTIFACT_NAMES.contains(&name) {
         toml::from_str::<toml::Value>(content).is_err()
     } else {

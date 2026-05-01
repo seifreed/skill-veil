@@ -58,7 +58,16 @@ pub(super) fn sha_for_lookup(package_id: &Option<String>, path: &Path) -> Option
     if let Some(sha) = sha_from_ancestors(path) {
         return Some(sha);
     }
-    compute_file_sha256(path).ok()
+    match compute_file_sha256(path) {
+        Ok(sha) => Some(sha),
+        Err(e) => {
+            tracing::warn!(
+                "sha_for_lookup: failed to compute SHA-256 for {}: {e}",
+                path.display()
+            );
+            None
+        }
+    }
 }
 
 /// Recover a SHA-256 from a nearby ancestor directory whose name is a 64-hex

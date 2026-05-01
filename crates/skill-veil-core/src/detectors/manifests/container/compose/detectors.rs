@@ -14,8 +14,20 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-pub(super) fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, serde_yaml::Error> {
-    serde_yaml::from_str::<serde_yaml::Value>(content)
+/// Maximum YAML content size accepted by [`parse_compose_yaml`]. Beyond
+/// this limit, the parse is rejected outright — deeply nested adversarial
+/// YAML can cause stack overflow in `serde_yaml::from_str`, and legitimate
+/// Docker Compose files are well under 1 MiB.
+const MAX_YAML_CONTENT_BYTES: usize = 4 * 1024 * 1024;
+
+pub(super) fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, String> {
+    if content.len() > MAX_YAML_CONTENT_BYTES {
+        return Err(format!(
+            "YAML content exceeds {MAX_YAML_CONTENT_BYTES} byte limit (got {} bytes)",
+            content.len()
+        ));
+    }
+    serde_yaml::from_str::<serde_yaml::Value>(content).map_err(|e| e.to_string())
 }
 
 /// A `docker-compose.yml` whose YAML body is unparseable is suspicious on
@@ -25,7 +37,7 @@ pub(super) fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, ser
 /// host-mount / privilege / env_file detector. Emit an explicit finding so
 /// the manifest's existence — and our inability to analyze it — is recorded
 /// in the audit output instead of being swallowed.
-pub(super) fn parse_failure_finding(artifact_path: &str, err: &serde_yaml::Error) -> Finding {
+pub(super) fn parse_failure_finding(artifact_path: &str, err: &str) -> Finding {
     Finding::builder(
         "MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE",
         ThreatCategory::Generic,

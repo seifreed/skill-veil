@@ -72,38 +72,58 @@ impl FileSystemProvider for StdFileSystemProvider {
     /// would surface as `PathNotFound` and operators would see the scan
     /// silently skip artifacts that actually exist.
     fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
-        // Defence-in-depth size guard: pre-stat the file and refuse anything
-        // larger than `MAX_READ_FILE_BYTES`. Without this, a malicious
-        // package shipping a 100 GB file would cause `std::fs::read` to
-        // attempt a 100 GB heap allocation. Discovery-layer caps already
-        // exist (`MAX_DATA_FILE_BYTES`, `MAX_SCRIPT_FILE_BYTES`), but
-        // external callers reach this port directly and would otherwise
-        // bypass those caps.
-        match std::fs::metadata(path) {
-            Ok(meta) if meta.len() > MAX_READ_FILE_BYTES => {
-                return Err(FileSystemError::IoError(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "refusing to read {}: size {} exceeds MAX_READ_FILE_BYTES ({})",
-                        path.display(),
-                        meta.len(),
-                        MAX_READ_FILE_BYTES
-                    ),
-                )));
-            }
-            Ok(_) => {}
+        // Defence-in-depth size guard: open the file once, then check
+        // metadata on the already-open handle and use `.take()` to bound
+        // the read. Pre-fix the function used a separate `metadata()` call
+        // followed by `read()`, which was a TOCTOU race — a file could grow
+        // between the stat and the read, defeating the size cap. Opening
+        // once also avoids the symlink-swap risk of stat-then-read.
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 return Err(FileSystemError::PathNotFound(path.to_path_buf()));
             }
             Err(err) => return Err(FileSystemError::IoError(err)),
-        }
-        match std::fs::read(path) {
-            Ok(bytes) => Ok(FileContent::new(bytes)),
+        };
+        let meta = match file.metadata() {
+            Ok(m) => m,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                Err(FileSystemError::PathNotFound(path.to_path_buf()))
+                return Err(FileSystemError::PathNotFound(path.to_path_buf()));
             }
-            Err(err) => Err(FileSystemError::IoError(err)),
+            Err(err) => return Err(FileSystemError::IoError(err)),
+        };
+        if meta.len() > MAX_READ_FILE_BYTES {
+            return Err(FileSystemError::IoError(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "refusing to read {}: size {} exceeds MAX_READ_FILE_BYTES ({})",
+                    path.display(),
+                    meta.len(),
+                    MAX_READ_FILE_BYTES
+                ),
+            )));
         }
+        use std::io::Read;
+        let mut buf = Vec::with_capacity(meta.len().try_into().unwrap_or(0));
+        // `.take()` bounds the read at MAX_READ_FILE_BYTES + 1 so that a
+        // file that grew between the metadata check and the read still
+        // cannot exceed the cap. If we read more than MAX_READ_FILE_BYTES
+        // bytes, the file grew and we reject it.
+        let mut limited = file.take(MAX_READ_FILE_BYTES + 1);
+        if let Err(err) = limited.read_to_end(&mut buf) {
+            return Err(FileSystemError::IoError(err));
+        }
+        if buf.len() as u64 > MAX_READ_FILE_BYTES {
+            return Err(FileSystemError::IoError(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "refusing to read {}: size exceeds MAX_READ_FILE_BYTES ({})",
+                    path.display(),
+                    MAX_READ_FILE_BYTES
+                ),
+            )));
+        }
+        Ok(FileContent::new(buf))
     }
 
     /// List the entries of `path` that match `pattern`.

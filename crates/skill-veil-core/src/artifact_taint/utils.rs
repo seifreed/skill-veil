@@ -128,7 +128,39 @@ pub(super) fn build_sibling_clusters(graph: &ArtifactGraph) -> Vec<BTreeSet<Stri
             cluster.insert(edge.to.clone());
         }
     }
-    parent_to_cluster.into_values().collect()
+    // Deduplicate overlapping clusters: when two clusters share nodes,
+    // merge them so that cross-node taint findings have consistent
+    // attribution. Without this, the same source-sink pair could produce
+    // findings with different `artifact_path` values depending on which
+    // cluster produced them.
+    let clusters = parent_to_cluster.into_values().collect::<Vec<_>>();
+    merge_overlapping_clusters(clusters)
+}
+
+/// Merge clusters that share any node. Two clusters {A,B,C} and {C,D}
+/// both contain C, so taint findings for (B,C) and (C,D) should share
+/// a single cluster {A,B,C,D} with consistent attribution.
+fn merge_overlapping_clusters(mut clusters: Vec<BTreeSet<String>>) -> Vec<BTreeSet<String>> {
+    if clusters.is_empty() {
+        return clusters;
+    }
+    // Sort by size descending so larger clusters absorb smaller ones.
+    clusters.sort_by_key(|b| std::cmp::Reverse(b.len()));
+    let mut merged: Vec<BTreeSet<String>> = Vec::new();
+    for cluster in clusters {
+        let mut found_overlap = false;
+        for existing in &mut merged {
+            if !existing.is_disjoint(&cluster) {
+                existing.extend(cluster.iter().cloned());
+                found_overlap = true;
+                break;
+            }
+        }
+        if !found_overlap {
+            merged.push(cluster);
+        }
+    }
+    merged
 }
 
 #[cfg(test)]
