@@ -25,17 +25,10 @@ pub(super) fn build_blast_radius_summary(
 
     for finding in findings {
         let value = finding.match_value.to_ascii_lowercase();
-        if [
-            "http://",
-            "https://",
-            "localhost",
-            "127.0.0.1",
-            "169.254.169.254",
-            ".internal",
-            ".local",
-        ]
-        .iter()
-        .any(|needle| value.contains(needle))
+        if LOCAL_INDICATORS
+            .iter()
+            .chain(EXTERNAL_PROTOCOLS.iter())
+            .any(|needle| value.contains(needle))
         {
             network_targets.push(finding.match_value.clone());
         }

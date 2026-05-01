@@ -228,6 +228,22 @@ pub(super) fn looks_like_script(path: &Path) -> bool {
             .and_then(|ext| ext.to_str())
             .map(str::to_ascii_lowercase)
             .as_deref(),
-        Some("sh" | "bash" | "zsh" | "ps1" | "py" | "js" | "ts" | "mjs" | "cjs" | "mts" | "cts")
+        Some(
+            "sh" | "bash"
+                | "zsh"
+                | "ps1"
+                | "py"
+                | "js"
+                | "ts"
+                | "mjs"
+                | "cjs"
+                | "mts"
+                | "cts"
+                | "rb"
+                | "pl"
+                | "rs"
+                | "go"
+                | "php"
+        )
     )
 }

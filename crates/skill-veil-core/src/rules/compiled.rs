@@ -353,12 +353,16 @@ impl CompiledRule {
         let matches = compiled.find_matches(&sec.content);
         let initial_count = findings.len();
         for mat in matches {
-            findings.push(self.create_finding(
-                MatchTarget::Section {
-                    name: section.to_string(),
-                },
-                &mat.matched_text,
-            ));
+            let line_number = calculate_line_number(&sec.content, mat.start);
+            let finding = self
+                .create_finding(
+                    MatchTarget::Section {
+                        name: section.to_string(),
+                    },
+                    &mat.matched_text,
+                )
+                .with_line(line_number);
+            findings.push(finding);
         }
         findings.len() > initial_count
     }

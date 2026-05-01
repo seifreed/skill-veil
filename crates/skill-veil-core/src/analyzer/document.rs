@@ -44,7 +44,13 @@ impl SkillDocument {
 
         let (sections, parse_warning) = match parser.parse_sections(&content) {
             Ok(sections) => (sections, false),
-            Err(_error) => (Vec::new(), true),
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to parse markdown sections in {}: {error}; continuing with empty sections",
+                    path.display()
+                );
+                (Vec::new(), true)
+            }
         };
         let referenced_files = extract_references(&content, &path);
         let assessment = assess_artifact(path.as_path(), &content, &sections, &referenced_files);

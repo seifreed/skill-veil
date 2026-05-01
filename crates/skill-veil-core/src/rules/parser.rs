@@ -32,6 +32,9 @@ pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
         if !pack.rules.is_empty() {
             return Ok(pack.rules);
         }
+        // Recognised as RulePackFile but empty — push a label so the
+        // final error message mentions this format was attempted.
+        errors.push("RulePackFile format (empty rules)".to_string());
     } else if !content.trim().is_empty() {
         errors.push("RulePackFile format".to_string());
     }
