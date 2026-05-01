@@ -253,7 +253,17 @@ fn parse_json_suppression_object(
     let expires_at = object
         .get("expires_at")
         .and_then(|value| value.as_str())
-        .and_then(|value| value.parse::<DateTime<Utc>>().ok());
+        .and_then(|value| {
+            value
+                .parse::<DateTime<Utc>>()
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        "suppression: malformed expires_at timestamp '{value}' for rule \
+                         {rule_id}: {e}"
+                    );
+                })
+                .ok()
+        });
     Some(InlineSuppression {
         path: artifact_path.to_string(),
         rule_id,

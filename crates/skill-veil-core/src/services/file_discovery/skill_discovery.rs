@@ -28,8 +28,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             YAML_GLOB_PATTERN,
             YML_GLOB_PATTERN,
         ] {
-            if let Ok(files) = self.fs_provider.list_files(path, pattern, self.recursive) {
-                candidates.extend(files);
+            match self.fs_provider.list_files(path, pattern, self.recursive) {
+                Ok(files) => candidates.extend(files),
+                Err(e) => tracing::warn!(
+                    "skill-discovery: list_files({}/{pattern}) failed: {e}",
+                    path.display()
+                ),
             }
         }
 
@@ -48,8 +52,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             YAML_GLOB_PATTERN,
             YML_GLOB_PATTERN,
         ] {
-            if let Ok(files) = self.fs_provider.list_files(path, pattern, self.recursive) {
-                candidates.extend(files);
+            match self.fs_provider.list_files(path, pattern, self.recursive) {
+                Ok(files) => candidates.extend(files),
+                Err(e) => tracing::warn!(
+                    "skill-discovery: list_files({}/{pattern}) failed: {e}",
+                    path.display()
+                ),
             }
         }
 
@@ -101,15 +109,19 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// - Setup/Install/Usage sections
     /// - Bash/PowerShell/Shell code blocks
     fn looks_like_agent_extension(&self, path: &Path) -> bool {
-        if let Ok(content) = self.fs_provider.read_file_bytes(path) {
-            let decoded = content.decode_utf8_lossy();
-            let assessment = assess_artifact_path(path, &decoded.text);
-            !matches!(
-                assessment.classification,
-                ArtifactClassification::GenericMarkdown
-            )
-        } else {
-            false
+        match self.fs_provider.read_file_bytes(path) {
+            Ok(content) => {
+                let decoded = content.decode_utf8_lossy();
+                let assessment = assess_artifact_path(path, &decoded.text);
+                !matches!(
+                    assessment.classification,
+                    ArtifactClassification::GenericMarkdown
+                )
+            }
+            Err(e) => {
+                tracing::warn!("skill-discovery: cannot read {}: {e}", path.display());
+                false
+            }
         }
     }
 }

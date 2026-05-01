@@ -60,7 +60,7 @@ impl CapabilityScoreAccumulator {
     /// load-bearing key.
     fn score_capability(&mut self, factor: String, contribution: u32, rationale: String) {
         if self.scored_capabilities.insert(factor.clone()) {
-            self.total_score += contribution;
+            self.total_score = self.total_score.saturating_add(contribution);
             self.factors.push(RiskFactor {
                 factor,
                 contribution,

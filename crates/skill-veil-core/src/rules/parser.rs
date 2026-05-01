@@ -54,9 +54,18 @@ pub fn parse_rules_file(content: &str) -> Result<Vec<Rule>, RuleError> {
     }
 
     match serde_yaml::from_str::<Vec<Rule>>(content) {
-        Ok(rules) => return Ok(rules),
+        Ok(rules) => {
+            if !rules.is_empty() {
+                tracing::warn!(
+                    "rule-parser: accepted bare Vec<Rule> format without schema_version — \
+                     pack authors should use RulePackFile with schema_version {}",
+                    RULE_PACK_SCHEMA_VERSION
+                );
+            }
+            return Ok(rules);
+        }
         Err(e) => {
-            errors.push(format!("rule list format: {}", e));
+            errors.push(format!("rule list format: {e}"));
         }
     }
 

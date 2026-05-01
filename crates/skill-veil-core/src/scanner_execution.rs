@@ -365,9 +365,15 @@ fn collect_extracted_iocs<F: FileSystemProvider, P: MarkdownParser>(
 
     let supporting = collect_supporting_artifact_paths(scanner, doc);
     for path in supporting {
-        if let Ok(file) = fs.read_file_bytes(&path) {
-            let bytes = file.as_bytes();
-            iocs.merge(crate::ioc_extraction::extract_from_artifact(&path, bytes));
+        match fs.read_file_bytes(&path) {
+            Ok(file) => {
+                let bytes = file.as_bytes();
+                iocs.merge(crate::ioc_extraction::extract_from_artifact(&path, bytes));
+            }
+            Err(e) => tracing::warn!(
+                "ioc-extraction: skipping supporting artifact {}: {e}",
+                path.display()
+            ),
         }
     }
     iocs
@@ -523,8 +529,14 @@ fn collect_and_apply_suppressions<F: FileSystemProvider, P: MarkdownParser>(
     let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
     let mut ref_contents: Vec<(PathBuf, String)> = Vec::new();
     for referenced_file in &supporting_artifacts {
-        if let Ok((ref_content, _)) = read_text_file_lossy(referenced_file, fs) {
-            ref_contents.push((referenced_file.clone(), ref_content));
+        match read_text_file_lossy(referenced_file, fs) {
+            Ok((ref_content, _)) => {
+                ref_contents.push((referenced_file.clone(), ref_content));
+            }
+            Err(e) => tracing::warn!(
+                "suppression: cannot read referenced file {}: {e}",
+                referenced_file.display()
+            ),
         }
     }
     let mut suppression_sources: Vec<(&Path, &str)> = Vec::with_capacity(1 + ref_contents.len());
