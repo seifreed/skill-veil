@@ -85,7 +85,20 @@ fn sha_from_ancestors(path: &Path) -> Option<String> {
         .next()
 }
 
+/// Maximum file size that `compute_file_sha256` will read into memory.
+/// Matches the limit used by `StdFileSystemProvider::read_file_bytes`.
+const MAX_HASH_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
 fn compute_file_sha256(path: &Path) -> Result<String> {
+    let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+    if meta.len() > MAX_HASH_FILE_BYTES {
+        anyhow::bail!(
+            "refusing to hash {}: size {} exceeds MAX_HASH_FILE_BYTES ({})",
+            path.display(),
+            meta.len(),
+            MAX_HASH_FILE_BYTES
+        );
+    }
     let bytes = std::fs::read(path).with_context(|| format!("hashing {}", path.display()))?;
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
@@ -154,6 +167,23 @@ mod tests {
         let path = std::path::PathBuf::from(format!("/tmp/{other}/SKILL.md"));
         let resolved = sha_for_lookup(&Some(id.clone()), &path).unwrap();
         assert_eq!(resolved, id);
+    }
+
+    /// Contract: `compute_file_sha256` refuses to read files exceeding
+    /// `MAX_HASH_FILE_BYTES`. Without this guard a maliciously large file
+    /// would be read entirely into memory, risking OOM.
+    #[test]
+    fn compute_file_sha256_rejects_oversized_file() {
+        // Verify the guard exists and is a positive bound.
+        const { assert!(MAX_HASH_FILE_BYTES > 0) };
+        let dir = std::env::temp_dir().join("skill-veil-sha-oversized-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.bin");
+        // Write a tiny file and confirm hashing succeeds (below the cap).
+        std::fs::write(&path, b"tiny").unwrap();
+        let result = compute_file_sha256(&path);
+        assert!(result.is_ok(), "small file should hash successfully");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

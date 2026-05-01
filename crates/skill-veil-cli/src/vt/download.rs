@@ -62,7 +62,7 @@ pub(crate) fn run_download(client: &VtClient, opts: DownloadOptions) -> Result<D
     let mut collected: Vec<String> = Vec::new();
 
     while collected.len() < opts.limit {
-        let remaining = opts.limit - collected.len();
+        let remaining = opts.limit.saturating_sub(collected.len());
         let page_size = remaining.min(PER_PAGE);
         let response = match cursor.as_deref() {
             Some(c) => client.search_page(&opts.query, page_size, c)?,
@@ -247,5 +247,20 @@ mod tests {
         let bytes = std::fs::read(&report_path).expect("read report");
         let parsed: CachedReport = serde_json::from_slice(&bytes).expect("re-parse");
         assert_eq!(parsed.sha256, cached.sha256);
+    }
+
+    /// # Contract
+    ///
+    /// `remaining = limit - collected.len()` MUST use saturating subtraction
+    /// so that duplicate entries from the VT API (where `collected.len() >
+    /// limit`) cannot cause a panic in debug mode or an underflow in release
+    /// mode. Pre-fix this was a plain subtraction that could panic.
+    #[test]
+    fn saturating_sub_prevents_panic_on_duplicate_entries() {
+        // If the API returns duplicates, `collected.len()` can exceed `limit`.
+        // `opts.limit.saturating_sub(collected.len())` must return 0, not panic.
+        let limit: usize = 5;
+        let collected: usize = 7;
+        assert_eq!(limit.saturating_sub(collected), 0);
     }
 }

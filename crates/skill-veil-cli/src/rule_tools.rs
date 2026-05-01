@@ -92,7 +92,13 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
 
     for entry in walkdir::WalkDir::new(rules_dir)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|e| match e {
+            Ok(e) => Some(e),
+            Err(err) => {
+                tracing::warn!("rules validate: skipping directory entry: {err}");
+                None
+            }
+        })
         .filter(|e| {
             e.path()
                 .extension()
@@ -192,7 +198,13 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
 
     for entry in walkdir::WalkDir::new(rules_dir)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(|e| match e {
+            Ok(e) => Some(e),
+            Err(err) => {
+                tracing::warn!("rule-pack info: skipping directory entry: {err}");
+                None
+            }
+        })
         .filter(|e| {
             e.path()
                 .extension()

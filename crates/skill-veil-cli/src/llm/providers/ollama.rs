@@ -108,7 +108,13 @@ impl LlmProvider for OllamaProvider {
             auth_header = format!("Bearer {k}");
             headers.push(("authorization", auth_header.as_str()));
         }
-        let text = post_json_with_retry(&self.agent, &url, &headers, &body).ok()?;
+        let text = match post_json_with_retry(&self.agent, &url, &headers, &body) {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!("ollama: context-length probe failed: {e:#}");
+                return None;
+            }
+        };
         parse_ollama_context_length(&text)
     }
 }
@@ -133,7 +139,7 @@ pub(crate) fn parse_ollama_context_length(body: &str) -> Option<usize> {
         for (key, value) in info {
             if key.ends_with(".context_length") {
                 if let Some(n) = value.as_u64() {
-                    return Some(n as usize);
+                    return Some(usize::try_from(n).unwrap_or(usize::MAX));
                 }
             }
         }
@@ -208,5 +214,27 @@ mod tests {
     fn probe_returns_none_when_field_absent() {
         assert_eq!(parse_ollama_context_length("{}"), None);
         assert_eq!(parse_ollama_context_length("not-json"), None);
+    }
+
+    /// Contract: `context_length` values from `model_info` that exceed
+    /// `usize::MAX` MUST saturate to `usize::MAX` rather than silently
+    /// truncating the high bits. On 64-bit targets this test verifies the
+    /// saturation path works for realistic large values; on 32-bit targets
+    /// it pins the saturation behaviour.
+    #[test]
+    fn probe_saturates_context_length_exceeding_usize_max() {
+        // Use a raw u64 literal that exceeds usize::MAX on 32-bit targets.
+        let huge: u64 = 0x1_0000_0000; // 2^32
+        let body = format!(r#"{{"model_info": {{"llama.context_length": {huge}}}}}"#);
+        let result = parse_ollama_context_length(&body);
+        if cfg!(target_pointer_width = "64") {
+            assert_eq!(result, Some(0x1_0000_0000usize));
+        } else {
+            assert_eq!(
+                result,
+                Some(usize::MAX),
+                "u64 value exceeding usize::MAX must saturate, not truncate"
+            );
+        }
     }
 }

@@ -406,8 +406,8 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
 }
 
 /// Run the claim-vs-behavior detector. Reads each supporting artifact via the
-/// scanner's filesystem provider; failures are silently dropped (the artifact
-/// is just not contributing to deceptive-docs evaluation).
+/// scanner's filesystem provider; I/O errors are logged and the artifact is
+/// excluded from deceptive-docs evaluation (but not silently swallowed).
 fn deceptive_docs_findings<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     doc: &SkillDocument,
@@ -419,7 +419,13 @@ fn deceptive_docs_findings<F: FileSystemProvider, P: MarkdownParser>(
     let fs = scanner.file_discovery().fs_provider();
     let materialised: Vec<(PathBuf, String)> = supporting
         .into_iter()
-        .filter_map(|p| read_text_file_lossy(&p, fs).ok().map(|(c, _)| (p, c)))
+        .filter_map(|p| match read_text_file_lossy(&p, fs) {
+            Ok((c, _)) => Some((p, c)),
+            Err(e) => {
+                tracing::warn!("deceptive-docs: skipping {}: {e}", p.display());
+                None
+            }
+        })
         .collect();
     crate::deceptive_docs::detect_deceptive_documentation(doc, &materialised)
 }

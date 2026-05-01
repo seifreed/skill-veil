@@ -107,8 +107,20 @@ impl LlmProvider for LmStudioProvider {
             .strip_suffix("/v1")
             .unwrap_or_else(|| self.base_url.trim_end_matches('/'));
         let url = format!("{api_root}/api/v0/models");
-        let resp = self.agent.get(&url).call().ok()?;
-        let text = resp.into_string().ok()?;
+        let resp = match self.agent.get(&url).call() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!("lmstudio: context-length probe request failed: {e:#}");
+                return None;
+            }
+        };
+        let text = match resp.into_string() {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::debug!("lmstudio: context-length probe body read failed: {e:#}");
+                return None;
+            }
+        };
         parse_lmstudio_context_length(&text, &self.model)
     }
 }
@@ -130,11 +142,19 @@ pub(crate) fn parse_lmstudio_context_length(body: &str, model: &str) -> Option<u
         };
         if id == model {
             // Prefer the actually-loaded ctx; fall back to max.
-            if let Some(n) = entry.get("loaded_context_length").and_then(|x| x.as_u64()) {
-                return Some(n as usize);
+            if let Some(n) = entry
+                .get("loaded_context_length")
+                .and_then(|x| x.as_u64())
+                .and_then(|n| usize::try_from(n).ok())
+            {
+                return Some(n);
             }
-            if let Some(n) = entry.get("max_context_length").and_then(|x| x.as_u64()) {
-                return Some(n as usize);
+            if let Some(n) = entry
+                .get("max_context_length")
+                .and_then(|x| x.as_u64())
+                .and_then(|n| usize::try_from(n).ok())
+            {
+                return Some(n);
             }
         }
     }
@@ -252,5 +272,28 @@ mod tests {
             headers.iter().all(|(k, _)| *k != "authorization"),
             "Authorization header MUST NOT be present when api_key is unset; got {headers:?}"
         );
+    }
+
+    /// Contract: `context_length` values that exceed `usize::MAX` (possible
+    /// when the JSON returns a u64 value larger than fits in usize on 32-bit
+    /// targets) MUST be rejected rather than silently truncated. The pre-fix
+    /// code used `n as usize`, which truncates the high bits on 32-bit.
+    #[test]
+    fn parse_lmstudio_ctx_rejects_values_exceeding_usize_max() {
+        // Use a raw u64 literal that exceeds usize::MAX on 32-bit targets.
+        // On 64-bit targets this value fits in usize, so the test verifies
+        // the try_from path handles normal large values correctly.
+        let huge: u64 = 0x1_0000_0000; // 2^32, exceeds u32-based usize
+        let body = format!(r#"{{"data": [{{"id": "big", "loaded_context_length": {huge}}}]}}"#);
+        let result = parse_lmstudio_context_length(&body, "big");
+        // On 64-bit targets this should parse fine; on 32-bit it must return None.
+        if cfg!(target_pointer_width = "64") {
+            assert_eq!(result, Some(0x1_0000_0000usize));
+        } else {
+            assert_eq!(
+                result, None,
+                "u64 value exceeding usize::MAX must not be silently truncated"
+            );
+        }
     }
 }
