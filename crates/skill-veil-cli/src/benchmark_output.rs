@@ -335,11 +335,24 @@ fn append_coverage_buckets(output: &mut String, evaluation: &CorpusEvaluation) {
 }
 
 fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
-    if evaluation.family_metrics.is_empty() {
+    // Skip families with `sample_count == 0` before rendering. Without this
+    // guard, an empty family's precision/recall divisions produce NaN, which
+    // the `partial_cmp().unwrap_or(Equal)` sort hides from the developer but
+    // surfaces verbatim as the literal string `"NaN"` in the rendered text
+    // report — breaking CI parsers that consume the benchmark output. The
+    // markdown dashboard already filters this case (Round-5 audit Bug 2.4);
+    // mirror the same guard here so the two output paths stay aligned.
+    let populated_families: Vec<_> = evaluation
+        .family_metrics
+        .iter()
+        .filter(|f| f.sample_count > 0)
+        .cloned()
+        .collect();
+    if populated_families.is_empty() {
         return;
     }
     output.push_str("Family metrics:\n");
-    for family in &evaluation.family_metrics {
+    for family in &populated_families {
         output.push_str(&format!(
             "  - {}: samples={} precision={:.2} recall={:.2} fpr={:.2} exact_label={:.2} thresholds={}→{}\n",
             family.family,
@@ -352,7 +365,7 @@ fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
             family.threshold_recommendation.recommended_block_threshold,
         ));
     }
-    let mut weakest_families = evaluation.family_metrics.clone();
+    let mut weakest_families = populated_families;
     weakest_families.sort_by(|left, right| {
         left.metrics
             .exact_label_accuracy
@@ -382,4 +395,128 @@ fn append_dedup_line(output: &mut String, evaluation: &CorpusEvaluation) {
         evaluation.deduplication.unique_findings,
         evaluation.deduplication.duplicates_removed
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use skill_veil_core::{
+        AttackFamilyMetrics, CalibrationSummary, CorpusCoverage, DeduplicationMetrics,
+        RegressionMetrics, ThresholdRecommendation,
+    };
+
+    fn empty_metrics() -> RegressionMetrics {
+        // sample_count == 0 produces these NaN values upstream — pin the
+        // shape so the test reproduces the bug exactly.
+        RegressionMetrics {
+            precision: f32::NAN,
+            recall: f32::NAN,
+            false_positive_rate: f32::NAN,
+            accuracy: f32::NAN,
+            exact_label_accuracy: f32::NAN,
+            true_positive: 0,
+            false_positive: 0,
+            true_negative: 0,
+            false_negative: 0,
+        }
+    }
+
+    fn finite_metrics() -> RegressionMetrics {
+        RegressionMetrics {
+            precision: 0.85,
+            recall: 0.75,
+            false_positive_rate: 0.10,
+            accuracy: 0.80,
+            exact_label_accuracy: 0.78,
+            true_positive: 8,
+            false_positive: 1,
+            true_negative: 2,
+            false_negative: 2,
+        }
+    }
+
+    fn threshold_recommendation_default() -> ThresholdRecommendation {
+        ThresholdRecommendation {
+            current_approval_threshold: 30,
+            current_block_threshold: 70,
+            recommended_approval_threshold: 30,
+            recommended_block_threshold: 70,
+            current_metrics: finite_metrics(),
+            recommended_metrics: finite_metrics(),
+            rationale: String::new(),
+        }
+    }
+
+    fn family(name: &str, sample_count: u32, metrics: RegressionMetrics) -> AttackFamilyMetrics {
+        AttackFamilyMetrics {
+            family: name.into(),
+            sample_count,
+            metrics,
+            threshold_recommendation: threshold_recommendation_default(),
+        }
+    }
+
+    fn corpus_with_families(family_metrics: Vec<AttackFamilyMetrics>) -> CorpusEvaluation {
+        CorpusEvaluation {
+            metrics: finite_metrics(),
+            coverage: CorpusCoverage::default(),
+            deduplication: DeduplicationMetrics::default(),
+            confidence_calibration: CalibrationSummary::default(),
+            threshold_recommendation: threshold_recommendation_default(),
+            family_metrics,
+            samples: Vec::new(),
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `append_family_metrics` MUST drop families whose `sample_count == 0`
+    /// before rendering. Pre-fix the markdown dashboard already filtered
+    /// these (Round-5 audit Bug 2.4) but the plain-text report did not, so
+    /// CI parsers consuming the text format would choke on literal "NaN"
+    /// strings emitted from precision/recall divisions on zero samples.
+    /// The two output paths must stay aligned because `cargo run -- benchmark`
+    /// can render either format depending on the `--format` flag.
+    #[test]
+    fn append_family_metrics_omits_empty_families_to_avoid_nan_in_text_report() {
+        let corpus = corpus_with_families(vec![
+            family("ghost", 0, empty_metrics()),
+            family("real", 5, finite_metrics()),
+        ]);
+
+        let mut output = String::new();
+        append_family_metrics(&mut output, &corpus);
+
+        assert!(
+            !output.contains("NaN"),
+            "text report must not emit literal NaN; got:\n{output}",
+        );
+        assert!(
+            !output.contains("ghost"),
+            "empty families must be dropped from the rendered list; got:\n{output}",
+        );
+        assert!(
+            output.contains("real"),
+            "populated families must still be rendered; got:\n{output}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// When EVERY family is empty, the function MUST emit nothing — the
+    /// "Family metrics:" header is itself meaningless without rows.
+    /// Pre-fix the function emitted the header followed by NaN rows,
+    /// pretending the corpus had family data when it really had none.
+    #[test]
+    fn append_family_metrics_emits_nothing_when_all_families_are_empty() {
+        let corpus = corpus_with_families(vec![
+            family("ghost1", 0, empty_metrics()),
+            family("ghost2", 0, empty_metrics()),
+        ]);
+
+        let mut output = String::new();
+        append_family_metrics(&mut output, &corpus);
+
+        assert!(output.is_empty(), "no rows means no header; got:\n{output}",);
+    }
 }

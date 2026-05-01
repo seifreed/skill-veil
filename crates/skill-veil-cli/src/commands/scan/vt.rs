@@ -16,8 +16,23 @@ pub(super) fn try_enrich_with_vt(
     cache_dir_override: Option<&Path>,
     quiet: bool,
 ) -> Result<Option<String>> {
-    let Ok(config) = VtConfig::load() else {
-        return Ok(None); // no apikey configured → silent skip
+    // Distinguish "not configured" from "configured but broken". Pre-fix
+    // every load failure was collapsed to `Ok(None)` so a malformed
+    // `~/.vt.toml`, a `chmod 000` lockdown, an empty `apikey` field, or a
+    // bad TOML parse all looked exactly like "no apikey" — operators got
+    // zero feedback that their VT enrichment had quietly fallen off. The
+    // explicit `vt` subcommand still uses `load()` and surfaces the
+    // guidance message; the auto-enrichment path uses `load_optional()`
+    // and warns on real errors instead of swallowing them.
+    let config = match VtConfig::load_optional() {
+        Ok(Some(cfg)) => cfg,
+        Ok(None) => return Ok(None),
+        Err(err) => {
+            if !quiet {
+                eprintln!("VT enrichment skipped: {err:#}");
+            }
+            return Ok(None);
+        }
     };
     let client = VtClient::new(config);
     let cache_root = cache_root_for(scan_path, cache_dir_override);
