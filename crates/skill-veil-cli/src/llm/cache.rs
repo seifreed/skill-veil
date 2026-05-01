@@ -154,7 +154,10 @@ pub(crate) fn load_fresh(path: &Path, ttl: Duration) -> Result<Option<LlmPackage
         return Ok(None);
     };
     let age = Utc::now() - record.fetched_at;
-    if age > ttl {
+    // A future-dated fetched_at (clock skew or tampering) produces a
+    // negative age, which never exceeds the TTL — freezing the entry
+    // forever. Treat negative ages as expired (fail-closed).
+    if age > ttl || age < chrono::Duration::zero() {
         return Ok(None);
     }
     if matches!(

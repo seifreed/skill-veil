@@ -179,6 +179,8 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("spawn(")
         || lower.contains("start-process")
         || lower.contains("iex ")
+        || lower.contains("iex(")
+        || lower.contains("child_process")
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::ProcessExecution,
@@ -292,17 +294,21 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
             relation: ArtifactRelation::Downloads,
         });
     }
-    // Mirror `script_capabilities`: `iex ` is the PowerShell alias for
-    // `Invoke-Expression` and is treated as `ProcessExecution` there
-    // (mod.rs:114). Pre-fix `script_relations` omitted it, so a script
-    // calling `iex $payload` declared the capability without producing
-    // the matching `Executes` edge — composite capabilities downstream
-    // (`ShellDownloadExec`, taint chains) silently lost the link.
+    // Mirror `script_capabilities`: every pattern that declares
+    // `ProcessExecution` MUST also produce an `Executes` edge here.
+    // Pre-fix `script_relations` omitted `exec(`, `os.system(`, `spawn(`,
+    // and `iex `, so a script calling `os.system("curl " + secret)`
+    // declared ProcessExecution but had no Executes edge — composite
+    // capabilities and taint chains silently lost the link.
     if lower.lines().any(line_invokes_shell_or_interpreter)
         || lower.contains("start-process")
         || lower.contains("subprocess.")
+        || lower.contains("os.system(")
+        || lower.contains("exec(")
+        || lower.contains("spawn(")
         || lower.contains("child_process")
         || lower.contains("iex ")
+        || lower.contains("iex(")
     {
         links.push(ArtifactLink {
             target: "process".to_string(),
@@ -359,6 +365,13 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         || lower.contains("os.environ")
         || lower.contains("getenv(")
         || references_dotenv_file(&lower)
+        || lower.contains("access_token")
+        || lower.contains("api_token")
+        || lower.contains("auth_token")
+        || lower.contains("bearer_token")
+        || lower.contains("secret_key")
+        || lower.contains("client_secret")
+        || lower.contains("_authtoken")
     {
         links.push(ArtifactLink {
             target: "secrets".to_string(),

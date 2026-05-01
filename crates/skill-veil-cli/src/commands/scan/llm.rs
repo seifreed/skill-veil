@@ -103,14 +103,18 @@ pub(super) fn try_enrich_with_llm(
                 ) {
                     continue;
                 }
+                let mut read_ok = false;
                 match std::fs::read_to_string(&hash.path) {
-                    Ok(c) => supporting.push((hash.path.clone(), c)),
+                    Ok(c) => {
+                        supporting.push((hash.path.clone(), c));
+                        read_ok = true;
+                    }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => {
                         tracing::warn!("llm-enrich: skipping {}: {e}", hash.path.display());
                     }
                 }
-                if supporting.last().is_none() && hash.path.is_relative() {
+                if !read_ok && hash.path.is_relative() {
                     let abs = parent.join(&hash.path);
                     if is_primary_artifact_path(&abs, &res.metadata.path, primary_canon.as_deref())
                     {

@@ -40,7 +40,7 @@ pub(crate) fn analyze_dockerfile(path: &Path, content: &str) -> Vec<Finding> {
 
     for line in content.lines().map(str::trim) {
         let lower_line = line.to_ascii_lowercase();
-        if lower_line.starts_with("from ") && lower_line.contains(":latest") {
+        if lower_line.starts_with("from ") && is_latest_tag(&lower_line) {
             findings.push(
                 Finding::builder("MANIFEST_DOCKER_LATEST_TAG", ThreatCategory::SupplyChain)
                     .severity(Severity::Low)
@@ -82,6 +82,15 @@ pub(crate) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
             && DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
                 .iter()
                 .any(|t| trimmed.contains(t))
+        {
+            has_network_download = true;
+        }
+        // Dockerfile `ADD <url> <dest>` downloads from HTTP/HTTPS URLs at
+        // build time — functionally equivalent to `RUN curl … | bash` but
+        // invisible to the token-based network detection above.
+        if !has_network_download
+            && trimmed.starts_with("add ")
+            && (trimmed.contains("http://") || trimmed.contains("https://"))
         {
             has_network_download = true;
         }
@@ -141,6 +150,20 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
         }
     }
     links
+}
+
+/// Check that `:latest` is a tag boundary, not a substring like
+/// `:latest-alpine` or `:latest-rc`. After `:latest`, the next character
+/// must be whitespace, end-of-string, or a comment (`#`).
+fn is_latest_tag(lower_line: &str) -> bool {
+    lower_line.contains(":latest")
+        && lower_line.split(":latest").any(|after| {
+            after.is_empty()
+                || after.starts_with(' ')
+                || after.starts_with('\t')
+                || after.starts_with('#')
+                || after.starts_with('\n')
+        })
 }
 
 #[cfg(test)]

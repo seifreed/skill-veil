@@ -353,7 +353,11 @@ impl CompiledRule {
         let matches = compiled.find_matches(&sec.content);
         let initial_count = findings.len();
         for mat in matches {
-            let line_number = calculate_line_number(&sec.content, mat.start);
+            // Convert section-relative offset to document-relative
+            // line number so inline suppressions (which operate on
+            // document-level line numbers) can match these findings.
+            let line_number =
+                calculate_line_number(&sec.content, mat.start) + sec.start_line.saturating_sub(1);
             let finding = self
                 .create_finding(
                     MatchTarget::Section {

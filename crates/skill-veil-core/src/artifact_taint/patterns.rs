@@ -1,10 +1,16 @@
 use crate::artifact_graph::{ArtifactEdge, EndpointKind};
+use crate::detectors::scripts::references_dotenv_file;
 
 pub(super) fn looks_like_secret_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
+    // Use the word-boundary-aware helper for `.env` so that `.envrc`,
+    // `.envelope`, and `.environments/` do not produce false taint edges.
+    // Pre-fix the bare `.env` substring matched all of these lookalikes.
+    if references_dotenv_file(&lower) {
+        return true;
+    }
     // Specific secret file/variable patterns — match as substrings.
     let specific_patterns = [
-        ".env",
         ".npmrc",
         ".ssh",
         "id_rsa",
@@ -125,8 +131,12 @@ pub(super) fn looks_like_local_endpoint(lower: &str) -> bool {
         || lower.contains("127.0.0.1")
         || lower.contains("0.0.0.0")
         || lower.contains("::1")
-        || lower.contains(".local")
-        || lower.contains(".internal")
+        || lower.contains(".local/")
+        || lower.contains(".local:")
+        || lower.ends_with(".local")
+        || lower.contains(".internal/")
+        || lower.contains(".internal:")
+        || lower.ends_with(".internal")
 }
 
 pub(super) fn looks_like_registry_url(url: &str) -> bool {

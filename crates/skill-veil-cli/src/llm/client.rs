@@ -18,6 +18,13 @@ use std::time::Duration;
 const MAX_ADDITIONAL_ATTEMPTS: u32 = 2;
 const INITIAL_BACKOFF_MS: u64 = 1_500;
 
+/// Maximum response body size (10 MiB). A compromised or misconfigured LLM
+/// endpoint can return an arbitrarily large response body. Without a cap, the
+/// scanner would allocate unbounded memory before any downstream parsing or
+/// truncation occurs. 10 MiB is three orders of magnitude above realistic
+/// LLM responses while preventing OOM.
+const MAX_RESPONSE_BODY_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Implemented by every concrete provider (OpenAI, Anthropic, Ollama, …).
 pub(crate) trait LlmProvider: Send + Sync {
     /// One-shot analysis. Takes the prompt by shared reference to make the
@@ -103,7 +110,7 @@ fn truncate_error_body(body: String) -> String {
 /// `LlmError::HttpStatus { status, body: "" }` with no clue why the body
 /// was missing. The warning preserves that context.
 fn drain_error_body(status: u16, resp: ureq::Response) -> String {
-    match resp.into_string() {
+    match bounded_read_response(resp) {
         Ok(body) => truncate_error_body(body),
         Err(err) => {
             tracing::warn!(
@@ -114,6 +121,17 @@ fn drain_error_body(status: u16, resp: ureq::Response) -> String {
             String::new()
         }
     }
+}
+
+/// Read an HTTP response body with a size cap to prevent unbounded memory
+/// allocation from a compromised or misconfigured endpoint.
+pub(crate) fn bounded_read_response(resp: ureq::Response) -> Result<String, std::io::Error> {
+    use std::io::Read;
+    let mut buf = String::new();
+    resp.into_reader()
+        .take(MAX_RESPONSE_BODY_BYTES)
+        .read_to_string(&mut buf)?;
+    Ok(buf)
 }
 
 /// POST a JSON body with authorization headers, parse the response as a
@@ -137,9 +155,7 @@ pub(crate) fn post_json_with_retry(
             .send_string(body);
         match result {
             Ok(resp) => {
-                return resp
-                    .into_string()
-                    .map_err(|e| LlmError::Decode(e.to_string()))
+                return bounded_read_response(resp).map_err(|e| LlmError::Decode(e.to_string()))
             }
             Err(ureq::Error::Status(status, resp)) => {
                 if status == 401 || status == 403 {

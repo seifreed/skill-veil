@@ -3,7 +3,8 @@
 
 use crate::config::ProviderParams;
 use crate::llm::client::{
-    build_agent, openai_compatible_messages_value, post_json_with_retry, LlmProvider,
+    bounded_read_response, build_agent, openai_compatible_messages_value, post_json_with_retry,
+    LlmProvider,
 };
 use crate::llm::types::{LlmError, LlmPrompt, LlmRawResponse};
 
@@ -114,7 +115,7 @@ impl LlmProvider for LmStudioProvider {
                 return None;
             }
         };
-        let text = match resp.into_string() {
+        let text = match bounded_read_response(resp) {
             Ok(t) => t,
             Err(e) => {
                 tracing::debug!("lmstudio: context-length probe body read failed: {e:#}");

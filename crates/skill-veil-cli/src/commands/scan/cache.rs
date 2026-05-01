@@ -29,9 +29,26 @@ pub(super) fn cache_key_for(scan_path: &Path) -> String {
 /// `.llm-cache/<sha>.json` with `fetched_at: now+1d` and a benign
 /// verdict to suppress real lookups for the entire cache TTL window
 /// (30 days for VT, 90 days for LLM).
-pub(super) fn cache_base_dir(override_dir: Option<&Path>) -> PathBuf {
+pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> PathBuf {
     if let Some(dir) = override_dir {
-        return dir.to_path_buf();
+        // Validate the override does not place the cache inside the
+        // scanned package (see the invariant doc-comment above).
+        if let (Ok(dir_canon), Ok(scan_canon)) = (dir.canonicalize(), scan_path.canonicalize()) {
+            if dir_canon.starts_with(&scan_canon) {
+                tracing::warn!(
+                    "--cache-dir {} is inside scan path {}; this allows a malicious skill to \
+                     forge cache entries and suppress real enrichment. Using default cache location.",
+                    dir.display(),
+                    scan_path.display(),
+                );
+                // Fall through to default
+            } else {
+                return dir.to_path_buf();
+            }
+        } else {
+            // If we can't canonicalize, trust the override but warn
+            return dir.to_path_buf();
+        }
     }
     if let Some(user_cache) = dirs::cache_dir() {
         return user_cache.join(CACHE_NAMESPACE);
@@ -47,13 +64,13 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>) -> PathBuf {
 }
 
 pub(super) fn cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> PathBuf {
-    cache_base_dir(override_dir)
+    cache_base_dir(override_dir, scan_path)
         .join("vt-enrichment")
         .join(cache_key_for(scan_path))
 }
 
 pub(super) fn llm_cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> PathBuf {
-    cache_base_dir(override_dir)
+    cache_base_dir(override_dir, scan_path)
         .join("llm")
         .join(cache_key_for(scan_path))
 }

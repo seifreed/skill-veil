@@ -18,7 +18,7 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
                 "SCRIPT_REMOTE_BINARY_DOWNLOAD",
                 // `\b` anchors prevent substring hits inside unrelated
                 // tokens like `mycurl`, `securl-helper`, `awget-utility`.
-                r"(?i)\b(curl|wget)\b.*(\.sh|\.ps1|\.py|\.js|\.exe|\.pkg|\.dmg|\.deb|\.rpm)",
+                r"(?i)\b(curl|wget)\b.*(\.sh|\.ps1|\.py|\.js|\.exe|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
             ),
             (
                 "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
@@ -32,7 +32,7 @@ pub(crate) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern
         compile_each(&[
             (
                 "SCRIPT_DEFERRED_EXECUTION",
-                r"(?i)(crontab|schtasks|at\s+\d|systemd-run|launchctl\s+load)",
+                r"(?i)(crontab|schtasks|\bat\s+\d|systemd-run|launchctl\s+load)",
             ),
             (
                 "SCRIPT_PERSISTENCE",
@@ -49,7 +49,8 @@ pub(crate) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Compiled
                 // `\b` prevents substring hits inside unrelated tokens like
                 // `rebash`, `nashbash`, `myash` — pre-fix any string ending
                 // in `bash` or `sh` followed by ` -c $VAR` matched.
-                r#"(?i)\b(bash|sh)\s+-c\s+["']?\$[A-Za-z_][A-Za-z0-9_]*"#,
+                // `\{?` after `$` covers both `$VAR` and `${VAR}` forms.
+                r#"(?i)\b(bash|sh)\s+-c\s+["']?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"#,
             ),
             (
                 "UNSAFE_USER_CONTROLLED_EXEC_SHELL",
@@ -63,7 +64,7 @@ pub(crate) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Compile
         compile_each(&[
             (
                 "COMMAND_INJECTION_SINK_PYTHON",
-                r"(?i)subprocess\.(run|popen|call)\([^)]*shell\s*=\s*true",
+                r"(?i)subprocess\.(run|popen|call|check_output|check_call)\([^)]*shell\s*=\s*true",
             ),
             (
                 "UNSAFE_USER_CONTROLLED_EXEC_PYTHON",

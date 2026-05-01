@@ -64,10 +64,14 @@ const LOCKFILE_NAMES: &[&str] = &[
 /// discovery stream so a single physical file cannot appear under two
 /// artifact roles at once.
 fn is_manifest_or_lockfile(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+    let Some(name) = path.file_name() else {
         return false;
     };
-    let lowered = name.to_ascii_lowercase();
+    // Use lossy conversion consistent with `list_files` / `walk_files`,
+    // which already apply `to_string_lossy` to handle non-UTF-8 filenames.
+    // Strict `to_str()` returns `None` for non-UTF-8, silently dropping
+    // manifest files with unusual names — a known evasion vector.
+    let lowered = name.to_string_lossy().to_ascii_lowercase();
     MANIFEST_NAMES.contains(&lowered.as_str()) || LOCKFILE_NAMES.contains(&lowered.as_str())
 }
 
@@ -231,7 +235,10 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
         files
             .into_iter()
             .filter_map(|path| {
-                let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
+                // Use lossy conversion consistent with `list_files` / `walk_files`
+                // so non-UTF-8 filenames are still discovered rather than silently
+                // dropped (a known evasion vector for malicious packages).
+                let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
                 names.contains(&file_name.as_str()).then_some(path)
             })
             .collect()

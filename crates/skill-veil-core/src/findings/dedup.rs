@@ -151,11 +151,13 @@ fn merge_into(existing: &mut Finding, candidate: Finding) {
     // would silently fail to update `existing`. Guard the invariant in
     // debug builds so any future path that bypasses the builder surfaces
     // the bug loudly instead of producing wrong merge results.
+    // In release builds, defensively replace NaN with the candidate value
+    // to prevent silent persistence of an invalid confidence.
     debug_assert!(
         !candidate.confidence.is_nan() && !existing.confidence.is_nan(),
         "merge_into invariant: confidence must be finite (sanitized in builder)",
     );
-    if candidate.confidence > existing.confidence {
+    if existing.confidence.is_nan() || candidate.confidence > existing.confidence {
         existing.confidence = candidate.confidence;
     }
 

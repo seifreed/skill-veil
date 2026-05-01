@@ -83,14 +83,19 @@ const READ_VERBS: &[&str] = &[
     "process.env",
     "get-content",
     "$(cat ",
+    "dotenv",
+    "load_dotenv",
 ];
 
 const NETWORK_VERBS: &[&str] = &[
     "curl ",
+    "wget ",
     "fetch(",
     "axios",
     "requests.",
     "invoke-webrequest",
+    " nc ",
+    "ncat ",
     "webhook",
     "telegram.org",
     "discord.com",

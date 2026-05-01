@@ -140,7 +140,8 @@ pub(crate) fn detect_powershell_dynamic_exec(
     if language != "ps1"
         || !(content_lower.contains("start-process")
             || content_lower.contains("invoke-expression")
-            || content_lower.contains("iex "))
+            || content_lower.contains("iex ")
+            || content_lower.contains("iex("))
     {
         return Vec::new();
     }

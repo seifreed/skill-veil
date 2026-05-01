@@ -37,6 +37,13 @@ pub struct Section {
     pub level: u8,
     pub content: String,
     pub code_blocks: Vec<CodeBlock>,
+    /// 1-based line number of the section header within the full document.
+    /// Used to convert section-relative offsets into document-relative
+    /// line numbers so that inline suppressions (which operate on
+    /// document-level line numbers) can match findings produced by
+    /// `SectionRegex` rules.
+    #[serde(default)]
+    pub start_line: usize,
 }
 
 /// A fenced code block within a [`Section`].

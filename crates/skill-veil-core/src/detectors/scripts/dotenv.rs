@@ -38,14 +38,16 @@ pub(crate) fn references_dotenv_file(lower: &str) -> bool {
             None => true,
             Some(c) => matches!(
                 c,
-                '"' | '\'' | ' ' | '\t' | '\n' | ':' | ',' | ')' | ';' | '`'
+                '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ':' | ',' | ')' | ';' | '`'
             ),
         };
         if is_terminator {
             let before = lower[..abs].chars().next_back();
             let before_ok = matches!(
                 before,
-                None | Some('"' | '\'' | '/' | '\\' | ' ' | '\t' | '(' | ',' | ':' | '`')
+                None | Some(
+                    '"' | '\'' | '/' | '\\' | ' ' | '\t' | '(' | ',' | ':' | '`' | '=' | '-'
+                )
             );
             if before_ok {
                 return true;

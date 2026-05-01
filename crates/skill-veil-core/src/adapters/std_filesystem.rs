@@ -196,8 +196,23 @@ impl FileSystemProvider for StdFileSystemProvider {
                 Err(err) => return Err(FileSystemError::IoError(err)),
             };
             for entry in entries {
-                let entry = entry?;
-                let file_type = entry.file_type()?;
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(err) => {
+                        tracing::warn!("Skipping entry during non-recursive file listing: {err}");
+                        continue;
+                    }
+                };
+                let file_type = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(err) => {
+                        tracing::warn!(
+                            "Skipping entry with unavailable file type: {}: {err}",
+                            entry.path().display()
+                        );
+                        continue;
+                    }
+                };
                 if file_type.is_file() && !file_type.is_symlink() {
                     let entry_path = entry.path();
                     if let Some(filename_os) = entry_path.file_name() {
@@ -213,8 +228,22 @@ impl FileSystemProvider for StdFileSystemProvider {
         Ok(files)
     }
 
+    /// Use `symlink_metadata` to avoid following symlinks, consistent with
+    /// `list_files` / `walk_files` which explicitly filter out symlinks.
+    /// `Path::exists()` follows symlinks AND swallows permission errors
+    /// (returning `false` for `PermissionDenied`), which is inconsistent
+    /// with the symlink-does-not-exist policy of the listing methods.
     fn exists(&self, path: &Path) -> bool {
-        path.exists()
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                tracing::debug!("exists: stat failed for {}: {e}", path.display());
+                // Fail-closed: permission errors mean "exists but
+                // inaccessible", not "not found"
+                true
+            }
+        }
     }
 
     fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
@@ -222,12 +251,22 @@ impl FileSystemProvider for StdFileSystemProvider {
         Ok(FileMeta { len: meta.len() })
     }
 
+    /// Use `symlink_metadata` to avoid following symlinks, consistent with
+    /// the listing methods' `!file_type.is_symlink()` filter.
     fn is_file(&self, path: &Path) -> bool {
-        path.is_file()
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta.is_file() && !meta.is_symlink(),
+            Err(_) => false,
+        }
     }
 
+    /// Use `symlink_metadata` to avoid following symlinks, consistent with
+    /// the listing methods' `!file_type.is_symlink()` filter.
     fn is_dir(&self, path: &Path) -> bool {
-        path.is_dir()
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) => meta.is_dir() && !meta.is_symlink(),
+            Err(_) => false,
+        }
     }
 
     /// Recursive walk over `path` honouring `max_depth` and `skip_dirs`.

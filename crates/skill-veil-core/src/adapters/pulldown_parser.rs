@@ -18,6 +18,12 @@ impl PulldownMarkdownParser {
 
 impl MarkdownParser for PulldownMarkdownParser {
     fn parse_sections(&self, content: &str) -> Result<Vec<Section>, ParserError> {
+        // Pre-compute a byte-offset → line-number mapping so we can
+        // determine the 1-based document line number of each heading.
+        let line_offsets: Vec<usize> = std::iter::once(0)
+            .chain(content.match_indices('\n').map(|(i, _)| i + 1))
+            .collect();
+
         let parser = Parser::new(content);
         let mut sections = Vec::new();
         let mut current_section: Option<Section> = None;
@@ -27,7 +33,7 @@ impl MarkdownParser for PulldownMarkdownParser {
         let mut current_code = String::new();
         let mut code_blocks: Vec<CodeBlock> = Vec::new();
 
-        for event in parser {
+        for (event, range) in parser.into_offset_iter() {
             match event {
                 Event::Start(Tag::Heading { level, .. }) => {
                     flush_section_or_preamble(
@@ -36,11 +42,14 @@ impl MarkdownParser for PulldownMarkdownParser {
                         &mut current_content,
                         &mut code_blocks,
                     );
+                    // Compute 1-based line number for the heading start.
+                    let start_line = offset_to_line(&line_offsets, range.start);
                     current_section = Some(Section {
                         name: String::new(),
                         level: heading_level_to_u8(level),
                         content: String::new(),
                         code_blocks: Vec::new(),
+                        start_line,
                     });
                 }
                 Event::End(TagEnd::Heading(_)) => {
@@ -121,10 +130,21 @@ fn flush_section_or_preamble(
             level: 0,
             content: current_content.trim().to_string(),
             code_blocks: code_blocks.clone(),
+            start_line: 1,
         });
     }
     current_content.clear();
     code_blocks.clear();
+}
+
+/// Convert a byte offset into a 1-based line number using the pre-computed
+/// line-start offsets. Binary search finds the line whose start offset is
+/// ≤ `offset`, giving O(log n) per lookup.
+fn offset_to_line(line_offsets: &[usize], offset: usize) -> usize {
+    match line_offsets.binary_search(&offset) {
+        Ok(i) => i + 1,
+        Err(i) => i,
+    }
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
