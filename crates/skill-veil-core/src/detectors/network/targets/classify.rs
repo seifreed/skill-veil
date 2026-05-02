@@ -45,7 +45,7 @@ fn classify_internal_network_target(content: &str) -> Option<NetworkTarget> {
         Some(NetworkTarget::Loopback)
     } else if lower.contains("localhost") {
         Some(NetworkTarget::Localhost)
-    } else if lower.contains("0.0.0.0") {
+    } else if looks_like_bind_all(&lower) {
         Some(NetworkTarget::BindAll)
     } else if RE_RFC1918_10.is_match(&lower) {
         Some(NetworkTarget::Rfc1918_10)
@@ -64,6 +64,27 @@ fn classify_internal_network_target(content: &str) -> Option<NetworkTarget> {
 
 pub(crate) fn contains_internal_network_target(content: &str) -> Option<NetworkTarget> {
     classify_internal_network_target(content)
+}
+
+/// Check whether `text` contains `0.0.0.0` as a standalone IP address
+/// rather than as a substring of a longer dotted quad like `10.0.0.0`
+/// or `100.0.0.0`. Pre-fix a plain `contains("0.0.0.0")` matched
+/// `10.0.0.0` because the four-character substring appears starting at
+/// index 1 (`1[0.0.0.0]`), misclassifying the RFC1918 /8 network address
+/// as `BindAll`.
+pub(crate) fn looks_like_bind_all(text: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = text[start..].find("0.0.0.0") {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !text.as_bytes()[abs - 1].is_ascii_digit();
+        let after = abs + "0.0.0.0".len();
+        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_digit();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -167,5 +188,65 @@ mod tests {
                 "identifier substring {sample:?} must NOT classify as Loopback"
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// `0.0.0.0` as a standalone IP MUST classify as `BindAll`. This is
+    /// the happy path that existed before the word-boundary fix.
+    #[test]
+    fn classify_bind_all_ip() {
+        assert_eq!(
+            contains_internal_network_target("bind http://0.0.0.0:8080"),
+            Some(NetworkTarget::BindAll)
+        );
+        assert_eq!(
+            contains_internal_network_target("listen 0.0.0.0"),
+            Some(NetworkTarget::BindAll)
+        );
+    }
+
+    /// # Contract
+    ///
+    /// IPs that *contain* `0.0.0.0` as a substring (like `10.0.0.0`
+    /// or `100.0.0.0`) MUST NOT classify as `BindAll`. Pre-fix a plain
+    /// `contains("0.0.0.0")` matched `10.0.0.0` because the substring
+    /// starts at index 1 (`1[0.0.0.0]`), misclassifying the RFC1918 /8
+    /// network address.
+    #[test]
+    fn classify_does_not_misclassify_rfc1918_10_as_bind_all() {
+        assert_eq!(
+            contains_internal_network_target("http://10.0.0.0/"),
+            Some(NetworkTarget::Rfc1918_10),
+            "10.0.0.0 must classify as Rfc1918_10, not BindAll"
+        );
+        assert_eq!(
+            contains_internal_network_target("100.0.0.0"),
+            None,
+            "100.0.0.0 must not classify as BindAll"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `looks_like_bind_all` requires digit boundaries on both sides of
+    /// `0.0.0.0`. The standalone address matches; substrings embedded in
+    /// larger dotted quads do not.
+    #[test]
+    fn looks_like_bind_all_distinguishes_standalone_from_substring() {
+        assert!(looks_like_bind_all("0.0.0.0"));
+        assert!(looks_like_bind_all("http://0.0.0.0:8080"));
+        assert!(
+            !looks_like_bind_all("10.0.0.0"),
+            "10.0.0.0 contains 0.0.0.0 but is not BindAll"
+        );
+        assert!(
+            !looks_like_bind_all("100.0.0.0"),
+            "100.0.0.0 contains 0.0.0.0 but is not BindAll"
+        );
+        assert!(
+            !looks_like_bind_all("0.0.0.01"),
+            "trailing digit makes this not 0.0.0.0"
+        );
     }
 }

@@ -327,7 +327,6 @@ fn has_shell_exec_signal(context: &str) -> bool {
 /// matches `"oauth scopes"`).
 fn has_oauth_scope_signal(context: &str) -> bool {
     context.contains("oauth")
-        || context.contains("oauth scope")
         || context.contains("calendar")
         || context.contains("drive")
         || context.contains("slack")

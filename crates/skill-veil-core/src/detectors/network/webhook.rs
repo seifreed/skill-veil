@@ -55,7 +55,7 @@ pub(crate) fn classify_webhook_exposure(content: &str) -> Option<WebhookExposure
             || lower.contains("post /api/webhook"))
         && (lower.contains("public endpoint")
             || lower.contains("publicly reachable")
-            || lower.contains("0.0.0.0")
+            || crate::detectors::network::targets::looks_like_bind_all(&lower)
             || lower.contains("accept callbacks")
             || lower.contains("incoming webhooks"))
         && !(lower.contains("verify signature")

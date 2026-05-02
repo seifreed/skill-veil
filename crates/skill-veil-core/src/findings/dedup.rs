@@ -147,17 +147,12 @@ fn merge_into(existing: &mut Finding, candidate: Finding) {
 
     existing.severity = existing.severity.max(candidate.severity);
     // `confidence` is sanitized in the builder to be finite within `[0, 1]`,
-    // but `>` returns `false` for either side being NaN — a NaN candidate
-    // would silently fail to update `existing`. Guard the invariant in
-    // debug builds so any future path that bypasses the builder surfaces
-    // the bug loudly instead of producing wrong merge results.
-    // In release builds, defensively replace NaN with the candidate value
-    // to prevent silent persistence of an invalid confidence.
-    debug_assert!(
-        !candidate.confidence.is_nan() && !existing.confidence.is_nan(),
-        "merge_into invariant: confidence must be finite (sanitized in builder)",
-    );
-    if existing.confidence.is_nan() || candidate.confidence > existing.confidence {
+    // but external YAML rule packs could introduce NaN. Handle explicitly:
+    // if existing is NaN we always replace; if only candidate is NaN we
+    // keep existing; otherwise we take the max.
+    if existing.confidence.is_nan()
+        || (!candidate.confidence.is_nan() && candidate.confidence > existing.confidence)
+    {
         existing.confidence = candidate.confidence;
     }
 

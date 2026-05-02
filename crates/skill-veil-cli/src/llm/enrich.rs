@@ -145,6 +145,11 @@ pub(crate) fn enrich_scan_result(
         prompt_chars_total: 0,
     };
 
+    debug_assert_eq!(
+        scan_result.results.len(),
+        bundles.len(),
+        "enrich_scan_result: results and bundles must have the same length"
+    );
     for (scan_res, bundle) in scan_result.results.iter().zip(bundles) {
         match enrich_one(
             provider.as_ref(),
@@ -293,6 +298,47 @@ fn enrich_one(
     let mut followup_files: Vec<(PathBuf, String)> = Vec::new();
 
     if let Some(v1) = verdict.as_ref().filter(|_| matches!(status, LlmStatus::Ok)) {
+        if !v1.insufficient_context.is_empty() {
+            // Check turn-2 cache before calling the provider again.
+            // Pre-fix the turn-2 cache key was computed only *after* the
+            // follow-up turn executed, so re-scans always re-prompted.
+            let manifest_paths: std::collections::BTreeSet<&str> =
+                manifest.iter().map(|m| m.path.as_str()).collect();
+            let requested: Vec<String> = v1
+                .insufficient_context
+                .iter()
+                .filter(|p| manifest_paths.contains(p.as_str()))
+                .take(MAX_REQUESTED_PATHS)
+                .cloned()
+                .collect();
+            if !requested.is_empty() {
+                let lookup: std::collections::BTreeMap<String, String> = bundle
+                    .supporting
+                    .iter()
+                    .map(|(p, c)| (p.display().to_string(), c.clone()))
+                    .collect();
+                let followup_files: Vec<(PathBuf, String)> = requested
+                    .into_iter()
+                    .filter_map(|p| lookup.get(&p).map(|c| (PathBuf::from(&p), c.clone())))
+                    .collect();
+                if !followup_files.is_empty() {
+                    let t2_key = compute_cache_key_with_followup(
+                        provider_name,
+                        model_name,
+                        &sampling_fp,
+                        &manifest_prompt,
+                        &followup_files,
+                    );
+                    let t2_path = opts.cache_root.join(format!("{t2_key}.json"));
+                    if let Some(fresh) = load_fresh(&t2_path, Duration::days(CACHE_TTL_DAYS))? {
+                        return Ok(LlmPackageResult {
+                            cached: true,
+                            ..fresh
+                        });
+                    }
+                }
+            }
+        }
         if let Some(outcome) = execute_followup_turn(
             provider,
             scan_res,

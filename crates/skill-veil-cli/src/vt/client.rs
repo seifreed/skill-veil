@@ -221,7 +221,8 @@ impl VtClient {
         // Domains share the envelope shape: `data: { attributes: {...} }`.
         // We intentionally reuse `FileReportEnvelope` since we only read the
         // generic `last_analysis_stats`, `reputation`, `categories` fields.
-        let url = format!("{BASE_URL}/domains/{domain}");
+        let encoded = urlencoding::encode(domain);
+        let url = format!("{BASE_URL}/domains/{encoded}");
         self.get_json_with_retry(&url, &[])
     }
 
@@ -240,7 +241,8 @@ impl VtClient {
         &self,
         ip: &str,
     ) -> Result<super::types::FileReportEnvelope, VtError> {
-        let url = format!("{BASE_URL}/ip_addresses/{ip}");
+        let encoded = urlencoding::encode(ip);
+        let url = format!("{BASE_URL}/ip_addresses/{encoded}");
         self.get_json_with_retry(&url, &[])
     }
 
