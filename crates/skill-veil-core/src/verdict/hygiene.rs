@@ -17,6 +17,9 @@ pub(super) fn build_hygiene_summary(findings: &[Finding]) -> HygieneSummary {
         if finding.signal_class != SignalClass::Hygiene {
             continue;
         }
+        if finding.suppression.is_some() {
+            continue;
+        }
 
         match finding.artifact_scope {
             ArtifactScope::PackageRootArtifact => package_root_findings += 1,

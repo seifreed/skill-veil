@@ -58,16 +58,20 @@ pub(crate) fn scan_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser
     let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
 
     for referenced_file in &supporting_artifacts {
-        // Existence and directory checks both go through the
+        // Existence and file-type checks both go through the
         // `FileSystemProvider` port. Using `PathBuf::is_dir()` would consult
         // `std::fs::metadata` directly (following symlinks — the port's
         // `is_dir` uses `symlink_metadata` and rejects symlinks), opening
         // both a TOCTOU window and a symlink-evasion path where a malicious
         // package shipping `evil_dir -> /etc` would be silently skipped
         // instead of surfacing as a read error. It also lets test doubles
-        // disagree with production behaviour. Pre-fix the is_dir check
-        // bypassed the port by calling Path::is_dir directly.
-        if !fs.exists(referenced_file) || fs.is_dir(referenced_file) {
+        // disagree with production behaviour.
+        //
+        // The `!fs.is_file()` guard rejects symlinks (including
+        // symlinks-to-directories), FIFOs, and device files — all of which
+        // would cause `read_file_bytes` to hang (FIFO), produce unbounded
+        // reads (devices), or spurious parse errors (symlink-to-directory).
+        if !fs.exists(referenced_file) || !fs.is_file(referenced_file) {
             continue;
         }
         findings.extend(analyze_referenced_artifact(scanner, referenced_file));
@@ -588,8 +592,13 @@ mod scan_supporting_artifacts_tests {
     /// port by calling Path::is_dir directly (follows symlinks), while
     /// rejects symlinks — a malicious package shipping `evil_dir -> /etc`
     /// would be silently skipped instead of surfaced as a read error.
+    ///
+    /// The `!fs.is_file()` guard also rejects symlinks-to-directories,
+    /// FIFOs, and device files — all of which would cause `read_file_bytes`
+    /// to hang (FIFO), produce unbounded reads (devices), or spurious
+    /// parse errors (symlink-to-directory).
     #[test]
-    fn scan_supporting_artifacts_uses_fs_provider_for_existence_and_is_dir() {
+    fn scan_supporting_artifacts_uses_fs_provider_for_existence_and_is_file() {
         let body = include_str!("scanner_execution.rs");
         let production = body.split("#[cfg(test)]").next().unwrap_or(body);
         let Some(after_sig) = production.split("fn scan_supporting_artifacts<").nth(1) else {
@@ -612,7 +621,7 @@ mod scan_supporting_artifacts_tests {
             !in_function.contains(".is_dir()"),
             "scan_supporting_artifacts must not call Path::is_dir directly; \
              Path::is_dir follows symlinks and bypasses the FileSystemProvider port, \
-             which uses symlink_metadata and rejects symlinks. Use fs.is_dir() instead."
+             which uses symlink_metadata and rejects symlinks."
         );
         assert!(
             in_function.contains("fs.exists(referenced_file)"),
@@ -620,10 +629,11 @@ mod scan_supporting_artifacts_tests {
              that mock providers and production share the same code path"
         );
         assert!(
-            in_function.contains("fs.is_dir(referenced_file)"),
-            "scan_supporting_artifacts must use fs.is_dir(referenced_file) so \
-             that symlinks are rejected via the port's symlink_metadata check \
-             instead of silently skipped via std::fs::metadata"
+            in_function.contains("fs.is_file(referenced_file)"),
+            "scan_supporting_artifacts must use fs.is_file(referenced_file) so \
+             that symlinks, FIFOs, and device files are rejected via the \
+             FileSystemProvider port's symlink_metadata check instead of \
+             causing hangs or unbounded reads"
         );
     }
 }

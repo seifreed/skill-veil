@@ -89,8 +89,7 @@ pub(crate) fn detect_python_exec_network(
         return Vec::new();
     }
     let has_exec = content_lower.contains("subprocess.") || content_lower.contains("os.system(");
-    let has_network = content_lower.contains("requests.get(")
-        || content_lower.contains("requests.post(")
+    let has_network = content_lower.contains("requests.")
         || content_lower.contains("urllib.request")
         || content_lower.contains("httpx.");
     if has_exec && has_network {

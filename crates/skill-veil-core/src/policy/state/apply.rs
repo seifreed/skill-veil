@@ -99,12 +99,30 @@ fn match_override<'p>(
     overrides: &'p [PolicyOverride],
     now: DateTime<Utc>,
 ) -> Option<&'p PolicyOverride> {
-    overrides
+    let matches: Vec<_> = overrides
         .iter()
         .enumerate()
         .filter(|(_, po)| policy_override_matches(po, finding, now))
-        .max_by_key(|(index, po)| (policy_override_specificity(po), *index))
-        .map(|(_, po)| po)
+        .collect();
+    let best = matches
+        .iter()
+        .max_by_key(|(index, po)| (policy_override_specificity(po), *index))?;
+    if matches.len() > 1 {
+        let top_specificity = policy_override_specificity(best.1);
+        let same_specificity_count = matches
+            .iter()
+            .filter(|(_, po)| policy_override_specificity(po) == top_specificity)
+            .count();
+        if same_specificity_count > 1 {
+            tracing::warn!(
+                rule_id = %finding.rule_id,
+                count = same_specificity_count,
+                "Multiple policy overrides with equal specificity match the same finding; \
+                 last-wins semantics apply — consider consolidating or differentiating selectors"
+            );
+        }
+    }
+    Some(best.1)
 }
 
 fn build_audit_entry(

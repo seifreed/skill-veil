@@ -140,27 +140,68 @@ pub(super) fn build_sibling_clusters(graph: &ArtifactGraph) -> Vec<BTreeSet<Stri
 /// Merge clusters that share any node. Two clusters {A,B,C} and {C,D}
 /// both contain C, so taint findings for (B,C) and (C,D) should share
 /// a single cluster {A,B,C,D} with consistent attribution.
-fn merge_overlapping_clusters(mut clusters: Vec<BTreeSet<String>>) -> Vec<BTreeSet<String>> {
+///
+/// Uses a union-find approach so transitive overlaps are correctly
+/// merged: if cluster A overlaps B and B overlaps C, all three end up
+/// in one cluster regardless of processing order. Pre-fix the greedy
+/// single-pass merge only merged into the first overlapping cluster,
+/// so A-C transitivity via B could be lost if B was processed after A
+/// and C were checked.
+fn merge_overlapping_clusters(clusters: Vec<BTreeSet<String>>) -> Vec<BTreeSet<String>> {
     if clusters.is_empty() {
-        return clusters;
+        return Vec::new();
     }
-    // Sort by size descending so larger clusters absorb smaller ones.
-    clusters.sort_by_key(|b| std::cmp::Reverse(b.len()));
-    let mut merged: Vec<BTreeSet<String>> = Vec::new();
-    for cluster in clusters {
-        let mut found_overlap = false;
-        for existing in &mut merged {
-            if !existing.is_disjoint(&cluster) {
-                existing.extend(cluster.iter().cloned());
-                found_overlap = true;
-                break;
+
+    // Collect all unique nodes and assign each an index.
+    let mut node_index: BTreeMap<String, usize> = BTreeMap::new();
+    for cluster in &clusters {
+        for node in cluster {
+            if !node_index.contains_key(node) {
+                let idx = node_index.len();
+                node_index.insert(node.clone(), idx);
             }
         }
-        if !found_overlap {
-            merged.push(cluster);
+    }
+
+    let n = node_index.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+
+    fn find(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]]; // path compression
+            i = parent[i];
+        }
+        i
+    }
+
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let ra = find(parent, a);
+        let rb = find(parent, b);
+        if ra != rb {
+            parent[ra] = rb;
         }
     }
-    merged
+
+    // Union all nodes within each cluster.
+    for cluster in &clusters {
+        let mut iter = cluster.iter();
+        let first = iter.next();
+        if let Some(first_node) = first {
+            let first_idx = node_index[first_node];
+            for node in iter {
+                union(&mut parent, first_idx, node_index[node]);
+            }
+        }
+    }
+
+    // Collect clusters by root.
+    let mut root_to_set: BTreeMap<usize, BTreeSet<String>> = BTreeMap::new();
+    for (node, idx) in &node_index {
+        let root = find(&mut parent, *idx);
+        root_to_set.entry(root).or_default().insert(node.clone());
+    }
+
+    root_to_set.into_values().collect()
 }
 
 #[cfg(test)]
@@ -238,6 +279,48 @@ mod tests {
         assert!(
             clusters.is_empty(),
             "non-structural edges must NOT form clusters; got {clusters:?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `merge_overlapping_clusters` MUST merge transitively connected
+    /// clusters. If cluster {A,B} overlaps with {B,C} (via B), and {B,C}
+    /// overlaps with {C,D} (via C), all four nodes must end up in one
+    /// cluster. Pre-fix the greedy single-pass merge only merged into the
+    /// first overlapping cluster, so transitivity was order-dependent:
+    /// processing A and C before B left {A,B} and {C,D} separate when
+    /// B bridges them both.
+    #[test]
+    fn merge_overlapping_clusters_merges_transitively() {
+        let c1: BTreeSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
+        let c2: BTreeSet<String> = ["c".to_string(), "d".to_string()].into_iter().collect();
+        let c3: BTreeSet<String> = ["b".to_string(), "c".to_string()].into_iter().collect();
+        let merged = merge_overlapping_clusters(vec![c1, c2, c3]);
+        assert_eq!(
+            merged.len(),
+            1,
+            "transitively connected clusters must merge into one; got {merged:?}"
+        );
+        assert!(
+            merged[0].contains("a") && merged[0].contains("d"),
+            "all transitively connected nodes must be in the merged cluster; got {:?}",
+            merged[0]
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Disjoint clusters (no shared nodes) MUST NOT be merged.
+    #[test]
+    fn merge_overlapping_clusters_preserves_disjoint() {
+        let c1: BTreeSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
+        let c2: BTreeSet<String> = ["c".to_string(), "d".to_string()].into_iter().collect();
+        let merged = merge_overlapping_clusters(vec![c1, c2]);
+        assert_eq!(
+            merged.len(),
+            2,
+            "disjoint clusters must not merge; got {merged:?}"
         );
     }
 }

@@ -267,7 +267,7 @@ impl FileSystemProvider for StdFileSystemProvider {
     }
 
     fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
-        let meta = std::fs::metadata(path).map_err(FileSystemError::IoError)?;
+        let meta = std::fs::symlink_metadata(path).map_err(FileSystemError::IoError)?;
         Ok(FileMeta { len: meta.len() })
     }
 

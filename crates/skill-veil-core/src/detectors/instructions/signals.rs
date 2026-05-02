@@ -14,7 +14,7 @@ lazy_pattern!(
 );
 lazy_pattern!(
     pub(crate) RE_SECRET,
-    r"(?i)(token|secret|cookie|password|credential|session)"
+    r"(?i)\b(token|secret|cookie|password|credential|session)\b"
 );
 lazy_pattern!(
     pub(crate) RE_OAUTH,

@@ -150,8 +150,17 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
         }
         for (root, recursive) in &roots {
             for pattern in patterns {
-                let Ok(files) = self.fs_provider.list_files(root, pattern, *recursive) else {
-                    continue;
+                let files = match self.fs_provider.list_files(root, pattern, *recursive) {
+                    Ok(f) => f,
+                    Err(err) => {
+                        tracing::warn!(
+                            path = %root.display(),
+                            pattern = %pattern,
+                            error = %err,
+                            "discover_by_patterns: list_files failed"
+                        );
+                        continue;
+                    }
                 };
                 for file in files {
                     if results.len() >= cap {

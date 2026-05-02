@@ -8,9 +8,8 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use skill_veil_core::{
-    diff_reports_with_policy_state, finding_fingerprint, load_baseline, load_waivers,
-    validate_policy, validate_waivers, JsonReport, PolicyFile, RecommendedAction,
-    StdFileSystemProvider,
+    diff_reports_with_policy_state, finding_fingerprint, load_baseline, load_policy, load_waivers,
+    validate_waivers, JsonReport, RecommendedAction, StdFileSystemProvider,
 };
 use std::io::IsTerminal;
 use std::path::PathBuf;
@@ -31,12 +30,8 @@ pub(crate) fn run_waivers_validate(args: WaiversValidateArgs) -> Result<()> {
 }
 
 pub(crate) fn run_policy_validate(args: PolicyValidateArgs) -> Result<()> {
-    let content = std::fs::read_to_string(&args.path)
-        .with_context(|| format!("Failed to read {}", args.path.display()))?;
-    let policy: PolicyFile = serde_json::from_str(&content)
-        .or_else(|_| serde_yaml::from_str(&content))
-        .with_context(|| format!("Failed to parse {}", args.path.display()))?;
-    validate_policy(&policy).map_err(anyhow::Error::msg)?;
+    let fs = StdFileSystemProvider::new();
+    load_policy(&fs, &args.path).context("Failed to load policy file")?;
     println!("Policy file is valid");
     Ok(())
 }
