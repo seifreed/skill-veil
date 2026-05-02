@@ -200,9 +200,11 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
                 // pattern list. Non-recursive roots already went through
                 // `list_files` with the glob, so no extension filter needed.
                 if *recursive && !extensions.is_empty() {
-                    let matches_ext = file
-                        .extension()
-                        .is_some_and(|ext| extensions.iter().any(|e| *e == ext.to_string_lossy()));
+                    let matches_ext = file.extension().is_some_and(|ext| {
+                        extensions
+                            .iter()
+                            .any(|e| e.eq_ignore_ascii_case(&ext.to_string_lossy()))
+                    });
                     if !matches_ext {
                         continue;
                     }

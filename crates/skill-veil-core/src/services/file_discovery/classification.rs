@@ -146,8 +146,7 @@ fn is_markdown_under_prompts_dir(path: &Path, file_name_lower: &str) -> bool {
     };
     let parent_is_prompts = parent
         .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("prompts"));
+        .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("prompts"));
     if !parent_is_prompts {
         return false;
     }

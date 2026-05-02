@@ -35,7 +35,9 @@ pub(crate) fn check_internal_network_target(
     let target = contains_internal_network_target(content)?;
     if !(matches!(
         artifact_kind,
-        ArtifactKind::ReferencedArtifact | ArtifactKind::McpServerManifest
+        ArtifactKind::ReferencedArtifact
+            | ArtifactKind::McpServerManifest
+            | ArtifactKind::AgentInstruction
     ) || contains_internal_network_action(content))
         || looks_like_local_dev_reference(content)
     {

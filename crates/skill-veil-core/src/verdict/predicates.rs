@@ -25,11 +25,12 @@ pub(super) struct VerdictPredicates {
     pub(super) has_conclusive_supporting_malicious: bool,
     pub(super) isolated_weak_package_root_signal: bool,
     pub(super) has_non_hygiene_primary_block: bool,
-    /// The (scope, category) of the isolated weak package-root group, when
-    /// `isolated_weak_package_root_signal` is true. Used to filter
+    /// The (scope, category, signal_class) of the isolated weak package-root
+    /// group, when `isolated_weak_package_root_signal` is true. Used to filter
     /// `calibration_notes` so that a `downgraded_*` note from an unrelated
-    /// group does not block the Benign downgrade for this group.
-    pub(super) isolated_weak_signal_key: Option<(ArtifactScope, ThreatCategory)>,
+    /// group — even one sharing (scope, category) — does not block the Benign
+    /// downgrade for this group.
+    pub(super) isolated_weak_signal_key: Option<(ArtifactScope, ThreatCategory, SignalClass)>,
 }
 
 impl VerdictPredicates {
@@ -70,8 +71,9 @@ impl VerdictPredicates {
             if !is_non_hygiene {
                 return false;
             }
-            // Find the corresponding calibrated group (exact match first, then scope+category).
-            // Absence of the original signal_class counts as weakening.
+            // Find the corresponding calibrated group (exact match first, then
+            // scope+category+signal_class via reclassification). Absence of the
+            // original signal_class counts as weakening.
             let calibrated = root_cause_groups
                 .iter()
                 .find(|cal| {
@@ -80,6 +82,10 @@ impl VerdictPredicates {
                         && cal.signal_class == raw_group.signal_class
                 })
                 .or_else(|| {
+                    // After reclassification, a group originally labelled
+                    // MaliciousBehavior may appear as ReviewSignal. Match on
+                    // (scope, category) alone, but only if the surviving group
+                    // was actually weakened (action lowered or class changed).
                     root_cause_groups.iter().find(|cal| {
                         cal.scope == raw_group.scope && cal.category == raw_group.category
                     })
@@ -105,7 +111,7 @@ impl VerdictPredicates {
             .iter()
             .any(Finding::is_conclusive_malicious_evidence);
         let isolated_weak_signal_key = isolated_weak_package_root_group(root_cause_groups)
-            .map(|group| (group.scope, group.category));
+            .map(|group| (group.scope, group.category, group.signal_class));
         let isolated_weak_package_root_signal = isolated_weak_signal_key.is_some();
         let has_non_hygiene_primary_block = root_cause_groups.iter().any(|group| {
             group.scope == ArtifactScope::AgentEntrypoint
@@ -153,16 +159,19 @@ impl VerdictPredicates {
             || package_summary.risk_score >= RISK_THRESHOLD_BLOCK;
 
         // Filter calibration notes to only those that apply to the isolated
-        // weak group's (scope, category). A `downgraded_*` note from any
-        // OTHER group is irrelevant to whether this specific isolated signal
-        // can be downgraded — using the unfiltered `all()` would let an
-        // unrelated downgrade block the Benign path here.
+        // weak group's (scope, category, signal_class). A `downgraded_*` note
+        // from any OTHER group — even one sharing (scope, category) — is
+        // irrelevant to whether this specific isolated signal can be
+        // downgraded. Using the unfiltered `all()` would let an unrelated
+        // downgrade block the Benign path here.
         let calibration_left_isolated_group_intact = self
             .isolated_weak_signal_key
-            .map(|(scope, category)| {
+            .map(|(scope, category, signal_class)| {
                 calibration_notes
                     .iter()
-                    .filter(|n| n.scope == scope && n.category == category)
+                    .filter(|n| {
+                        n.scope == scope && n.category == category && n.signal_class == signal_class
+                    })
                     .all(|n| n.effect.starts_with("remains_"))
             })
             .unwrap_or(true);

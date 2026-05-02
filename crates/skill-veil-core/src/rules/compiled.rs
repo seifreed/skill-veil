@@ -165,10 +165,9 @@ impl CompiledRule {
                 patterns.push(pattern.clone());
             }
             RuleCondition::SectionContains { values, .. } => {
-                for value in values {
-                    // Escape the value for literal matching
-                    patterns.push(regex::escape(value));
-                }
+                // SectionContains matching uses str::contains, not regex —
+                // compiling these values wastes memory and CPU at load time.
+                let _ = values;
             }
             RuleCondition::SectionRegex { pattern, .. } => {
                 patterns.push(pattern.clone());
@@ -325,7 +324,7 @@ impl CompiledRule {
                 let target = MatchTarget::Section {
                     name: section.to_string(),
                 };
-                findings.push(self.create_finding(target, value));
+                findings.push(self.create_finding(target, value.to_lowercase()));
                 matched = true;
             }
         }

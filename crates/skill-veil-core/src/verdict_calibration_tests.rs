@@ -349,7 +349,7 @@ fn calibration_updates_finding_count_when_excluding_rules() {
 /// This test guards against re-introducing the round-1 `dedup_notes` regression.
 #[test]
 fn dedup_notes_preserves_per_group_distinctions() {
-    use crate::findings::{ArtifactScope, ThreatCategory, VerdictCalibrationNote};
+    use crate::findings::{ArtifactScope, SignalClass, ThreatCategory, VerdictCalibrationNote};
 
     let mut notes = vec![
         VerdictCalibrationNote {
@@ -358,6 +358,7 @@ fn dedup_notes_preserves_per_group_distinctions() {
             rationale: "shared rationale".to_string(),
             scope: ArtifactScope::AgentEntrypoint,
             category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::Hygiene,
         },
         VerdictCalibrationNote {
             rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
@@ -365,6 +366,7 @@ fn dedup_notes_preserves_per_group_distinctions() {
             rationale: "shared rationale".to_string(),
             scope: ArtifactScope::PackageRootArtifact,
             category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::Hygiene,
         },
         // Exact duplicate of the first — must collapse.
         VerdictCalibrationNote {
@@ -373,6 +375,7 @@ fn dedup_notes_preserves_per_group_distinctions() {
             rationale: "shared rationale".to_string(),
             scope: ArtifactScope::AgentEntrypoint,
             category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::Hygiene,
         },
     ];
 
@@ -397,7 +400,7 @@ fn dedup_notes_preserves_per_group_distinctions() {
 /// `dedup_notes_preserves_per_group_distinctions` guards the inverse.
 #[test]
 fn dedup_notes_collapses_per_group_duplicates_within_same_group() {
-    use crate::findings::{ArtifactScope, ThreatCategory, VerdictCalibrationNote};
+    use crate::findings::{ArtifactScope, SignalClass, ThreatCategory, VerdictCalibrationNote};
 
     let mut notes = vec![
         VerdictCalibrationNote {
@@ -406,6 +409,7 @@ fn dedup_notes_collapses_per_group_duplicates_within_same_group() {
             rationale: "x".to_string(),
             scope: ArtifactScope::AgentEntrypoint,
             category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::Hygiene,
         },
         VerdictCalibrationNote {
             rule_id: "RULE_A".to_string(),
@@ -413,6 +417,7 @@ fn dedup_notes_collapses_per_group_duplicates_within_same_group() {
             rationale: "x".to_string(),
             scope: ArtifactScope::AgentEntrypoint,
             category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::Hygiene,
         },
     ];
     dedup_notes(&mut notes);

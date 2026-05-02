@@ -462,6 +462,11 @@ fn apply_single_rule_to_group<'f>(
         // touch that signal's group.
         scope: group.scope,
         category: group.category,
+        // Capture the original signal_class (before any reclassification)
+        // so that verdict predicates can filter notes by (scope, category,
+        // signal_class) and avoid cross-group contamination when two root
+        // cause groups share (scope, category) but differ in signal class.
+        signal_class: state.original_signal_class,
     };
     (risk_delta, Some(note))
 }

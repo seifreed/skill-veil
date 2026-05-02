@@ -45,7 +45,14 @@ pub(crate) fn is_common_lockfile_source(url: &str) -> bool {
         "npm.pkg.github.com",
     ]
     .iter()
-    .any(|host| url.contains(host))
+    .any(|host| host_matches_url(host, url))
+}
+
+/// Exact-host matching: `://host/` or `://host:` prevents substring
+/// false positives like `evil.registry.npmjs.org.attacker.com` from
+/// matching `registry.npmjs.org`.
+fn host_matches_url(host: &str, url: &str) -> bool {
+    url.contains(&format!("://{host}/")) || url.contains(&format!("://{host}:"))
 }
 
 #[cfg(test)]
@@ -95,6 +102,22 @@ mod tests {
     fn is_common_lockfile_source_rejects_arbitrary_hosts() {
         assert!(!is_common_lockfile_source(
             "https://attacker.example.com/-/x.tgz"
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// `is_common_lockfile_source` MUST reject URLs that contain a known
+    /// host as a substring inside a different hostname. An attacker URL
+    /// like `https://evil.registry.npmjs.org.attacker.com/...` must NOT
+    /// match `registry.npmjs.org`.
+    #[test]
+    fn is_common_lockfile_source_rejects_substring_host_evasion() {
+        assert!(!is_common_lockfile_source(
+            "https://evil.registry.npmjs.org.attacker.com/pkg/-/pkg-1.0.0.tgz"
+        ));
+        assert!(!is_common_lockfile_source(
+            "https://my-registry.npmmirror.com.evil.com/pkg/-/pkg-1.0.0.tgz"
         ));
     }
 }
