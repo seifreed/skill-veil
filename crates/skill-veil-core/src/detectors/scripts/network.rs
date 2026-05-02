@@ -286,4 +286,31 @@ mod tests {
             "expected fire on genuine dotenv: {sample:?} → {findings:?}"
         );
     }
+
+    /// # Contract (negative)
+    ///
+    /// `NETWORK_VERBS` uses substring matching (`line.contains(v)`), so
+    /// entries MUST include word-boundary spaces. Pre-fix `"nc "` (no
+    /// leading space) matched `func `, `prince `, `lance `, `bounce `,
+    /// `influence `, etc. — any identifier ending in `nc` followed by a
+    /// space. The leading space `" nc "` ensures only the standalone
+    /// `nc` command matches, while still matching `nc` at line start
+    /// (e.g. `nc -lvp 4444`) because `line.contains(" nc ")` handles
+    /// mid-line usage and the detector is called per-line.
+    #[test]
+    fn network_verbs_nc_does_not_match_substrings() {
+        for benign in [
+            "def func ():\n",
+            "echo prince charming\n",
+            "val = bounce\n",
+            "result = influence(decision)\n",
+        ] {
+            let lower = benign.to_ascii_lowercase();
+            let matches = NETWORK_VERBS.iter().any(|v| lower.contains(v));
+            assert!(
+                !matches,
+                "NETWORK_VERBS must not match substring 'nc' in benign text: {benign:?}"
+            );
+        }
+    }
 }

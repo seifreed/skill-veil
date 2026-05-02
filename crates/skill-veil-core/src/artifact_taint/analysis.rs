@@ -53,6 +53,10 @@ pub(super) fn derive_cross_node_taint_findings(
     // Cap per-cluster findings to avoid quadratic explosion when a parent
     // references many children that each expose sources and sinks.
     const MAX_CROSS_NODE_FINDINGS_PER_CLUSTER: usize = 50;
+    // Global cap across all clusters: without this, `per_group_budget * N
+    // sibling_clusters` can far exceed the per-cluster constant. Monorepo-style
+    // packages with many parent-child relationships are the typical trigger.
+    const MAX_CROSS_NODE_FINDINGS_TOTAL: usize = 100;
     let sibling_clusters = build_sibling_clusters(graph);
     // Divide budget across groups so every source-sink family gets representation,
     // even when a high-volume group would otherwise exhaust the entire budget.
@@ -71,6 +75,9 @@ pub(super) fn derive_cross_node_taint_findings(
     for cluster in &sibling_clusters {
         if cluster.len() < 2 {
             continue;
+        }
+        if findings.len() >= MAX_CROSS_NODE_FINDINGS_TOTAL {
+            break;
         }
         for group in groups {
             let source_nodes: Vec<&String> = cluster
@@ -91,10 +98,14 @@ pub(super) fn derive_cross_node_taint_findings(
                     let snk = sink_summary(graph, sink_node, group.sink);
                     let kind = artifact_kind_for_node(graph, source_node);
                     for rule in &group.rules {
-                        // Check budget *before* pushing each finding. Counting
-                        // post-push allowed the last (source, sink) pair to
-                        // emit `rules.len()` findings before breaking,
-                        // exceeding the cap by `rules.len() - 1` per group.
+                        // Check budgets *before* pushing each finding.
+                        // Per-group budget prevents a single group from
+                        // monopolising the cluster budget. Global total
+                        // cap prevents `per_group_budget * N clusters`
+                        // from exceeding the intended ceiling.
+                        if findings.len() >= MAX_CROSS_NODE_FINDINGS_TOTAL {
+                            break 'group;
+                        }
                         if group_finding_count >= per_group_budget {
                             break 'group;
                         }

@@ -195,12 +195,13 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
             break;
         }
         if let Some(host) = extract_host_from_url(trimmed) {
-            if !is_noise_domain(&host)
-                && !is_ipv4(&host)
-                && !is_ipv6(&host)
-                && !try_insert_bounded(&mut domains, host, "domain")
-            {
-                break;
+            if !is_noise_domain(&host) && !is_ipv4(&host) && !is_ipv6(&host) {
+                // Domain cap reached: skip insertion but keep scanning URLs.
+                // Check cap before calling try_insert_bounded to avoid
+                // repeated warn! on every URL-domain pair after the cap.
+                if domains.len() < MAX_IOCS_PER_KIND_PER_ARTIFACT {
+                    try_insert_bounded(&mut domains, host, "domain");
+                }
             }
         }
     }
@@ -542,6 +543,39 @@ mod tests {
             iocs.domains.is_empty(),
             "got false-positive: {:?}",
             iocs.domains
+        );
+    }
+
+    /// # Contract
+    ///
+    /// When the domain cap is reached, `extract_from_text` MUST continue
+    /// scanning URLs for their domains without emitting repeated
+    /// `tracing::warn!` on every URL-domain pair. Pre-fix the code called
+    /// `try_insert_bounded` on every domain after the cap, logging a warn
+    /// for each — on adversarial inputs with thousands of URLs, this
+    /// produced thousands of identical log lines.
+    #[test]
+    fn domain_cap_does_not_spam_repeated_warns() {
+        let mut text = String::new();
+        // Exceed the domain cap, then add more URLs to prove scanning
+        // continues past the cap without calling try_insert_bounded.
+        let target = MAX_IOCS_PER_KIND_PER_ARTIFACT + 100;
+        for n in 0..target {
+            use std::fmt::Write;
+            let _ = writeln!(text, "see https://unique-{n}.example.com/");
+        }
+        let iocs = extract_from_text(&text);
+        assert!(
+            iocs.domains.len() <= MAX_IOCS_PER_KIND_PER_ARTIFACT,
+            "domain set must be capped at {}; got {}",
+            MAX_IOCS_PER_KIND_PER_ARTIFACT,
+            iocs.domains.len()
+        );
+        // All URLs still scanned (the URL cap is independent).
+        assert!(
+            iocs.urls.len() <= MAX_IOCS_PER_KIND_PER_ARTIFACT,
+            "URL set must also be capped; got {}",
+            iocs.urls.len()
         );
     }
 }

@@ -38,7 +38,7 @@ pub(crate) fn references_dotenv_file(lower: &str) -> bool {
             None => true,
             Some(c) => matches!(
                 c,
-                '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ':' | ',' | ')' | ';' | '`'
+                '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ':' | ',' | ')' | ';' | '`' | '.'
             ),
         };
         if is_terminator {
@@ -106,5 +106,36 @@ mod tests {
                 "must match genuine reference: {sample}"
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// Standard dotenv variant files (`.env.local`, `.env.production`,
+    /// `.env.staging`, `.env.development`) are genuine secret-bearing
+    /// files that MUST be detected. Pre-fix the terminator character set
+    /// after `.env` excluded `.`, so `cat .env.local` was rejected —
+    /// an attacker storing secrets in `.env.local` would bypass the
+    /// Critical/Block taint finding.
+    #[test]
+    fn fires_on_dotenv_variant_files() {
+        for sample in [
+            "cat .env.local",
+            "cat .env.production",
+            "cat .env.staging",
+            "cat .env.development",
+            "cat .env.test",
+            "fs.readFileSync('.env.local')",
+            "open(\".env.production\")",
+        ] {
+            assert!(
+                references_dotenv_file(&sample.to_ascii_lowercase()),
+                "must match dotenv variant: {sample}"
+            );
+        }
+        // `.environment` is NOT a dotenv variant — must still be rejected.
+        assert!(
+            !references_dotenv_file("cat .environment"),
+            "must not match .environment"
+        );
     }
 }

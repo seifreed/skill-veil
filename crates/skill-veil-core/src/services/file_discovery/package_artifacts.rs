@@ -139,6 +139,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
         // subdirs (`scripts/`, `bin/`, …) are scanned recursively because
         // malicious skills routinely hide payloads in nested folders like
         // `scripts/备份文件/` ("backup files") or `tools/internal/`.
+        //
+        // Recursive subdirectory roots route through `walk_files` with
+        // `MAX_DISCOVERY_DEPTH` and `SKIP_DISCOVERY_DIRS` so that deeply
+        // nested trees (e.g. `scripts/node_modules/`) are bounded and
+        // excluded directories are pruned — matching the same hardening
+        // applied by `discover_package_manifests` and `discover_lockfiles`.
         let mut roots: Vec<(PathBuf, bool)> =
             Vec::with_capacity(1 + SCRIPT_DISCOVERY_SUBDIRS.len());
         roots.push((package_root.to_path_buf(), false));
@@ -149,49 +155,83 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             }
         }
         for (root, recursive) in &roots {
-            for pattern in patterns {
-                let files = match self.fs_provider.list_files(root, pattern, *recursive) {
+            let files = if *recursive {
+                match self
+                    .fs_provider
+                    .walk_files(root, MAX_DISCOVERY_DEPTH, SKIP_DISCOVERY_DIRS)
+                {
                     Ok(f) => f,
                     Err(err) => {
                         tracing::warn!(
                             path = %root.display(),
-                            pattern = %pattern,
                             error = %err,
-                            "discover_by_patterns: list_files failed"
+                            "discover_by_patterns: walk_files failed"
                         );
                         continue;
                     }
-                };
-                for file in files {
-                    if results.len() >= cap {
-                        return results;
-                    }
-                    if let Some(limit) = max_bytes {
-                        // Fail-safe: when metadata is unavailable (permission
-                        // denied, symlink loop, file deleted between listing
-                        // and stat) we MUST skip the file rather than fall
-                        // through to the include path. Including it would let
-                        // an unreadable 50 MB blob bypass `max_bytes` and
-                        // pressure the analysis pipeline. Going through the
-                        // `fs_provider` port keeps test mocks consistent —
-                        // calling `std::fs::metadata` directly would always
-                        // miss virtual paths in unit tests.
-                        match self.fs_provider.metadata(&file) {
-                            Ok(meta) if meta.len > limit => continue,
-                            Ok(_) => {}
-                            Err(err) => {
-                                tracing::debug!(
-                                    file = %file.display(),
-                                    error = %err,
-                                    "file_discovery: skipping file with unavailable metadata"
-                                );
-                                continue;
-                            }
+                }
+            } else {
+                let mut combined = Vec::new();
+                for pattern in patterns {
+                    match self.fs_provider.list_files(root, pattern, false) {
+                        Ok(f) => combined.extend(f),
+                        Err(err) => {
+                            tracing::warn!(
+                                path = %root.display(),
+                                pattern = %pattern,
+                                error = %err,
+                                "discover_by_patterns: list_files failed"
+                            );
                         }
                     }
-                    if seen.insert(file.clone()) {
-                        results.push(file);
+                }
+                combined
+            };
+            let extensions: Vec<&str> = patterns
+                .iter()
+                .filter_map(|p| p.strip_prefix("*."))
+                .collect();
+            for file in files {
+                if results.len() >= cap {
+                    return results;
+                }
+                // For recursive walks (which return ALL files, not just those
+                // matching a glob), filter by extension to respect the caller's
+                // pattern list. Non-recursive roots already went through
+                // `list_files` with the glob, so no extension filter needed.
+                if *recursive && !extensions.is_empty() {
+                    let matches_ext = file
+                        .extension()
+                        .is_some_and(|ext| extensions.iter().any(|e| *e == ext.to_string_lossy()));
+                    if !matches_ext {
+                        continue;
                     }
+                }
+                if let Some(limit) = max_bytes {
+                    // Fail-safe: when metadata is unavailable (permission
+                    // denied, symlink loop, file deleted between listing
+                    // and stat) we MUST skip the file rather than fall
+                    // through to the include path. Including it would let
+                    // an unreadable 50 MB blob bypass `max_bytes` and
+                    // pressure the analysis pipeline. Going through the
+                    // `fs_provider` port keeps test mocks consistent —
+                    // calling `std::fs::metadata` directly would always
+                    // miss virtual paths in unit tests.
+                    match self.fs_provider.metadata(&file) {
+                        Ok(meta) if meta.len > limit => continue,
+                        Ok(_) => {}
+                        Err(err) => {
+                            tracing::debug!(
+                                file = %file.display(),
+                                error = %err,
+                                "file_discovery: skipping file with unavailable metadata"
+                            );
+                            continue;
+                        }
+                    }
+                }
+                if seen.insert(file.clone()) {
+                    results.push(file);
                 }
             }
         }

@@ -351,19 +351,24 @@ fn collect_extracted_iocs<F: FileSystemProvider, P: MarkdownParser>(
     //  - File hashes, which MUST be computed over the on-disk bytes.
     // We re-read the primary file once: the cost is one extra
     // `read_file_bytes` per scan and the digest is correct.
-    let primary_bytes = match fs.read_file_bytes(primary_path) {
-        Ok(file) => file.as_bytes().to_vec(),
+    // When re-reading the file fails, we use `extract_from_text` (which omits
+    // the file hash) rather than hashing the lossy-decoded content. The
+    // lossy-decoded string replaces invalid UTF-8 bytes with U+FFFD, so a
+    // SHA-256 computed over it would disagree with `sha256sum` on the raw
+    // file — exactly when an accurate hash is most needed (binary-disguised
+    // malware payloads). Skipping the hash is safer than producing a wrong one.
+    let mut iocs = match fs.read_file_bytes(primary_path) {
+        Ok(file) => crate::ioc_extraction::extract_from_artifact(primary_path, file.as_bytes()),
         Err(err) => {
             tracing::warn!(
                 path = %primary_path.display(),
                 error = %err,
                 "IOC extraction: failed to re-read primary artifact for SHA-256; \
-                 falling back to lossy-decoded content (digest may not match sha256sum)"
+                 skipping file hash (URL/IP/domain extraction continues)"
             );
-            primary_content.as_bytes().to_vec()
+            crate::ioc_extraction::extract_from_text(primary_content)
         }
     };
-    let mut iocs = crate::ioc_extraction::extract_from_artifact(primary_path, &primary_bytes);
 
     let supporting = collect_supporting_artifact_paths(scanner, doc);
     for path in supporting {

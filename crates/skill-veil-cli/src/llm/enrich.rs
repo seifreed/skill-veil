@@ -160,6 +160,19 @@ pub(crate) fn enrich_scan_result(
             }
             Err(err) => {
                 tracing::warn!("LLM enrichment error for result: {err:#}");
+                enrichment.packages.push(LlmPackageResult {
+                    package_id: scan_res.metadata.package_id.clone(),
+                    primary_path: scan_res.metadata.path.clone(),
+                    verdict: None,
+                    status: LlmStatus::ProviderError {
+                        message: err.to_string(),
+                    },
+                    cached: false,
+                    prompt_chars: 0,
+                    raw_response_excerpt: None,
+                    fetched_at: Utc::now(),
+                    turns_used: 0,
+                });
             }
         }
     }

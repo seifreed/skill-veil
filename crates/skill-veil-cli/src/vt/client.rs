@@ -42,6 +42,12 @@ const ERROR_BODY_MAX_BYTES: usize = 512;
 /// limit and an attacker cannot fill the disk before the producer notices.
 const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
 
+/// Cap on VT JSON API response bodies to prevent unbounded memory allocation
+/// from a compromised or misconfigured endpoint. Mirrors the LLM client's
+/// `MAX_RESPONSE_BODY_BYTES` (10 MiB). VT JSON responses are typically under
+/// 100 KiB; 10 MiB is a generous ceiling that covers large report objects.
+const MAX_JSON_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
 /// UTF-8 char boundary, appending `"...[truncated]"` when shortened.
 fn truncate_error_body(body: String) -> String {
@@ -288,8 +294,12 @@ impl VtClient {
         let body = format!("url={encoded}");
         let endpoint = format!("{BASE_URL}/urls");
         let resp = self.post_form_with_retry(&endpoint, &body)?;
-        resp.into_string()
-            .map_err(|e| VtError::Decode(e.to_string()))
+        let mut buf = String::new();
+        resp.into_reader()
+            .take(MAX_JSON_RESPONSE_BYTES)
+            .read_to_string(&mut buf)
+            .map_err(|e| VtError::Decode(e.to_string()))?;
+        Ok(buf)
     }
 
     /// Download the raw file bytes to `dest`. `dest`'s parent must already
@@ -445,10 +455,13 @@ impl VtClient {
         T: serde::de::DeserializeOwned,
     {
         let response = self.request_with_retry(&self.agent, url, query)?;
-        let text = response
-            .into_string()
+        let mut buf = String::new();
+        response
+            .into_reader()
+            .take(MAX_JSON_RESPONSE_BYTES)
+            .read_to_string(&mut buf)
             .map_err(|err| VtError::Decode(err.to_string()))?;
-        serde_json::from_str::<T>(&text).map_err(|err| VtError::Decode(err.to_string()))
+        serde_json::from_str::<T>(&buf).map_err(|err| VtError::Decode(err.to_string()))
     }
 
     /// POST a form-encoded body with retry semantics matching

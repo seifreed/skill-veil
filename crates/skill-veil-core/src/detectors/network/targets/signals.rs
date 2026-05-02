@@ -78,4 +78,27 @@ mod tests {
             "httpx.get('http://[::ffff:10.0.0.1]/internal')"
         ));
     }
+
+    /// # Contract
+    ///
+    /// `RE_SSRF_FETCH_LINE` MUST include `localhost`, `127.0.0.1`, and
+    /// `0.0.0.0` in its IP address alternation. Pre-fix these three targets
+    /// were present in `RE_INTERNAL_ACTION` but absent from
+    /// `RE_SSRF_FETCH_LINE`, so SSRF payloads targeting localhost (e.g.
+    /// `curl http://localhost:8080/admin`) fell through to the lower-severity
+    /// `INTERNAL_NETWORK_ACCESS` finding instead of the high-severity
+    /// `SSRF_LIKE_FETCH`.
+    #[test]
+    fn detect_ssrf_like_fetch_line_includes_localhost_and_loopback() {
+        for sample in [
+            "curl http://localhost:8080/admin",
+            "requests.get('http://127.0.0.1/secret')",
+            "wget http://0.0.0.0:9090/metrics",
+        ] {
+            assert!(
+                contains_ssrf_like_fetch_line(sample),
+                "SSRF-like fetch must match localhost/loopback target: {sample:?}"
+            );
+        }
+    }
 }
