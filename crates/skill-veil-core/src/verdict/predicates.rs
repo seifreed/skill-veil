@@ -172,7 +172,7 @@ impl VerdictPredicates {
                     .filter(|n| {
                         n.scope == scope && n.category == category && n.signal_class == signal_class
                     })
-                    .all(|n| n.effect.starts_with("remains_"))
+                    .all(|n| n.effect.starts_with("remains_") || n.effect == "reclassified_only")
             })
             .unwrap_or(true);
 

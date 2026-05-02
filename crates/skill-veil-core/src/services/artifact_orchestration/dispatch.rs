@@ -72,7 +72,7 @@ pub(super) fn analyze(
         _ if DOCKER_COMPOSE_NAMES.contains(&name) => {
             manifests::analyze_docker_compose(path, content)
         }
-        "makefile" => manifests::analyze_makefile(path, content),
+        "makefile" | "gnumakefile" => manifests::analyze_makefile(path, content),
         ".npmrc" => manifests::analyze_npmrc(path, content),
         "pip.conf" => manifests::analyze_pip_conf(path, content),
         _ if INSTRUCTION_NAMES.contains(&name) => {
@@ -115,7 +115,7 @@ pub(super) fn infer_relations(
         "dockerfile" => manifests::dockerfile_relations(content),
         "package.json" => manifests::package_json_relations(content),
         _ if LOCKFILE_NAMES.contains(&name) => lockfiles::lockfile_relations(content),
-        "makefile" => manifests::makefile_relations(content),
+        "makefile" | "gnumakefile" => manifests::makefile_relations(content),
         ".npmrc" => manifests::npmrc_relations(content),
         "pip.conf" => manifests::pip_conf_relations(content),
         "skill.md" => instructions::instruction_relations(service, content),
@@ -165,7 +165,7 @@ pub(super) fn infer_capabilities(
         "requirements.txt" => manifests::requirements_txt_capabilities(content),
         "pyproject.toml" => manifests::pyproject_toml_capabilities(content),
         "cargo.toml" => manifests::cargo_toml_capabilities(content),
-        "makefile" => manifests::makefile_capabilities(content),
+        "makefile" | "gnumakefile" => manifests::makefile_capabilities(content),
         ".npmrc" => manifests::npmrc_capabilities(content),
         "pip.conf" => manifests::pip_conf_capabilities(content),
         "skill.md" => instructions::instruction_capabilities(service, content),

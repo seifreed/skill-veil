@@ -311,7 +311,7 @@ fn compute_calibration_gates(findings: &[Finding]) -> Vec<bool> {
                 | "SKILL_REMOTE_EXEC_POWERSHELL_IEX"
                 | "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"
                 | "OFFICIAL_SECRET_EXFIL_WEBHOOK"
-        );
+        ) && f.recommended_action != RecommendedAction::Log;
         let is_actionable_chain_category = matches!(
             f.category,
             ThreatCategory::RemoteExec
@@ -327,7 +327,7 @@ fn compute_calibration_gates(findings: &[Finding]) -> Vec<bool> {
                 | "MCP_TOOLING_TRANSPORT_DECLARED"
                 | "OFFICIAL_MCP_REMOTE_TUNNEL_WITH_EXEC"
                 | "OFFICIAL_MCP_REMOTE_BRIDGE_WITH_COMMAND"
-        )
+        ) && f.recommended_action != RecommendedAction::Log
     });
     vec![
         !has_stronger_behavior,
@@ -446,10 +446,14 @@ fn apply_single_rule_to_group<'f>(
         group.signal_class = SignalClass::ReviewSignal;
     }
     state.pre_rule_action = group.strongest_action;
+    let was_reclassified =
+        rule.reclassify_signal && group.signal_class != state.original_signal_class;
     let note = VerdictCalibrationNote {
         rule_id: rule.note_rule_id.to_string(),
         effect: if changed_from_previous {
             rule.effect_downgraded.to_string()
+        } else if was_reclassified {
+            "reclassified_only".to_string()
         } else {
             rule.effect_unchanged.to_string()
         },
@@ -462,11 +466,16 @@ fn apply_single_rule_to_group<'f>(
         // touch that signal's group.
         scope: group.scope,
         category: group.category,
-        // Capture the original signal_class (before any reclassification)
-        // so that verdict predicates can filter notes by (scope, category,
-        // signal_class) and avoid cross-group contamination when two root
-        // cause groups share (scope, category) but differ in signal class.
-        signal_class: state.original_signal_class,
+        // Use the POST-reclassification signal_class so that verdict
+        // predicates filtering on (scope, category, signal_class) see the
+        // value that matches the calibrated root cause groups. The
+        // pre-fix code recorded `state.original_signal_class`, which
+        // caused `calibration_left_isolated_group_intact` to produce
+        // empty matches (the note carried the old class but the group
+        // had been reclassified), making the predicate vacuously
+        // satisfied and allowing a Benign downgrade that should have
+        // been blocked by a reclassification.
+        signal_class: group.signal_class,
     };
     (risk_delta, Some(note))
 }

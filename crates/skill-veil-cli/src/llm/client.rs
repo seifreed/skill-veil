@@ -65,6 +65,11 @@ pub(crate) fn build_agent(timeout_secs: u64) -> ureq::Agent {
     ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(timeout_secs))
         .user_agent(&user_agent)
+        // Prevent API key leakage through HTTP 3xx redirects. Every LLM
+        // provider sends Authorization headers; silently following a redirect
+        // would forward those headers to the redirect target. The VT client
+        // already guards against this exact attack with redirects(0).
+        .redirects(0)
         .build()
 }
 

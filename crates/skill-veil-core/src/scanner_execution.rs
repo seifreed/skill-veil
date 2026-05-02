@@ -372,6 +372,13 @@ fn collect_extracted_iocs<F: FileSystemProvider, P: MarkdownParser>(
 
     let supporting = collect_supporting_artifact_paths(scanner, doc);
     for path in supporting {
+        // Reject symlinks, FIFOs, and device files before reading — mirrors
+        // the guard in scan_supporting_artifacts. Without this, a malicious
+        // skill referencing /dev/urandom or a symlink → /etc/shadow would
+        // leak sensitive content into IOC extraction.
+        if !fs.exists(&path) || !fs.is_file(&path) {
+            continue;
+        }
         match fs.read_file_bytes(&path) {
             Ok(file) => {
                 let bytes = file.as_bytes();
@@ -432,6 +439,7 @@ fn deceptive_docs_findings<F: FileSystemProvider, P: MarkdownParser>(
     let fs = scanner.file_discovery().fs_provider();
     let materialised: Vec<(PathBuf, String)> = supporting
         .into_iter()
+        .filter(|p| fs.exists(p) && fs.is_file(p))
         .filter_map(|p| match read_text_file_lossy(&p, fs) {
             Ok((c, _)) => Some((p, c)),
             Err(e) => {
@@ -536,6 +544,11 @@ fn collect_and_apply_suppressions<F: FileSystemProvider, P: MarkdownParser>(
     let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
     let mut ref_contents: Vec<(PathBuf, String)> = Vec::new();
     for referenced_file in &supporting_artifacts {
+        // Reject symlinks, FIFOs, and device files before reading inline
+        // suppressions — mirrors the guard in scan_supporting_artifacts.
+        if !fs.exists(referenced_file) || !fs.is_file(referenced_file) {
+            continue;
+        }
         match read_text_file_lossy(referenced_file, fs) {
             Ok((ref_content, _)) => {
                 ref_contents.push((referenced_file.clone(), ref_content));

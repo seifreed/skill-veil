@@ -136,6 +136,7 @@ pub fn artifact_kind_for_path<F: FileSystemProvider>(path: &Path) -> ArtifactKin
             | "docker-compose.yml"
             | "docker-compose.yaml"
             | "makefile"
+            | "gnumakefile"
             | ".npmrc"
             | "pip.conf",
         ) => ArtifactKind::PackageManifest,
@@ -175,6 +176,7 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
         "docker-compose.yml",
         "docker-compose.yaml",
         "makefile",
+        "gnumakefile",
         ".npmrc",
         "pip.conf",
         "mcp.json",
@@ -208,7 +210,25 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
                 .is_some_and(|name| RELEVANT_NAMES.contains(&name))
                 || matches!(
                     extension.as_deref(),
-                    Some("sh" | "bash" | "zsh" | "py" | "js" | "ts" | "ps1")
+                    Some(
+                        "sh" | "bash"
+                            | "zsh"
+                            | "ksh"
+                            | "fish"
+                            | "ps1"
+                            | "py"
+                            | "js"
+                            | "ts"
+                            | "mjs"
+                            | "cjs"
+                            | "mts"
+                            | "cts"
+                            | "rb"
+                            | "pl"
+                            | "rs"
+                            | "go"
+                            | "php",
+                    )
                 )
         })
         .collect()
@@ -316,6 +336,7 @@ fn sibling_package_manifests<F: FileSystemProvider>(fs_provider: &F, path: &Path
         "docker-compose.yml",
         "docker-compose.yaml",
         "makefile",
+        "gnumakefile",
         ".npmrc",
         "pip.conf",
     ];

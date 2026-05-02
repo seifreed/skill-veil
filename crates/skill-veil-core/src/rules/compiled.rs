@@ -321,16 +321,32 @@ impl CompiledRule {
                 continue;
             }
             let value_lower = value.to_lowercase();
-            if let Some(pos) = content_lower.find(&value_lower) {
-                // Preserve the original case from the document so that
-                // findings from SectionContains and Regex conditions produce
-                // consistent fingerprints (Regex already preserves case).
-                let original_text = sec.content[pos..pos + value.len()].to_string();
+            // Find ALL occurrences, not just the first. A malicious string
+            // appearing multiple times in a section should produce multiple
+            // findings — finding only the first undercounts risk.
+            let mut search_from = 0;
+            while let Some(pos_lower) = content_lower[search_from..].find(&value_lower) {
+                // Map the byte offset in `content_lower` back to the
+                // corresponding character range in the original mixed-case
+                // content. Using `pos_lower` directly as a byte offset into
+                // `sec.content` is incorrect when characters before the match
+                // have different byte lengths in their lowercase form (e.g.
+                // İ → i̇). Walking by character count avoids this mismatch.
+                let char_offset = content_lower[..search_from + pos_lower].chars().count();
+                let original_text: String = sec
+                    .content
+                    .chars()
+                    .skip(char_offset)
+                    .take(value.chars().count())
+                    .collect();
                 let target = MatchTarget::Section {
                     name: section.to_string(),
                 };
-                findings.push(self.create_finding(target, original_text));
+                findings.push(self.create_finding(target, &original_text));
                 matched = true;
+                // Advance past this match to find subsequent occurrences.
+                let advance_bytes = value_lower.len();
+                search_from += pos_lower + advance_bytes;
             }
         }
         matched

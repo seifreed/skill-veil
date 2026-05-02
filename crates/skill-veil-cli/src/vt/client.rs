@@ -75,7 +75,7 @@ fn truncate_error_body(body: String) -> String {
 /// [`ERROR_BODY_MAX_BYTES`] so a hostile gateway cannot push large blobs
 /// into operator logs.
 fn drain_error_body(status: u16, resp: ureq::Response) -> String {
-    match resp.into_string() {
+    match bounded_read_response(resp) {
         Ok(body) => truncate_error_body(body),
         Err(err) => {
             tracing::warn!(
@@ -86,6 +86,19 @@ fn drain_error_body(status: u16, resp: ureq::Response) -> String {
             String::new()
         }
     }
+}
+
+/// Read an HTTP response body with a size cap to prevent unbounded memory
+/// allocation from a compromised or misconfigured endpoint. Mirrors the
+/// LLM client's `bounded_read_response` — pre-fix `drain_error_body` used
+/// `resp.into_string()` which allocates the entire body before truncation,
+/// allowing a hostile endpoint to cause OOM.
+fn bounded_read_response(resp: ureq::Response) -> Result<String, io::Error> {
+    let mut buf = String::new();
+    resp.into_reader()
+        .take(MAX_JSON_RESPONSE_BYTES)
+        .read_to_string(&mut buf)?;
+    Ok(buf)
 }
 
 #[derive(Debug, Error)]

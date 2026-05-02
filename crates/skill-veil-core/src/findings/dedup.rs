@@ -1,4 +1,4 @@
-use super::{ArtifactKind, ArtifactScope, Finding};
+use super::{ArtifactKind, ArtifactScope, Finding, MatchTarget};
 use crate::policy::fingerprint::MIN_RELATIVE_SUFFIX_COMPONENTS;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -31,6 +31,32 @@ struct FindingDedupKey {
     artifact_path: Option<String>,
 }
 
+/// Build a dedup-normalised `matched_on` string from a `MatchTarget`.
+///
+/// Case-normalises components that are case-insensitive (section names,
+/// code-block languages) while preserving the casing of file paths, which
+/// are case-sensitive on Linux. The previous implementation lowercased the
+/// entire `Display` output, which merged `ReferencedFile { path:
+/// "Scripts/setup.sh" }` with `ReferencedFile { path: "scripts/setup.sh"
+/// }` on case-sensitive filesystems — two different files that happen to
+/// differ only in path casing.
+fn dedup_matched_on(target: &MatchTarget) -> String {
+    match target {
+        MatchTarget::Document => "document".to_string(),
+        MatchTarget::Section { name } => format!("section:{}", name.to_ascii_lowercase()),
+        MatchTarget::CodeBlock { language } => {
+            format!(
+                "code_block:{}",
+                language
+                    .as_deref()
+                    .unwrap_or("unknown")
+                    .to_ascii_lowercase()
+            )
+        }
+        MatchTarget::ReferencedFile { path } => format!("file:{path}"),
+    }
+}
+
 /// Whether `artifact_path` should be considered to identify the same artifact as
 /// `primary` for scope-splitting purposes.
 ///
@@ -54,8 +80,26 @@ fn primary_path_matches(primary: &Path, artifact_path: &str) -> bool {
     if ap == primary {
         return true;
     }
-    let ap_components = ap.components().count();
-    let primary_components = primary.components().count();
+    // Guard: two different absolute paths must match exactly, not by suffix.
+    // Mirrors `policy::fingerprint::paths_match` which has the same guard.
+    // Without this, `/config/skill.md` and `/other/config/skill.md` could
+    // incorrectly match via suffix on platforms where Path::ends_with is
+    // more permissive.
+    if ap.is_absolute() && primary.is_absolute() {
+        return false;
+    }
+    // Count meaningful components (exclude RootDir) for threshold comparison.
+    // `Path::components().count()` includes `RootDir` on Unix, inflating the
+    // count by 1 for absolute paths. This let `/config/skill.md` (2 meaningful
+    // components but 3 with RootDir) pass the MIN_RELATIVE_SUFFIX_COMPONENTS=3
+    // threshold, which is designed to reject 2-component paths.
+    let meaningful = |p: &Path| -> usize {
+        p.components()
+            .filter(|c| !matches!(c, std::path::Component::RootDir))
+            .count()
+    };
+    let ap_components = meaningful(ap);
+    let primary_components = meaningful(primary);
     if ap_components == 1 {
         return primary.ends_with(ap);
     }
@@ -216,15 +260,19 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
         let key = FindingDedupKey {
             rule_id: finding.rule_id.clone(),
             category: finding.category,
-            // Normalise case so that section-name casing differences
-            // (e.g. "Setup" vs "SETUP") don't split findings that are
-            // logically the same.  The matching engine is
-            // case-insensitive; the dedup key must agree.
-            matched_on: finding.matched_on.to_string().to_ascii_lowercase(),
+            // Normalise case selectively per MatchTarget variant so that
+            // section-name casing differences (e.g. "Setup" vs "SETUP")
+            // don't split findings that are logically the same, while
+            // preserving path casing for ReferencedFile on case-sensitive
+            // filesystems (Linux) where Scripts/setup.sh and
+            // scripts/setup.sh are different files.
+            matched_on: dedup_matched_on(&finding.matched_on),
             // URL and hostname matches are case-insensitive; normalise
             // match_value to avoid duplicate entries for the same URL
             // captured with different casing (e.g. "https://Evil.COM/x"
-            // vs "https://evil.com/x").
+            // vs "https://evil.com/x"). The matching engine uses
+            // case-insensitive regex, so findings for the same logical
+            // match always share a lowercased value.
             match_value: finding.match_value.to_ascii_lowercase(),
             artifact_kind: finding.artifact_kind,
             artifact_scope: finding.artifact_scope,
