@@ -59,13 +59,10 @@ pub(crate) struct LlmPackageResult {
     pub raw_response_excerpt: Option<String>,
     pub fetched_at: DateTime<Utc>,
     /// 1 if the manifest prompt sufficed; 2 if the LLM requested a follow-up
-    /// with full contents. Capped at 2 — no turn-3 loop.
-    #[serde(default = "default_turns")]
+    /// with full contents. Capped at 2 — no turn-3 loop. 0 for cache entries
+    /// predating this field (treated as "legacy/unknown" by display code).
+    #[serde(default)]
     pub turns_used: u8,
-}
-
-fn default_turns() -> u8 {
-    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

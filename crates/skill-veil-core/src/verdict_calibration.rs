@@ -514,6 +514,7 @@ fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
             .then_with(|| a.rule_id.cmp(&b.rule_id))
             .then_with(|| a.effect.cmp(&b.effect))
             .then_with(|| a.rationale.cmp(&b.rationale))
+            .then_with(|| a.signal_class.cmp(&b.signal_class))
     });
     notes.dedup_by(|a, b| {
         a.scope == b.scope
@@ -521,6 +522,7 @@ fn dedup_notes(notes: &mut Vec<VerdictCalibrationNote>) {
             && a.rule_id == b.rule_id
             && a.effect == b.effect
             && a.rationale == b.rationale
+            && a.signal_class == b.signal_class
     });
 }
 

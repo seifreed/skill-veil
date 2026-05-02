@@ -64,7 +64,7 @@ pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
     };
 
     if let Some(output_path) = args.output {
-        std::fs::write(&output_path, output_content).context("Failed to write output file")?;
+        write_file_ensuring_parent(&output_path, output_content)?;
     } else {
         print!("{}", output_content);
     }

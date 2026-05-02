@@ -335,7 +335,9 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     if lower.contains("crontab")
         || lower.contains("schtasks")
         || lower.contains("launchctl")
+        || lower.contains("runonce")
         || lower.contains("autostart")
+        || lower.contains("register-scheduledtask")
     {
         links.push(ArtifactLink {
             target: "persistence-surface".to_string(),
@@ -361,6 +363,7 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     if lower.contains("writefilesync(")
         || lower.contains("tee ")
         || contains_shell_append_redirect(&lower)
+        || lower.contains("> /etc/")
         || lower.contains("set-content")
     {
         links.push(ArtifactLink {

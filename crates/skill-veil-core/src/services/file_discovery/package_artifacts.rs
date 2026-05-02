@@ -40,6 +40,7 @@ const MANIFEST_NAMES: &[&str] = &[
     "docker-compose.yml",
     "docker-compose.yaml",
     "makefile",
+    "gnumakefile",
     ".npmrc",
     "pip.conf",
 ];

@@ -423,3 +423,53 @@ fn dedup_notes_collapses_per_group_duplicates_within_same_group() {
     dedup_notes(&mut notes);
     assert_eq!(notes.len(), 1);
 }
+
+/// Contract: `dedup_notes` MUST NOT collapse notes that differ only in
+/// `signal_class`. Two root cause groups at the same `(scope, category)`
+/// but different `signal_class` (e.g. `MaliciousBehavior` vs `ReviewSignal`)
+/// produce calibration notes with identical `(rule_id, effect, rationale)`.
+/// Collapsing them would let an unrelated `downgraded_*` note in one group
+/// vacuously satisfy the Benign-path filter for another group, silently
+/// downgrading `Suspicious` to `Benign`. Pre-fix the dedup key omitted
+/// `signal_class`, causing exactly this collapse.
+#[test]
+fn dedup_notes_preserves_signal_class_distinctions() {
+    use crate::findings::{ArtifactScope, SignalClass, ThreatCategory, VerdictCalibrationNote};
+
+    let mut notes = vec![
+        VerdictCalibrationNote {
+            rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "shared rationale".to_string(),
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::MaliciousBehavior,
+        },
+        VerdictCalibrationNote {
+            rule_id: "DECLARED_PERMISSION_NETWORK_ACCESS".to_string(),
+            effect: "remains_context_only".to_string(),
+            rationale: "shared rationale".to_string(),
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::ScopeCreep,
+            signal_class: SignalClass::ReviewSignal,
+        },
+    ];
+
+    dedup_notes(&mut notes);
+
+    assert_eq!(
+        notes.len(),
+        2,
+        "Notes differing in signal_class MUST survive dedup; got {:?}",
+        notes
+    );
+    let classes: Vec<_> = notes.iter().map(|n| n.signal_class).collect();
+    assert!(
+        classes.contains(&SignalClass::MaliciousBehavior),
+        "MaliciousBehavior note must survive"
+    );
+    assert!(
+        classes.contains(&SignalClass::ReviewSignal),
+        "ReviewSignal note must survive"
+    );
+}

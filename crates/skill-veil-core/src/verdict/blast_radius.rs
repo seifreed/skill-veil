@@ -30,7 +30,7 @@ pub(super) fn build_blast_radius_summary(
             .chain(EXTERNAL_PROTOCOLS.iter())
             .any(|needle| value.contains(needle))
         {
-            network_targets.push(finding.match_value.clone());
+            network_targets.push(value.clone());
         }
 
         let factor = match finding.category {
@@ -155,4 +155,53 @@ fn token_has_embedded_external_url(token: &str) -> bool {
                 .any(|li| is_exact_local_indicator(embedded, li))
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::findings::{
+        ArtifactKind, ArtifactScope, EvidenceKind, MatchTarget, RecommendedAction, Severity,
+        SignalClass,
+    };
+
+    /// # Contract
+    ///
+    /// `build_blast_radius_summary` MUST deduplicate `network_targets`
+    /// case-insensitively. Two findings referencing the same URL with
+    /// different casing (e.g. `"https://Evil.COM/x"` and
+    /// `"https://evil.com/x"`) MUST appear as a single entry in
+    /// `network_targets`. Pre-fix the original `match_value` was pushed
+    /// (not the lowercased version), so case-sensitive `sort`/`dedup`
+    /// failed to collapse them.
+    #[test]
+    fn blast_radius_deduplicates_case_variant_network_targets() {
+        let make_finding = |match_value: &str| {
+            Finding::builder("TEST_RULE", ThreatCategory::DataExfiltration)
+                .severity(Severity::High)
+                .confidence(0.8)
+                .action(RecommendedAction::Block)
+                .evidence_kind(EvidenceKind::Behavior)
+                .matched_on(MatchTarget::Document)
+                .match_value(match_value.to_string())
+                .artifact(ArtifactKind::SkillDocument, None)
+                .artifact_scope(ArtifactScope::AgentEntrypoint)
+                .signal_class(SignalClass::MaliciousBehavior)
+                .reason("test".to_string())
+                .build()
+        };
+
+        let findings = vec![
+            make_finding("https://Evil.COM/payload"),
+            make_finding("https://evil.com/payload"),
+        ];
+
+        let summary = build_blast_radius_summary(&findings, &[]);
+        assert_eq!(
+            summary.network_targets.len(),
+            1,
+            "case-variant URLs MUST be deduplicated; got {:?}",
+            summary.network_targets
+        );
+    }
 }

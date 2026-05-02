@@ -221,7 +221,11 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
             // logically the same.  The matching engine is
             // case-insensitive; the dedup key must agree.
             matched_on: finding.matched_on.to_string().to_ascii_lowercase(),
-            match_value: finding.match_value.clone(),
+            // URL and hostname matches are case-insensitive; normalise
+            // match_value to avoid duplicate entries for the same URL
+            // captured with different casing (e.g. "https://Evil.COM/x"
+            // vs "https://evil.com/x").
+            match_value: finding.match_value.to_ascii_lowercase(),
             artifact_kind: finding.artifact_kind,
             artifact_scope: finding.artifact_scope,
             artifact_path: finding.artifact_path.clone(),
@@ -355,6 +359,48 @@ mod tests {
             out_a[0].reason.contains("substantially longer"),
             "tie-break MUST pick the longer reason; got {:?}",
             out_a[0].reason
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `deduplicate_findings` MUST merge findings whose `match_value`
+    /// differs only in case (e.g. `"https://Evil.COM/x"` vs
+    /// `"https://evil.com/x"`). URL-matching rules use case-insensitive
+    /// regexes, so the same URL captured with different casing produces
+    /// two findings that are logically identical. Pre-fix `match_value`
+    /// was not normalised in the dedup key, causing duplicate entries.
+    #[test]
+    fn deduplicate_findings_merges_case_variant_match_values() {
+        use crate::findings::{
+            EvidenceKind, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+        };
+
+        let upper = Finding::builder("URL_RULE", ThreatCategory::DataExfiltration)
+            .severity(Severity::High)
+            .confidence(0.8)
+            .action(RecommendedAction::Block)
+            .evidence_kind(EvidenceKind::Behavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("https://Evil.COM/payload")
+            .reason("exfiltration URL detected".to_string())
+            .build();
+        let lower = Finding::builder("URL_RULE", ThreatCategory::DataExfiltration)
+            .severity(Severity::High)
+            .confidence(0.8)
+            .action(RecommendedAction::Block)
+            .evidence_kind(EvidenceKind::Behavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("https://evil.com/payload")
+            .reason("exfiltration URL detected".to_string())
+            .build();
+
+        let (deduped, _) = deduplicate_findings(vec![upper, lower]);
+        assert_eq!(
+            deduped.len(),
+            1,
+            "case-variant match_values MUST merge; got {:?}",
+            deduped
         );
     }
 }

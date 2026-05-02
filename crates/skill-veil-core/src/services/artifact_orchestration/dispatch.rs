@@ -231,6 +231,8 @@ pub(super) fn looks_like_script(path: &Path) -> bool {
         Some(
             "sh" | "bash"
                 | "zsh"
+                | "ksh"
+                | "fish"
                 | "ps1"
                 | "py"
                 | "js"

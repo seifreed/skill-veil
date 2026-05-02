@@ -78,12 +78,21 @@ fn sanitize_llm_confidence(verdict: &mut LlmVerdict) {
 
 fn strip_json_fences(raw: &str) -> String {
     let trimmed = raw.trim();
-    let without_fence = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .map(|s| s.trim_start_matches(['\r', '\n']))
+    // Some LLM providers prepend preamble text before the JSON fence.
+    // Search for the opening fence anywhere in the response, not just at
+    // the start, so "Here is my analysis:\n```json\n{…}" still parses.
+    let opening = trimmed
+        .find("```json")
+        .or_else(|| trimmed.find("```"))
+        .map(|pos| {
+            let after = &trimmed[pos..]
+                .strip_prefix("```json")
+                .or_else(|| trimmed.get(pos..)?.strip_prefix("```"))
+                .unwrap_or(&trimmed[pos..]);
+            after.trim_start_matches(['\r', '\n'])
+        })
         .unwrap_or(trimmed);
-    let without_trailing = without_fence.trim_end();
+    let without_trailing = opening.trim_end();
     let stripped = without_trailing
         .strip_suffix("```")
         .unwrap_or(without_trailing)

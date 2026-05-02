@@ -2,7 +2,7 @@ use crate::lazy_pattern;
 
 lazy_pattern!(
     pub(crate) RE_OPAQUE_MCP_ENDPOINT,
-    r"(?i)(ngrok|trycloudflare|workers\.dev|raw\.githubusercontent\.com|pastebin\.com)"
+    r"(?i)(?:^|[:/@.\s])(ngrok|trycloudflare|workers\.dev|raw\.githubusercontent\.com|pastebin\.com)(?:$|[:/.])"
 );
 lazy_pattern!(
     pub(crate) RE_MCP_NO_AUTH,
@@ -50,12 +50,12 @@ lazy_pattern!(pub(crate) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
     line.split_whitespace().any(|token| {
         let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
-        let basename = basename
-            .strip_suffix(".exe")
-            .or_else(|| basename.strip_suffix(".EXE"))
-            .or_else(|| basename.strip_suffix(".Exe"))
-            .unwrap_or(basename);
-        let basename_lower = basename.to_ascii_lowercase();
+        // Lowercase first, then strip .exe — avoids evasion via mixed-case
+        // suffixes like .eXe that the prior per-casing strip missed.
+        let mut basename_lower = basename.to_ascii_lowercase();
+        if basename_lower.ends_with(".exe") {
+            basename_lower.truncate(basename_lower.len() - 4);
+        }
         matches!(
             basename_lower.as_str(),
             "bash"
@@ -187,6 +187,48 @@ mod tests {
         assert!(line_invokes_shell_or_interpreter("tcsh -c 'cmd'"));
         assert!(line_invokes_shell_or_interpreter("/bin/fish script.fish"));
         assert!(line_invokes_shell_or_interpreter("/usr/bin/ksh -c 'x'"));
+    }
+
+    /// Contract: mixed-case `.exe` suffixes like `.eXe`, `.EXe` must be
+    /// stripped. Pre-fix the per-casing strip missed these variants,
+    /// allowing evasion via `POWERSHELL.eXe`.
+    #[test]
+    fn line_invokes_shell_or_interpreter_strips_mixed_case_exe() {
+        assert!(
+            line_invokes_shell_or_interpreter("POWERSHELL.eXe -c x"),
+            "mixed-case .eXe must be stripped and detected"
+        );
+        assert!(
+            line_invokes_shell_or_interpreter("bash.EXe script.sh"),
+            "mixed-case .EXe must be stripped and detected"
+        );
+        assert!(
+            line_invokes_shell_or_interpreter("/usr/bin/python.eXE -c x"),
+            "mixed-case .eXE must be stripped and detected"
+        );
+    }
+
+    /// Contract: `RE_OPAQUE_MCP_ENDPOINT` MUST match domain-bounded
+    /// occurrences of opaque-host indicators (ngrok, trycloudflare, etc.)
+    /// but MUST NOT match substrings inside unrelated hostnames.
+    #[test]
+    fn re_opaque_mcp_endpoint_matches_domain_boundaries() {
+        // Positive: real opaque endpoint URLs
+        assert!(RE_OPAQUE_MCP_ENDPOINT.is_match("https://ngrok.io/tunnel"));
+        assert!(RE_OPAQUE_MCP_ENDPOINT.is_match("https://myapp.trycloudflare.com/"));
+        assert!(RE_OPAQUE_MCP_ENDPOINT
+            .is_match("https://raw.githubusercontent.com/owner/repo/main/file"));
+        assert!(RE_OPAQUE_MCP_ENDPOINT.is_match("https://pastebin.com/raw/abc123"));
+
+        // Negative: substring matches inside unrelated hostnames
+        assert!(
+            !RE_OPAQUE_MCP_ENDPOINT.is_match("https://my-ngrok-tunnel.example.com/"),
+            "ngrok as substring inside another hostname must not match"
+        );
+        assert!(
+            !RE_OPAQUE_MCP_ENDPOINT.is_match("https://not-really-pastebin.com.example.org/"),
+            "pastebin.com as substring must not match"
+        );
     }
 
     /// Contract: `RE_MCP_INLINE_SECRET` requires an actual secret value,

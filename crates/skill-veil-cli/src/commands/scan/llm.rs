@@ -214,6 +214,7 @@ fn is_primary_artifact_path(
     }
     if candidate.is_relative()
         && candidate.file_name() == primary.file_name()
+        && candidate.parent().is_none_or(|p| p.as_os_str().is_empty())
         && primary.ends_with(candidate)
     {
         return true;

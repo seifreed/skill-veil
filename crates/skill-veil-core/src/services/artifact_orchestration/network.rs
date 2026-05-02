@@ -48,11 +48,15 @@ pub(crate) fn is_common_lockfile_source(url: &str) -> bool {
     .any(|host| host_matches_url(host, url))
 }
 
-/// Exact-host matching: `://host/` or `://host:` prevents substring
-/// false positives like `evil.registry.npmjs.org.attacker.com` from
-/// matching `registry.npmjs.org`.
+/// Exact-host matching: `://host/`, `://host:`, or `@host/` (for
+/// authenticated registry URLs like `https://user:pass@registry.npmjs.org/pkg`)
+/// prevents substring false positives like `evil.registry.npmjs.org.attacker.com`
+/// from matching `registry.npmjs.org`.
 fn host_matches_url(host: &str, url: &str) -> bool {
-    url.contains(&format!("://{host}/")) || url.contains(&format!("://{host}:"))
+    url.contains(&format!("://{host}/"))
+        || url.contains(&format!("://{host}:"))
+        || url.contains(&format!("@{host}/"))
+        || url.contains(&format!("@{host}:"))
 }
 
 #[cfg(test)]
@@ -119,5 +123,29 @@ mod tests {
         assert!(!is_common_lockfile_source(
             "https://my-registry.npmmirror.com.evil.com/pkg/-/pkg-1.0.0.tgz"
         ));
+    }
+
+    /// # Contract
+    ///
+    /// `host_matches_url` MUST match authenticated registry URLs where
+    /// credentials precede the host (e.g. `https://user:pass@registry.npmjs.org/`).
+    /// Pre-fix only `://{host}/` and `://{host}:` were checked, so URLs
+    /// with `@`-delimited auth never matched known registries.
+    #[test]
+    fn host_matches_url_matches_authenticated_registry_urls() {
+        assert!(
+            host_matches_url(
+                "registry.npmjs.org",
+                "https://user:pass@registry.npmjs.org/pkg"
+            ),
+            "authenticated URL with @ must match known host"
+        );
+        assert!(
+            host_matches_url(
+                "registry.npmjs.org",
+                "https://user:pass@registry.npmjs.org:443/pkg"
+            ),
+            "authenticated URL with @ and port must match known host"
+        );
     }
 }

@@ -11,13 +11,20 @@ const CACHE_NAMESPACE: &str = "skill-veil";
 /// `canonicalize` fails (e.g. the scan path was deleted between args
 /// parse and cache lookup) — in that case the cache simply misses,
 /// which is the safe failure mode.
+///
+/// Uses `format!("{:#?}", …)` rather than `to_string_lossy()` to avoid
+/// collisions between paths that differ only in non-UTF-8 byte sequences
+/// (which `to_string_lossy` replaces with the same U+FFFD replacement
+/// character, collapsing distinct paths into the same key).
 pub(super) fn cache_key_for(scan_path: &Path) -> String {
     use sha2::{Digest, Sha256};
     let canonical = scan_path
         .canonicalize()
         .unwrap_or_else(|_| scan_path.to_path_buf());
     let mut h = Sha256::new();
-    h.update(canonical.to_string_lossy().as_bytes());
+    // Lossless encoding: Debug format preserves the full OsStr including
+    // non-UTF-8 sequences that to_string_lossy would collapse.
+    h.update(format!("{canonical:#?}").as_bytes());
     format!("{:x}", h.finalize())
 }
 
