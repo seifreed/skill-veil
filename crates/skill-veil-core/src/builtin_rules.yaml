@@ -57,7 +57,7 @@
 - id: SKILL_SUPPLY_CHAIN_NO_HASH
   category: supply_chain
   severity: medium
-  confidence: 0.70
+  confidence: 0.65
   # Anchor the extension so `wget myfile.sh.txt` / `curl test.sh.backup`
   # don't trigger. `\\S+` consumes the URL/filename without crossing
   # whitespace, and the trailing class requires the executable extension
@@ -65,10 +65,14 @@
   # semicolon, end-of-line). Pre-fix `.*\\.(sh|...)` matched any
   # substring `.sh` mid-token, so changelog/README mentions of e.g.
   # `wget archive.sh.gz` lifted benign skills to `require_approval`.
+  # Note: the regex crate does not support negative lookahead, so this
+  # rule cannot distinguish "download with hash verification" from
+  # "download without hash verification". Confidence is reduced to
+  # reflect the higher false-positive rate on scripts that verify hashes.
   when: !regex
-    pattern: "(curl|wget|Invoke-WebRequest)\\s+\\S+\\.(sh|ps1|exe|bin)(?:[\\s\"'`)\\];]|$)"
+    pattern: "(?i)(curl|wget|Invoke-WebRequest)\\s+\\S+\\.(sh|ps1|exe|bin)(?:[\\s\"'`)\\];]|$)"
   action: require_approval
-  reason: "Downloading executable without hash verification"
+  reason: "Downloading executable — verify hash integrity separately"
   shield:
     scope: skill.install
   enabled: true

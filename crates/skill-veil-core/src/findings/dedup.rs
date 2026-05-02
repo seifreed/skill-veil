@@ -216,7 +216,11 @@ pub fn deduplicate_findings(findings: Vec<Finding>) -> (Vec<Finding>, Deduplicat
         let key = FindingDedupKey {
             rule_id: finding.rule_id.clone(),
             category: finding.category,
-            matched_on: finding.matched_on.to_string(),
+            // Normalise case so that section-name casing differences
+            // (e.g. "Setup" vs "SETUP") don't split findings that are
+            // logically the same.  The matching engine is
+            // case-insensitive; the dedup key must agree.
+            matched_on: finding.matched_on.to_string().to_ascii_lowercase(),
             match_value: finding.match_value.clone(),
             artifact_kind: finding.artifact_kind,
             artifact_scope: finding.artifact_scope,

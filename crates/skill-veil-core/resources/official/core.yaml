@@ -10,7 +10,7 @@ rules:
     severity: critical
     confidence: 0.98
     when: !regex
-      pattern: "curl\\s+.*\\|\\s*(ba)?sh"
+      pattern: "(?i)curl\\s+.*\\|\\s*(ba)?sh"
     action: block
     reason: "Remote download and execution via curl piped to shell"
     shield:
@@ -148,7 +148,7 @@ rules:
     severity: high
     confidence: 0.85
     when: !regex
-      pattern: "(?i)(urllib|requests|http\\.client).*http://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
+      pattern: "(?i)(urllib|requests|http\\.client).*https?://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
     action: require_approval
     reason: "Python HTTP request to bare IP — possible C2 beacon"
     shield:

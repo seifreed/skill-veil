@@ -7,7 +7,7 @@
   confidence: 0.98
   when:
     regex:
-      pattern: "curl\\s+.*\\|\\s*(ba)?sh"
+      pattern: "(?i)curl\\s+.*\\|\\s*(ba)?sh"
   action: block
   reason: "Remote download and execution via curl piped to shell"
   shield:
@@ -23,7 +23,7 @@
   confidence: 0.98
   when:
     regex:
-      pattern: "wget\\s+.*-O\\s*-\\s*\\|\\s*(ba)?sh"
+      pattern: "(?i)wget\\s+.*-O\\s*-\\s*\\|\\s*(ba)?sh"
   action: block
   reason: "Remote download and execution via wget piped to shell"
   shield:

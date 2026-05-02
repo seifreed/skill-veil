@@ -58,7 +58,18 @@ pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
         let basename_lower = basename.to_ascii_lowercase();
         matches!(
             basename_lower.as_str(),
-            "bash" | "sh" | "dash" | "zsh" | "pwsh" | "powershell" | "python" | "node"
+            "bash"
+                | "sh"
+                | "dash"
+                | "zsh"
+                | "fish"
+                | "ksh"
+                | "csh"
+                | "tcsh"
+                | "pwsh"
+                | "powershell"
+                | "python"
+                | "node"
         )
     })
 }
@@ -163,6 +174,19 @@ mod tests {
         assert!(line_invokes_shell_or_interpreter("dash setup.sh"));
         assert!(line_invokes_shell_or_interpreter("pwsh -c 'x'"));
         assert!(line_invokes_shell_or_interpreter("powershell -c 'x'"));
+    }
+
+    /// Contract: alternative shells (fish, ksh, csh, tcsh) are detected.
+    /// These are common on macOS and Unix systems and can be used as
+    /// evasion vectors when bash/sh are filtered.
+    #[test]
+    fn line_invokes_shell_or_interpreter_detects_alternative_shells() {
+        assert!(line_invokes_shell_or_interpreter("fish -c 'payload'"));
+        assert!(line_invokes_shell_or_interpreter("ksh script.ksh"));
+        assert!(line_invokes_shell_or_interpreter("csh -c 'cmd'"));
+        assert!(line_invokes_shell_or_interpreter("tcsh -c 'cmd'"));
+        assert!(line_invokes_shell_or_interpreter("/bin/fish script.fish"));
+        assert!(line_invokes_shell_or_interpreter("/usr/bin/ksh -c 'x'"));
     }
 
     /// Contract: `RE_MCP_INLINE_SECRET` requires an actual secret value,

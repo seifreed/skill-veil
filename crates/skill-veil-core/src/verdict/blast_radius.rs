@@ -146,7 +146,13 @@ fn token_has_embedded_external_url(token: &str) -> bool {
     ["http://", "https://"].iter().any(|proto| {
         remainder.find(proto).is_some_and(|proto_pos| {
             let embedded = &remainder[proto_pos..];
-            !LOCAL_INDICATORS.iter().any(|li| embedded.contains(li))
+            // Use boundary-aware checking (same logic as
+            // `is_exact_local_indicator`) so that
+            // `localhost.evil.com` embedded in a URL is not
+            // treated as a genuine local indicator.
+            !LOCAL_INDICATORS
+                .iter()
+                .any(|li| is_exact_local_indicator(embedded, li))
         })
     })
 }

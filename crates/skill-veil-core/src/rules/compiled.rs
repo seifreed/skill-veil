@@ -320,11 +320,16 @@ impl CompiledRule {
             if value.is_empty() {
                 continue;
             }
-            if content_lower.contains(&value.to_lowercase()) {
+            let value_lower = value.to_lowercase();
+            if let Some(pos) = content_lower.find(&value_lower) {
+                // Preserve the original case from the document so that
+                // findings from SectionContains and Regex conditions produce
+                // consistent fingerprints (Regex already preserves case).
+                let original_text = sec.content[pos..pos + value.len()].to_string();
                 let target = MatchTarget::Section {
                     name: section.to_string(),
                 };
-                findings.push(self.create_finding(target, value.to_lowercase()));
+                findings.push(self.create_finding(target, original_text));
                 matched = true;
             }
         }

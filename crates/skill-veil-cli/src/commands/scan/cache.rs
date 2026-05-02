@@ -46,8 +46,17 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> P
                 return dir.to_path_buf();
             }
         } else {
-            // If we can't canonicalize, trust the override but warn
-            return dir.to_path_buf();
+            // If we can't canonicalize, we cannot verify the override is
+            // safe.  Reject it and fall through to the default cache
+            // location — a malicious skill could place a symlink that
+            // breaks canonicalize to bypass the containment check.
+            tracing::warn!(
+                "--cache-dir {} or scan path {} could not be canonicalized; \
+                 cannot verify the override is not inside the scan path. \
+                 Using default cache location.",
+                dir.display(),
+                scan_path.display(),
+            );
         }
     }
     if let Some(user_cache) = dirs::cache_dir() {
@@ -128,6 +137,10 @@ mod tests {
         let scan_path = tmp.path().join("scan-target");
         std::fs::create_dir_all(&scan_path).expect("seed scan dir");
         let override_dir = tmp.path().join("custom-cache");
+        // Both directories must exist on disk so that canonicalize()
+        // succeeds — the security check rejects overrides when it
+        // cannot verify containment.
+        std::fs::create_dir_all(&override_dir).expect("seed override dir");
 
         let vt_root = cache_root_for(&scan_path, Some(&override_dir));
         let llm_root = llm_cache_root_for(&scan_path, Some(&override_dir));
@@ -139,6 +152,32 @@ mod tests {
         assert!(
             llm_root.starts_with(&override_dir),
             "llm cache MUST be rooted under override; got {llm_root:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// When `--cache-dir` points to a path that cannot be canonicalized
+    /// (e.g. a broken symlink), the override MUST be rejected and the
+    /// default cache location used instead.  Pre-fix the code trusted
+    /// the override with a warning, which allowed a malicious skill to
+    /// bypass the containment check by placing a symlink that breaks
+    /// canonicalize.
+    #[test]
+    fn cache_base_dir_rejects_override_when_canonicalize_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        std::fs::create_dir_all(&scan_path).expect("seed scan dir");
+        // Broken symlink: points to a nonexistent target
+        let broken = tmp.path().join("broken-cache-link");
+        std::os::unix::fs::symlink("/nonexistent/path/that/does/not/exist", &broken)
+            .expect("create broken symlink");
+
+        let result = cache_base_dir(Some(&broken), &scan_path);
+        // Must NOT use the broken-symlink override
+        assert!(
+            !result.starts_with(&broken),
+            "broken-symlink override MUST be rejected; got {result:?}",
         );
     }
 
