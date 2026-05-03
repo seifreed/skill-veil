@@ -1678,3 +1678,34 @@ fn verify_pack_checksum_lenient_does_not_require_sidecar() {
         .load_rules_file(&fs, &pack_path)
         .expect("Lenient policy must accept packs without sidecars");
 }
+
+/// Contract: `check_section_condition` must correctly extract the original
+/// text when case-folding changes character counts. The German ß lowercases
+/// to "ss" (1 char → 2 chars), and Turkish İ lowercases to "i̇" (1 char →
+/// 2 chars). Without the lower_to_original mapping, `char_offset` computed
+/// from `content_lower` would point past the actual match in the original,
+/// producing a garbled `match_value`.
+#[test]
+fn section_condition_unicode_case_folding_extracts_correct_original_text() {
+    // Use ß (eszett) which lowercases to "ss" — if the offset mapping is
+    // wrong, searching for "straße" in content containing "Straße" would
+    // extract the wrong span from the original.
+    let engine = default_engine();
+    let doc = parse_test_doc("# Description\nA Straße is a German road. Another Straße here.\n");
+
+    // Find any finding whose match_value contains "Straße" (the original
+    // mixed-case form). If the offset is wrong, the match_value would
+    // contain garbled text instead.
+    let findings = engine.evaluate(&doc);
+    for f in &findings {
+        if f.match_value.contains("ß") || f.match_value.contains("Straße") {
+            // The match_value must be a substring of the original content,
+            // not a garbled offset into it.
+            assert!(
+                doc.raw_content.contains(&f.match_value),
+                "match_value '{}' must appear verbatim in the original content",
+                f.match_value
+            );
+        }
+    }
+}

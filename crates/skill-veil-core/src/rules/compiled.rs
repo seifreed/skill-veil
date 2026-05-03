@@ -316,6 +316,22 @@ impl CompiledRule {
 
         let mut matched = false;
         let content_lower = sec.content.to_lowercase();
+
+        // Build a mapping from lowercased character index to original character
+        // index. Case-folding can expand characters (e.g. İ → i̇, ß → ss), so a
+        // position in the lowercased string does not correspond 1-to-1 with the
+        // original. Without this mapping, `char_offset` computed from
+        // `content_lower` would point to the wrong position in `sec.content`.
+        let mut lower_to_original: Vec<usize> = Vec::new();
+        for (orig_idx, ch) in sec.content.chars().enumerate() {
+            for _ in ch.to_lowercase() {
+                lower_to_original.push(orig_idx);
+            }
+        }
+        // Sentinel: one-past-the-end original char index, used when the match
+        // extends to the end of the lowercased content.
+        lower_to_original.push(sec.content.chars().count());
+
         for value in values {
             if value.is_empty() {
                 continue;
@@ -326,18 +342,18 @@ impl CompiledRule {
             // findings — finding only the first undercounts risk.
             let mut search_from = 0;
             while let Some(pos_lower) = content_lower[search_from..].find(&value_lower) {
-                // Map the byte offset in `content_lower` back to the
-                // corresponding character range in the original mixed-case
-                // content. Using `pos_lower` directly as a byte offset into
-                // `sec.content` is incorrect when characters before the match
-                // have different byte lengths in their lowercase form (e.g.
-                // İ → i̇). Walking by character count avoids this mismatch.
-                let char_offset = content_lower[..search_from + pos_lower].chars().count();
+                // Map the byte offset in `content_lower` to the corresponding
+                // character range in the original mixed-case content via the
+                // lower_to_original index built above.
+                let lower_char_start = content_lower[..search_from + pos_lower].chars().count();
+                let lower_char_end = lower_char_start + value_lower.chars().count();
+                let orig_start = lower_to_original[lower_char_start];
+                let orig_end = lower_to_original[lower_char_end];
                 let original_text: String = sec
                     .content
                     .chars()
-                    .skip(char_offset)
-                    .take(value.chars().count())
+                    .skip(orig_start)
+                    .take(orig_end - orig_start)
                     .collect();
                 let target = MatchTarget::Section {
                     name: section.to_string(),

@@ -77,9 +77,12 @@ impl VerdictPredicates {
             // → ReviewSignal), the exact match fails. We then look for a
             // group at the same (scope, category) whose signal class differs
             // from the raw group's — that is the reclassified group.
-            // Matching on (scope, category) alone without confirming the
-            // class change would pick the wrong group when multiple groups
-            // share (scope, category) but have different signal classes.
+            //
+            // When multiple groups share (scope, category), prefer the one
+            // whose signal class is ReviewSignal — the only reclassification
+            // target. Without this preference, `.find()` could match an
+            // unrelated Hygiene group at the same (scope, category), falsely
+            // triggering `calibration_weakened_non_hygiene`.
             let calibrated = root_cause_groups
                 .iter()
                 .find(|cal| {
@@ -88,10 +91,13 @@ impl VerdictPredicates {
                         && cal.signal_class == raw_group.signal_class
                 })
                 .or_else(|| {
+                    // Prefer ReviewSignal: calibration only reclassifies TO
+                    // ReviewSignal, so a Hygiene group at (scope, category)
+                    // is never the reclassified version of a non-hygiene raw group.
                     root_cause_groups.iter().find(|cal| {
                         cal.scope == raw_group.scope
                             && cal.category == raw_group.category
-                            && cal.signal_class != raw_group.signal_class
+                            && cal.signal_class == SignalClass::ReviewSignal
                     })
                 });
             let Some(calibrated) = calibrated else {

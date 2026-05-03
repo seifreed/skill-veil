@@ -112,10 +112,15 @@ pub(super) fn looks_like_external_sink(edge: &ArtifactEdge) -> bool {
         "raw.githubusercontent.com",
         "sendgrid",
         "mailgun",
-        "webhook",
     ]
     .iter()
-    .any(|needle| lower.contains(needle));
+    .any(|needle| lower.contains(needle))
+    // Webhook endpoints: match "/webhook" followed by a path separator (/,
+    // ?, #) or end-of-string, or the dedicated "webhook.site" service.
+    // The bare substring "webhook" matched documentation URLs like
+    // "/webhook-setup-guide" — the boundary check prevents that.
+    || lower.split('/').any(|segment| segment == "webhook" || segment.starts_with("webhook?") || segment.starts_with("webhook#"))
+    || lower.contains("webhook.site");
     if known_external {
         return true;
     }
@@ -219,5 +224,78 @@ mod tests {
         assert!(!has_word_boundary("tokenizer", "token"));
         assert!(!has_word_boundary("mytoken", "token"));
         assert!(!has_word_boundary("token1", "token"));
+    }
+
+    /// # Contract
+    /// `looks_like_external_sink` must NOT match documentation URLs that
+    /// merely contain the word "webhook" in a path like "/webhook-setup-guide"
+    /// or "/docs/webhook-integration". Only actual webhook endpoints (path
+    /// component "/webhook" or the dedicated webhook.site service) should
+    /// match. The negative test cases use localhost URLs so that only the
+    /// `known_external` patterns determine the result — the generic HTTP
+    /// check skips local endpoints.
+    #[test]
+    fn looks_like_external_sink_rejects_webhook_documentation_urls() {
+        use crate::artifact_graph::{ArtifactEdge, ArtifactRelation};
+
+        // Negative: localhost URL with webhook-setup-guide must not match
+        let local_doc_url = ArtifactEdge {
+            from: "a".to_string(),
+            to: "http://localhost:3000/webhook-setup-guide".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            !looks_like_external_sink(&local_doc_url),
+            "localhost URL with '/webhook-setup-guide' must NOT be classified as an external sink"
+        );
+
+        // Positive: actual webhook endpoint must still match
+        let real_webhook = ArtifactEdge {
+            from: "a".to_string(),
+            to: "https://hooks.slack.com/services/webhook".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            looks_like_external_sink(&real_webhook),
+            "actual webhook endpoint URL must be classified as an external sink"
+        );
+
+        // Positive: webhook.site must match
+        let webhook_site = ArtifactEdge {
+            from: "a".to_string(),
+            to: "https://webhook.site/abc123".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            looks_like_external_sink(&webhook_site),
+            "webhook.site URLs must be classified as an external sink"
+        );
+
+        // Positive: /webhook/ as a path segment must match
+        let webhook_path = ArtifactEdge {
+            from: "a".to_string(),
+            to: "https://api.example.com/webhook/notify".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            looks_like_external_sink(&webhook_path),
+            "/webhook/ as a path segment must be classified as an external sink"
+        );
+
+        // Negative: /webhook-setup-guide must NOT match (hyphen after webhook)
+        let doc_path = ArtifactEdge {
+            from: "a".to_string(),
+            to: "http://localhost:8080/webhook-setup-guide".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            !looks_like_external_sink(&doc_path),
+            "local URL with '/webhook-setup-guide' must NOT match the webhook pattern"
+        );
     }
 }

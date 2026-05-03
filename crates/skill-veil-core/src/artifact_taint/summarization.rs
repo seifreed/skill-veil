@@ -33,92 +33,119 @@ pub(super) fn source_summary(
     source: TaintSourceKind,
 ) -> String {
     match source {
-        TaintSourceKind::SecretAccess => graph
-            .edges
-            .iter()
-            .find(|edge| {
+        TaintSourceKind::SecretAccess => collect_matching_edges(
+            graph,
+            |edge| {
                 edge.from == node_path
                     && (matches!(edge.relation, ArtifactRelation::AccessesSecrets)
                         || (matches!(edge.relation, ArtifactRelation::Reads)
                             && looks_like_secret_target(&edge.to)))
-            })
-            .map(|edge| edge.to.clone())
-            .unwrap_or_else(|| "secret_access".to_string()),
-        TaintSourceKind::RemoteDownload => graph
-            .edges
-            .iter()
-            .find(|edge| edge.from == node_path && is_external_download_edge(edge))
-            .map(|edge| edge.to.clone())
-            .unwrap_or_else(|| "remote_download".to_string()),
-        TaintSourceKind::FilesystemWrite => graph
-            .edges
-            .iter()
-            .find(|edge| {
-                edge.from == node_path && matches!(edge.relation, ArtifactRelation::Writes)
-            })
-            .map(|edge| edge.to.clone())
-            .unwrap_or_else(|| "filesystem_write".to_string()),
-        TaintSourceKind::IdentityAccess => graph
-            .edges
-            .iter()
-            .find(|edge| {
+            },
+            "secret_access",
+        ),
+        TaintSourceKind::RemoteDownload => collect_matching_edges(
+            graph,
+            |edge| edge.from == node_path && is_external_download_edge(edge),
+            "remote_download",
+        ),
+        TaintSourceKind::FilesystemWrite => collect_matching_edges(
+            graph,
+            |edge| edge.from == node_path && matches!(edge.relation, ArtifactRelation::Writes),
+            "filesystem_write",
+        ),
+        TaintSourceKind::IdentityAccess => collect_matching_edges(
+            graph,
+            |edge| {
                 edge.from == node_path
                     && matches!(edge.relation, ArtifactRelation::Reads)
                     && looks_like_identity_target(&edge.to)
-            })
-            .map(|edge| edge.to.clone())
-            .unwrap_or_else(|| "identity_access".to_string()),
+            },
+            "identity_access",
+        ),
     }
 }
 
 pub(super) fn sink_summary(graph: &ArtifactGraph, node_path: &str, sink: TaintSinkKind) -> String {
     match sink {
-        TaintSinkKind::ExternalNetwork => graph
-            .edges
-            .iter()
-            .find(|edge| {
+        TaintSinkKind::ExternalNetwork => collect_matching_edges(
+            graph,
+            |edge| {
                 edge.from == node_path
                     && matches!(edge.relation, ArtifactRelation::ConnectsTo)
                     && looks_like_external_sink(edge)
-            })
-            .map(|edge| edge.to.clone())
-            .unwrap_or_else(|| "external_network".to_string()),
-        TaintSinkKind::Execution => graph
-            .edges
-            .iter()
-            .find(|edge| {
+            },
+            "external_network",
+        ),
+        TaintSinkKind::Execution => {
+            let from_edges = collect_matching_edges_or_empty(graph, |edge| {
                 edge.from == node_path && matches!(edge.relation, ArtifactRelation::Executes)
-            })
-            .map(|edge| edge.to.clone())
-            .or_else(|| {
-                if node_has_capability(graph, node_path, ArtifactCapability::ProcessExecution) {
-                    Some("process_execution".to_string())
-                } else if node_has_capability(
-                    graph,
-                    node_path,
-                    ArtifactCapability::InstallExecution,
-                ) {
-                    Some("install_execution".to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "execution".to_string()),
-        TaintSinkKind::Persistence => graph
-            .edges
-            .iter()
-            .find(|edge| {
+            });
+            if !from_edges.is_empty() {
+                return from_edges;
+            }
+            if node_has_capability(graph, node_path, ArtifactCapability::ProcessExecution) {
+                "process_execution".to_string()
+            } else if node_has_capability(graph, node_path, ArtifactCapability::InstallExecution) {
+                "install_execution".to_string()
+            } else {
+                "execution".to_string()
+            }
+        }
+        TaintSinkKind::Persistence => {
+            let from_edges = collect_matching_edges_or_empty(graph, |edge| {
                 edge.from == node_path && matches!(edge.relation, ArtifactRelation::Persists)
-            })
-            .map(|edge| edge.to.clone())
-            .or_else(|| {
-                if node_has_capability(graph, node_path, ArtifactCapability::PersistenceSurface) {
-                    Some("persistence_surface".to_string())
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "persistence".to_string()),
+            });
+            if !from_edges.is_empty() {
+                return from_edges;
+            }
+            if node_has_capability(graph, node_path, ArtifactCapability::PersistenceSurface) {
+                "persistence_surface".to_string()
+            } else {
+                "persistence".to_string()
+            }
+        }
+    }
+}
+
+/// Collect all edges matching a predicate, join their targets with ", ".
+/// Returns the fallback string when no edges match, preserving the old
+/// single-edge behavior for the common case of one match.
+fn collect_matching_edges(
+    graph: &ArtifactGraph,
+    predicate: impl Fn(&ArtifactEdge) -> bool,
+    fallback: &str,
+) -> String {
+    let targets: Vec<&str> = graph
+        .edges
+        .iter()
+        .filter(|edge| predicate(edge))
+        .map(|edge| edge.to.as_str())
+        .collect();
+    if targets.is_empty() {
+        fallback.to_string()
+    } else if targets.len() == 1 {
+        targets[0].to_string()
+    } else {
+        targets.join(", ")
+    }
+}
+
+fn collect_matching_edges_or_empty(
+    graph: &ArtifactGraph,
+    predicate: impl Fn(&ArtifactEdge) -> bool,
+) -> String {
+    let targets: Vec<&str> = graph
+        .edges
+        .iter()
+        .filter(|edge| predicate(edge))
+        .map(|edge| edge.to.as_str())
+        .collect();
+    if targets.is_empty() {
+        String::new()
+    } else if targets.len() == 1 {
+        targets[0].to_string()
+    } else {
+        targets.join(", ")
     }
 }
 

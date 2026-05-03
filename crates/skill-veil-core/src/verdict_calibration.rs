@@ -340,6 +340,10 @@ fn compute_calibration_gates(findings: &[Finding]) -> Vec<bool> {
 /// Mutable per-group state threaded through each calibration rule application.
 struct GroupCalibrationState<'f> {
     original_signal_class: SignalClass,
+    /// Group's strongest action before any calibration rule fired.
+    /// Used to distinguish "already at Log before calibration" from "downgraded to Log
+    /// by a prior calibration rule" — only the latter should trigger `reclassify_signal`.
+    original_action: RecommendedAction,
     /// Rule IDs already excluded by earlier rules in this group's calibration pass.
     accumulated_exclusions: Vec<&'f str>,
     /// Group's strongest action before the current rule fires (updated after each rule).
@@ -377,6 +381,7 @@ fn apply_calibration_rules<'f>(
         .zip(original_snapshots.iter())
         .map(|(g, &(_, original_signal_class))| GroupCalibrationState {
             original_signal_class,
+            original_action: g.strongest_action,
             accumulated_exclusions: Vec::new(),
             pre_rule_action: g.strongest_action,
         })
@@ -460,9 +465,14 @@ fn apply_single_rule_to_group<'f>(
     } else {
         0
     };
-    if rule.reclassify_signal
-        && (changed_from_previous || group.strongest_action == RecommendedAction::Log)
-    {
+    // Only reclassify if this rule actually downgraded the action, OR if a
+    // prior calibration rule already brought the group down to Log from a
+    // higher action. Groups that were *already* at Log before any calibration
+    // (e.g. Hygiene-only groups) must NOT be reclassified — their Log action
+    // is inherent, not a calibration artifact.
+    let downgraded_by_prior_rule = group.strongest_action == RecommendedAction::Log
+        && state.original_action > RecommendedAction::Log;
+    if rule.reclassify_signal && (changed_from_previous || downgraded_by_prior_rule) {
         group.signal_class = SignalClass::ReviewSignal;
     }
     state.pre_rule_action = group.strongest_action;

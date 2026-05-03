@@ -531,3 +531,44 @@ fn representative_rules_uses_original_signal_class_after_reclassification() {
          signal_class instead of original_signal_class"
     );
 }
+
+/// Contract: a group whose strongest action is *inherently* `Log` (i.e. it was
+/// `Log` before any calibration rule fired) must NOT be reclassified to
+/// `ReviewSignal`. Reclassification is reserved for groups that calibration
+/// *actively* downgraded — groups already at their floor action have no
+/// calibration artifact to justify a signal-class change.
+#[test]
+fn reclassify_signal_does_not_fire_on_inherently_log_groups() {
+    use crate::findings::{ArtifactScope, Finding, MatchTarget, Severity, ThreatCategory};
+
+    let findings = vec![
+        Finding::builder("SOME_HYGIENE_RULE", ThreatCategory::DataExfiltration)
+            .severity(Severity::Low)
+            .action(RecommendedAction::Log)
+            .signal_class(SignalClass::SuspiciousPackageBehavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("localhost")
+            .reason("inherent log signal")
+            .build(),
+    ];
+
+    let root_cause_groups = vec![RootCauseGroup {
+        scope: ArtifactScope::AgentEntrypoint,
+        category: ThreatCategory::DataExfiltration,
+        signal_class: SignalClass::SuspiciousPackageBehavior,
+        finding_count: 1,
+        strongest_action: RecommendedAction::Log,
+        representative_rules: vec!["SOME_HYGIENE_RULE".to_string()],
+    }];
+
+    let result = calibrate_verdict_inputs(&findings, &root_cause_groups);
+
+    // The group was at Log before calibration; reclassify_signal must NOT fire.
+    let group = &result.root_cause_groups[0];
+    assert_eq!(
+        group.signal_class,
+        SignalClass::SuspiciousPackageBehavior,
+        "inherently-Log group must not be reclassified to ReviewSignal; \
+         reclassify_signal should only fire when calibration actively downgraded the action"
+    );
+}

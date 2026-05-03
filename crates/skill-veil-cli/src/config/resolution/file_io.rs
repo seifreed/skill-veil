@@ -41,6 +41,7 @@ pub(super) fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct FileFormat {
     #[serde(default)]
     pub(super) llm: Option<FileLlmSection>,
@@ -249,6 +250,28 @@ max_prompt_charz = 80000
             result.is_err(),
             "FileLlmLimits MUST reject unknown field 'max_prompt_charz'; \
              pre-fix, this was silently accepted and max_prompt_chars defaulted to None"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `FileFormat` MUST reject unknown top-level fields so that config typos
+    /// (e.g. `[lmm]` instead of `[llm]`) produce a clear error rather than
+    /// silently discarding the entire LLM configuration. Pre-fix,
+    /// `#[serde(deny_unknown_fields)]` was absent on `FileFormat`, so a typo
+    /// like `[lmm]` was silently ignored and LLM enrichment defaulted to
+    /// disabled with no error.
+    #[test]
+    fn file_format_rejects_unknown_top_level_fields() {
+        let src = r#"
+[lmm]
+provider = "anthropic"
+"#;
+        let result: Result<FileFormat, _> = toml::from_str(src);
+        assert!(
+            result.is_err(),
+            "FileFormat MUST reject unknown top-level field 'lmm'; \
+             pre-fix, this was silently accepted and LLM config was lost"
         );
     }
 }

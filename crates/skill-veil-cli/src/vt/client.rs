@@ -22,7 +22,11 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (+vt-integration)"
 );
-const MAX_RETRIES: u32 = 3;
+/// Maximum additional retry attempts for transient VT API failures.
+/// Named to match the LLM client's convention: total attempts = initial + this value.
+/// Pre-fix this was `MAX_ADDITIONAL_ATTEMPTS = 3`, which yielded 4 total attempts (initial + 3 retries)
+/// — inconsistent with the LLM client's `MAX_ADDITIONAL_ATTEMPTS = 2` (3 total).
+const MAX_ADDITIONAL_ATTEMPTS: u32 = 2;
 const INITIAL_BACKOFF_MS: u64 = 2_000;
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 60;
 const DOWNLOAD_HTTP_TIMEOUT_SECS: u64 = 300;
@@ -521,7 +525,7 @@ impl VtClient {
                     }
                     let is_retryable = status == 429 || (500..600).contains(&status);
                     if is_retryable {
-                        if attempt >= MAX_RETRIES {
+                        if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                             return if status == 429 {
                                 Err(VtError::RateLimited { retries: attempt })
                             } else {
@@ -539,7 +543,7 @@ impl VtClient {
                             "VT POST returned status {} (attempt {}/{}), sleeping {:?}",
                             status,
                             attempt + 1,
-                            MAX_RETRIES,
+                            MAX_ADDITIONAL_ATTEMPTS,
                             delay
                         );
                         std::thread::sleep(delay);
@@ -553,7 +557,7 @@ impl VtClient {
                     });
                 }
                 Err(ureq::Error::Transport(err)) => {
-                    if attempt >= MAX_RETRIES {
+                    if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                         return Err(VtError::Network(err.to_string()));
                     }
                     let delay = Duration::from_millis(
@@ -563,7 +567,7 @@ impl VtClient {
                         "VT POST transport error {:?} (attempt {}/{}), sleeping {:?}",
                         err,
                         attempt + 1,
-                        MAX_RETRIES,
+                        MAX_ADDITIONAL_ATTEMPTS,
                         delay
                     );
                     std::thread::sleep(delay);
@@ -614,7 +618,7 @@ impl VtClient {
                     // retry.
                     let is_retryable = status == 429 || (500..600).contains(&status);
                     if is_retryable {
-                        if attempt >= MAX_RETRIES {
+                        if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                             return if status == 429 {
                                 Err(VtError::RateLimited { retries: attempt })
                             } else {
@@ -629,7 +633,7 @@ impl VtClient {
                             "VT returned status {} (attempt {}/{}), sleeping {:?}",
                             status,
                             attempt + 1,
-                            MAX_RETRIES,
+                            MAX_ADDITIONAL_ATTEMPTS,
                             delay
                         );
                         std::thread::sleep(delay);
@@ -640,7 +644,7 @@ impl VtClient {
                     return Err(VtError::HttpStatus { status, body });
                 }
                 Err(ureq::Error::Transport(err)) => {
-                    if attempt >= MAX_RETRIES {
+                    if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                         return Err(VtError::Network(err.to_string()));
                     }
                     let delay = Duration::from_millis(
@@ -650,7 +654,7 @@ impl VtClient {
                         "VT transport error {:?} (attempt {}/{}), sleeping {:?}",
                         err,
                         attempt + 1,
-                        MAX_RETRIES,
+                        MAX_ADDITIONAL_ATTEMPTS,
                         delay
                     );
                     std::thread::sleep(delay);

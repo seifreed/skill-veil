@@ -542,6 +542,7 @@ fn collect_and_apply_suppressions<F: FileSystemProvider, P: MarkdownParser>(
 ) -> (Vec<Finding>, Vec<Finding>) {
     let fs = scanner.file_discovery().fs_provider();
     let supporting_artifacts = collect_supporting_artifact_paths(scanner, doc);
+    let mut seen_paths: BTreeSet<PathBuf> = supporting_artifacts.iter().cloned().collect();
     let mut ref_contents: Vec<(PathBuf, String)> = Vec::new();
     for referenced_file in &supporting_artifacts {
         // Reject symlinks, FIFOs, and device files before reading inline
@@ -557,6 +558,28 @@ fn collect_and_apply_suppressions<F: FileSystemProvider, P: MarkdownParser>(
                 "suppression: cannot read referenced file {}: {e}",
                 referenced_file.display()
             ),
+        }
+    }
+    // Taint findings reference source/sink files that may not appear in
+    // `doc.referenced_files`. Without their content, `# skill-veil:ignore`
+    // comments in those files have no effect on taint findings.
+    for finding in &findings {
+        if let Some(ref artifact_path) = finding.artifact_path {
+            let artifact_pb = PathBuf::from(artifact_path.as_str());
+            if seen_paths.insert(artifact_pb.clone())
+                && fs.exists(&artifact_pb)
+                && fs.is_file(&artifact_pb)
+            {
+                match read_text_file_lossy(&artifact_pb, fs) {
+                    Ok((content, _)) => {
+                        ref_contents.push((artifact_pb, content));
+                    }
+                    Err(e) => tracing::warn!(
+                        "suppression: cannot read taint artifact {}: {e}",
+                        artifact_path
+                    ),
+                }
+            }
         }
     }
     let mut suppression_sources: Vec<(&Path, &str)> = Vec::with_capacity(1 + ref_contents.len());
