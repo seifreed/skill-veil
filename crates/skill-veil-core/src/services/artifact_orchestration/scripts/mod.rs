@@ -23,7 +23,7 @@ use std::path::Path;
 /// inline `#` comments via [`strip_inline_hash_comment`]; this list
 /// keeps the script side aligned.
 const HASH_COMMENT_LANGUAGES: &[&str] = &[
-    "sh", "bash", "zsh", "ksh", "fish", "py", "rb", "pl", "yaml", "yml", "ps1",
+    "sh", "bash", "zsh", "ksh", "fish", "py", "rb", "pl", "yaml", "yml", "ps1", "psm1", "psd1",
 ];
 
 /// Strip inline `#` comments from `content` for the languages in
@@ -175,12 +175,14 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
 
     if lower.contains("subprocess.")
         || lower.contains("os.system(")
-        || lower.contains("exec(")
+        || lower.contains("child_process.exec(")
+        || lower.contains("child_process.spawn(")
+        || lower.contains("child_process.execsync(")
+        || lower.contains("child_process.spawnsync(")
         || lower.contains("spawn(")
         || lower.contains("start-process")
         || lower.contains("iex ")
         || lower.contains("iex(")
-        || lower.contains("child_process")
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::ProcessExecution,

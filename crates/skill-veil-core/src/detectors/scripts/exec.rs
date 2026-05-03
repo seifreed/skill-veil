@@ -28,15 +28,16 @@ pub(crate) fn detect_node_process_exec(
     // Severity::Medium/Block. Each entry MUST carry an explicit boundary
     // (trailing space, embedded `:`, or `.exe`) or be a unique multi-word
     // phrase — bare interpreter names like `"bash"` or `"sh"` would match
-    // common identifiers (`bashConfig`, `bashly`, `// bash compatibility`)
-    // and silently flip the qualitative finding state on weak evidence.
+    // common identifiers (`bashConfig`, `bashly`, `// bash compatibility`,
+    // `flash`, `crash`, `push`, `stash`) and silently flip the qualitative
+    // finding state on weak evidence. Shell interpreter names (`bash`, `sh`,
+    // `powershell`, `pwsh`, `zsh`, `ksh`, `fish`) use the same word-boundary
+    // logic as `line_invokes_shell_or_interpreter` to avoid identifier FPs.
     const RISKY_INDICATORS: &[&str] = &[
         "curl ",
         "wget ",
         "http://",
         "https://",
-        "bash ",
-        "sh ",
         "powershell",
         "cmd.exe",
         "invoke-webrequest",
@@ -44,7 +45,24 @@ pub(crate) fn detect_node_process_exec(
     let risky_indicator = RISKY_INDICATORS
         .iter()
         .find(|needle| content_lower.contains(**needle))
-        .copied();
+        .copied()
+        .or_else(|| {
+            // Shell interpreter tokens require word-boundary matching to
+            // avoid substring false positives (e.g. `flash`, `crash`, `push`
+            // all end in `sh` + space). Reuse the same basename logic as
+            // `line_invokes_shell_or_interpreter` for consistency.
+            static SHELL_NAMES: &[&str] = &["bash", "sh", "dash", "zsh", "ksh", "fish", "csh", "tcsh", "pwsh"];
+            content_lower.lines().find_map(|line| {
+                line.split_whitespace().find_map(|token| {
+                    let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
+                    let mut lower = basename.to_ascii_lowercase();
+                    if lower.ends_with(".exe") {
+                        lower.truncate(lower.len() - 4);
+                    }
+                    SHELL_NAMES.iter().find(|&&name| name == lower).copied()
+                })
+            })
+        });
     let risky_process_exec = risky_indicator.is_some();
     vec![
         Finding::builder("SCRIPT_NODE_PROCESS_EXEC", ThreatCategory::RemoteExec)
@@ -88,9 +106,13 @@ pub(crate) fn detect_python_exec_network(
     if language != "py" {
         return Vec::new();
     }
-    let has_exec = content_lower.contains("subprocess.") || content_lower.contains("os.system(");
+    let has_exec = content_lower.contains("subprocess.")
+        || content_lower.contains("os.system(")
+        || content_lower.contains("os.popen(")
+        || content_lower.contains("os.execvp?");
     let has_network = content_lower.contains("requests.")
         || content_lower.contains("urllib.request")
+        || content_lower.contains("urlopen(")
         || content_lower.contains("httpx.");
     if has_exec && has_network {
         vec![
@@ -136,7 +158,7 @@ pub(crate) fn detect_powershell_dynamic_exec(
     language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    if language != "ps1"
+    if !matches!(language, "ps1" | "psm1" | "psd1")
         || !(content_lower.contains("start-process")
             || content_lower.contains("invoke-expression")
             || content_lower.contains("iex ")
@@ -167,7 +189,7 @@ pub(crate) fn detect_shell_side_effects(
     language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    if !matches!(language, "sh" | "bash" | "zsh")
+    if !matches!(language, "sh" | "bash" | "zsh" | "ksh" | "fish")
         || !(content_lower.contains("chmod +x")
             || content_lower.contains("nohup ")
             || content_lower.contains("/dev/tcp/"))
@@ -200,10 +222,10 @@ pub(crate) fn detect_injection_patterns(
     artifact_path: &str,
 ) -> Vec<Finding> {
     let patterns: &[(&str, crate::ports::CompiledPattern)] = match language {
-        "sh" | "bash" | "zsh" => &SHELL_INJECTION_PATTERNS,
+        "sh" | "bash" | "zsh" | "ksh" | "fish" => &SHELL_INJECTION_PATTERNS,
         "py" => &PYTHON_INJECTION_PATTERNS,
         "js" | "ts" | "mjs" | "cjs" | "mts" | "cts" => &NODE_INJECTION_PATTERNS,
-        "ps1" => &POWERSHELL_INJECTION_PATTERNS,
+        "ps1" | "psm1" | "psd1" => &POWERSHELL_INJECTION_PATTERNS,
         _ => &[],
     };
     let mut findings = Vec::new();
@@ -232,15 +254,15 @@ pub(crate) fn detect_injection_patterns(
 mod tests {
     use super::*;
 
-    /// Contract: a JS file that mentions `bash` only as part of an
-    /// identifier or unbroken token (`bashConfig`, `bashly`, `bashlib`,
-    /// `bash-style`) MUST NOT escalate `SCRIPT_NODE_PROCESS_EXEC` from
+    /// Contract: a JS file that mentions `bash` or `sh` only as part of an
+    /// identifier or unbroken token (`bashConfig`, `bashly`, `flash`, `crash`,
+    /// `push`, `stash`) MUST NOT escalate `SCRIPT_NODE_PROCESS_EXEC` from
     /// Severity::Low / Action::Log to Severity::Medium / Action::Block.
-    /// The pre-fix `RISKY_INDICATORS` list contained the bare token
-    /// `"bash"`, so common identifiers and library names would flip the
-    /// qualitative finding state on weak evidence. Adding the trailing
-    /// space (`"bash "`) preserves the boundary that every other entry
-    /// in the list already encodes.
+    /// Pre-fix the `RISKY_INDICATORS` list contained bare `"bash "` and
+    /// `"sh "`, so common identifiers and English words would flip the
+    /// qualitative finding state on weak evidence. The fix uses
+    /// word-boundary matching (same logic as `line_invokes_shell_or_interpreter`)
+    /// so `flash`, `crash`, `push`, `stash` no longer match.
     ///
     /// This guards the identifier vector specifically; the substring
     /// detector cannot disambiguate English prose like `// bash
@@ -262,6 +284,25 @@ mod tests {
             findings[0].severity,
         );
         assert_eq!(findings[0].recommended_action, RecommendedAction::Log);
+    }
+
+    /// Contract: identifiers ending in `sh` followed by a space (`flash `,
+    /// `crash `, `push `, `stash `) MUST NOT escalate. Pre-fix `"sh "`
+    /// matched all of these, flipping Severity::Low to Medium.
+    #[test]
+    fn detect_node_process_exec_keeps_severity_low_for_sh_substring_identifiers() {
+        for word in ["flash", "crash", "push", "stash", "trash", "slash", "hash"] {
+            let content = format!("const {{ exec }} = require('child_process');\nconst x = {word}();\nexec('echo hi');\n");
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+            assert_eq!(findings.len(), 1);
+            assert_eq!(
+                findings[0].severity,
+                Severity::Low,
+                "`{word}` identifier must NOT escalate severity; got {:?}",
+                findings[0].severity,
+            );
+        }
     }
 
     /// Contract: a real `bash -c "..."` invocation still escalates
@@ -335,6 +376,91 @@ mod tests {
                     .iter()
                     .all(|f| f.rule_id != "COMMAND_INJECTION_SINK_POWERSHELL"),
                 "must NOT raise COMMAND_INJECTION_SINK_POWERSHELL for {script:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `detect_shell_side_effects` MUST fire on KornShell (`.ksh`)
+    /// and Fish (`.fish`) scripts. Pre-fix only `sh | bash | zsh` were
+    /// accepted, so a `.ksh` script with `chmod +x` or `/dev/tcp/` and a
+    /// `.fish` script with `nohup ` escaped detection entirely.
+    #[test]
+    fn detect_shell_side_effects_fires_for_ksh_and_fish() {
+        let content = "chmod +x ./payload\n";
+        let lower = content.to_ascii_lowercase();
+        for lang in ["sh", "bash", "zsh", "ksh", "fish"] {
+            let findings = detect_shell_side_effects(&lower, lang, "/tmp/install.sh");
+            assert!(
+                !findings.is_empty(),
+                "{lang}: detect_shell_side_effects must fire on chmod +x; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `detect_shell_side_effects` MUST NOT fire for non-shell
+    /// languages (e.g. Python, Node). Negative-side regression so the
+    /// broadened language set doesn't over-match.
+    #[test]
+    fn detect_shell_side_effects_does_not_fire_for_non_shell() {
+        let content = "chmod +x ./payload\n";
+        let lower = content.to_ascii_lowercase();
+        for lang in ["py", "js", "ts", "rb", "pl"] {
+            let findings = detect_shell_side_effects(&lower, lang, "/tmp/install.sh");
+            assert!(
+                findings.is_empty(),
+                "{lang}: detect_shell_side_effects must NOT fire for non-shell language; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `detect_powershell_dynamic_exec` MUST fire on `.psm1`
+    /// (PowerShell module) and `.psd1` (PowerShell data) files. Pre-fix
+    /// only `"ps1"` was accepted, so a `.psm1` module with `Invoke-Expression`
+    /// escaped detection entirely.
+    #[test]
+    fn detect_powershell_dynamic_exec_fires_for_psm1_and_psd1() {
+        let content = "Invoke-Expression($cmd)\n";
+        let lower = content.to_ascii_lowercase();
+        for lang in ["ps1", "psm1", "psd1"] {
+            let findings = detect_powershell_dynamic_exec(&lower, lang, "/tmp/mod.psm1");
+            assert!(
+                !findings.is_empty(),
+                "{lang}: detect_powershell_dynamic_exec must fire on Invoke-Expression; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `detect_injection_patterns` MUST route KornShell and Fish
+    /// scripts to the shell injection patterns. Pre-fix only `sh | bash | zsh`
+    /// were accepted.
+    #[test]
+    fn detect_injection_patterns_routes_ksh_and_fish_to_shell_patterns() {
+        let content = "bash -c \"$USER_CMD\"\n";
+        let lower = content.to_ascii_lowercase();
+        for lang in ["sh", "bash", "zsh", "ksh", "fish"] {
+            let findings = detect_injection_patterns(&lower, content, lang, "/tmp/x.sh");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id.starts_with("COMMAND_INJECTION_SINK_SHELL")),
+                "{lang}: injection patterns must fire for shell language; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `detect_injection_patterns` MUST route `.psm1` and `.psd1`
+    /// to the PowerShell injection patterns. Pre-fix only `"ps1"` was accepted.
+    #[test]
+    fn detect_injection_patterns_routes_psm1_to_powershell_patterns() {
+        let content = "Invoke-Expression($cmd)\n";
+        let lower = content.to_ascii_lowercase();
+        for lang in ["ps1", "psm1", "psd1"] {
+            let findings = detect_injection_patterns(&lower, content, lang, "/tmp/x.psm1");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "COMMAND_INJECTION_SINK_POWERSHELL"),
+                "{lang}: PowerShell injection patterns must fire; got {findings:?}",
             );
         }
     }

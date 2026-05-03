@@ -234,6 +234,8 @@ pub(super) fn looks_like_script(path: &Path) -> bool {
                 | "ksh"
                 | "fish"
                 | "ps1"
+                | "psm1"
+                | "psd1"
                 | "py"
                 | "js"
                 | "ts"
@@ -248,4 +250,48 @@ pub(super) fn looks_like_script(path: &Path) -> bool {
                 | "php"
         )
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: `looks_like_script` MUST recognise PowerShell module
+    /// (`.psm1`) and data (`.psd1`) extensions. Pre-fix only `.ps1` was
+    /// accepted, so `.psm1` files escaped script analysis entirely.
+    #[test]
+    fn looks_like_script_accepts_powershell_variants() {
+        for ext in ["ps1", "psm1", "psd1"] {
+            let path = std::path::PathBuf::from(format!("/pkg/module.{ext}"));
+            assert!(
+                looks_like_script(&path),
+                ".{ext} MUST be recognised as a script extension",
+            );
+        }
+    }
+
+    /// Contract: `looks_like_script` MUST recognise all shell variants
+    /// including KornShell (`.ksh`) and Fish (`.fish`).
+    #[test]
+    fn looks_like_script_accepts_all_shell_variants() {
+        for ext in ["sh", "bash", "zsh", "ksh", "fish"] {
+            let path = std::path::PathBuf::from(format!("/pkg/script.{ext}"));
+            assert!(
+                looks_like_script(&path),
+                ".{ext} MUST be recognised as a script extension",
+            );
+        }
+    }
+
+    /// Contract: `looks_like_script` MUST NOT match non-script extensions.
+    #[test]
+    fn looks_like_script_rejects_non_script_extensions() {
+        for ext in ["md", "txt", "json", "yaml", "toml", "xml", "csv"] {
+            let path = std::path::PathBuf::from(format!("/pkg/file.{ext}"));
+            assert!(
+                !looks_like_script(&path),
+                ".{ext} must NOT be classified as a script extension",
+            );
+        }
+    }
 }

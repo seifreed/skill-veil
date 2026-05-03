@@ -70,7 +70,7 @@ pub fn finding_fingerprint(finding: &Finding) -> String {
             .as_bytes(),
     );
     hasher.update(b"\0");
-    hasher.update(finding.match_value.as_bytes());
+    hasher.update(finding.match_value.to_ascii_lowercase().as_bytes());
     hasher.update(b"\0");
     hasher.update(finding.matched_on.to_string().as_bytes());
     format!("{:x}", hasher.finalize())
@@ -389,6 +389,35 @@ mod fingerprint_tests {
             fp.chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()),
             "fingerprint must be lowercase hex; got `{fp}`"
+        );
+    }
+
+    /// Contract: `match_value` is normalised to lowercase in the fingerprint,
+    /// matching `deduplicate_findings` which lowercases `match_value` in the
+    /// dedup key. Without this normalisation, two findings that dedup treats
+    /// as identical (same rule, same lowercased `match_value`) would produce
+    /// different fingerprints, causing baseline mismatches when URL casing
+    /// varies between scan runs.
+    #[test]
+    fn finding_fingerprint_normalizes_match_value_case() {
+        let a = finding(
+            "RULE_A",
+            Some("p/q/r.rs"),
+            "https://Evil.COM/x",
+            "r",
+            MatchTarget::Document,
+        );
+        let b = finding(
+            "RULE_A",
+            Some("p/q/r.rs"),
+            "https://evil.com/x",
+            "r",
+            MatchTarget::Document,
+        );
+        assert_eq!(
+            finding_fingerprint(&a),
+            finding_fingerprint(&b),
+            "match_value casing MUST NOT affect the fingerprint"
         );
     }
 }

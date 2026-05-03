@@ -22,7 +22,7 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
             ),
             (
                 "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
-                r"(?i)invoke-webrequest.+(\.ps1|\.exe|\.zip)",
+                r"(?i)invoke-webrequest.+(\.ps1|\.exe|\.zip|\.sh|\.py|\.js|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
             ),
         ])
     });
@@ -79,10 +79,6 @@ pub(crate) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledP
             (
                 "COMMAND_INJECTION_SINK_NODE",
                 r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)",
-            ),
-            (
-                "UNSAFE_USER_CONTROLLED_EXEC_NODE",
-                r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input)",
             ),
         ])
     });
