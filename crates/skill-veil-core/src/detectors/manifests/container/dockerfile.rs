@@ -13,20 +13,18 @@ use crate::services::artifact_orchestration::manifests::strip_inline_hash_commen
 /// Tokens that, when present in a lowercased Dockerfile line, indicate the
 /// build pulls something from the network at image-build time.
 ///
-/// The list is ordered roughly by frequency in real Dockerfiles. Each token
-/// includes a trailing whitespace where ambiguity with substrings (`unc`,
-/// `func`, `vncserver`) is plausible — e.g. ` nc ` requires whitespace on
-/// both sides so it doesn't match `func` or `unc`. Pre-fix only `curl`,
-/// `wget`, and `invoke-webrequest` were detected, which let
-/// `python:slim`-style Dockerfiles using `python -m urllib`, BSD `fetch`,
-/// or raw `nc` evade the NetworkAccess capability.
+/// Tokens that need a left boundary to avoid false positives (e.g. `nc`
+/// inside `func`) are prefixed with a space. All tokens are matched with
+/// word-boundary awareness: a token matches when followed by whitespace,
+/// a shell operator (`|`, `;`, `&`, `>`), or end-of-line. This catches
+/// pipe-joined commands like `curl|sh` that lack trailing whitespace.
 const DOCKERFILE_NETWORK_DOWNLOAD_TOKENS: &[&str] = &[
-    "curl ",
-    "wget ",
+    "curl",
+    "wget",
     "invoke-webrequest",
-    "ncat ",
-    " nc ",
-    "fetch ",
+    "ncat",
+    " nc",
+    "fetch",
     "python -m urllib",
     "python -m http",
     "python -c \"import urllib",
@@ -81,7 +79,7 @@ pub(crate) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
         if !has_network_download
             && DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
                 .iter()
-                .any(|t| trimmed.contains(t))
+                .any(|t| token_with_boundary(&trimmed, t))
         {
             has_network_download = true;
         }
@@ -164,6 +162,36 @@ fn is_latest_tag(lower_line: &str) -> bool {
                 || after.starts_with('#')
                 || after.starts_with('\n')
         })
+}
+
+/// Match a network-download token with word-boundary awareness.
+///
+/// After the token, the next character must be whitespace, a shell
+/// operator (`|`, `;`, `&`, `>`), a Python module separator (`.`),
+/// or end-of-string. This catches pipe-joined commands like `curl|sh`
+/// that lack trailing whitespace while still rejecting substrings like
+/// `uncurl`. The `.` boundary catches `python -m urllib.request` which
+/// is the same download vector as `python -m urllib`.
+fn token_with_boundary(lower_line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = lower_line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let after = lower_line.get(token_end..).unwrap_or("");
+        if after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('.')
+        {
+            return true;
+        }
+        start = token_end;
+    }
+    false
 }
 
 #[cfg(test)]

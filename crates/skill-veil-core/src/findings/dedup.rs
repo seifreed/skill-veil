@@ -220,6 +220,14 @@ fn merge_into(existing: &mut Finding, candidate: Finding) {
     if existing.line_number.is_none() {
         existing.line_number = candidate.line_number;
     }
+    // Merge operational_contexts from the candidate. Since contexts are
+    // derived from (category, artifact_kind), two findings with the same
+    // dedup key may still differ in artifact_kind and thus in contexts.
+    for ctx in candidate.operational_contexts {
+        if !existing.operational_contexts.contains(&ctx) {
+            existing.operational_contexts.push(ctx);
+        }
+    }
 }
 
 /// Deduplicate findings that match on the same rule, category, match target,

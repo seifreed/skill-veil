@@ -142,11 +142,14 @@ pub(crate) fn enrich_scan_result(
         prompt_chars_total: 0,
     };
 
-    debug_assert_eq!(
-        scan_result.results.len(),
-        bundles.len(),
-        "enrich_scan_result: results and bundles must have the same length"
-    );
+    if scan_result.results.len() != bundles.len() {
+        tracing::error!(
+            "enrich_scan_result: results ({}) and bundles ({}) length mismatch — \
+             excess items will be silently skipped",
+            scan_result.results.len(),
+            bundles.len()
+        );
+    }
     for (scan_res, bundle) in scan_result.results.iter().zip(bundles) {
         match enrich_one(
             provider.as_ref(),

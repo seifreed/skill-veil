@@ -10,6 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
+use super::classification::MAX_DATA_FILE_BYTES;
 use crate::analyzer::{assess_artifact_path, ArtifactClassification};
 use crate::ports::FileSystemProvider;
 
@@ -109,6 +110,14 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// - Setup/Install/Usage sections
     /// - Bash/PowerShell/Shell code blocks
     fn looks_like_agent_extension(&self, path: &Path) -> bool {
+        // Skip oversized files before reading to avoid loading multi-GB
+        // markdown into memory. The limit matches the one used by
+        // discover_package_data_files for the same reason.
+        if let Ok(meta) = self.fs_provider.metadata(path) {
+            if meta.len > MAX_DATA_FILE_BYTES {
+                return false;
+            }
+        }
         match self.fs_provider.read_file_bytes(path) {
             Ok(content) => {
                 let decoded = content.decode_utf8_lossy();

@@ -20,6 +20,13 @@ use crate::findings::{
 /// Docker Compose files are well under 1 MiB.
 const MAX_YAML_CONTENT_BYTES: usize = 4 * 1024 * 1024;
 
+/// Maximum YAML nesting depth accepted by [`parse_compose_yaml`].
+/// `serde_yaml` uses recursive descent parsing, so deeply nested YAML
+/// within the size limit can still cause a stack overflow. Legitimate
+/// Docker Compose files rarely exceed 10 levels; 64 provides ample
+/// headroom without risking stack exhaustion.
+const MAX_YAML_NESTING_DEPTH: usize = 64;
+
 pub(super) fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, String> {
     if content.len() > MAX_YAML_CONTENT_BYTES {
         return Err(format!(
@@ -27,7 +34,28 @@ pub(super) fn parse_compose_yaml(content: &str) -> Result<serde_yaml::Value, Str
             content.len()
         ));
     }
-    serde_yaml::from_str::<serde_yaml::Value>(content).map_err(|e| e.to_string())
+    let value = serde_yaml::from_str::<serde_yaml::Value>(content).map_err(|e| e.to_string())?;
+    if yaml_nesting_depth(&value) > MAX_YAML_NESTING_DEPTH {
+        return Err(format!(
+            "YAML nesting depth exceeds {MAX_YAML_NESTING_DEPTH} level limit"
+        ));
+    }
+    Ok(value)
+}
+
+/// Recursively compute the maximum nesting depth of a [`serde_yaml::Value`].
+fn yaml_nesting_depth(value: &serde_yaml::Value) -> usize {
+    match value {
+        serde_yaml::Value::Mapping(m) => {
+            1 + m
+                .iter()
+                .map(|(_, v)| yaml_nesting_depth(v))
+                .max()
+                .unwrap_or(0)
+        }
+        serde_yaml::Value::Sequence(s) => 1 + s.iter().map(yaml_nesting_depth).max().unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// A `docker-compose.yml` whose YAML body is unparseable is suspicious on

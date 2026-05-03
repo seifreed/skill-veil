@@ -151,6 +151,10 @@ pub(crate) fn load_fresh(path: &Path, ttl: Duration) -> Result<Option<LlmPackage
         return Ok(None);
     };
     let Ok(record) = serde_json::from_slice::<LlmPackageResult>(&bytes) else {
+        tracing::debug!(
+            "cache: failed to deserialize {}; treating as cache miss",
+            path.display()
+        );
         return Ok(None);
     };
     let age = Utc::now() - record.fetched_at;

@@ -345,8 +345,18 @@ impl CompiledRule {
                 findings.push(self.create_finding(target, &original_text));
                 matched = true;
                 // Advance past this match to find subsequent occurrences.
-                let advance_bytes = value_lower.len();
-                search_from += pos_lower + advance_bytes;
+                // Use character count, not byte length, to advance because
+                // case-folding can change byte length (e.g. İ → i̇: 2 bytes
+                // become 3). Walking by chars and converting back to a byte
+                // offset in `content_lower` avoids skipping or re-matching
+                // when the lowercase form differs in byte width from the
+                // original.
+                let match_end_bytes = search_from + pos_lower + value_lower.len();
+                let advance_chars = content_lower[..match_end_bytes].chars().count();
+                search_from = content_lower
+                    .char_indices()
+                    .nth(advance_chars)
+                    .map_or(match_end_bytes, |(idx, _)| idx);
             }
         }
         matched

@@ -42,7 +42,12 @@ pub(super) fn build_blast_radius_summary(
             ThreatCategory::ToolAbuse => "tool overreach",
             ThreatCategory::AutonomyEscalation => "autonomous high-impact actions",
             ThreatCategory::SupplyChain => "supply chain changes",
-            _ => continue,
+            ThreatCategory::PersuasiveLanguage => "persuasive language",
+            ThreatCategory::SocialManipulation => "social manipulation",
+            ThreatCategory::ScopeCreep => "scope creep",
+            ThreatCategory::Obfuscation => "obfuscation",
+            ThreatCategory::UnsafeBinary => "unsafe binary execution",
+            ThreatCategory::Generic => "generic security concern",
         };
         if finding.recommended_action != RecommendedAction::Log
             && finding.signal_class != SignalClass::Hygiene

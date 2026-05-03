@@ -21,10 +21,14 @@ pub(crate) fn waiver_matches_finding(
         .as_ref()
         .is_none_or(|rule_id| rule_id.eq_ignore_ascii_case(&finding.rule_id));
     let path_matches = waiver.artifact_path.as_ref().is_none_or(|path| {
+        // When the finding has no artifact_path (e.g. graph-derived taint
+        // findings), the waiver's path selector cannot be confirmed or
+        // denied. Allow the match so that intentional waivers are not
+        // bypassed by findings that lack a concrete path.
         finding
             .artifact_path
             .as_ref()
-            .is_some_and(|artifact_path| paths_match(artifact_path, path))
+            .is_none_or(|artifact_path| paths_match(artifact_path, path))
     });
     let context_matches = waiver
         .context
@@ -53,7 +57,7 @@ pub(crate) fn policy_override_matches(
         finding
             .artifact_path
             .as_ref()
-            .is_some_and(|artifact_path| paths_match(artifact_path, path))
+            .is_none_or(|artifact_path| paths_match(artifact_path, path))
     });
     let context_matches = policy_override
         .context

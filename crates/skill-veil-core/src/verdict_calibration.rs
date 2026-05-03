@@ -434,6 +434,26 @@ fn apply_single_rule_to_group<'f>(
     );
     group.strongest_action = new_action;
     group.finding_count = remaining_count;
+    // Rebuild representative_rules from the findings that remain after
+    // calibration exclusions, rather than keeping stale rule IDs whose
+    // findings were excluded. Without this, downstream verdict reports
+    // would list rules that no longer contribute to the group's action.
+    {
+        let mut rules: Vec<String> = findings
+            .iter()
+            .filter(|f| {
+                f.artifact_scope == group.scope
+                    && f.category == group.category
+                    && f.signal_class == group.signal_class
+                    && !state.accumulated_exclusions.contains(&f.rule_id.as_str())
+            })
+            .map(|f| f.rule_id.clone())
+            .collect();
+        rules.sort();
+        rules.dedup();
+        rules.truncate(super::verdict::MAX_REPRESENTATIVE_RULES);
+        group.representative_rules = rules;
+    }
     let changed_from_previous = group.strongest_action < state.pre_rule_action;
     let risk_delta = if changed_from_previous {
         rule.risk_delta

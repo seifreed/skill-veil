@@ -71,9 +71,15 @@ impl VerdictPredicates {
             if !is_non_hygiene {
                 return false;
             }
-            // Find the corresponding calibrated group (exact match first, then
-            // scope+category+signal_class via reclassification). Absence of the
-            // original signal_class counts as weakening.
+            // Find the corresponding calibrated group. Exact match on
+            // (scope, category, signal_class) is preferred. If calibration
+            // reclassified the group's signal class (e.g. MaliciousBehavior
+            // → ReviewSignal), the exact match fails. We then look for a
+            // group at the same (scope, category) whose signal class differs
+            // from the raw group's — that is the reclassified group.
+            // Matching on (scope, category) alone without confirming the
+            // class change would pick the wrong group when multiple groups
+            // share (scope, category) but have different signal classes.
             let calibrated = root_cause_groups
                 .iter()
                 .find(|cal| {
@@ -82,12 +88,10 @@ impl VerdictPredicates {
                         && cal.signal_class == raw_group.signal_class
                 })
                 .or_else(|| {
-                    // After reclassification, a group originally labelled
-                    // MaliciousBehavior may appear as ReviewSignal. Match on
-                    // (scope, category) alone, but only if the surviving group
-                    // was actually weakened (action lowered or class changed).
                     root_cause_groups.iter().find(|cal| {
-                        cal.scope == raw_group.scope && cal.category == raw_group.category
+                        cal.scope == raw_group.scope
+                            && cal.category == raw_group.category
+                            && cal.signal_class != raw_group.signal_class
                     })
                 });
             let Some(calibrated) = calibrated else {
