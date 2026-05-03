@@ -103,8 +103,20 @@ pub(crate) fn paths_match(a: &str, b: &str) -> bool {
     if pa.is_absolute() && pb.is_absolute() {
         return false;
     }
-    let a_components = pa.components().count();
-    let b_components = pb.components().count();
+    // Count meaningful path components (exclude RootDir) so that absolute
+    // paths like `/config/skill.md` (2 meaningful components, 3 with
+    // RootDir) don't inflate past the MIN_RELATIVE_SUFFIX_COMPONENTS=3
+    // threshold. This aligns with `findings::dedup::primary_path_matches`
+    // which also excludes RootDir. Pre-fix `components().count()` included
+    // RootDir on Unix, so `/config/skill.md` had count 3 and passed the
+    // 3-component check even though it only has 2 meaningful components.
+    let meaningful = |p: &std::path::Path| -> usize {
+        p.components()
+            .filter(|c| !matches!(c, std::path::Component::RootDir))
+            .count()
+    };
+    let a_components = meaningful(pa);
+    let b_components = meaningful(pb);
     if b_components >= MIN_RELATIVE_SUFFIX_COMPONENTS && pa.ends_with(pb) {
         return true;
     }

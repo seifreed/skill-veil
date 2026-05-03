@@ -72,14 +72,21 @@ pub fn derive_package_verdict(
         blast_radius::build_blast_radius_summary(findings, &declared_permissions);
     let effective_capabilities = capabilities::derive_effective_capabilities(&root_cause_groups);
 
-    // Apply the calibration adjustment to the risk_score used by the
-    // verdict decision. Without this, `predicates.verdict()` evaluates
-    // `risk_gated_high` against the uncalibrated package score, so packages
-    // whose calibration would have brought them below the block threshold
-    // are still escalated to Suspicious. The persisted summaries on
-    // `ScanResult` keep the raw aggregation view; calibrated scores live in
+    // Apply the calibration adjustment to the package-level risk_score so
+    // `predicates.verdict()` evaluates `risk_gated_high` against the
+    // calibrated package score. The persisted summaries on `ScanResult`
+    // keep the raw aggregation view; calibrated scores live in
     // `PackageVerdictReport.calibration_risk_adjustment`.
-    let calibrated_primary = primary_summary.with_risk_adjustment(calibration_risk_adjustment);
+    //
+    // The primary summary is NOT adjusted because calibration may fire on
+    // findings in the `SupportingArtifact` scope — those findings do not
+    // contribute to `primary_summary`, so subtracting their calibration
+    // delta would incorrectly reduce the primary risk score. The package
+    // summary includes all findings, so the full adjustment is correct.
+    // Pre-fix both summaries received the same adjustment, which let
+    // supporting-artifact calibration push the primary score below the
+    // Benign threshold even when primary findings alone warranted Suspicious.
+    let calibrated_primary = primary_summary.clone();
     let calibrated_package = package_summary.with_risk_adjustment(calibration_risk_adjustment);
 
     let verdict = predicates.verdict(&calibration_notes, &calibrated_primary, &calibrated_package);

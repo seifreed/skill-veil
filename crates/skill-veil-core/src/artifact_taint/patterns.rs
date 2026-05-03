@@ -129,7 +129,7 @@ pub(super) fn looks_like_external_sink(edge: &ArtifactEdge) -> bool {
 pub(super) fn looks_like_local_endpoint(lower: &str) -> bool {
     lower.contains("localhost")
         || lower.contains("127.0.0.1")
-        || lower.contains("0.0.0.0")
+        || looks_like_bind_all_address(lower)
         || lower.contains("::1")
         || lower.contains(".local/")
         || lower.contains(".local:")
@@ -137,6 +137,26 @@ pub(super) fn looks_like_local_endpoint(lower: &str) -> bool {
         || lower.contains(".internal/")
         || lower.contains(".internal:")
         || lower.ends_with(".internal")
+}
+
+/// Check whether `text` contains `0.0.0.0` as a standalone IP address
+/// rather than as a substring of a longer dotted quad like `10.0.0.0`
+/// or `100.0.0.0`. A plain `contains("0.0.0.0")` matches those
+/// substrings, misclassifying public IPs as local endpoints and
+/// suppressing external-sink detection in taint analysis.
+fn looks_like_bind_all_address(text: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = text[start..].find("0.0.0.0") {
+        let abs = start + pos;
+        let before_ok = abs == 0 || !text.as_bytes()[abs - 1].is_ascii_digit();
+        let after = abs + "0.0.0.0".len();
+        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_digit();
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs + 1;
+    }
+    false
 }
 
 pub(super) fn looks_like_registry_url(url: &str) -> bool {

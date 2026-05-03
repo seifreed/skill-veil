@@ -51,7 +51,9 @@ pub(crate) fn detect_node_process_exec(
             // avoid substring false positives (e.g. `flash`, `crash`, `push`
             // all end in `sh` + space). Reuse the same basename logic as
             // `line_invokes_shell_or_interpreter` for consistency.
-            static SHELL_NAMES: &[&str] = &["bash", "sh", "dash", "zsh", "ksh", "fish", "csh", "tcsh", "pwsh"];
+            static SHELL_NAMES: &[&str] = &[
+                "bash", "sh", "dash", "zsh", "ksh", "fish", "csh", "tcsh", "pwsh",
+            ];
             content_lower.lines().find_map(|line| {
                 line.split_whitespace().find_map(|token| {
                     let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
@@ -109,7 +111,8 @@ pub(crate) fn detect_python_exec_network(
     let has_exec = content_lower.contains("subprocess.")
         || content_lower.contains("os.system(")
         || content_lower.contains("os.popen(")
-        || content_lower.contains("os.execvp?");
+        || content_lower.contains("os.execvp(")
+        || content_lower.contains("os.execvpe(");
     let has_network = content_lower.contains("requests.")
         || content_lower.contains("urllib.request")
         || content_lower.contains("urlopen(")

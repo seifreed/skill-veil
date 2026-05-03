@@ -103,10 +103,13 @@ pub struct VerdictCalibrationNote {
     #[serde(default = "default_calibration_note_category")]
     pub category: ThreatCategory,
     /// Signal class of the root cause group this note applies to, captured
-    /// *before* any reclassification. Enables precise per-group filtering
+    /// *after* any reclassification. Enables precise per-group filtering
     /// so that a `downgraded_*` note from a group with one signal class
     /// does not contaminate the Benign-downgrade check for a different
-    /// group that happens to share `(scope, category)`.
+    /// group that happens to share `(scope, category)`. Using the
+    /// post-reclassification value ensures that verdict predicates
+    /// filtering on `(scope, category, signal_class)` see the value that
+    /// matches the calibrated root cause groups.
     #[serde(default = "default_calibration_note_signal_class")]
     pub signal_class: SignalClass,
 }

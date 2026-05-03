@@ -53,8 +53,14 @@ pub(super) fn try_enrich_with_llm(
     cache_dir_override: Option<&Path>,
     quiet: bool,
 ) -> Result<Option<String>> {
-    let Ok(config) = UnifiedConfig::load() else {
-        return Ok(None);
+    let config = match UnifiedConfig::load() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            if !quiet {
+                eprintln!("LLM enrichment skipped: {err:#}");
+            }
+            return Ok(None);
+        }
     };
     let Some(llm_section) = config.llm else {
         return Ok(None);

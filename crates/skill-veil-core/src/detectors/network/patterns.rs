@@ -17,7 +17,7 @@ lazy_pattern!(
 // (`::1`) since both shapes appear in real exploit code.
 lazy_pattern!(
     pub(crate) RE_INTERNAL_ACTION,
-    r"(?is)(curl|wget|fetch|requests\.(get|post)|axios\.(get|post)|invoke-webrequest|invoke-restmethod|httpx\.(get|post)|aiohttp|net/http|client\.get|client\.post|open websocket|connect to|proxy to|query|call|\bPOST\b|\bGET\b).{0,180}(169\.254\.169\.254|127\.0\.0\.1|localhost|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|\[?::1\]?|\[?::ffff:\d{1,3}(\.\d{1,3}){3}\]?|[A-Za-z0-9._-]+\.internal|[A-Za-z0-9._-]+\.local)"
+    r"(?is)(curl|wget|fetch|requests\.(get|post)|axios\.(get|post)|invoke-webrequest|invoke-restmethod|httpx\.(get|post)|aiohttp|net/http|client\.get|client\.post|open websocket|connect to|proxy to|query|call|POST |GET ).{0,180}(169\.254\.169\.254|127\.0\.0\.1|localhost|0\.0\.0\.0|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|\[?::1\]?|\[?::ffff:\d{1,3}(\.\d{1,3}){3}\]?|[A-Za-z0-9._-]+\.internal|[A-Za-z0-9._-]+\.local)"
 );
 lazy_pattern!(
     pub(crate) RE_LOCAL_DEV_REFERENCE,

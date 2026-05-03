@@ -6,7 +6,8 @@
 use crate::findings::{Finding, RecommendedAction, Severity};
 use crate::policy::{
     apply_baseline, apply_policy_overrides_with_audit, apply_waivers, count_baseline_matches,
-    AppliedPolicyOverride, BaselineFile, PolicyFile, PolicyProfile, SuppressionSummary, WaiverFile,
+    finding_fingerprint, AppliedPolicyOverride, BaselineFile, PolicyFile, PolicyProfile,
+    SuppressionSummary, WaiverFile,
 };
 use crate::scanner_types::{ScanOptions, ScanTargetMode};
 use std::collections::BTreeSet;
@@ -72,15 +73,26 @@ impl ScanFilterService {
     }
 
     pub fn filter_with_summary(&self, findings: Vec<Finding>) -> FilterOutcome {
-        let findings = self.apply_severity_filter(findings);
-        let (findings, waiver_suppressed) = self.apply_waivers_stage(findings);
-        // Count baseline matches AFTER waivers so `baseline_suppressed` reflects
-        // the effective contribution of the baseline — i.e., how many findings
-        // the baseline actually removes given that waivers have already run.
-        // If a finding matches both a waiver and a baseline entry, the waiver
-        // wins (higher precedence) and baseline_suppressed will be 0 for it.
-        let (findings, baseline_suppressed) = self.apply_baseline_stage(findings);
+        // Apply policy overrides BEFORE severity filtering so that Block
+        // overrides can escalate findings above the minimum severity threshold.
+        // Pre-fix the severity filter ran first, silently discarding
+        // findings whose native severity was below `--min-severity` before
+        // overrides had a chance to promote their action to Block — defeating
+        // the operator intent encoded in `should_fail`'s Block-action bypass.
         let (findings, applied_overrides) = self.apply_overrides_stage(findings);
+        // Collect fingerprints of findings whose action was escalated TO Block
+        // by a policy override. These findings must survive the severity filter
+        // regardless of their native severity — the operator explicitly chose
+        // "halt on this rule" and that intent must not be silently discarded.
+        let block_overridden_fingerprints: BTreeSet<String> = applied_overrides
+            .iter()
+            .filter(|ov| ov.effective_action == RecommendedAction::Block)
+            .map(|ov| ov.finding_fingerprint.clone())
+            .collect();
+        let findings =
+            self.apply_severity_filter_with_overrides(findings, &block_overridden_fingerprints);
+        let (findings, waiver_suppressed) = self.apply_waivers_stage(findings);
+        let (findings, baseline_suppressed) = self.apply_baseline_stage(findings);
 
         FilterOutcome {
             suppression_summary: SuppressionSummary {
@@ -97,10 +109,22 @@ impl ScanFilterService {
         }
     }
 
-    fn apply_severity_filter(&self, findings: Vec<Finding>) -> Vec<Finding> {
+    fn apply_severity_filter_with_overrides(
+        &self,
+        findings: Vec<Finding>,
+        block_overridden_fingerprints: &BTreeSet<String>,
+    ) -> Vec<Finding> {
         findings
             .into_iter()
-            .filter(|f| self.should_include(f))
+            .filter(|f| {
+                // A finding escalated to Block by a policy override always
+                // survives the severity filter. The operator's explicit "halt
+                // on this rule" intent must override any severity gate.
+                if block_overridden_fingerprints.contains(&finding_fingerprint(f)) {
+                    return true;
+                }
+                self.should_include_by_severity_and_rules(f)
+            })
             .collect()
     }
 
@@ -124,8 +148,11 @@ impl ScanFilterService {
         apply_policy_overrides_with_audit(findings, self.policy.as_ref())
     }
 
-    /// Determine if a finding should be included based on filter options
-    fn should_include(&self, finding: &Finding) -> bool {
+    /// Determine if a finding should be included based on severity and rule filters.
+    ///
+    /// This does NOT consider policy-override-escalated Block actions — those
+    /// are handled separately in `apply_severity_filter_with_overrides`.
+    fn should_include_by_severity_and_rules(&self, finding: &Finding) -> bool {
         // Filter by minimum severity
         if let Some(min_sev) = self.min_severity {
             if finding.severity < min_sev {
