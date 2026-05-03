@@ -117,7 +117,7 @@ impl LlmConfigSection {
         // actually-loaded ctx, which is often smaller than the model's
         // theoretical max — we trust it over the static table.
         if let Some(tokens) = probed_tokens {
-            let budget = (tokens * CHARS_PER_TOKEN) as f64 * PROMPT_FRACTION;
+            let budget = (tokens.saturating_mul(CHARS_PER_TOKEN) as f64) * PROMPT_FRACTION;
             return apply_local_cap(budget as usize);
         }
 
@@ -130,7 +130,7 @@ impl LlmConfigSection {
         // 3. Prefix-match the model name.
         let lookup = lookup_model_context(model);
         let budget = match lookup {
-            Some(tokens) => (tokens * CHARS_PER_TOKEN) as f64 * PROMPT_FRACTION,
+            Some(tokens) => (tokens.saturating_mul(CHARS_PER_TOKEN) as f64) * PROMPT_FRACTION,
             None => FALLBACK_MAX_PROMPT_CHARS as f64,
         };
 
@@ -256,5 +256,38 @@ mod tests {
         assert_eq!(lookup_model_context("llama3.1:70b"), Some(128_000));
         assert_eq!(lookup_model_context("GPT-4o-mini"), Some(128_000));
         assert_eq!(lookup_model_context("mystery"), None);
+    }
+
+    /// # Contract
+    ///
+    /// Probed tokens that would cause `tokens * CHARS_PER_TOKEN` to overflow
+    /// `usize` MUST be saturated instead of wrapping. A malicious or buggy
+    /// Ollama `/api/show` response returning `usize::MAX` as the context
+    /// length must not panic (debug) or produce a nonsensical budget (release).
+    #[test]
+    fn probed_tokens_overflow_saturates() {
+        let s = mk_section(LlmProviderKind::Ollama, "llama3.1:8b", None);
+        let result = s.effective_max_prompt_chars_with_probe(Some(usize::MAX));
+        // saturating_mul(3) on usize::MAX = usize::MAX, then as f64 * 0.75
+        // The local-provider cap of 60_000 must still apply.
+        assert_eq!(result, LOCAL_PROVIDER_CAP_CHARS);
+    }
+
+    /// # Contract
+    ///
+    /// Cloud providers with extremely large probed tokens must produce a
+    /// finite budget without panicking or wrapping. Saturating_mul prevents
+    /// overflow in the `tokens * CHARS_PER_TOKEN` step.
+    #[test]
+    fn cloud_provider_large_probe_does_not_panic() {
+        let s = mk_section(LlmProviderKind::Anthropic, "claude-sonnet-4-5", None);
+        // usize::MAX / 2 * 3 is large but should not panic
+        let large = usize::MAX / 2;
+        let result = s.effective_max_prompt_chars_with_probe(Some(large));
+        // Should produce a finite result without panicking
+        assert!(
+            result > 0,
+            "budget must be positive for large probed tokens"
+        );
     }
 }

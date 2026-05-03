@@ -152,10 +152,21 @@ const ALLOWED_STORAGE_HOSTS: &[&str] = &[
 ];
 
 fn is_allowed_storage_target(url: &str) -> bool {
-    let prefixes = ALLOWED_STORAGE_HOSTS
-        .iter()
-        .map(|host| format!("https://{host}/"));
-    prefixes.into_iter().any(|p| url.starts_with(&p))
+    let parsed = match url::Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return false,
+    };
+    // Only allow HTTPS redirects.
+    if parsed.scheme() != "https" {
+        return false;
+    }
+    let host = match parsed.host_str() {
+        Some(h) => h,
+        None => return false,
+    };
+    // Exact host match — prevents prefix attacks like
+    // `vtsamples.commondatastorage.googleapis.com.evil.com`.
+    ALLOWED_STORAGE_HOSTS.contains(&host)
 }
 
 impl VtClient {
@@ -916,5 +927,72 @@ mod download_integrity_tests {
             "tmp sibling must be removed on cap-abort to bound disk use"
         );
         let _ = server.join();
+    }
+}
+
+#[cfg(test)]
+mod allowlist_tests {
+    use super::*;
+
+    /// # Contract
+    ///
+    /// `is_allowed_storage_target` MUST accept legitimate VT storage URLs
+    /// with exact host matching.
+    #[test]
+    fn allows_legitimate_vt_storage_hosts() {
+        assert!(is_allowed_storage_target(
+            "https://vtsamples.commondatastorage.googleapis.com/some/path?hash=abc"
+        ));
+        assert!(is_allowed_storage_target(
+            "https://www.virustotal.com/some/path"
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// `is_allowed_storage_target` MUST reject URLs whose host is a
+    /// subdomain of an allowed host (e.g. `evil.vtsamples.commondatastorage.googleapis.com`)
+    /// or that append a dot and attacker domain
+    /// (e.g. `vtsamples.commondatastorage.googleapis.com.evil.com`).
+    #[test]
+    fn rejects_subdomain_prefix_attack() {
+        assert!(!is_allowed_storage_target(
+            "https://vtsamples.commondatastorage.googleapis.com.evil.com/path"
+        ));
+        assert!(!is_allowed_storage_target(
+            "https://evil.vtsamples.commondatastorage.googleapis.com/path"
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// `is_allowed_storage_target` MUST reject non-HTTPS schemes (HTTP,
+    /// no scheme).
+    #[test]
+    fn rejects_non_https_schemes() {
+        assert!(!is_allowed_storage_target(
+            "http://vtsamples.commondatastorage.googleapis.com/path"
+        ));
+        assert!(!is_allowed_storage_target(
+            "ftp://vtsamples.commondatastorage.googleapis.com/path"
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// `is_allowed_storage_target` MUST reject completely unrelated hosts.
+    #[test]
+    fn rejects_unrelated_hosts() {
+        assert!(!is_allowed_storage_target("https://evil.com/path"));
+        assert!(!is_allowed_storage_target("https://example.com/"));
+    }
+
+    /// # Contract
+    ///
+    /// `is_allowed_storage_target` MUST reject malformed URLs.
+    #[test]
+    fn rejects_malformed_urls() {
+        assert!(!is_allowed_storage_target("not-a-url"));
+        assert!(!is_allowed_storage_target(""));
     }
 }

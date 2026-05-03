@@ -508,8 +508,8 @@ fn recalculate_group_action_excluding(
 ///
 /// # Identity contract
 ///
-/// Two notes are duplicates only when ALL FIVE fields match: `rule_id`, `effect`,
-/// `rationale`, **`scope`**, and **`category`**. The `scope`+`category` pair is
+/// Two notes are duplicates only when ALL SIX fields match: `rule_id`, `effect`,
+/// `rationale`, **`scope`**, **`category`**, and **`signal_class`**. The `scope`+`category` pair is
 /// load-bearing: `verdict::predicates::verdict()` filters notes by `(scope, category)`
 /// to decide whether calibration affects a specific isolated weak group. Collapsing
 /// per-group notes here would let an unrelated `downgraded_*` note in another group
