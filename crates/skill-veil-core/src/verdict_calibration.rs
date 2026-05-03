@@ -444,7 +444,7 @@ fn apply_single_rule_to_group<'f>(
             .filter(|f| {
                 f.artifact_scope == group.scope
                     && f.category == group.category
-                    && f.signal_class == group.signal_class
+                    && f.signal_class == state.original_signal_class
                     && !state.accumulated_exclusions.contains(&f.rule_id.as_str())
             })
             .map(|f| f.rule_id.clone())

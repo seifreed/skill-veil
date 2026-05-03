@@ -473,3 +473,61 @@ fn dedup_notes_preserves_signal_class_distinctions() {
         "ReviewSignal note must survive"
     );
 }
+
+/// Contract: after a calibration rule reclassifies a group's `signal_class`
+/// from `SuspiciousPackageBehavior` to `ReviewSignal`, a second calibration
+/// rule firing on the same group MUST still populate `representative_rules`
+/// with the original signal class's findings. The pre-fix code filtered
+/// `f.signal_class == group.signal_class` (post-reclassification), which
+/// produced an empty `representative_rules` vector because all findings
+/// retained their original signal class.
+#[test]
+fn representative_rules_uses_original_signal_class_after_reclassification() {
+    use crate::findings::{
+        ArtifactScope, Finding, MatchTarget, RootCauseGroup, Severity, ThreatCategory,
+    };
+
+    // INTERNAL_NETWORK_ACCESS triggers Tier 3 (reclassify_signal = true).
+    // After Tier 3 fires, group.signal_class becomes ReviewSignal.
+    // A second rule (MCP_NO_AUTH_MODEL, Tier 4) would then rebuild
+    // representative_rules. If it used group.signal_class instead of
+    // state.original_signal_class, it would find zero matching findings.
+    let findings = vec![
+        Finding::builder("INTERNAL_NETWORK_ACCESS", ThreatCategory::ToolAbuse)
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .signal_class(SignalClass::SuspiciousPackageBehavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("localhost")
+            .reason("internal network")
+            .build(),
+        Finding::builder("SOME_OTHER_RULE", ThreatCategory::ToolAbuse)
+            .severity(Severity::Low)
+            .action(RecommendedAction::Log)
+            .signal_class(SignalClass::SuspiciousPackageBehavior)
+            .matched_on(MatchTarget::Document)
+            .match_value("benign")
+            .reason("low risk")
+            .build(),
+    ];
+
+    let root_cause_groups = vec![RootCauseGroup {
+        scope: ArtifactScope::AgentEntrypoint,
+        category: ThreatCategory::ToolAbuse,
+        signal_class: SignalClass::SuspiciousPackageBehavior,
+        finding_count: 2,
+        strongest_action: RecommendedAction::RequireApproval,
+        representative_rules: vec!["INTERNAL_NETWORK_ACCESS".to_string()],
+    }];
+
+    let result = calibrate_verdict_inputs(&findings, &root_cause_groups);
+
+    // After reclassification, representative_rules must NOT be empty.
+    let group = &result.root_cause_groups[0];
+    assert!(
+        !group.representative_rules.is_empty(),
+        "representative_rules must contain rules from findings with the original signal_class; \
+         got empty representative_rules, which means the rebuild used the post-reclassification \
+         signal_class instead of original_signal_class"
+    );
+}

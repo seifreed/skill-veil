@@ -88,13 +88,12 @@ const READ_VERBS: &[&str] = &[
 ];
 
 /// `true` when `line` (already lowercased) contains a standalone `nc`
-/// command — either at line start (`nc -lvp 4444`) or mid-line
-/// (`echo x | nc -l 4444`). The bare substring `" nc "` was previously
-/// used, which failed to match `nc` at column 0 because there is no
-/// leading space. Both positions must be checked to cover reverse-shell
-/// invocations that start a line with `nc`.
+/// command — as a whitespace-delimited token. Handles `nc` at line start
+/// (`nc -lvp 4444`), mid-line (`echo x | nc -l 4444`), and tab-separated
+/// invocations common in Makefile recipes (`nc\t-lvp 4444`).
 fn line_starts_or_contains_nc(line: &str) -> bool {
-    line.starts_with("nc ") || line.contains(" nc ")
+    line.split_whitespace()
+        .any(|token| token.eq_ignore_ascii_case("nc"))
 }
 
 const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
@@ -348,6 +347,22 @@ mod tests {
         assert!(
             line_starts_or_contains_nc("echo x | nc 10.0.0.1 4444"),
             "nc mid-line must match"
+        );
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Tab-separated `nc` invocations (common in Makefiles) MUST be
+    /// detected. The pre-fix code only checked for ASCII space.
+    #[test]
+    fn network_verbs_nc_matches_tab_separated() {
+        assert!(
+            line_starts_or_contains_nc("nc\t-lvp 4444"),
+            "tab-separated nc at line start must match"
+        );
+        assert!(
+            line_starts_or_contains_nc("echo x | nc\t10.0.0.1 4444"),
+            "tab-separated nc mid-line must match"
         );
     }
 }

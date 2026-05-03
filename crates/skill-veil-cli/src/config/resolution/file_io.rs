@@ -57,6 +57,7 @@ pub(super) struct FileLlmSection {
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct FileProviderParams {
     #[serde(default)]
     pub(super) model: Option<String>,
@@ -202,6 +203,29 @@ request_timeout_secs = 60
             result.is_none(),
             "unreadable config MUST yield None (and produce a warn-level diagnostic, \
              not silently look identical to a missing file)"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `FileProviderParams` MUST reject unknown fields so that config typos
+    /// (e.g. `temperatur` instead of `temperature`, `apikey` instead of
+    /// `api_key`) produce a clear error rather than silently falling back
+    /// to defaults. Pre-fix, `#[serde(deny_unknown_fields)]` was absent,
+    /// so a typo like `temperatur = 0.7` was silently ignored and the
+    /// actual `temperature` defaulted to `None` (then 0.1 at the provider
+    /// level), making it appear the config was accepted when it was not.
+    #[test]
+    fn file_provider_params_rejects_unknown_fields() {
+        let src = r#"
+model = "gpt-4o"
+temperatur = 0.7
+"#;
+        let result: Result<FileProviderParams, _> = toml::from_str(src);
+        assert!(
+            result.is_err(),
+            "FileProviderParams MUST reject unknown field 'temperatur'; \
+             pre-fix, this was silently accepted and temperature defaulted to None"
         );
     }
 }

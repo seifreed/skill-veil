@@ -108,7 +108,11 @@ impl LlmProvider for LmStudioProvider {
             .strip_suffix("/v1")
             .unwrap_or_else(|| self.base_url.trim_end_matches('/'));
         let url = format!("{api_root}/api/v0/models");
-        let resp = match self.agent.get(&url).call() {
+        let mut req = self.agent.get(&url);
+        if let Some(ref k) = self.api_key {
+            req = req.set("authorization", &format!("Bearer {k}"));
+        }
+        let resp = match req.call() {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!("lmstudio: context-length probe request failed: {e:#}");

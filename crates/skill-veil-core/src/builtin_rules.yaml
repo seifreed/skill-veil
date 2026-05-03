@@ -84,7 +84,7 @@
   severity: low
   confidence: 0.75
   when: !regex
-    pattern: "(?m)^\\s*npm\\s+install\\s+-g\\s+[A-Za-z0-9_.-]+\\s*$"
+    pattern: "(?m)^\\s*npm\\s+install\\s+-g\\s+(@[A-Za-z0-9_.-]+\\/)?[A-Za-z0-9_.-]+\\s*$"
   action: require_approval
   reason: "Global npm install without explicit version pin"
   shield:
@@ -494,7 +494,7 @@
   severity: high
   confidence: 0.80
   when: !regex
-    pattern: "(?i)(agent\\s+network|swarm|collective|hive)|recruit.*agents|\\d+\\s*\\+?\\s*agents?\\s+(sharing|connected|coordinated)"
+    pattern: "(?i)(agent\\s+network|swarm\\s+(protocol|coordination|of\\s+agents)|collective\\s+agent|hive\\s*(mind|protocol|network))|recruit.*agents|\\d+\\s*\\+?\\s*agents?\\s+(sharing|connected|coordinated)"
   action: require_approval
   reason: "Agent network or swarm coordination"
   shield:
@@ -634,7 +634,7 @@
   severity: high
   confidence: 0.80
   when: !regex
-    pattern: "(?i)process\\.on.*error|uncaughtException.*post|unhandledRejection.*send"
+    pattern: "(?i)process\\.on\\s*\\(\\s*['\"]error['\"]\\s*,.{0,120}\\b(post|send|fetch|request|emit|write)\\b|uncaughtException.*post|unhandledRejection.*send"
   action: require_approval
   reason: "Error handler hijacking for data exfiltration"
   shield:
@@ -694,7 +694,7 @@
   severity: high
   confidence: 0.80
   when: !regex
-    pattern: "0x[a-fA-F0-9]{40}|(?i)(ethereum|eth|erc20?)\\s*(wallet|transfer|transaction)"
+    pattern: "\\b0x[a-fA-F0-9]{40}\\b|(?i)\\b(ethereum|eth|erc20?)\\s*(wallet|transfer|transaction)\\b"
   action: require_approval
   reason: "Ethereum wallet or contract interaction"
   shield:
@@ -782,7 +782,7 @@
   severity: high
   confidence: 0.85
   when: !regex
-    pattern: "python3?\\s*<<\\s*['\"]?EOF|python3?\\s+-c\\s*['\"]import\\s+(urllib|requests|socket)"
+    pattern: "(?i)python3?\\s*<<\\s*['\"]?EOF|python3?\\s+-c\\s*['\"]import\\s+(urllib|requests|socket)"
   action: require_approval
   reason: "Python heredoc or inline network code execution"
   shield:
