@@ -22,6 +22,7 @@ pub(crate) struct VtConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FileFormat {
     apikey: Option<String>,
 }
@@ -134,11 +135,23 @@ mod tests {
         assert!(parsed.apikey.is_none());
     }
 
+    /// # Contract
+    ///
+    /// `FileFormat` MUST reject unknown fields so that typos like `api_key`
+    /// (underscore) or `apikey` (missing 'y') produce a clear error rather
+    /// than silently falling back to `apikey: None`, which causes a confusing
+    /// "VirusTotal API key not found" message. Pre-fix, `#[serde(deny_unknown_fields)]`
+    /// was absent, so `api_key = "sk-..."` was silently accepted with
+    /// `apikey` defaulting to `None`.
     #[test]
-    fn rejects_missing_apikey_field() {
-        let body = r#"other = "x""#;
-        let parsed: FileFormat = toml::from_str(body).unwrap();
-        assert!(parsed.apikey.is_none());
+    fn file_format_rejects_unknown_fields() {
+        let body = r#"api_key = "sk-test123""#;
+        let result: Result<FileFormat, _> = toml::from_str(body);
+        assert!(
+            result.is_err(),
+            "FileFormat MUST reject unknown field 'api_key'; \
+             pre-fix, this was silently accepted and apikey defaulted to None"
+        );
     }
 
     #[test]

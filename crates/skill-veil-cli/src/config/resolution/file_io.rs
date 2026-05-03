@@ -72,6 +72,7 @@ pub(super) struct FileProviderParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(super) struct FileLlmLimits {
     #[serde(default)]
     pub(super) max_prompt_chars: Option<usize>,
@@ -226,6 +227,28 @@ temperatur = 0.7
             result.is_err(),
             "FileProviderParams MUST reject unknown field 'temperatur'; \
              pre-fix, this was silently accepted and temperature defaulted to None"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `FileLlmLimits` MUST reject unknown fields so that config typos
+    /// (e.g. `max_prompt_charz` instead of `max_prompt_chars`,
+    /// `request_timeout_sec` instead of `request_timeout_secs`) produce
+    /// a clear error rather than silently falling back to defaults.
+    /// Pre-fix, `#[serde(deny_unknown_fields)]` was absent, so a typo
+    /// like `max_prompt_charz = 80000` was silently ignored and the
+    /// actual `max_prompt_chars` defaulted to `None` (auto-detect).
+    #[test]
+    fn file_llm_limits_rejects_unknown_fields() {
+        let src = r#"
+max_prompt_charz = 80000
+"#;
+        let result: Result<FileLlmLimits, _> = toml::from_str(src);
+        assert!(
+            result.is_err(),
+            "FileLlmLimits MUST reject unknown field 'max_prompt_charz'; \
+             pre-fix, this was silently accepted and max_prompt_chars defaulted to None"
         );
     }
 }

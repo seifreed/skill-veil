@@ -14,6 +14,7 @@ pub enum PolicyProfile {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyProfiles {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub personal: Option<ConfiguredProfile>,
@@ -26,6 +27,7 @@ pub struct PolicyProfiles {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfiguredProfile {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fail_on: Option<Severity>,
@@ -34,12 +36,14 @@ pub struct ConfiguredProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextActionOverride {
     pub context: OperationalContext,
     pub action: RecommendedAction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -56,6 +60,7 @@ pub struct PolicyOverride {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppliedPolicyOverride {
     pub finding_fingerprint: String,
     pub rule_id: String,
@@ -79,6 +84,7 @@ pub const POLICY_AUDIT_PRECEDENCE: [&str; 4] = [
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyAudit {
     pub precedence_order: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -88,6 +94,7 @@ pub struct PolicyAudit {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyFile {
     #[serde(default = "default_policy_schema_version")]
     pub schema_version: String,
@@ -98,6 +105,7 @@ pub struct PolicyFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContextPolicy {
     pub context: OperationalContext,
     pub action: RecommendedAction,
@@ -105,6 +113,7 @@ pub struct ContextPolicy {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SuppressionSummary {
     pub baseline_suppressed: usize,
     pub waiver_suppressed: usize,
@@ -116,6 +125,7 @@ pub struct SuppressionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiffReport {
     pub new_findings: Vec<DiffEntry>,
     pub resolved_findings: Vec<DiffEntry>,
@@ -129,6 +139,7 @@ pub struct DiffReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DiffEntry {
     pub fingerprint: String,
     pub rule_id: String,
@@ -139,6 +150,7 @@ pub struct DiffEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShieldPolicy {
     pub id: String,
     pub category: ThreatCategory,
@@ -157,4 +169,69 @@ pub(crate) fn default_policy_schema_version() -> String {
 
 pub(crate) fn empty_finding_summary() -> FindingSummary {
     FindingSummary::from_findings(&[])
+}
+
+#[cfg(test)]
+mod deny_unknown_fields_tests {
+    use super::*;
+
+    /// # Contract
+    ///
+    /// `PolicyOverride` MUST reject unknown fields so that typos like
+    /// `artifact_pat` instead of `artifact_path` produce a clear error
+    /// rather than silently defaulting `artifact_path` to `None`, which
+    /// would make the override match ALL artifacts (a policy bypass).
+    #[test]
+    fn policy_override_rejects_unknown_fields() {
+        let yaml = r#"
+action: log
+reason: approved
+artifact_pat: "src/main.rs"
+"#;
+        let result: Result<PolicyOverride, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "PolicyOverride MUST reject unknown field 'artifact_pat'; \
+             pre-fix, this was silently accepted and artifact_path defaulted to None"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `PolicyFile` MUST reject unknown top-level fields so that typos like
+    /// `overides` instead of `overrides` are caught at load time.
+    #[test]
+    fn policy_file_rejects_unknown_fields() {
+        let yaml = "schema_version: \"1\"\noverides: []\n";
+        let result: Result<PolicyFile, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "PolicyFile MUST reject unknown field 'overides'; \
+             pre-fix, this was silently accepted and overrides defaulted to empty"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `ShieldPolicy` MUST reject unknown fields so that typos in security
+    /// policy descriptors are caught at load time.
+    #[test]
+    fn shield_policy_rejects_unknown_fields() {
+        let yaml = r#"
+id: shield-1
+category: RemoteExec
+severity: High
+confidence: 0.9
+action: Block
+recommendation_agent: []
+revoked: false
+revokd: true
+"#;
+        let result: Result<ShieldPolicy, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "ShieldPolicy MUST reject unknown field 'revokd'; \
+             pre-fix, this was silently accepted and revoked kept its intended value"
+        );
+    }
 }

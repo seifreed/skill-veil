@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BaselineFile {
     #[serde(default = "default_policy_schema_version")]
     pub schema_version: String,
@@ -18,6 +19,7 @@ pub struct BaselineFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BaselineEntry {
     pub fingerprint: String,
     pub rule_id: String,
@@ -27,6 +29,7 @@ pub struct BaselineEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WaiverFile {
     #[serde(default = "default_policy_schema_version")]
     pub schema_version: String,
@@ -38,6 +41,7 @@ pub struct WaiverFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WaiverEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_id: Option<String>,
@@ -116,5 +120,80 @@ mod serde_default_tests {
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.entries[0].fingerprint, "deadbeef");
         assert_eq!(parsed.entries[0].rule_id, "RULE_A");
+    }
+
+    /// # Contract
+    ///
+    /// `BaselineEntry` MUST reject unknown fields so that typos like
+    /// `fingerprintt` instead of `fingerprint` produce a clear error.
+    /// Pre-fix, `#[serde(deny_unknown_fields)]` was absent, so a typo
+    /// silently created a malformed entry with the wrong field missing.
+    #[test]
+    fn baseline_entry_rejects_unknown_fields() {
+        let yaml = format!(
+            "schema_version: {POLICY_SCHEMA_VERSION}\n\
+             entries:\n  \
+             - fingerprintt: deadbeef\n    \
+               rule_id: RULE_A\n    \
+               reason: pre-existing\n"
+        );
+        let result: Result<BaselineFile, _> = serde_yaml::from_str(&yaml);
+        assert!(
+            result.is_err(),
+            "BaselineEntry MUST reject unknown field 'fingerprintt'; \
+             pre-fix, this was silently accepted and fingerprint was missing"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `WaiverEntry` MUST reject unknown fields so that typos like
+    /// `rule_ld` instead of `rule_id` produce a clear error rather than
+    /// silently defaulting `rule_id` to `None`, which could make a waiver
+    /// match all rules (a policy bypass).
+    #[test]
+    fn waiver_entry_rejects_unknown_fields() {
+        let yaml = format!(
+            "schema_version: {POLICY_SCHEMA_VERSION}\n\
+             waivers:\n  \
+             - rule_ld: RULE_A\n    \
+               reason: approved exception\n"
+        );
+        let result: Result<WaiverFile, _> = serde_yaml::from_str(&yaml);
+        assert!(
+            result.is_err(),
+            "WaiverEntry MUST reject unknown field 'rule_ld'; \
+             pre-fix, this was silently accepted and rule_id defaulted to None"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `BaselineFile` MUST reject unknown top-level fields so that typos
+    /// like `entires` instead of `entries` are caught at load time.
+    #[test]
+    fn baseline_file_rejects_unknown_top_level_fields() {
+        let yaml = format!("schema_version: {POLICY_SCHEMA_VERSION}\nentires: []\n");
+        let result: Result<BaselineFile, _> = serde_yaml::from_str(&yaml);
+        assert!(
+            result.is_err(),
+            "BaselineFile MUST reject unknown field 'entires'; \
+             pre-fix, this was silently accepted and entries defaulted to empty"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `WaiverFile` MUST reject unknown top-level fields so that typos
+    /// like `wavers` instead of `waivers` are caught at load time.
+    #[test]
+    fn waiver_file_rejects_unknown_top_level_fields() {
+        let yaml = format!("schema_version: {POLICY_SCHEMA_VERSION}\nwavers: []\n");
+        let result: Result<WaiverFile, _> = serde_yaml::from_str(&yaml);
+        assert!(
+            result.is_err(),
+            "WaiverFile MUST reject unknown field 'wavers'; \
+             pre-fix, this was silently accepted and waivers defaulted to empty"
+        );
     }
 }

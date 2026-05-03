@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Shield hint for policy generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShieldHint {
     /// Scope for the shield policy
     pub scope: String,
@@ -17,6 +18,7 @@ pub struct ShieldHint {
 ///
 /// Rules are typically defined in YAML format and loaded by the [`super::RuleEngine`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Rule {
     /// Unique rule identifier
     pub id: String,
@@ -54,6 +56,7 @@ pub enum RulePackKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct RulePackMetadata {
     #[serde(default)]
     pub name: String,
@@ -64,6 +67,7 @@ pub struct RulePackMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RulePackFile {
     pub schema_version: String,
     #[serde(default)]
@@ -73,6 +77,7 @@ pub struct RulePackFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct IocFeedFile {
     pub schema_version: String,
     #[serde(default)]
@@ -91,4 +96,98 @@ fn default_confidence() -> f32 {
 
 fn default_enabled() -> bool {
     true
+}
+
+#[cfg(test)]
+mod deny_unknown_fields_tests {
+    use super::*;
+
+    /// # Contract
+    ///
+    /// `Rule` MUST reject unknown fields so that typos in optional fields
+    /// (e.g. `confedence` instead of `confidence`, `enabeld` instead of
+    /// `enabled`) produce a clear error rather than silently falling back
+    /// to defaults. Pre-fix, `#[serde(deny_unknown_fields)]` was absent,
+    /// so a rule pack author who wrote `confedence: 0.5` got a rule firing
+    /// at confidence 0.9 (the default) with no error or warning.
+    #[test]
+    fn rule_rejects_unknown_fields() {
+        let yaml = r#"
+id: TEST_RULE
+category: RemoteExec
+severity: High
+when:
+  regex:
+    pattern: "curl"
+action: Block
+reason: test
+confedence: 0.5
+"#;
+        let result: Result<Rule, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "Rule MUST reject unknown field 'confedence'; \
+             pre-fix, this was silently accepted and confidence defaulted to 0.9"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `ShieldHint` MUST reject unknown fields so that typos like
+    /// `scop` instead of `scope` are caught at load time.
+    #[test]
+    fn shield_hint_rejects_unknown_fields() {
+        let yaml = "scop: package\n";
+        let result: Result<ShieldHint, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "ShieldHint MUST reject unknown field 'scop'; \
+             pre-fix, this was silently accepted and scope was missing"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `RulePackFile` MUST reject unknown fields so that typos in
+    /// top-level keys (e.g. `ruels` instead of `rules`) are caught.
+    #[test]
+    fn rule_pack_file_rejects_unknown_fields() {
+        let yaml = "schema_version: \"1\"\nruels: []\n";
+        let result: Result<RulePackFile, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "RulePackFile MUST reject unknown field 'ruels'; \
+             pre-fix, this was silently accepted and rules defaulted to empty"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `IocFeedFile` MUST reject unknown fields so that typos like
+    /// `domians` instead of `domains` are caught.
+    #[test]
+    fn ioc_feed_file_rejects_unknown_fields() {
+        let yaml = "schema_version: \"1\"\ndomians: []\n";
+        let result: Result<IocFeedFile, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "IocFeedFile MUST reject unknown field 'domians'; \
+             pre-fix, this was silently accepted and domains defaulted to empty"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `RulePackMetadata` MUST reject unknown fields so that typos like
+    /// `compatability` instead of `compatibility` are caught.
+    #[test]
+    fn rule_pack_metadata_rejects_unknown_fields() {
+        let yaml = "compatability: [\"1\"]\n";
+        let result: Result<RulePackMetadata, _> = serde_yaml::from_str(yaml);
+        assert!(
+            result.is_err(),
+            "RulePackMetadata MUST reject unknown field 'compatability'; \
+             pre-fix, this was silently accepted and compatibility defaulted to empty"
+        );
+    }
 }
