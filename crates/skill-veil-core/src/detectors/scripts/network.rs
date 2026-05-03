@@ -153,7 +153,9 @@ pub(crate) fn detect_file_secret_to_network_flow(
     for read_idx in &read_indices {
         let end = (read_idx + TAINT_WINDOW_LINES).min(lines.len() - 1);
         for follow_line in &lines[*read_idx..=end] {
-            if NETWORK_VERB_SUBSTRINGS.iter().any(|v| follow_line.contains(v))
+            if NETWORK_VERB_SUBSTRINGS
+                .iter()
+                .any(|v| follow_line.contains(v))
                 || line_starts_or_contains_nc(follow_line)
             {
                 return vec![

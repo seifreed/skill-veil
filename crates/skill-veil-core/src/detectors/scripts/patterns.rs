@@ -75,12 +75,10 @@ pub(crate) static PYTHON_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, Compile
 
 pub(crate) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
-        compile_each(&[
-            (
-                "COMMAND_INJECTION_SINK_NODE",
-                r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)",
-            ),
-        ])
+        compile_each(&[(
+            "COMMAND_INJECTION_SINK_NODE",
+            r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)",
+        )])
     });
 
 pub(crate) static POWERSHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =

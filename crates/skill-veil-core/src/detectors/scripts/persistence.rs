@@ -78,22 +78,20 @@ pub(crate) fn detect_shell_persistence_write(
     if !matches!(language, "sh" | "bash" | "zsh" | "ksh" | "fish")
         || !(content_lower.contains("> /etc/")
             || content_lower.contains("tee /etc/")
-            || content_lower
-                .lines()
-                .any(|line| {
-                    let has_dotfile_append = line.contains(">> ~/.");
-                    if !has_dotfile_append {
-                        return false;
-                    }
-                    // Accept common write verbs that precede `>> ~/.`:
-                    // echo, printf, cat, tee -a. Pre-fix only `echo `
-                    // was accepted, so `printf >> ~/.bashrc`, `cat x >> ~/.zshrc`,
-                    // and `tee -a ~/.profile` all escaped detection.
-                    line.contains("echo ")
-                        || line.contains("printf ")
-                        || line.contains("cat ")
-                        || line.contains("tee ")
-                }))
+            || content_lower.lines().any(|line| {
+                let has_dotfile_append = line.contains(">> ~/.");
+                if !has_dotfile_append {
+                    return false;
+                }
+                // Accept common write verbs that precede `>> ~/.`:
+                // echo, printf, cat, tee -a. Pre-fix only `echo `
+                // was accepted, so `printf >> ~/.bashrc`, `cat x >> ~/.zshrc`,
+                // and `tee -a ~/.profile` all escaped detection.
+                line.contains("echo ")
+                    || line.contains("printf ")
+                    || line.contains("cat ")
+                    || line.contains("tee ")
+            }))
     {
         return Vec::new();
     }
