@@ -49,7 +49,7 @@ fn yaml_nesting_depth(value: &serde_yaml::Value) -> usize {
         serde_yaml::Value::Mapping(m) => {
             1 + m
                 .iter()
-                .map(|(_, v)| yaml_nesting_depth(v))
+                .flat_map(|(k, v)| [yaml_nesting_depth(k), yaml_nesting_depth(v)])
                 .max()
                 .unwrap_or(0)
         }
