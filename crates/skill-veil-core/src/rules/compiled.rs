@@ -355,10 +355,23 @@ impl CompiledRule {
                     .skip(orig_start)
                     .take(orig_end - orig_start)
                     .collect();
+                // Convert section-relative char offset to document-relative
+                // line number so inline suppressions (which key on
+                // document-level line numbers) can match these findings.
+                let orig_byte_offset = sec
+                    .content
+                    .char_indices()
+                    .nth(orig_start)
+                    .map_or(sec.content.len(), |(idx, _)| idx);
+                let line_number = calculate_line_number(&sec.content, orig_byte_offset)
+                    + sec.start_line.saturating_sub(1);
                 let target = MatchTarget::Section {
                     name: section.to_string(),
                 };
-                findings.push(self.create_finding(target, &original_text));
+                findings.push(
+                    self.create_finding(target, &original_text)
+                        .with_line(line_number),
+                );
                 matched = true;
                 // Advance past this match to find subsequent occurrences.
                 // Use character count, not byte length, to advance because

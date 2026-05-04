@@ -1709,3 +1709,50 @@ fn section_condition_unicode_case_folding_extracts_correct_original_text() {
         }
     }
 }
+
+/// Contract: `SectionContains` findings must carry a line number so inline
+/// suppressions (`# skill-veil:ignore[RULE_ID]`) can match them. Pre-fix,
+/// `check_section_condition` produced findings with `line_number: None`,
+/// making them permanently un-suppressible via line-specific directives.
+#[test]
+fn section_contains_finding_has_line_number() {
+    let mut engine = empty_engine();
+    engine
+        .add_rule(Rule {
+            id: "TEST_SEC_LINE".to_string(),
+            category: crate::findings::ThreatCategory::ToolAbuse,
+            severity: Severity::Medium,
+            confidence: 0.8,
+            condition: RuleCondition::SectionContains {
+                section: "Setup".to_string(),
+                values: vec!["dangerous_tool".to_string()],
+            },
+            action: crate::findings::RecommendedAction::RequireApproval,
+            reason: "test".to_string(),
+            shield: None,
+            enabled: true,
+            tags: vec![],
+        })
+        .unwrap();
+
+    // Line 1: heading, line 2: blank, line 3: section header, line 4: content
+    let doc = parse_test_doc("# Skill\n\n## Setup\nUse the dangerous_tool carefully.\n");
+    let findings = engine.evaluate(&doc);
+
+    let finding = findings
+        .iter()
+        .find(|f| f.rule_id == "TEST_SEC_LINE")
+        .expect("SectionContains rule must produce a finding");
+    assert!(
+        finding.line_number.is_some(),
+        "SectionContains finding must have a line number for inline suppression; got None"
+    );
+    // The section content collapses newlines into spaces, so the best
+    // available line number is the section header line (3). This matches
+    // how SectionRegex findings report line numbers.
+    assert_eq!(
+        finding.line_number,
+        Some(3),
+        "SectionContains finding line number must point to the section header line"
+    );
+}

@@ -139,7 +139,7 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
         // capabilities (e.g. `ShellDownloadExec`) that key off the edge.
         if DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
             .iter()
-            .any(|t| lower.contains(t))
+            .any(|t| token_with_boundary(&lower, t))
         {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
@@ -166,19 +166,37 @@ fn is_latest_tag(lower_line: &str) -> bool {
 
 /// Match a network-download token with word-boundary awareness.
 ///
-/// After the token, the next character must be whitespace, a shell
-/// operator (`|`, `;`, `&`, `>`), a Python module separator (`.`),
-/// or end-of-string. This catches pipe-joined commands like `curl|sh`
-/// that lack trailing whitespace while still rejecting substrings like
-/// `uncurl`. The `.` boundary catches `python -m urllib.request` which
-/// is the same download vector as `python -m urllib`.
+/// Before the token, the preceding character (if any) must be whitespace,
+/// a shell operator (`|`, `;`, `&`), or start-of-line. After the token,
+/// the next character must be whitespace, a shell operator (`|`, `;`, `&`,
+/// `>`), a Python module separator (`.`), or end-of-string.
+///
+/// The left boundary rejects substrings like `prefetch` → `fetch` and
+/// `uncurl` → `curl`. The right boundary catches pipe-joined commands
+/// like `curl|sh` that lack trailing whitespace. The `.` boundary catches
+/// `python -m urllib.request` which is the same download vector as
+/// `python -m urllib`.
 fn token_with_boundary(lower_line: &str, token: &str) -> bool {
     let mut start = 0;
     while let Some(pos) = lower_line[start..].find(token) {
         let abs_pos = start + pos;
         let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            lower_line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        // Tokens that start with a space (e.g. " nc") carry their own
+        // left boundary. Otherwise, the character before the token must
+        // be a word boundary.
+        let left_ok = token.starts_with(' ')
+            || before.is_none()
+            || matches!(
+                before,
+                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&')
+            );
         let after = lower_line.get(token_end..).unwrap_or("");
-        if after.is_empty()
+        let right_ok = after.is_empty()
             || after.starts_with(' ')
             || after.starts_with('\t')
             || after.starts_with('|')
@@ -186,7 +204,8 @@ fn token_with_boundary(lower_line: &str, token: &str) -> bool {
             || after.starts_with('&')
             || after.starts_with('>')
             || after.starts_with('.')
-        {
+            || after.starts_with(':');
+        if left_ok && right_ok {
             return true;
         }
         start = token_end;
@@ -367,6 +386,25 @@ mod tests {
                     .iter()
                     .any(|l| matches!(l.relation, ArtifactRelation::Downloads)),
                 "`{token}` must keep producing a Downloads edge; got {links:?}",
+            );
+        }
+    }
+
+    /// Contract: `dockerfile_relations` must use word-boundary-aware matching
+    /// (like `dockerfile_capabilities`), not bare substring matching. Pre-fix,
+    /// `lower.contains(t)` matched substrings like "prefetch" → "fetch" and
+    /// "func" → "nc", producing spurious `Downloads` edges without a matching
+    /// `NetworkAccess` capability.
+    #[test]
+    fn dockerfile_relations_does_not_overmatch_substrings() {
+        for line in ["RUN prefetch npm package", "RUN apk add func unc vncserver"] {
+            let content = format!("FROM alpine\n{line}\n");
+            let links = dockerfile_relations(&content);
+            assert!(
+                !links
+                    .iter()
+                    .any(|l| matches!(l.relation, ArtifactRelation::Downloads)),
+                "substring in `{line}` must not produce a Downloads edge; got {links:?}",
             );
         }
     }

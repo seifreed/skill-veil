@@ -163,7 +163,7 @@ fn process_one(
 /// cache silently until the user removed the file by hand.
 fn persist_report(report_path: &Path, cached: &CachedReport) -> Result<()> {
     let json = serde_json::to_string_pretty(cached).context("serialising report")?;
-    let tmp = report_path.with_extension("json.tmp");
+    let tmp = report_path.with_extension("tmp");
     std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
     crate::util::cache_io::finalize_atomic_write(&tmp, report_path)
         .with_context(|| format!("renaming {} to {}", tmp.display(), report_path.display()))?;
@@ -200,7 +200,7 @@ mod tests {
 
         persist_report(&report_path, &cached).expect("persist must succeed");
 
-        let tmp = report_path.with_extension("json.tmp");
+        let tmp = report_path.with_extension("tmp");
         assert!(!tmp.exists(), "tmp must not linger after success");
         assert!(report_path.exists(), "report must exist at dest");
         let bytes = std::fs::read(&report_path).expect("read report");
@@ -224,7 +224,7 @@ mod tests {
         let result = persist_report(&report_path, &cached);
 
         assert!(result.is_err(), "rename into missing parent must fail");
-        let tmp = report_path.with_extension("json.tmp");
+        let tmp = report_path.with_extension("tmp");
         assert!(!tmp.exists(), "tmp must be cleaned up on failure");
     }
 
