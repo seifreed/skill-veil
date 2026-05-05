@@ -25,7 +25,12 @@ sha2.workspace = true
 chrono.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
-yara-x = { git = "https://github.com/VirusTotal/yara-x", rev = "8a241d9e73be6df91c3af4ef934cad1d51b26ed8", optional = true }
+
+[dependencies.yara-x]
+version = "1.15.0"
+git = "https://github.com/VirusTotal/yara-x"
+rev = "8a241d9e73be6df91c3af4ef934cad1d51b26ed8"
+optional = true
 
 [features]
 default = []

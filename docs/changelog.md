@@ -7,12 +7,14 @@ release process is formalized.
 
 ## [Unreleased]
 
-## [0.1.2] - 2026-05-05
+## [0.1.3] - 2026-05-05
 
 ### Fixed
 
 - Made cache override tests portable on Windows while preserving Unix
   broken-symlink coverage, unblocking the full CI matrix.
+- Added crates.io-compatible version metadata for the optional `yara-x`
+  dependency while preserving the pinned upstream git revision.
 
 ### Added
 
