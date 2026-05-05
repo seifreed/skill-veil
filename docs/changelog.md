@@ -7,6 +7,13 @@ release process is formalized.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-05
+
+### Fixed
+
+- Made cache override tests portable on Windows while preserving Unix
+  broken-symlink coverage, unblocking the full CI matrix.
+
 ### Added
 
 - strict `scan-file` and package-oriented `scan-package`
