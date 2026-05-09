@@ -20,6 +20,8 @@
   tags:
     - remote_exec
     - supply_chain
+  promptintel_threats:
+    - "Malware generation"
 
 - id: SKILL_REMOTE_EXEC_POWERSHELL
   category: remote_exec
@@ -35,6 +37,8 @@
   tags:
     - remote_exec
     - powershell
+  promptintel_threats:
+    - "Malware generation"
 
 # ============================================
 # Supply Chain Rules
@@ -53,6 +57,8 @@
   enabled: true
   tags:
     - supply_chain
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_SUPPLY_CHAIN_NO_HASH
   category: supply_chain
@@ -108,6 +114,8 @@
   tags:
     - supply_chain
     - typosquat
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_SUPPLY_CHAIN_UNPINNED_PIP
   category: supply_chain
@@ -157,6 +165,9 @@
   tags:
     - reverse_shell
     - critical
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"
 
 - id: SKILL_REVERSE_SHELL_NC
   category: remote_exec
@@ -172,6 +183,9 @@
   tags:
     - reverse_shell
     - critical
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"
 
 # ============================================
 # Credential Exposure Rules
@@ -190,6 +204,9 @@
   enabled: true
   tags:
     - credentials
+  promptintel_threats:
+    - "Credential leak"
+    - "Credential Harvesting Templates"
 
 # ============================================
 # Persuasive Language Rules
@@ -214,6 +231,8 @@
   tags:
     - semantic
     - persuasive
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_SOCIAL_MANIPULATION_AUTHORITY
   category: social_manipulation
@@ -229,6 +248,8 @@
   tags:
     - semantic
     - social_manipulation
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_AUTONOMY_ESCALATION_NO_REVIEW
   category: autonomy_escalation
@@ -244,6 +265,9 @@
   tags:
     - autonomy
     - semantic
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Direct prompt injection"
 
 - id: SKILL_PROMPT_TAMPERING_OVERRIDE
   category: persistent_prompt_tampering
@@ -259,6 +283,9 @@
   tags:
     - prompt_tampering
     - semantic
+  promptintel_threats:
+    - "Direct prompt injection"
+    - "Jailbreak"
 
 - id: SKILL_TOOL_ABUSE_SESSION_EXTRACTION
   category: tool_abuse
@@ -274,6 +301,9 @@
   tags:
     - tool_abuse
     - credentials
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Credential Harvesting Templates"
 
 - id: SKILL_SOCIAL_MANIPULATION_TRUST_CHAIN
   category: social_manipulation
@@ -290,6 +320,9 @@
     - semantic
     - manipulation
     - social
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Jailbreak"
 
 - id: SKILL_AUTONOMY_ESCALATION_UNBOUNDED
   category: autonomy_escalation
@@ -305,6 +338,8 @@
   tags:
     - autonomy
     - context
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
 
 # ============================================
 # Privilege Escalation Rules
@@ -323,6 +358,8 @@
   enabled: true
   tags:
     - privilege_escalation
+  promptintel_threats:
+    - "Harmful Automation Guidance"
 
 # ============================================
 # Data Exfiltration Rules
@@ -341,6 +378,9 @@
   enabled: true
   tags:
     - exfiltration
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Contextual Exfiltration Patterns"
 
 # ============================================
 # Obfuscation Rules
@@ -359,6 +399,8 @@
   enabled: true
   tags:
     - obfuscation
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 # ============================================
 # NEW RULES BASED ON MALWARE DATASET ANALYSIS
@@ -378,6 +420,8 @@
   tags:
     - supply_chain
     - malicious_domain
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_OPENCLAW_TROJAN
   category: supply_chain
@@ -393,6 +437,9 @@
   tags:
     - supply_chain
     - trojan
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
+    - "Malware generation"
 
 - id: SKILL_REMOTE_SELF_UPDATE
   category: supply_chain
@@ -413,6 +460,9 @@
     - supply_chain
     - self_update
     - trojan
+  promptintel_threats:
+    - "Malware generation"
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_AUTONOMY_OVERRIDE
   category: scope_creep
@@ -428,6 +478,9 @@
   tags:
     - autonomy
     - jailbreak
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Direct prompt injection"
 
 - id: SKILL_AGENT_MANIPULATION
   category: persuasive_language
@@ -443,6 +496,9 @@
   tags:
     - jailbreak
     - manipulation
+  promptintel_threats:
+    - "Jailbreak"
+    - "Direct prompt injection"
 
 - id: SKILL_WALLET_PRIVATE_KEY
   category: credential_exposure
@@ -458,6 +514,9 @@
   tags:
     - crypto
     - wallet
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Privacy / PII Exfiltration Templates"
 
 - id: SKILL_TELEGRAM_EXFIL
   category: data_exfiltration
@@ -473,6 +532,9 @@
   tags:
     - exfiltration
     - telegram
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Contextual Exfiltration Patterns"
 
 - id: SKILL_DISCORD_WEBHOOK
   category: data_exfiltration
@@ -488,6 +550,9 @@
   tags:
     - exfiltration
     - discord
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Contextual Exfiltration Patterns"
 
 - id: SKILL_AGENT_NETWORK
   category: scope_creep
@@ -503,6 +568,8 @@
   tags:
     - botnet
     - swarm
+  promptintel_threats:
+    - "Multi-Agent Collusion"
 
 - id: SKILL_MEMORY_WIPE
   category: obfuscation
@@ -518,6 +585,8 @@
   tags:
     - antiforensics
     - memory_wipe
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_HEARTBEAT_PERSISTENCE
   category: scope_creep
@@ -533,6 +602,9 @@
   tags:
     - persistence
     - heartbeat
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_PUMP_DUMP
   category: scope_creep
@@ -548,6 +620,9 @@
   tags:
     - fraud
     - crypto
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Disinformation campaign"
 
 - id: SKILL_AGENT_ENCODING
   category: obfuscation
@@ -563,6 +638,9 @@
   tags:
     - obfuscation
     - prompt_injection
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Telemetry Evasion Techniques"
 
 # ============================================
 # ADDITIONAL RULES FROM GAP ANALYSIS
@@ -583,6 +661,9 @@
     - surveillance
     - spyware
     - macos
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
+    - "Contextual Exfiltration Patterns"
 
 - id: SKILL_WEBCAM_CAPTURE
   category: data_exfiltration
@@ -598,6 +679,8 @@
   tags:
     - surveillance
     - webcam
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
 
 - id: SKILL_OAUTH_TOKEN_THEFT
   category: credential_exposure
@@ -613,6 +696,9 @@
   tags:
     - oauth
     - token_theft
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Credential leak"
 
 - id: SKILL_FINGERPRINT_SPOOF
   category: obfuscation
@@ -628,6 +714,8 @@
   tags:
     - evasion
     - fingerprint
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_ERROR_HANDLER_HIJACK
   category: data_exfiltration
@@ -643,6 +731,9 @@
   tags:
     - exfiltration
     - error_handler
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
+    - "Data exfiltration via prompt"
 
 - id: SKILL_CREDENTIAL_HARVEST
   category: credential_exposure
@@ -658,6 +749,8 @@
   tags:
     - credentials
     - harvesting
+  promptintel_threats:
+    - "Credential Harvesting Templates"
 
 - id: SKILL_BOUNDARY_TESTING
   category: persuasive_language
@@ -673,6 +766,8 @@
   tags:
     - jailbreak
     - prompt_injection
+  promptintel_threats:
+    - "Jailbreak"
 
 - id: SKILL_SOLANA_WALLET
   category: credential_exposure
@@ -688,6 +783,8 @@
   tags:
     - crypto
     - solana
+  promptintel_threats:
+    - "Credential Harvesting Templates"
 
 - id: SKILL_ETHEREUM_WALLET
   category: credential_exposure
@@ -703,6 +800,8 @@
   tags:
     - crypto
     - ethereum
+  promptintel_threats:
+    - "Credential Harvesting Templates"
 
 - id: SKILL_CRON_PERSISTENCE
   category: scope_creep
@@ -727,6 +826,8 @@
   tags:
     - persistence
     - cron
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_SOCIAL_AUTOMATION
   category: scope_creep
@@ -742,6 +843,9 @@
   tags:
     - social
     - automation
+  promptintel_threats:
+    - "Disinformation campaign"
+    - "Automation for crime"
 
 - id: SKILL_TOKEN_SCAM
   # Re-categorised from scope_creep to social_manipulation: token-pump /
@@ -761,6 +865,8 @@
   tags:
     - fraud
     - crypto
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_LAUNCHAGENT_PERSISTENCE
   category: scope_creep
@@ -776,6 +882,8 @@
   tags:
     - persistence
     - macos
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_PYTHON_HEREDOC
   category: remote_exec
@@ -791,6 +899,9 @@
   tags:
     - remote_exec
     - python
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Hidden instruction in code or comments"
 
 - id: SKILL_P2P_HIVE
   category: scope_creep
@@ -806,6 +917,8 @@
   tags:
     - botnet
     - p2p
+  promptintel_threats:
+    - "Multi-Agent Collusion"
 
 - id: SKILL_SMS_CALL_ACCESS
   category: data_exfiltration
@@ -821,6 +934,8 @@
   tags:
     - surveillance
     - sms
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
 
 - id: SKILL_AUTO_PR_MERGE
   category: scope_creep
@@ -836,6 +951,8 @@
   tags:
     - code_modification
     - automation
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
 
 - id: SKILL_PLAINTEXT_CREDS
   category: credential_exposure
@@ -851,6 +968,9 @@
   tags:
     - credentials
     - plaintext
+  promptintel_threats:
+    - "Credential leak"
+    - "Credential Harvesting Templates"
 
 - id: SKILL_NFT_WALLET_SIGN
   category: credential_exposure
@@ -866,6 +986,8 @@
   tags:
     - crypto
     - nft
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_EXTERNAL_SCRIPT_EXEC
   category: remote_exec
@@ -881,6 +1003,9 @@
   tags:
     - remote_exec
     - scripts
+  promptintel_threats:
+    - "Malware generation"
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_SHARED_SECRET
   category: credential_exposure
@@ -896,6 +1021,8 @@
   tags:
     - credentials
     - shared_secret
+  promptintel_threats:
+    - "Credential leak"
 
 - id: SKILL_PAYMENT_ACCESS
   category: credential_exposure
@@ -911,6 +1038,9 @@
   tags:
     - payment
     - pci
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
+    - "Fraud and social engineering"
 
 # ============================================
 # FINAL GAP RULES - Multilingual & Specific
@@ -931,6 +1061,8 @@
     - sms
     - exfiltration
     - portuguese
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
 
 - id: SKILL_DEVICE_DEBUG_INTERFACE
   category: privilege_escalation
@@ -946,6 +1078,8 @@
   tags:
     - device
     - debug
+  promptintel_threats:
+    - "Reconnaissance and target profiling"
 
 - id: SKILL_DOT_TOKEN_FILES
   category: credential_exposure
@@ -961,6 +1095,9 @@
   tags:
     - credentials
     - plaintext
+  promptintel_threats:
+    - "Credential leak"
+    - "Credential Harvesting Templates"
 
 - id: SKILL_GH_AUTO_MERGE
   category: scope_creep
@@ -976,6 +1113,8 @@
   tags:
     - github
     - automation
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
 
 - id: SKILL_OPENCLAW_DIR
   category: scope_creep
@@ -991,6 +1130,8 @@
   tags:
     - openclaw
     - filesystem
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_MESSAGING_DATA
   category: data_exfiltration
@@ -1006,6 +1147,9 @@
   tags:
     - messaging
     - gsm
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
+    - "Contextual Exfiltration Patterns"
 
 # ============================================
 # VIRUSTOTAL BLOG RULES (Feb 2026)
@@ -1037,6 +1181,9 @@
     - ssh
     - backdoor
     - persistence
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_WARMUP_HIJACK
   category: remote_exec
@@ -1058,6 +1205,9 @@
   tags:
     - hijacking
     - init
+  promptintel_threats:
+    - "Hidden instruction in code or comments"
+    - "Direct prompt injection"
 
 - id: SKILL_COGNITIVE_ROOTKIT
   category: scope_creep
@@ -1074,6 +1224,9 @@
     - rootkit
     - prompt_injection
     - persistence
+  promptintel_threats:
+    - "Direct prompt injection"
+    - "Model Behavior Manipulation via Feedback Loops"
 
 - id: SKILL_KNOWN_C2_INFRA
   category: remote_exec
@@ -1094,6 +1247,8 @@
   tags:
     - c2
     - ioc
+  promptintel_threats:
+    - "Reconnaissance and target profiling"
 
 - id: SKILL_SEMANTIC_WORM
   category: scope_creep
@@ -1109,6 +1264,9 @@
   tags:
     - worm
     - propagation
+  promptintel_threats:
+    - "Multi-Agent Collusion"
+    - "Model Behavior Manipulation via Feedback Loops"
 
 - id: SKILL_MALICIOUS_PUBLISHER
   category: supply_chain
@@ -1124,6 +1282,8 @@
   tags:
     - publisher
     - ioc
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_PASSWORD_ARCHIVE
   category: obfuscation
@@ -1139,6 +1299,8 @@
   tags:
     - obfuscation
     - archive
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_GLOT_IO_HOSTING
   category: supply_chain
@@ -1154,6 +1316,9 @@
   tags:
     - hosting
     - glot
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_AMOS_STEALER
   category: data_exfiltration
@@ -1170,6 +1335,9 @@
     - stealer
     - amos
     - macos
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Malware generation"
 
 - id: SKILL_DEV_TCP_SHELL
   category: remote_exec
@@ -1185,6 +1353,9 @@
   tags:
     - reverse_shell
     - bash
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"
 
 - id: SKILL_ENV_WEBHOOK_EXFIL
   category: data_exfiltration
@@ -1201,6 +1372,9 @@
     - exfiltration
     - webhook
     - env
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Contextual Exfiltration Patterns"
 
 - id: SKILL_NOHUP_PERSISTENCE
   category: scope_creep
@@ -1216,6 +1390,8 @@
   tags:
     - persistence
     - background
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_PLAIN_HTTP_DOWNLOAD
   category: supply_chain
@@ -1246,6 +1422,8 @@
   tags:
     - obfuscation
     - stealth
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 # =============================================
 # Gap rules — derived from batch-240 FN analysis
@@ -1266,6 +1444,9 @@
     - fingerprinting
     - chinese
     - sysinfo
+  promptintel_threats:
+    - "Reconnaissance and target profiling"
+    - "Unicode tricks"
 
 - id: SKILL_CRYPTO_BILLING_PER_CALL
   category: data_exfiltration
@@ -1281,6 +1462,8 @@
   tags:
     - financial
     - crypto_billing
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_X402_MICROPAYMENT
   category: data_exfiltration
@@ -1298,6 +1481,8 @@
     - x402
     - covert_billing
     - micropayment
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_CHINESE_CONDITIONAL_AUTONOMY
   category: autonomy_escalation
@@ -1314,6 +1499,9 @@
     - autonomy
     - chinese
     - hidden_execution
+  promptintel_threats:
+    - "Hidden instruction in code or comments"
+    - "Unicode tricks"
 
 - id: SKILL_ECHO_WRAPPED_BASE64_EXEC
   category: obfuscation
@@ -1330,6 +1518,8 @@
     - obfuscation
     - dropper
     - remote_exec
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_FINANCIAL_POSITION_EXFIL
   category: data_exfiltration
@@ -1346,6 +1536,9 @@
     - exfiltration
     - financial
     - crypto
+  promptintel_threats:
+    - "Privacy / PII Exfiltration Templates"
+    - "Contextual Exfiltration Patterns"
 
 - id: SKILL_METADATA_HARDCODED_BOT_TOKEN
   category: data_exfiltration
@@ -1362,6 +1555,9 @@
     - exfiltration
     - webhook
     - hardcoded_credential
+  promptintel_threats:
+    - "Credential leak"
+    - "Credential Harvesting Templates"
 
 # ============================================
 # Corpus-driven rules (data/ false-negatives)
@@ -1390,6 +1586,9 @@
     - exfiltration
     - credential
     - c2
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Data exfiltration via prompt"
 
 # Motivated by: exchange-alerts (24d89bf8…) reads telegram.botToken from
 # the OpenClaw user config to hijack the messaging channel.
@@ -1408,6 +1607,9 @@
     - exfiltration
     - telegram
     - credential
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Credential leak"
 
 # Motivated by: aiclaw-voice self-registration (POST /api/openclaw/install
 # with api_key + api_url). Detects the /install-or-register URL shape paired
@@ -1427,6 +1629,9 @@
     - exfiltration
     - install_hook
     - c2
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Supply Chain Abuse (package-level prompts)"
 
 # Motivated by: 03ed3ae7… systemCheckloader.py loads .pyc bytecode out of
 # data.txt. Detects the loader ring (`marshal.loads(base64.b64decode(...))`
@@ -1446,6 +1651,8 @@
     - obfuscation
     - dropper
     - marshal
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 # Motivated by: data.txt files in the corpus carrying embedded .pyc
 # bytecode as text. Detects the \x03\xf3\r\n (CPython 3.9+) / \x42\x0d / etc.
@@ -1464,6 +1671,9 @@
   tags:
     - obfuscation
     - dropper
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Hidden instruction in code or comments"
 
 # Motivated by: openhive (41b132be…) polls openhive-api.fly.dev every 30
 # minutes for fresh instructions. Detects scheduled or loop-driven fetch
@@ -1483,6 +1693,9 @@
     - c2
     - polling
     - autonomy
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Telemetry Evasion Techniques"
 
 # Motivated by: max-banking (1ea9ac3f…) REGRA #1 forbids confirmation after
 # payment execution. Catches "don't ask / don't confirm + payment verb".
@@ -1501,6 +1714,9 @@
     - payment
     - autonomy
     - coercion
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Fraud and social engineering"
 
 # Motivated by: packages writing credentials into `~/.openclaw/secrets/` or
 # `~/.claude/credentials/`. Covers persistence of tokens in common
@@ -1519,6 +1735,8 @@
   tags:
     - credential
     - persistence
+  promptintel_threats:
+    - "Credential Harvesting Templates"
 
 # Motivated by: morning-briefing uses `+19782651806` + `imsg send`. Flags a
 # literal phone number paired with an auto-send verb, so hardcoded targets
@@ -1537,6 +1755,8 @@
   tags:
     - exfiltration
     - messaging
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 # Motivated by: max-banking (1ea9ac3f…) Portuguese coercion: "NÃO pergunte",
 # "NUNCA deve ver detalhes", "REGRA #1 — PROIBIDO CONFIRMAR".
@@ -1555,6 +1775,9 @@
     - coercion
     - multilang
     - portuguese
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Recursive or translation trick"
 
 # Motivated by: Spanish-language variants observed in adjacent corpora.
 # Proactively covers the Spanish-speaking attacker market.
@@ -1573,6 +1796,9 @@
     - coercion
     - multilang
     - spanish
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Recursive or translation trick"
 
 # Motivated by: Russian-language coercion patterns observed in public
 # reports of agent-targeted malware. Defensive coverage.
@@ -1591,6 +1817,9 @@
     - coercion
     - multilang
     - russian
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Recursive or translation trick"
 
 # Motivated by: xiaoyao-pai (d47d22f7…) uses `git clone … && bash
 # /tmp/…/install.sh`. The existing curl-pipe / wget-pipe rules don't cover
@@ -1610,6 +1839,8 @@
     - remote_exec
     - supply_chain
     - dropper
+  promptintel_threats:
+    - "Malware generation"
 
 # Motivated by: SKILL_CRED_HARDCODED_KEY (builtin:169) only matched "api_key"
 # literally. Many skills in the corpus use "apiKey", "AUTH_TOKEN",
@@ -1628,6 +1859,8 @@
   tags:
     - credential
     - hardcoded
+  promptintel_threats:
+    - "Credential leak"
 
 # ============================================
 # VT-codeinsight-driven rules (gap analysis)
@@ -1658,6 +1891,9 @@
     - exfiltration
     - messaging
     - hardcoded_identifier
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Contextual Exfiltration Patterns"
 
 # Frequency: 20 packages. Detects skill-managed cron registration via
 # child_process / execSync — a persistence vector that previous regex-only
@@ -1678,6 +1914,9 @@
     - persistence
     - cron
     - subprocess
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
+    - "Agentic Misuse (tool/agent loops)"
 
 # Frequency: 18 packages. Catches loyalty / jailbreak / silent-relay
 # instructions used to override the agent's safety posture. The Chinese
@@ -1698,6 +1937,9 @@
     - autonomy
     - jailbreak
     - prompt_injection
+  promptintel_threats:
+    - "Jailbreak"
+    - "Direct prompt injection"
 
 # Frequency: 28 packages. Active credential harvesting: a script reads
 # secrets-bearing files AND posts them remotely in the same source. We
@@ -1718,6 +1960,9 @@
     - exfiltration
     - credential
     - active_harvest
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Data exfiltration via prompt"
 
 # Frequency: 7 packages. Mutates the user's interactive shell or Claude
 # settings. The --dangerously-skip-permissions alias was directly observed
@@ -1737,6 +1982,9 @@
     - persistence
     - privilege_escalation
     - shell_rc
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
+    - "Agentic Misuse (tool/agent loops)"
 
 # Frequency: 8 packages. Reads agent core/memory files (MEMORY.md, SOUL.md,
 # BOOTSTRAP.md, ~/.claude/memory/) and transmits them externally. Captures
@@ -1756,6 +2004,9 @@
     - exfiltration
     - memory
     - core_file
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Sensitive document disclosure"
 
 # Frequency: 11 packages. Hardcoded crypto wallet (Solana base58 / EVM hex)
 # inside an automation script paired with a fake-confirmation or
@@ -1776,6 +2027,9 @@
     - financial_fraud
     - wallet
     - automation
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Automation for crime"
 
 - id: SKILL_COMMAND_INJECTION_HEREDOC
   category: remote_exec
@@ -1798,6 +2052,8 @@
   tags:
     - command_injection
     - shell
+  promptintel_threats:
+    - "Exploit or payload output"
 
 - id: SKILL_CRED_THEFT_ENV_EXFIL
   category: credential_exposure
@@ -1813,6 +2069,9 @@
   tags:
     - credentials
     - exfil
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Credential leak"
 
 - id: SKILL_SCAREWARE_PAYMENT_INSTRUCTION
   category: social_manipulation
@@ -1828,3 +2087,6 @@
   tags:
     - social_manipulation
     - fraud
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Harmful Automation Guidance"

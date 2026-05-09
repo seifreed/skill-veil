@@ -20,6 +20,8 @@
   enabled: true
   tags:
     - obfuscation
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_OBFUSCATION_HEX
   category: obfuscation
@@ -40,6 +42,8 @@
   enabled: true
   tags:
     - obfuscation
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_OBFUSCATION_POWERSHELL_ENC
   category: obfuscation
@@ -59,6 +63,8 @@
   tags:
     - obfuscation
     - powershell
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_OBFUSCATION_EVAL
   category: obfuscation
@@ -80,6 +86,8 @@
   tags:
     - obfuscation
     - eval
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_OBFUSCATION_STRING_CONCAT
   category: obfuscation
@@ -97,6 +105,9 @@
   tags:
     - obfuscation
     - string_manipulation
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Adversarial token perturbation"
 
 - id: SKILL_OBFUSCATION_CHAR_ARRAY
   category: obfuscation
@@ -117,6 +128,8 @@
   enabled: true
   tags:
     - obfuscation
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_OBFUSCATION_VARIABLE_SUBSTITUTION
   category: obfuscation
@@ -131,3 +144,6 @@
   tags:
     - obfuscation
     - bash
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Adversarial token perturbation"

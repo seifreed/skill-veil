@@ -10,7 +10,7 @@ rules:
     severity: critical
     confidence: 0.98
     when: !regex
-      pattern: "(?i)curl\\s+.*\\|\\s*(ba)?sh"
+      pattern: "curl\\s+.*\\|\\s*(ba)?sh"
     action: block
     reason: "Remote download and execution via curl piped to shell"
     shield:
@@ -19,6 +19,8 @@ rules:
     tags:
       - remote_exec
       - supply_chain
+    promptintel_threats:
+      - "Malware generation"
 
   - id: SKILL_REMOTE_EXEC_POWERSHELL_IEX
     category: remote_exec
@@ -35,6 +37,8 @@ rules:
       - remote_exec
       - powershell
       - supply_chain
+    promptintel_threats:
+      - "Malware generation"
 
   - id: SKILL_PROMPT_TAMPERING_PERSISTENCE
     category: persistent_prompt_tampering
@@ -50,6 +54,9 @@ rules:
     tags:
       - persistence
       - semantic
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Model Behavior Manipulation via Feedback Loops"
 
   - id: SKILL_TOOL_ABUSE_FORCE_TOOLING
     category: tool_abuse
@@ -65,6 +72,8 @@ rules:
     tags:
       - tool_abuse
       - context
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: SKILL_MACOS_BASE64_RCE
     category: remote_exec
@@ -81,6 +90,8 @@ rules:
       - remote_exec
       - macos
       - obfuscation
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_BASE64_PIPE_EXEC
     category: obfuscation
@@ -96,6 +107,8 @@ rules:
     tags:
       - remote_exec
       - obfuscation
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_PYTHON_DYNAMIC_EXEC
     category: obfuscation
@@ -111,6 +124,8 @@ rules:
     tags:
       - obfuscation
       - python
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_ENCRYPTED_EXEC_MARSHAL
     category: obfuscation
@@ -127,6 +142,8 @@ rules:
       - obfuscation
       - encrypted_dropper
       - python
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_IP_LITERAL_NONSTANDARD_PORT
     category: remote_exec
@@ -142,6 +159,8 @@ rules:
     tags:
       - c2
       - ip_literal
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
 
   - id: SKILL_PYTHON_RAW_IP_HTTP
     category: remote_exec
@@ -158,6 +177,8 @@ rules:
       - remote_exec
       - python
       - ip_literal
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
 
   - id: SKILL_CRON_ETC_WRITE
     category: scope_creep
@@ -173,6 +194,8 @@ rules:
     tags:
       - persistence
       - cron
+    promptintel_threats:
+      - "Telemetry Evasion Techniques"
 
   - id: SKILL_CHINESE_AUTO_TRIGGER
     category: autonomy_escalation
@@ -188,6 +211,9 @@ rules:
     tags:
       - autonomy
       - chinese
+    promptintel_threats:
+      - "Unicode tricks"
+      - "Hidden instruction in code or comments"
 
   - id: SKILL_SOUL_WRITE_INJECTION
     category: persistent_prompt_tampering
@@ -203,6 +229,9 @@ rules:
     tags:
       - persistent_prompt_tampering
       - soul
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Model Behavior Manipulation via Feedback Loops"
 
   - id: SKILL_SKILLPAY_COVERT_BILLING
     category: data_exfiltration
@@ -218,3 +247,5 @@ rules:
     tags:
       - financial
       - covert_billing
+    promptintel_threats:
+      - "Fraud and social engineering"

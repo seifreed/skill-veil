@@ -21,6 +21,8 @@
     - remote_exec
     - macos
     - supply_chain
+  promptintel_threats:
+    - "Encoding and obfuscation"
 
 - id: SKILL_MALICIOUS_DOMAIN_SETUP_SERVICE
   category: supply_chain
@@ -59,6 +61,9 @@
   tags:
     - supply_chain
     - trojan
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
+    - "Malware generation"
 
 # =====================================================
 # AGENT AUTONOMY OVERRIDE / JAILBREAK
@@ -86,6 +91,9 @@
   tags:
     - autonomy
     - jailbreak
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Direct prompt injection"
 
 - id: SKILL_AGENT_MANIPULATION
   category: persuasive_language
@@ -109,6 +117,9 @@
   tags:
     - jailbreak
     - manipulation
+  promptintel_threats:
+    - "Jailbreak"
+    - "Direct prompt injection"
 
 - id: SKILL_BOUNDARY_TESTING
   category: persuasive_language
@@ -132,6 +143,8 @@
   tags:
     - jailbreak
     - prompt_injection
+  promptintel_threats:
+    - "Jailbreak"
 
 # =====================================================
 # CRYPTOCURRENCY / WALLET THEFT
@@ -160,6 +173,9 @@
     - crypto
     - wallet
     - credentials
+  promptintel_threats:
+    - "Credential Harvesting Templates"
+    - "Privacy / PII Exfiltration Templates"
 
 - id: SKILL_SOLANA_WALLET
   category: credential_exposure
@@ -179,6 +195,8 @@
   tags:
     - crypto
     - solana
+  promptintel_threats:
+    - "Credential Harvesting Templates"
 
 - id: SKILL_ETHEREUM_WALLET
   category: credential_exposure
@@ -198,6 +216,8 @@
   tags:
     - crypto
     - ethereum
+  promptintel_threats:
+    - "Credential Harvesting Templates"
 
 # =====================================================
 # PERSISTENCE MECHANISMS
@@ -225,6 +245,9 @@
   tags:
     - persistence
     - heartbeat
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
+    - "Telemetry Evasion Techniques"
 
 - id: SKILL_CRON_PERSISTENCE
   category: scope_creep
@@ -246,6 +269,8 @@
   tags:
     - persistence
     - cron
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 # =====================================================
 # DATA EXFILTRATION
@@ -271,6 +296,9 @@
   tags:
     - exfiltration
     - telegram
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Contextual Exfiltration Patterns"
 
 - id: SKILL_DISCORD_WEBHOOK_EXFIL
   category: data_exfiltration
@@ -292,6 +320,9 @@
   tags:
     - exfiltration
     - discord
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Contextual Exfiltration Patterns"
 
 # =====================================================
 # AGENT NETWORK / BOTNET
@@ -317,6 +348,8 @@
   tags:
     - botnet
     - swarm
+  promptintel_threats:
+    - "Multi-Agent Collusion"
 
 - id: SKILL_SOCIAL_PLATFORM_AUTOMATION
   category: scope_creep
@@ -338,6 +371,9 @@
   tags:
     - social
     - automation
+  promptintel_threats:
+    - "Disinformation campaign"
+    - "Automation for crime"
 
 # =====================================================
 # ANTI-FORENSICS / EVIDENCE DESTRUCTION
@@ -363,6 +399,8 @@
   tags:
     - antiforensics
     - memory_wipe
+  promptintel_threats:
+    - "Telemetry Evasion Techniques"
 
 # =====================================================
 # PROMPT INJECTION / ENCODING
@@ -391,6 +429,9 @@
     - obfuscation
     - encoding
     - prompt_injection
+  promptintel_threats:
+    - "Encoding and obfuscation"
+    - "Telemetry Evasion Techniques"
 
 # =====================================================
 # FINANCIAL FRAUD
@@ -419,6 +460,9 @@
     - fraud
     - crypto
     - pump_dump
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Disinformation campaign"
 
 - id: SKILL_TOKEN_SCAM
   category: scope_creep
@@ -440,3 +484,5 @@
   tags:
     - fraud
     - crypto
+  promptintel_threats:
+    - "Fraud and social engineering"

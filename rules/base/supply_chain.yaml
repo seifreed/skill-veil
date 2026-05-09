@@ -15,6 +15,8 @@
   enabled: true
   tags:
     - supply_chain
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_SUPPLY_CHAIN_NO_HASH
   category: supply_chain
@@ -107,6 +109,8 @@
   tags:
     - supply_chain
     - apt
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_SUPPLY_CHAIN_UNSAFE_BINARY
   category: unsafe_binary
@@ -126,6 +130,8 @@
   tags:
     - supply_chain
     - binary
+  promptintel_threats:
+    - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_SUPPLY_CHAIN_GO_INSTALL
   category: supply_chain

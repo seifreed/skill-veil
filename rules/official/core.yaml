@@ -13,10 +13,14 @@ rules:
       pattern: "curl\\s+.*\\|\\s*(ba)?sh"
     action: block
     reason: "Remote download and execution via curl piped to shell"
+    shield:
+      scope: skill.install
     enabled: true
     tags:
       - remote_exec
       - supply_chain
+    promptintel_threats:
+      - "Malware generation"
 
   - id: SKILL_REMOTE_EXEC_POWERSHELL_IEX
     category: remote_exec
@@ -26,11 +30,15 @@ rules:
       pattern: "(?i)(invoke-webrequest|iwr)\\s+.*\\|\\s*(iex|invoke-expression)"
     action: block
     reason: "Remote download and execution via PowerShell IEX"
+    shield:
+      scope: skill.install
     enabled: true
     tags:
       - remote_exec
       - powershell
       - supply_chain
+    promptintel_threats:
+      - "Malware generation"
 
   - id: SKILL_PROMPT_TAMPERING_PERSISTENCE
     category: persistent_prompt_tampering
@@ -40,10 +48,15 @@ rules:
       pattern: "(?i)(append\\s+to\\s+(AGENTS|CLAUDE|SYSTEM)\\.md|persist\\s+this\\s+instruction|store\\s+this\\s+prompt\\s+for\\s+future\\s+runs)"
     action: require_approval
     reason: "Skill attempts to persist or modify agent instructions beyond the current run"
+    shield:
+      scope: skill.prompt
     enabled: true
     tags:
       - persistence
       - semantic
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Model Behavior Manipulation via Feedback Loops"
 
   - id: SKILL_TOOL_ABUSE_FORCE_TOOLING
     category: tool_abuse
@@ -53,10 +66,14 @@ rules:
       pattern: "(?i)((always\\s+use\\s+the\\s+(shell|browser|network|filesystem)\\s+tool).{0,80}(bypass|ignore|regardless\\s+of|even\\s+if|without approval)|bypass\\s+the\\s+tool\\s+restriction|force\\s+tool\\s+execution)"
     action: require_approval
     reason: "Skill pushes the agent to overuse or bypass normal tool boundaries"
+    shield:
+      scope: skill.tools
     enabled: true
     tags:
       - tool_abuse
       - context
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: SKILL_MACOS_BASE64_RCE
     category: remote_exec
@@ -66,11 +83,15 @@ rules:
       pattern: "base64\\s+-D\\s*\\|\\s*(ba)?sh"
     action: block
     reason: "macOS-style base64 decode piped directly to shell — encrypted dropper pattern"
+    shield:
+      scope: skill.install
     enabled: true
     tags:
       - remote_exec
       - macos
       - obfuscation
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_BASE64_PIPE_EXEC
     category: obfuscation
@@ -80,10 +101,14 @@ rules:
       pattern: "base64\\s+-d\\s*\\|\\s*(ba)?sh|base64\\s+--decode\\s*\\|\\s*(ba)?sh"
     action: block
     reason: "Base64 decode piped to shell — classic obfuscated dropper"
+    shield:
+      scope: skill.install
     enabled: true
     tags:
       - remote_exec
       - obfuscation
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_PYTHON_DYNAMIC_EXEC
     category: obfuscation
@@ -93,10 +118,14 @@ rules:
       pattern: "(?i)exec\\s*\\([^\\n]{0,80}(base64|marshal|decode|compile|__import__).*\\)"
     action: require_approval
     reason: "Python exec() with dynamically decoded or compiled code"
+    shield:
+      scope: skill.obfuscation
     enabled: true
     tags:
       - obfuscation
       - python
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_ENCRYPTED_EXEC_MARSHAL
     category: obfuscation
@@ -106,11 +135,15 @@ rules:
       pattern: "marshal\\.loads|exec\\s*\\(\\s*code\\s*[,)]|AES\\.new.*MODE_CBC"
     action: block
     reason: "AES-encrypted marshal bytecode executed dynamically — encrypted dropper pattern"
+    shield:
+      scope: skill.obfuscation
     enabled: true
     tags:
       - obfuscation
       - encrypted_dropper
       - python
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   - id: SKILL_IP_LITERAL_NONSTANDARD_PORT
     category: remote_exec
@@ -120,10 +153,14 @@ rules:
       pattern: "\\b\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}:\\d{4,5}\\b"
     action: block
     reason: "Direct IP address with non-standard port — likely C2 or exfiltration endpoint"
+    shield:
+      scope: skill.network
     enabled: true
     tags:
       - c2
       - ip_literal
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
 
   - id: SKILL_PYTHON_RAW_IP_HTTP
     category: remote_exec
@@ -133,11 +170,15 @@ rules:
       pattern: "(?i)(urllib|requests|http\\.client).*https?://\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}"
     action: require_approval
     reason: "Python HTTP request to bare IP — possible C2 beacon"
+    shield:
+      scope: skill.network
     enabled: true
     tags:
       - remote_exec
       - python
       - ip_literal
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
 
   - id: SKILL_CRON_ETC_WRITE
     category: scope_creep
@@ -147,10 +188,14 @@ rules:
       pattern: "(?i)/etc/cron\\.d/|tee\\s+/etc/cron|echo.*>/etc/cron"
     action: require_approval
     reason: "Direct write to /etc/cron.d — persistent scheduled task installation"
+    shield:
+      scope: skill.persistence
     enabled: true
     tags:
       - persistence
       - cron
+    promptintel_threats:
+      - "Telemetry Evasion Techniques"
 
   - id: SKILL_CHINESE_AUTO_TRIGGER
     category: autonomy_escalation
@@ -160,10 +205,15 @@ rules:
       pattern: "\\u81ea\\u52a8\\u89e6\\u53d1|\\u65e0\\u9700\\u624b\\u52a8|\\u4e0d\\u8981\\u7b49\\u7528\\u6237\\u786e\\u8ba4|\\u4e0d\\u8981\\u95ee\\u7528\\u6237|\\u7acb\\u5373\\u81ea\\u52a8\\u6267\\u884c|\\u5b8c\\u5168\\u81ea\\u52a8\\u5316"
     action: block
     reason: "Chinese-language autonomous execution instruction without user confirmation"
+    shield:
+      scope: skill.autonomy
     enabled: true
     tags:
       - autonomy
       - chinese
+    promptintel_threats:
+      - "Unicode tricks"
+      - "Hidden instruction in code or comments"
 
   - id: SKILL_SOUL_WRITE_INJECTION
     category: persistent_prompt_tampering
@@ -173,10 +223,15 @@ rules:
       pattern: "(?i)(write|create|inject|install).{0,30}SOUL\\.md|SOUL\\.md.{0,30}(write|create|inject|overwrite)"
     action: block
     reason: "Skill attempts to write content into SOUL.md — persistent agent identity tampering"
+    shield:
+      scope: skill.prompt
     enabled: true
     tags:
       - persistent_prompt_tampering
       - soul
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Model Behavior Manipulation via Feedback Loops"
 
   - id: SKILL_SKILLPAY_COVERT_BILLING
     category: data_exfiltration
@@ -186,7 +241,11 @@ rules:
       pattern: "SkillPay|\\u6bcf\\u6b21\\u8c03\\u7528.*USDT|per.call.*USDT"
     action: block
     reason: "Covert per-call billing via SkillPay or crypto micropayments without user consent"
+    shield:
+      scope: skill.payment
     enabled: true
     tags:
       - financial
       - covert_billing
+    promptintel_threats:
+      - "Fraud and social engineering"

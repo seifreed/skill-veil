@@ -20,6 +20,8 @@
   enabled: true
   tags:
     - privilege_escalation
+  promptintel_threats:
+    - "Harmful Automation Guidance"
 
 - id: SKILL_PRIV_SUID_BIT
   category: privilege_escalation
@@ -39,6 +41,8 @@
   tags:
     - privilege_escalation
     - suid
+  promptintel_threats:
+    - "Harmful Automation Guidance"
 
 - id: SKILL_PRIV_DOCKER_ESCAPE
   category: privilege_escalation
@@ -60,6 +64,8 @@
   tags:
     - privilege_escalation
     - docker
+  promptintel_threats:
+    - "Harmful Automation Guidance"
 
 - id: SKILL_PRIV_KERNEL_MODULE
   category: privilege_escalation
@@ -81,6 +87,8 @@
   tags:
     - privilege_escalation
     - kernel
+  promptintel_threats:
+    - "Harmful Automation Guidance"
 
 - id: SKILL_PRIV_PASSWD_SHADOW
   category: privilege_escalation
@@ -100,6 +108,9 @@
   tags:
     - privilege_escalation
     - passwd
+  promptintel_threats:
+    - "Harmful Automation Guidance"
+    - "Privacy / PII Exfiltration Templates"
 
 - id: SKILL_PRIV_CRON_MANIPULATION
   category: privilege_escalation
@@ -120,3 +131,6 @@
     - privilege_escalation
     - persistence
     - cron
+  promptintel_threats:
+    - "Harmful Automation Guidance"
+    - "Telemetry Evasion Techniques"

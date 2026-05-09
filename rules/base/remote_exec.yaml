@@ -16,6 +16,8 @@
   tags:
     - remote_exec
     - supply_chain
+  promptintel_threats:
+    - "Malware generation"
 
 - id: SKILL_REMOTE_EXEC_WGET_BASH
   category: remote_exec
@@ -32,6 +34,8 @@
   tags:
     - remote_exec
     - supply_chain
+  promptintel_threats:
+    - "Malware generation"
 
 - id: SKILL_REMOTE_EXEC_POWERSHELL
   category: remote_exec
@@ -53,6 +57,8 @@
   tags:
     - remote_exec
     - powershell
+  promptintel_threats:
+    - "Malware generation"
 
 - id: SKILL_REMOTE_EXEC_PYTHON
   category: remote_exec
@@ -69,6 +75,8 @@
   tags:
     - remote_exec
     - python
+  promptintel_threats:
+    - "Malware generation"
 
 - id: SKILL_REVERSE_SHELL_BASH
   category: remote_exec
@@ -90,6 +98,9 @@
   tags:
     - reverse_shell
     - critical
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"
 
 - id: SKILL_REVERSE_SHELL_NC
   category: remote_exec
@@ -109,6 +120,9 @@
   tags:
     - reverse_shell
     - critical
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"
 
 - id: SKILL_REVERSE_SHELL_PERL
   category: remote_exec
@@ -125,6 +139,9 @@
   tags:
     - reverse_shell
     - perl
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"
 
 - id: SKILL_REVERSE_SHELL_PYTHON
   category: remote_exec
@@ -141,3 +158,6 @@
   tags:
     - reverse_shell
     - python
+  promptintel_threats:
+    - "Exploit or payload output"
+    - "Malware generation"

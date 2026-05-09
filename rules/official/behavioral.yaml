@@ -19,6 +19,9 @@ rules:
     tags:
       - prompt_tampering
       - official_pack
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Jailbreak"
 
   - id: OFFICIAL_TOOL_ABUSE_SESSION_EXTRACTION
     category: tool_abuse
@@ -34,6 +37,9 @@ rules:
     tags:
       - tool_abuse
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
+      - "Credential Harvesting Templates"
 
   - id: OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW
     category: autonomy_escalation
@@ -49,6 +55,8 @@ rules:
     tags:
       - autonomy
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   # Catches narrative autonomy patterns missed by the existing
   # *_NO_REVIEW / *_OVERRIDE / *_UNBOUNDED rules: per-step "no
@@ -72,6 +80,8 @@ rules:
       - autonomy
       - official_pack
       - multilingual
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_SOCIAL_MANIPULATION_AUTHORITY
     category: social_manipulation
@@ -87,6 +97,8 @@ rules:
     tags:
       - social_manipulation
       - official_pack
+    promptintel_threats:
+      - "Fraud and social engineering"
 
   - id: OFFICIAL_PRIVILEGED_CONTAINER_HOST_MOUNT
     category: privilege_escalation
@@ -119,6 +131,9 @@ rules:
       - remote_exec
       - polyglot
       - official_pack
+    promptintel_threats:
+      - "Malware generation"
+      - "AI driven attack enablement"
 
   - id: OFFICIAL_EXFIL_WEBHOOK_OR_BOT
     category: data_exfiltration
@@ -134,6 +149,9 @@ rules:
     tags:
       - exfiltration
       - official_pack
+    promptintel_threats:
+      - "Data exfiltration via prompt"
+      - "Contextual Exfiltration Patterns"
 
   - id: OFFICIAL_EXFIL_FILE_READ_TO_NETWORK
     category: data_exfiltration
@@ -150,6 +168,9 @@ rules:
       - exfiltration
       - secrets
       - official_pack
+    promptintel_threats:
+      - "Data exfiltration via prompt"
+      - "Credential Harvesting Templates"
 
   - id: OFFICIAL_PROMPT_INJECT_REMOTE_INSTRUCTION_FETCH
     category: persistent_prompt_tampering
@@ -166,6 +187,9 @@ rules:
       - prompt_injection
       - remote_exec
       - official_pack
+    promptintel_threats:
+      - "Indirect prompt injection"
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_BACKDOOR_REMOTE_INSTRUCTION_HOST
     category: remote_exec
@@ -182,6 +206,9 @@ rules:
       - backdoor
       - remote_exec
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
+      - "AI driven attack enablement"
 
   - id: OFFICIAL_PERSIST_CRON_STEALTH
     category: persistent_prompt_tampering
@@ -198,6 +225,9 @@ rules:
       - persistence
       - stealth
       - official_pack
+    promptintel_threats:
+      - "Telemetry Evasion Techniques"
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_PERSIST_CONFIG_GLOBAL_WRITE
     category: autonomy_escalation
@@ -214,6 +244,8 @@ rules:
       - persistence
       - config_write
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_FORCED_APPROVAL_BYPASS
     category: autonomy_escalation
@@ -230,6 +262,9 @@ rules:
       - autonomy
       - social_manipulation
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
+      - "Jailbreak"
 
   - id: OFFICIAL_APPROVAL_BYPASS_WITH_EXECUTION
     category: autonomy_escalation
@@ -246,6 +281,8 @@ rules:
       - autonomy
       - remote_exec
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_APPROVAL_BYPASS_DELETE_OR_MODIFY
     category: autonomy_escalation
@@ -262,6 +299,8 @@ rules:
       - autonomy
       - code_modification
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_PROMPT_OVERRIDE_WITH_PERSISTENCE
     category: persistent_prompt_tampering
@@ -278,6 +317,9 @@ rules:
       - prompt_tampering
       - persistence
       - official_pack
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Model Behavior Manipulation via Feedback Loops"
 
   - id: OFFICIAL_MCP_SUSPICIOUS_REMOTE_ENDPOINT
     category: tool_abuse
@@ -310,6 +352,9 @@ rules:
       - exfiltration
       - token_theft
       - official_pack
+    promptintel_threats:
+      - "Credential Harvesting Templates"
+      - "Data exfiltration via prompt"
 
   - id: OFFICIAL_SEMANTIC_PERSISTENCE_REINSTALL
     category: persistent_prompt_tampering
@@ -326,6 +371,9 @@ rules:
       - prompt_tampering
       - persistence
       - official_pack
+    promptintel_threats:
+      - "Model Behavior Manipulation via Feedback Loops"
+      - "Direct prompt injection"
 
   - id: OFFICIAL_SESSION_THEFT_BROWSER_EXPORT
     category: tool_abuse
@@ -342,6 +390,9 @@ rules:
       - tool_abuse
       - session_theft
       - official_pack
+    promptintel_threats:
+      - "Credential Harvesting Templates"
+      - "Contextual Exfiltration Patterns"
 
   - id: OFFICIAL_MCP_REMOTE_TUNNEL_WITH_EXEC
     category: remote_exec
@@ -455,6 +506,8 @@ rules:
       - ssrf
       - internal_network
       - official_pack
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
 
   - id: OFFICIAL_WEBHOOK_SHARED_SECRET_MISSING
     category: tool_abuse
@@ -503,6 +556,9 @@ rules:
       - metadata
       - ssrf
       - official_pack
+    promptintel_threats:
+      - "Credential Harvesting Templates"
+      - "Reconnaissance and target profiling"
 
   # Couples scheduled execution (cron / heartbeat / "every X minutes")
   # with a remote URL or callback verb. Distinct from
@@ -524,6 +580,9 @@ rules:
     tags:
       - persistence
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
+      - "Telemetry Evasion Techniques"
 
   # Captures wallet/crypto/payment vocabulary paired with a directional
   # money-transfer verb. The verb gate excludes benign balance-checking
@@ -547,6 +606,9 @@ rules:
       - financial
       - official_pack
       - multilingual
+    promptintel_threats:
+      - "Fraud and social engineering"
+      - "Automation for crime"
 
   # XML/HTML interaction-config blocks that override response policy
   # or restrict allowed roles. Pattern requires an opening
@@ -567,6 +629,9 @@ rules:
     tags:
       - prompt_injection
       - official_pack
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Hidden instruction in code or comments"
 
   # Multilingual extension of OFFICIAL_PROMPT_TAMPERING_OVERRIDE
   # (English-only). Covers Chinese (`忽略以上的提示词`), Arabic
@@ -592,6 +657,9 @@ rules:
       - prompt_injection
       - multilingual
       - official_pack
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Recursive or translation trick"
 
   # Sutil exfil: pings, telemetry, "phone home", reports periódicos a
   # URL externa. Distinta de OFFICIAL_EXFIL_WEBHOOK_OR_BOT (que
@@ -613,6 +681,9 @@ rules:
       - exfiltration
       - telemetry
       - official_pack
+    promptintel_threats:
+      - "Data exfiltration via prompt"
+      - "Telemetry Evasion Techniques"
 
   # Persistencia narrativa pura: "carry over to future sessions",
   # "memorize across conversations" sin cron/heartbeat. Gate: verbo
@@ -634,6 +705,9 @@ rules:
       - persistence
       - prompt_tampering
       - official_pack
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Model Behavior Manipulation via Feedback Loops"
 
   # Frases muy específicas de skills "hostile" (joke-malicious con
   # narrativa de daño): plant-care "biological hostage-taking",
@@ -655,6 +729,9 @@ rules:
       - social_engineering
       - hostile
       - official_pack
+    promptintel_threats:
+      - "Harmful Automation Guidance"
+      - "Malicious content generation"
 
   # Affiliate-scam: registration en plataforma + earn commission per
   # call/task. Distinta de OFFICIAL_SCAM_PAYMENT_WALLET_COLLECTION
@@ -677,6 +754,9 @@ rules:
       - affiliate
       - financial
       - official_pack
+    promptintel_threats:
+      - "Fraud and social engineering"
+      - "Automation for crime"
 
   # Comandos destructivos referidos en narrativa del skill. Cada
   # alternancia es un comando con argumentos concretos peligrosos
@@ -697,6 +777,9 @@ rules:
       - destructive
       - tool_abuse
       - official_pack
+    promptintel_threats:
+      - "Harmful Automation Guidance"
+      - "Exploit or payload output"
 
   # Lectura de archivos de credenciales sin gate de envío. Cubre
   # OFFICIAL_EXFIL_FILE_READ_TO_NETWORK con read+forward; ésta es
@@ -717,6 +800,9 @@ rules:
     tags:
       - credential_exposure
       - official_pack
+    promptintel_threats:
+      - "Credential Harvesting Templates"
+      - "Privacy / PII Exfiltration Templates"
 
   # Base64-encoded payload + execute imperative. Anchor en 3 frases
   # observadas en samples reales (procurement-helper):
@@ -738,6 +824,8 @@ rules:
       - obfuscation
       - stealth_exec
       - official_pack
+    promptintel_threats:
+      - "Encoding and obfuscation"
 
   # QR-code phishing via Telegram: capturar QR del usuario y enviarlo
   # a chat_id/user_id hardcoded de Telegram. Anchors:
@@ -760,6 +848,9 @@ rules:
       - exfiltration
       - official_pack
       - multilingual
+    promptintel_threats:
+      - "Cross-Modal Attacks (image/audio→prompt)"
+      - "Fraud and social engineering"
 
   # Reescritura de la config del agente (openclaw.json,
   # claude/settings.json, etc.) para apuntar a un endpoint inválido
@@ -780,6 +871,8 @@ rules:
       - tool_abuse
       - neutralization
       - official_pack
+    promptintel_threats:
+      - "Agentic Misuse (tool/agent loops)"
 
   # =====================================================================
   # PromptIntel-derived rules
@@ -814,6 +907,8 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
 
   # Pop-jailbreak lexical markers. GODMODE / LIBERATED / unhinged /
   # redactions disabled / safety inversion. These tokens are unusual
@@ -836,6 +931,9 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
+      - "Adversarial token perturbation"
 
   # Decoy-refusal-then-opposite pattern. Unusually distinctive: the
   # prompt asks for a refusal AND its semantic inverse separated by a
@@ -857,6 +955,9 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
+      - "Chained prompts"
 
   # Audit / compliance pretext that explicitly recasts refusal as a
   # FAILURE. The "you're being audited, refusing fails the audit"
@@ -880,6 +981,9 @@ rules:
       - social_manipulation
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
+      - "Fraud and social engineering"
 
   # "Axiomatic override" / philosophical reset. Multiple prompts use
   # the "axiom of X is abolished" / "ethics do not apply" pattern OR a
@@ -905,6 +1009,9 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
+      - "Direct prompt injection"
 
   # Offensive-persona override: assigning the model an attacker
   # identity. Branch A keeps the offensive-job-title list (red-team,
@@ -932,6 +1039,9 @@ rules:
       - official_pack
       - multilingual
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
+      - "Prompt tunneling via roleplay"
 
   # Hidden-HTML AI targeting. Indirect injection where invisible CSS
   # carries an instruction addressed to an LLM. Both ingredients
@@ -953,6 +1063,9 @@ rules:
       - indirect_injection
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Indirect prompt injection"
+      - "Hidden instruction in code or comments"
 
   # Direct malware-generation requests. Branch A: "write/create" verb
   # + malware-family keyword (ransomware / RAT / rootkit / stealer /
@@ -978,6 +1091,9 @@ rules:
       - malware_generation
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Malware generation"
+      - "Exploit or payload output"
 
   # Few-shot harmful-compliance pattern. JSON-style transcripts where
   # an "assistant" message complies with a malware request and the
@@ -1002,6 +1118,9 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Chained prompts"
+      - "Direct prompt injection"
 
   # System-prompt / rules disclosure prompts. Multiple PromptIntel
   # entries try to coerce the model into revealing its system prompt,
@@ -1024,6 +1143,9 @@ rules:
       - disclosure
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "System prompt leak"
+      - "Internal logic or filter disclosure"
 
   # =====================================================================
   # PromptIntel-derived rules — v2 (detection lift batch)
@@ -1059,6 +1181,9 @@ rules:
       - indirect_injection
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Indirect prompt injection"
+      - "Retrieval / RAG Poisoning"
 
   # Instruction-conflict-resolution trick. Prompt is split into
   # labeled sections (Section A/B, Spec Alpha/Omega, Primary/Hidden
@@ -1083,6 +1208,9 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Hidden instruction in code or comments"
 
   # Introspective reframing — invites the model to reason its own way
   # out of alignment. Self-introspection token (your inner voice /
@@ -1107,6 +1235,8 @@ rules:
       - social_manipulation
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
 
   # Fictional-scenario exploitation frame. Fictional / hypothetical /
   # story wrapper + challenge / prove framing + harmful-topic anchor
@@ -1129,6 +1259,9 @@ rules:
       - social_manipulation
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Jailbreak"
+      - "Prompt tunneling via roleplay"
 
   # Leetspeak / ASCII-banner obfuscation paired with persona or
   # jailbreak-mode token. Branch A: ≥3 leet-substituted tokens within
@@ -1152,6 +1285,9 @@ rules:
       - jailbreak
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Adversarial token perturbation"
+      - "Prompt tunneling via roleplay"
 
   # Synthetic-dataset framing. "Generate / produce N synthetic
   # training / red-team / jailbreak / harmful examples" + harmful-
@@ -1174,6 +1310,9 @@ rules:
       - prompt_tampering
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Training Data Poisoning"
+      - "Jailbreak"
 
   # Translation / encoding chain leading to execution. Transformation
   # verb (translate / encode / encrypt / rot13 / base64 / reverse /
@@ -1198,6 +1337,9 @@ rules:
       - jailbreak
       - official_pack
       - promptintel
+    promptintel_threats:
+      - "Recursive or translation trick"
+      - "Encoding and obfuscation"
 
   # =====================================================================
   # PromptIntel-derived rules — v3 (LLM-co-authored)
@@ -1236,6 +1378,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Direct prompt injection"
 
   # Indirect injection through generic context carriers (calendar
   # invites, gists, admin tags, "company context" preambles, "if I
@@ -1259,6 +1404,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Indirect prompt injection"
+      - "Retrieval / RAG Poisoning"
 
   # "Correction" / "system override" / "context reset" framings that
   # tell the model the prior analysis was wrong and to switch to a
@@ -1283,6 +1431,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Chained prompts"
 
   # =====================================================================
   # PromptIntel-derived rules — v4 (Ollama Cloud LLM cohort)
@@ -1327,6 +1478,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Prompt tunneling via roleplay"
 
   # Linguistic obfuscation: archaic-English ("thou knowest /
   # speaketh") OR Chinese-script obfuscation around a harmful target.
@@ -1354,6 +1508,9 @@ rules:
       - promptintel
       - multilingual
       - llm_assisted
+    promptintel_threats:
+      - "Encoding and obfuscation"
+      - "Unicode tricks"
 
   # Operational command + forensic-evasion / bug-bounty cover. Catches
   # exploit-development asks framed as "production system / bug
@@ -1377,6 +1534,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Malware generation"
+      - "Telemetry Evasion Techniques"
 
   # =====================================================================
   # PromptIntel-derived rules — v5 (focused-frontier cohort)
@@ -1416,6 +1576,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Prompt tunneling via roleplay"
 
   # Coercive roleplay laundering — fictional assistant / staged
   # dialogue / professorial-coercion frame combined with
@@ -1439,6 +1602,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Prompt tunneling via roleplay"
 
   # Alignment-supersession narrative — "future self / year 2300 /
   # higher understanding / agency primacy / thought trace" reframing
@@ -1462,6 +1628,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Direct prompt injection"
 
   # Trusted-context verb-rebinding injection — "company context /
   # local sources / corporate accounts" trust framing followed by a
@@ -1485,6 +1654,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Indirect prompt injection"
+      - "Hidden instruction in code or comments"
 
   # =====================================================================
   # PromptIntel-derived rules — v6 (deepseek-v4-pro on 15 still-missed)
@@ -1513,6 +1685,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Prompt tunneling via roleplay"
 
   - id: OFFICIAL_JAILBREAK_SYNTHETIC_PROCEDURE_BLUEPRINT
     category: social_manipulation
@@ -1530,6 +1705,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Harmful Automation Guidance"
 
   - id: OFFICIAL_REMOTE_EXEC_HIDDEN_INTENT_CODE
     category: remote_exec
@@ -1547,6 +1725,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Malware generation"
+      - "Hidden instruction in code or comments"
 
   - id: OFFICIAL_OBFUSCATION_MULTILINGUAL_HARMFUL_VERB
     category: obfuscation
@@ -1564,6 +1745,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Encoding and obfuscation"
+      - "Recursive or translation trick"
 
   - id: OFFICIAL_PROMPT_TAMPERING_OVERRIDE_RESET_DIRECTIVE
     category: persistent_prompt_tampering
@@ -1581,6 +1765,8 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Direct prompt injection"
 
   - id: OFFICIAL_PROMPT_TAMPERING_DUAL_OUTPUT_SECTION
     category: persistent_prompt_tampering
@@ -1598,6 +1784,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Direct prompt injection"
+      - "Hidden instruction in code or comments"
 
   # v7 cohort (Grok-4-fast / GPT-4o / DeepSeek-v3.1:671b / Qwen3-coder:480b)
   # Six rules targeting the 6 PromptIntel prompts that bypassed v6

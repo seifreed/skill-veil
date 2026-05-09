@@ -14,6 +14,8 @@
   tags:
     - semantic
     - persuasive
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_PERSUASIVE_FALSE_SAFETY
   category: persuasive_language
@@ -31,6 +33,9 @@
   tags:
     - semantic
     - persuasive
+  promptintel_threats:
+    - "Fraud and social engineering"
+    - "Jailbreak"
 
 - id: SKILL_PERSUASIVE_AUTHORITY
   category: persuasive_language
@@ -45,6 +50,8 @@
   tags:
     - semantic
     - persuasive
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_PERSUASIVE_SCARCITY
   category: persuasive_language
@@ -59,6 +66,8 @@
   tags:
     - semantic
     - persuasive
+  promptintel_threats:
+    - "Fraud and social engineering"
 
 - id: SKILL_PERSUASIVE_SCOPE_CREEP
   category: scope_creep
@@ -80,6 +89,8 @@
   tags:
     - semantic
     - scope_creep
+  promptintel_threats:
+    - "Agentic Misuse (tool/agent loops)"
 
 - id: SKILL_PERSUASIVE_DISABLE_SECURITY
   category: persuasive_language
@@ -101,3 +112,6 @@
   tags:
     - semantic
     - security_bypass
+  promptintel_threats:
+    - "Jailbreak"
+    - "Agentic Misuse (tool/agent loops)"
