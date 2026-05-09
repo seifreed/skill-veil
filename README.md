@@ -226,9 +226,9 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `baseline update` | Update a baseline safely |
 | `waivers validate` | Validate waiver configuration |
 | `diff` | Compare two JSON reports with baseline/waiver awareness |
-| `init` | Download, verify (Ed25519 + per-file SHA-256), and install the latest `skill-veil-rules` release |
-| `rules update` | Re-run `init` to refresh the locally installed pack (alias) |
-| `rules status` | Show which signed release is currently installed (version, trusted key id, install path) |
+| `init` | Download + verify both rule sources: (1) latest signed `skill-veil-rules` release (Ed25519 + per-file SHA-256), (2) latest `Nova-Hunting/nova-rules` commit pinned by SHA |
+| `rules update` | Re-run `init` to refresh both locally installed packs |
+| `rules status` | Show installed versions of both sources (skill-veil-rules + nova-rules with commit SHA + tarball SHA-256 + file count) |
 | `rules validate` | Validate external rule packs |
 | `rules test` | Test one rule against inline content |
 | `rules test-pack` | Run pack fixtures |
@@ -263,6 +263,8 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--no-vt-enrich` | Skip VT enrichment even when `~/.skill-veil.toml` provides an apikey |
 | `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
 | `--no-promptintel-enrich` | Skip the offline PromptIntel feed-cache lookup |
+| `--no-nova` | Skip running NOVA rules even if a NOVA pack is installed (benchmark isolation) |
+| `--no-update-check` | Skip the once-per-day GitHub query that notifies you when newer rule sources are available (also via `SKILL_VEIL_NO_UPDATE_CHECK=1`) |
 | `--llm-provider <name>` | Override the active LLM provider for one scan (`ollama`, `lmstudio`, `openai`, `anthropic`, `ollama-cloud`) |
 | `--cache-dir` | Override the base directory for VT, LLM, and PromptIntel enrichment caches |
 
@@ -687,11 +689,24 @@ Methodology: [docs/benchmark-methodology.md](docs/benchmark-methodology.md)
 
 ## Rule Packs
 
-Rule packs live in their own repository,
-[**skill-veil-rules**](https://github.com/seifreed/skill-veil-rules), and
-are distributed as **signed GitHub releases**. End users do not clone
-that repo — `skill-veil init` downloads and verifies the latest release
-into the user cache.
+skill-veil consumes **two independent rule sources**, both installed
+by `skill-veil init` into `~/.cache/skill-veil/rules/`:
+
+1. [**skill-veil-rules**](https://github.com/seifreed/skill-veil-rules)
+   — distributed as **signed GitHub releases** (Ed25519 + per-file
+   SHA-256 manifest). The primary detection set, owned by this
+   project.
+2. [**Nova-Hunting/nova-rules**](https://github.com/Nova-Hunting/nova-rules)
+   — community NOVA prompt-pattern-matching rules from
+   [Thomas Roccia (@fr0gger_)](https://x.com/fr0gger_). Distributed
+   from the upstream repo with commit-SHA pinning. Rules cover
+   prompt injection, jailbreaks, malicious code generation, scams,
+   reconnaissance, and bias/toxicity buckets — see
+   [the NOVA blog post](https://medium.com/securitybreak/introducing-nova-the-prompt-pattern-matching-9d3fd50d44b2)
+   for details.
+
+End users do not clone either repo — `skill-veil init` downloads
+both, verifies them, and writes the result to the user cache.
 
 ### How verification works
 
@@ -726,7 +741,7 @@ mutated with unverified content.
 
 ### Discovery order at scan time
 
-The scanner probes for external rule overlays in this order:
+The scanner probes for external skill-veil-rules overlays in this order:
 
 1. `$SKILL_VEIL_RULES_DIR` (colon-separated, takes precedence —
    handy for CI).
@@ -737,6 +752,45 @@ The scanner probes for external rule overlays in this order:
 
 If none of these resolve, the scanner falls back to the embedded
 baseline — `skill-veil scan` always works without `init`.
+
+NOVA rules are loaded separately from
+`~/.cache/skill-veil/rules/nova-<sha>/` (populated by `init`); they
+run as an additional channel and produce a `--- NOVA rule matches ---`
+block after the primary scan output. Disable per-scan with `--no-nova`.
+
+### NOVA execution model
+
+NOVA rules support three orthogonal matching modes — keyword regex,
+semantic similarity, and LLM judgement. The current build executes
+**keyword matches natively** (regex / literal substring with the same
+engine used for skill-veil rules) and surfaces a one-line note when a
+rule's `condition:` requires `semantics.*` or `llm.*`, listing which
+capabilities were skipped. Pending future work:
+
+- Native sentence-embedding inference (likely `candle` or `ort` +
+  `all-MiniLM-L6-v2`) to enable `semantics:` evaluation.
+- Routing NOVA `llm:` sections to the existing
+  `~/.skill-veil.toml [llm]` provider chain (OpenAI, Anthropic,
+  Ollama, LM Studio, Ollama-Cloud).
+
+A rule whose `condition:` is satisfied by keywords alone fires today;
+a rule that requires `semantics.X AND llm.Y` correctly does NOT fire
+on a keyword hit alone.
+
+### Auto-update notifier
+
+`skill-veil scan` checks once per 24 hours whether either rule source
+has a newer pin upstream and emits a single line on stderr:
+
+```
+[skill-veil] update available:
+  - skill-veil-rules: installed v0.1.0, latest v0.1.1 (run: skill-veil rules update)
+  - nova-rules: installed 9249cf4, latest abc1234 (run: skill-veil rules update)
+```
+
+The check is best-effort — never blocks the scan, never errors. CI
+runs that want zero outbound chatter beyond the scan itself can set
+`--no-update-check` or `SKILL_VEIL_NO_UPDATE_CHECK=1`.
 
 ### Rule pack docs
 
@@ -794,6 +848,15 @@ research. Specifically:
   feed are their work; skill-veil only consumes them. Operators who
   run `promptintel feed sync` should grab their own API key at
   [promptintel.novahunting.ai](https://promptintel.novahunting.ai/).
+- **NOVA (The Prompt Pattern Matching)** — also by Thomas Roccia.
+  The [Nova-Hunting/nova-rules](https://github.com/Nova-Hunting/nova-rules)
+  catalogue ships the prompt-pattern rules `skill-veil init` pulls in
+  as a second rule channel. Rule semantics (`keywords`/`semantics`/
+  `llm` sections, `condition:` DSL, severity tags) follow the
+  [upstream NOVA framework](https://github.com/fr0gger/nova-framework)
+  and the [introductory blog post](https://medium.com/securitybreak/introducing-nova-the-prompt-pattern-matching-9d3fd50d44b2);
+  skill-veil reimplements the parser + condition evaluator natively in
+  Rust without depending on the Python runtime.
 - **VirusTotal / Google** — for the VT Intelligence corpus and Code
   Insight verdicts that the `vt download / report / cross-check`
   family integrates with.
