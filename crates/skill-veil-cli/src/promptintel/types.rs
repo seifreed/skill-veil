@@ -36,10 +36,9 @@ impl PromptSeverity {
 
 /// One entry in the PromptIntel database.
 ///
-/// Only the fields skill-veil actually consumes are modelled. Unknown
-/// fields are tolerated (the API may evolve faster than this client) by
-/// omitting `#[serde(deny_unknown_fields)]` — the cross-check pipeline
-/// degrades gracefully when, say, a future `provenance` field appears.
+/// Only the fields skill-veil consumes are modelled. Unknown fields
+/// are tolerated by omitting `#[serde(deny_unknown_fields)]` — the
+/// API may add fields faster than this client tracks them.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct Prompt {
     pub(crate) id: String,

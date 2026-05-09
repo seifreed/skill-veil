@@ -1,24 +1,18 @@
-//! Port traits for dependency inversion
+//! Port traits for dependency inversion. The domain layer depends only
+//! on these traits; infrastructure implementations live in [`adapters`]
+//! and are wired in at construction time.
 //!
-//! These traits define the interfaces that the domain layer depends on,
-//! allowing infrastructure implementations to be swapped. This enables:
+//! Traits:
 //!
-//! - **Testing**: Mock implementations for unit tests
-//! - **Flexibility**: Alternative implementations (e.g., different parsers)
-//! - **Decoupling**: Core logic is independent of specific libraries
+//! - [`MarkdownParser`] — parse markdown into sections
+//! - [`PatternMatcher`] — regex pattern matching
+//! - [`FileSystemProvider`] — filesystem operations
 //!
-//! # Available Traits
+//! Default implementations:
 //!
-//! - [`MarkdownParser`]: Parse markdown content into sections
-//! - [`PatternMatcher`]: Match patterns (regex) in text
-//! - [`FileSystemProvider`]: File system operations
-//!
-//! # Default Implementations
-//!
-//! Default implementations are provided in the [`adapters`] module:
-//! - [`PulldownMarkdownParser`]: Uses pulldown-cmark
-//! - [`RegexPatternMatcher`]: Uses the regex crate
-//! - [`StdFileSystemProvider`]: Uses std::fs
+//! - [`PulldownMarkdownParser`] (pulldown-cmark)
+//! - [`RegexPatternMatcher`] (regex crate)
+//! - [`StdFileSystemProvider`] (`std::fs`)
 //!
 //! [`adapters`]: crate::adapters
 //! [`PulldownMarkdownParser`]: crate::adapters::PulldownMarkdownParser

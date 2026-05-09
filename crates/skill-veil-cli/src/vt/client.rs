@@ -290,8 +290,9 @@ impl VtClient {
         url: &str,
     ) -> Result<super::types::FileReportEnvelope, VtError> {
         // VT addresses URLs by the base64url(no-pad) of their canonical
-        // string. The `/urls/{id}` endpoint accepts either the id or the raw
-        // URL (we pass the id for robustness against strange characters).
+        // string. The `/urls/{id}` endpoint accepts either the id or the
+        // raw URL; the id avoids URL-encoding ambiguity for arbitrary
+        // input characters.
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
         let id = URL_SAFE_NO_PAD.encode(url.as_bytes());
         let path = format!("{BASE_URL}/urls/{id}");

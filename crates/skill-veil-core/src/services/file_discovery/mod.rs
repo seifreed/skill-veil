@@ -1,18 +1,16 @@
-//! File discovery service - finds skill files in directories
+//! Locate skill-related files under a target path. Recursive vs
+//! non-recursive is driven by `ScanOptions`.
 //!
-//! This service is responsible for discovering skill markdown files within
-//! a given path, either recursively or non-recursively. The implementation
-//! is split across two cohesive submodules:
+//! Submodule split:
 //!
-//! - [`skill_discovery`]: locates SKILL.md / `*.skill.md` entrypoints,
-//!   the AGENTS / CLAUDE / SYSTEM markdown trio, MCP manifests, and
+//! - [`skill_discovery`] — SKILL.md / `*.skill.md` entrypoints, the
+//!   AGENTS / CLAUDE / SYSTEM markdown trio, MCP manifests, and
 //!   heuristic agent-extension candidates.
-//! - [`package_artifacts`]: locates supporting scripts, data files,
+//! - [`package_artifacts`] — supporting scripts, data files,
 //!   manifests, and lockfiles co-located with a skill package.
-//!
-//! Pure path-shape classification (constant tables,
-//! `is_explicit_skill_file`, the directory skip-list) lives in the
-//! [`classification`] module so the I/O orchestration here stays focused.
+//! - [`classification`] — pure path-shape predicates (constant tables,
+//!   `is_explicit_skill_file`, the directory skip-list), kept separate
+//!   so the I/O orchestration above stays focused.
 
 mod classification;
 mod package_artifacts;

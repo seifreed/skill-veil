@@ -1,7 +1,5 @@
-//! Scan filtering service - applies filters to findings
-//!
-//! This service is responsible for filtering scan results based on
-//! configured options like minimum severity and rule inclusion/exclusion.
+//! Apply post-scan filters to findings: minimum severity and rule
+//! include/exclude lists from `ScanOptions`.
 
 use crate::findings::{Finding, RecommendedAction, Severity};
 use crate::policy::{
