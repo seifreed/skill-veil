@@ -143,7 +143,77 @@ pub(crate) fn run_scan(
     };
 
     let scanner = Scanner::with_std_adapters(options).context("Failed to initialize scanner")?;
-    let scan_result = scanner.scan(&args.path).context("Failed to scan path")?;
+    let mut scan_result = scanner.scan(&args.path).context("Failed to scan path")?;
+
+    // NOVA evaluation. Done ONCE; the report feeds two consumers:
+    //   (a) findings injected into `scan_result` so JSON / SARIF /
+    //       text output surface NOVA hits as first-class Findings.
+    //   (b) the trailing `--- NOVA rule matches ---` text block
+    //       printed after enrichment for human-readable summary.
+    // Verdict / risk_score are NOT recomputed — NOVA is a community
+    // pack we do not yet pin against the benchmark corpus, so its
+    // findings carry SignalClass::ReviewSignal which by mapping
+    // contract does not inflate the existing calibration. The
+    // verdict_snapshot debug_assert below still passes because the
+    // snapshot only fingerprints (package_id, verdict, risk_score).
+    let nova_report = if args.no_nova {
+        None
+    } else {
+        match nova_run::evaluate_against_target(&args.path, args.cache_dir.as_deref()) {
+            Ok(r) => r,
+            Err(err) => {
+                if !quiet {
+                    eprintln!("warning: NOVA evaluation skipped: {err:#}");
+                }
+                None
+            }
+        }
+    };
+    if let Some(report) = &nova_report {
+        let by_path = report.findings_by_path();
+        for result in &mut scan_result.results {
+            let Some(path_str) = result
+                .findings
+                .first()
+                .and_then(|f| f.artifact_path.clone())
+                .or_else(|| {
+                    result
+                        .primary_findings
+                        .first()
+                        .and_then(|f| f.artifact_path.clone())
+                })
+            else {
+                continue;
+            };
+            let key = std::path::PathBuf::from(&path_str);
+            if let Some(findings) = by_path.get(&key) {
+                result.findings.extend(findings.iter().cloned());
+                result.primary_findings.extend(findings.iter().cloned());
+            }
+        }
+        // If no ScanResult matched a hit's path (single-file mode
+        // where the path-key match misses), append all NOVA hits to
+        // the first result so they at least appear in JSON / SARIF
+        // output rather than being silently dropped.
+        let injected: usize = scan_result
+            .results
+            .iter()
+            .map(|r| {
+                r.findings
+                    .iter()
+                    .filter(|f| f.rule_id.starts_with("NOVA_"))
+                    .count()
+            })
+            .sum();
+        if injected == 0 && !report.hits.is_empty() {
+            if let Some(first) = scan_result.results.first_mut() {
+                for hit_findings in by_path.values() {
+                    first.findings.extend(hit_findings.iter().cloned());
+                    first.primary_findings.extend(hit_findings.iter().cloned());
+                }
+            }
+        }
+    }
 
     if !scan_result.errors.is_empty() && !quiet {
         for err_entry in &scan_result.errors {
@@ -221,11 +291,14 @@ pub(crate) fn run_scan(
         }
     }
 
-    if !args.no_nova {
-        if let Some(nova_block) =
-            nova_run::try_scan_with_nova(&args.path, args.cache_dir.as_deref(), quiet)?
-        {
-            print!("{nova_block}");
+    // The text block is operator-friendly noise; suppress it for
+    // JSON / SARIF / Shield output where it would pollute the
+    // structured payload. NOVA findings still flow through those
+    // formats via the injection above.
+    if let Some(report) = nova_report.as_ref() {
+        let render_text = !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text);
+        if render_text {
+            print!("{}", nova_run::render_text_block(report));
         }
     }
 

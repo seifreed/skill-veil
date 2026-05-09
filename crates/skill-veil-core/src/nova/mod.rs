@@ -20,6 +20,7 @@
 pub mod condition;
 pub mod engine;
 pub mod evaluators;
+pub mod mapping;
 pub mod model;
 pub mod parser;
 
