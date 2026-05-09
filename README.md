@@ -55,9 +55,10 @@ malware engine.
 | **External Rule Packs** | Versioned `official` and `community` rule packs with fixtures and validation |
 | **Benchmarking** | Labeled corpus, confidence calibration, threshold tuning, and release history dashboard |
 | **VirusTotal Integration** | Bulk download, report caching, and cross-check between skill-veil verdicts and VT Code Insight |
+| **PromptIntel Integration** | Curated jailbreak corpus + agent-feed IOC enrichment + threat-intel report submission with persistent rate-limit tracker |
 | **LLM Enrichment** | Optional third scoring engine across Ollama, LM Studio, OpenAI, Anthropic, and Ollama Cloud |
 | **Inline Suppressions** | `# skill-veil:ignore`, `nosem`, and `nosemgrep` markers with optional rule-id and reason |
-| **Unified Config** | Single `~/.skill-veil.toml` for VT and LLM providers; per-flag overrides on the CLI |
+| **Unified Config** | Single `~/.skill-veil.toml` for VT, LLM, and PromptIntel providers; per-flag overrides on the CLI |
 
 ### What It Detects
 
@@ -221,6 +222,13 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `vt download` | Bulk-download a corpus from VirusTotal Intelligence with cached reports |
 | `vt report` | Fetch and cache the VT report for a single hash |
 | `vt cross-check` | Compare skill-veil verdicts against VT Code Insight on a downloaded corpus |
+| `promptintel download` | Bulk-download the PromptIntel jailbreak corpus into a scannable directory |
+| `promptintel cross-check` | Scan the downloaded corpus and report per-severity detection gaps; supports `--fail-below FLOAT` as a CI gate |
+| `promptintel feed sync` | Pull the agent-feed threat intel into the local cache (incremental by default; `--full` for revocation propagation) |
+| `promptintel feed list` | Render the cached feed entries |
+| `promptintel feed budget` | Show the persisted client-side rate-limit budget per endpoint |
+| `promptintel report submit` | Submit a threat-intel report (5/h, 20/d) with client-side validation and `--dry-run` |
+| `promptintel report list` | List reports the authenticated agent has previously submitted |
 
 ### Useful Options
 
@@ -238,8 +246,9 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--dashboard-output` | Write benchmark history dashboard |
 | `--no-vt-enrich` | Skip VT enrichment even when `~/.skill-veil.toml` provides an apikey |
 | `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
+| `--no-promptintel-enrich` | Skip the offline PromptIntel feed-cache lookup |
 | `--llm-provider <name>` | Override the active LLM provider for one scan (`ollama`, `lmstudio`, `openai`, `anthropic`, `ollama-cloud`) |
-| `--cache-dir` | Override the base directory for VT and LLM enrichment caches |
+| `--cache-dir` | Override the base directory for VT, LLM, and PromptIntel enrichment caches |
 
 ---
 
@@ -303,6 +312,72 @@ skill-veil vt report deadbeef0123...0123
 skill-veil vt cross-check --dir data --format markdown --only-mismatches
 ```
 
+### PromptIntel: jailbreak corpus, agent-feed enrichment, threat-intel reports
+
+PromptIntel (`api.promptintel.novahunting.ai`) is a curated database of
+malicious prompts plus a community-driven threat-intel feed. skill-veil
+integrates with both — the corpus pins detection regression tests, the
+feed enriches every scan with offline IOC matching, and the report
+endpoints close the feedback loop.
+
+```bash
+# One-time setup: ~/.skill-veil.toml
+# [promptintel]
+# apikey = "ak_..."
+# (or export PROMPTINTEL=ak_...)
+
+# Download the curated jailbreak corpus.
+skill-veil promptintel download --dest data/promptintel
+
+# Scan the corpus and report per-severity detection gaps.
+skill-veil promptintel cross-check
+
+# Use the corpus as a CI gate (exit 1 below threshold).
+skill-veil promptintel cross-check --fail-below 0.95
+
+# Pull the agent-feed threat-intel into the local cache.
+skill-veil promptintel feed sync                # incremental
+skill-veil promptintel feed sync --full         # full pull (revocation
+                                                # propagation; the
+                                                # ?since= filter does
+                                                # not return revoked
+                                                # entries)
+
+# Inspect the cached entries and the persisted rate-limit budget.
+skill-veil promptintel feed list
+skill-veil promptintel feed budget
+
+# Subsequent scan-package runs automatically match scan IOCs (URLs,
+# domains, IPs, file hashes) against the cache; no extra API call.
+skill-veil scan-package examples/manifest-package
+# → ... existing scanner output ...
+# === PromptIntel Feed Enrichment (informational; does not affect skill-veil verdict) ===
+# matches: 1 / 55 cached feed entries
+#   [critical] block            5d1f9928-...
+#     title       : Claude Code 'Leak' Lure distributing Vidar and GhostSocks
+#     matched ip   : 147.45.197.92
+
+# Validate a draft report locally before spending hourly quota (5/h, 20/d).
+skill-veil promptintel report submit --file draft.json --dry-run
+
+# Submit the report once the dry-run looks good.
+skill-veil promptintel report submit --file draft.json
+
+# List your prior submissions (60/h).
+skill-veil promptintel report list
+```
+
+The vendored snapshot at `benchmarks/promptintel-corpus/` keeps the
+detection numbers reproducible: a regression test asserts
+`critical 100% / high ≥94% / medium ≥80% / overall ≥98%` against the
+pinned 55-entry corpus, so any rule change that drops detection on
+the curated set fails CI.
+
+The rate-limit tracker persists to
+`<cache_root>/promptintel-feed/ratelimit.json` and enforces the
+documented per-endpoint quotas (`agent-feed` 120/h, `agents/reports/mine`
+60/h, `agents/reports` 5/h + 20/d). Failed calls do not spend quota.
+
 ### LLM enrichment as a third scoring engine
 
 ```bash
@@ -321,7 +396,7 @@ skill-veil scan-package examples/manifest-package --format json --output current
 skill-veil scan-package . --llm-provider openai
 
 # Skip enrichment entirely (CI runs that should not depend on a network model).
-skill-veil scan-package . --no-vt-enrich --no-llm-enrich
+skill-veil scan-package . --no-vt-enrich --no-llm-enrich --no-promptintel-enrich
 ```
 
 Supported providers out of the box: **Ollama**, **LM Studio**, **OpenAI**,
