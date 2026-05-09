@@ -10,10 +10,18 @@ auditable.
 Before tagging a release:
 
 1. `cargo test` passes.
-2. official rule packs validate and fixtures pass.
+2. official rule packs validate and fixtures pass (run against the
+   sibling `../skill-veil-rules/` checkout).
 3. benchmark runs successfully on `benchmarks/corpus.yaml`.
 4. `docs/changelog.md` is updated.
 5. security-relevant changes are reflected in release notes.
+6. embedded baseline at `crates/skill-veil-core/resources/official/`
+   matches the latest signed `skill-veil-rules` release the binary is
+   intended to ship with — bump it via the release-time sync if a
+   newer rule pack is in flight.
+7. `crates/skill-veil-cli/src/init/keys.rs` lists every Ed25519 key
+   that has signed a release the binary needs to verify (additions
+   are MINOR-safe; removals are MAJOR — see `docs/versioning.md`).
 
 ## Release Steps
 

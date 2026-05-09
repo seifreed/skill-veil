@@ -48,6 +48,8 @@ pub(crate) fn run_rules(action: RulesAction) -> Result<()> {
         } => rules_test_pack(rules_dir, fixtures),
         RulesAction::Validate { rules_dir, format } => rules_validate(rules_dir, format),
         RulesAction::PackInfo { rules_dir, format } => rules_pack_info(rules_dir, format),
+        RulesAction::Update(args) => super::init::run_rules_update(args),
+        RulesAction::Status(args) => super::init::run_rules_status(args),
     }
 }
 

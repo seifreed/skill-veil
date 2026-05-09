@@ -54,6 +54,18 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Hashing
 sha2 = "0.10"
 
+# Ed25519 signature verification (used by `skill-veil init` to verify
+# the manifest of the downloaded rules pack against the embedded public
+# key). `default-features = false` drops the std-rand dependency we
+# don't need on the verification-only path.
+ed25519-dalek = { version = "2.1", default-features = false, features = ["std"] }
+
+# Hex encoding for SHA-256 digests + tar+gzip extraction for the
+# rules-pack release tarball.
+hex = "0.4"
+tar = "0.4"
+flate2 = "1.0"
+
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 

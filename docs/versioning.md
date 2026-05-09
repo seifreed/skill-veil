@@ -20,7 +20,12 @@ The following are treated as public compatibility surfaces:
 - SARIF output structure as documented by the tool
 - policy file schema
 - baseline and waiver formats
-- rule pack schema under `rules/schema/`
+- rule pack schema under [`skill-veil-rules/schema/`](https://github.com/seifreed/skill-veil-rules/tree/main/schema)
+- `manifest.json` schema (`skill-veil.dev/rules-manifest/v1`) consumed by `skill-veil init`
+- the set of trusted Ed25519 public keys embedded at
+  `crates/skill-veil-cli/src/init/keys.rs` — additions are MINOR,
+  removals are MAJOR (breaks operators pinned to releases signed by
+  the removed key)
 
 ## Compatibility Rules
 

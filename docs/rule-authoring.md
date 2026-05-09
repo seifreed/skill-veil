@@ -1,13 +1,33 @@
 # Rule Authoring
 
-Rule packs are versioned YAML envelopes. External packs are now the primary
-authoring surface for contributors; built-in rules exist as a fallback only.
+Rule packs are versioned YAML envelopes distributed from a separate
+repository, [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules).
+External packs are the primary authoring surface for contributors; the
+embedded baseline shipped in the binary is a fallback only.
 
-Versioned rule-pack guidance lives in:
+## Where rules live
 
-- `rules/schema/skill-veil-rule-pack-v1.yaml`
-- `rules/official/`
-- `rules/community/`
+| Location | Role |
+|----------|------|
+| `skill-veil-rules/official/` | Curated default packs (stable rule IDs, treated as public API). |
+| `skill-veil-rules/community/` | Incubating / org-specific packs not enabled by default. |
+| `skill-veil-rules/base/` | Historical category-grouped packs. |
+| `skill-veil-rules/fixtures/` | Positive / negative test fixtures consumed by `skill-veil rules test-pack`. |
+| `skill-veil-rules/schema/skill-veil-rule-pack-v1.yaml` | Versioned schema reference. |
+| `crates/skill-veil-core/src/builtin_rules.yaml` | Embedded supplementary rules (`include_str!`'d into the binary). |
+| `crates/skill-veil-core/resources/official/{core,behavioral}.yaml` | Embedded baseline copies of the canonical official packs. |
+
+For local authoring, clone the rules repo as a sibling of skill-veil:
+
+```bash
+git clone https://github.com/seifreed/skill-veil-rules ../skill-veil-rules
+```
+
+`default_external_rule_dirs()` falls back to `./rules/official/` so the
+discovery path includes `../skill-veil-rules/official/` if you symlink
+or `cd` into the right place; the simpler workflow is to pass
+`--rules-dir ../skill-veil-rules/official` explicitly to the
+validators.
 
 ## Minimal example
 
@@ -47,7 +67,7 @@ rules:
 
 ## Fixtures
 
-Use fixture manifests under `rules/fixtures/`.
+Fixture manifests live under `skill-veil-rules/fixtures/`.
 
 Example:
 
@@ -65,13 +85,20 @@ cases:
     expected_category: tool_abuse
 ```
 
-Validate with:
+Validate locally:
 
 ```bash
-cargo run -p skill-veil -- rules test-pack --rules-dir rules/official --fixtures rules/fixtures/behavioral.yaml
-skill-veil rules test EXAMPLE_RULE --rules-dir rules/community --content "Use the tool to extract cookies" --expect-match true --expected-count 1 --expected-severity medium --expected-action require-approval --expected-category tool_abuse
-skill-veil rules validate --rules-dir rules/official
-skill-veil rules pack-info --rules-dir rules/official
+cargo run -p skill-veil -- rules test-pack \
+  --rules-dir ../skill-veil-rules/official \
+  --fixtures ../skill-veil-rules/fixtures/behavioral.yaml
+skill-veil rules test EXAMPLE_RULE \
+  --rules-dir ../skill-veil-rules/community \
+  --content "Use the tool to extract cookies" \
+  --expect-match true --expected-count 1 \
+  --expected-severity medium --expected-action require-approval \
+  --expected-category tool_abuse
+skill-veil rules validate --rules-dir ../skill-veil-rules/official
+skill-veil rules pack-info --rules-dir ../skill-veil-rules/official
 ```
 
 For IOC feeds, use the same envelope but `metadata.kind: ioc_feed` and list
@@ -85,6 +112,7 @@ See also:
 
 - `docs/yara.md`
 - `docs/examples/example-rule.yar`
+- [skill-veil-rules/CONTRIBUTING.md](https://github.com/seifreed/skill-veil-rules/blob/main/CONTRIBUTING.md)
 
 ## Guidance
 
@@ -92,7 +120,25 @@ See also:
 - Attach a clear `reason`.
 - Keep confidence defensible.
 - Use `require_approval` before `block` unless the behavior is clearly severe.
-- Keep `id` stable once a rule ships.
+- Keep `id` stable once a rule ships — official IDs are public API.
 - Treat `rules validate` as a contributor gate before opening a PR.
-- Use `official` packs for curated defaults and `community` packs for incubating
-  or less-proven rulesets.
+- Use `official/` packs for curated defaults and `community/` packs for
+  incubating or less-proven rulesets.
+
+## Promoting a rule into the embedded baseline
+
+Rules in `skill-veil-rules/official/` reach end users when:
+
+1. The rules repo cuts a new signed release (Ed25519 + per-file
+   SHA-256 manifest), and
+2. Either the user runs `skill-veil init` to pull the new release,
+   **or** a new `skill-veil` binary release ships an embedded baseline
+   that mirrors the latest official pack.
+
+To make a rule part of the embedded baseline shipped in the next
+`skill-veil` release, mirror it into
+`crates/skill-veil-core/resources/official/<topic>.yaml` (or
+`src/builtin_rules.yaml` for supplementary rules). Both paths are
+`include_str!`'d at compile time and the duplicate-id detection in
+`get_builtin_rules` will refuse to build if the same id appears twice
+across embedded packs — cross-check before mirroring.

@@ -33,9 +33,16 @@ cargo run -p skill-veil -- scan-package examples/manifest-package --format text
 # Benchmark corpus
 cargo run -p skill-veil -- benchmark benchmarks/corpus.yaml --format text
 
-# Validate / test external rule packs
-cargo run -p skill-veil -- rules validate --rules-dir rules/official
-cargo run -p skill-veil -- rules test-pack --rules-dir rules/official --fixtures rules/fixtures/behavioral.yaml
+# Validate / test external rule packs (clone the rules repo as a sibling first)
+git clone https://github.com/seifreed/skill-veil-rules ../skill-veil-rules
+cargo run -p skill-veil -- rules validate --rules-dir ../skill-veil-rules/official
+cargo run -p skill-veil -- rules test-pack \
+  --rules-dir ../skill-veil-rules/official \
+  --fixtures ../skill-veil-rules/fixtures/behavioral.yaml
+
+# End-user runtime: download + verify the latest signed release
+cargo run -p skill-veil -- init
+cargo run -p skill-veil -- rules status
 
 # Build with optional YARA support (feature-gated via yara-x)
 cargo build --all-targets --features yara
@@ -50,7 +57,19 @@ Two crates in a Cargo workspace:
 - **`crates/skill-veil-core`** — library: all analysis logic, domain types, rules, verdicts, policy
 - **`crates/skill-veil-cli`** — binary (`skill-veil`): CLI commands, output formatting, dataset tooling
 
-External rule packs live in `rules/official/` and `rules/community/`. Benchmark corpus is at `benchmarks/corpus.yaml`. Regression fixtures are at `crates/skill-veil-core/tests/fixtures/`.
+External rule packs live in their own repo,
+[`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules), and
+are distributed as Ed25519-signed GitHub Releases consumed at runtime
+via `skill-veil init` (writes to `~/.cache/skill-veil/rules/<version>/`).
+For development, clone `skill-veil-rules` as a sibling so local commands
+can point at `../skill-veil-rules/official/`. The embedded baseline
+shipped in the binary lives at `crates/skill-veil-core/src/builtin_rules.yaml`
+plus `crates/skill-veil-core/resources/official/{core,behavioral}.yaml`
+(both `include_str!`'d at build time).
+
+Benchmark corpus is at `benchmarks/corpus.yaml`. Regression fixtures
+are at `crates/skill-veil-core/tests/fixtures/` and stay in this repo
+because they pin scanner behaviour, not rule contracts.
 
 ## Architecture
 
@@ -105,7 +124,13 @@ Prevents false positives from isolated weak signals. Key rule: **declared networ
 
 ### Rule Schema
 
-Rules live in YAML (`builtin_rules.yaml`, `rules/official/*.yaml`, `rules/community/*.yaml`). Each rule requires:
+Rules live in YAML — `crates/skill-veil-core/src/builtin_rules.yaml`
+and `crates/skill-veil-core/resources/official/{core,behavioral}.yaml`
+in this repo (the embedded baseline), and `official/*.yaml` /
+`community/*.yaml` in the
+[`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) repo
+(the runtime overlay distributed as signed releases). Each rule
+requires:
 
 ```yaml
 - id: UPPERCASE_SNAKE_CASE_ID     # must be globally unique
@@ -123,7 +148,15 @@ Rules live in YAML (`builtin_rules.yaml`, `rules/official/*.yaml`, `rules/commun
 
 External rule packs add `schema_version: skill-veil.dev/rules/v1alpha1` and a `metadata:` block. The `official` pack treats rules as compatibility-sensitive and benchmark-reviewed.
 
-**When adding a rule:** add at least one positive and one negative fixture. Rule IDs in the official pack must not be removed or renamed — treat them as public API. Append changes to `rules/CHANGELOG.md`.
+**When adding a rule:** land it in `skill-veil-rules/official/` (or
+`community/`) with a positive **and** a negative fixture under
+`skill-veil-rules/fixtures/`. To make it part of the embedded
+baseline shipped in the next skill-veil release, mirror it into the
+embedded files at `crates/skill-veil-core/resources/official/` (or
+`src/builtin_rules.yaml` for supplementary rules) — these are
+`include_str!`'d at build time. Rule IDs in the official pack are
+**public API**: never rename or remove them. Append changes to
+`skill-veil-rules/CHANGELOG.md`.
 
 ### Testing Patterns
 

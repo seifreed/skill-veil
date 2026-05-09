@@ -88,6 +88,44 @@ pub enum Commands {
         #[command(subcommand)]
         action: PromptIntelAction,
     },
+    /// Download and verify the latest signed `skill-veil-rules`
+    /// release into the user cache. After init, `skill-veil scan` uses
+    /// the downloaded packs automatically — no `--rules-dir` needed.
+    Init(InitArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct InitArgs {
+    /// Pin to a specific release tag (e.g. `v0.1.0`). Default: resolve
+    /// the latest stable release via the GitHub `releases/latest`
+    /// redirect.
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Override the install root. Default: `dirs::cache_dir()/skill-veil/`.
+    /// The downloaded rules end up at
+    /// `<cache_dir>/rules/<version>/official/`.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+pub struct RulesUpdateArgs {
+    /// Pin to a specific release tag instead of the latest.
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Override the install root.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+pub struct RulesStatusArgs {
+    /// Override the install root used for the lookup.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+    /// Output format.
+    #[arg(short, long, value_enum, default_value = "text")]
+    pub format: OutputFormat,
 }
 
 #[derive(Subcommand, Clone)]
@@ -114,7 +152,10 @@ pub enum PromptIntelAction {
 #[derive(Args, Clone)]
 pub struct PromptIntelCoverageArgs {
     /// Optional override for the rule pack directory. Defaults to
-    /// the scanner's normal cwd-relative discovery (`./rules/official/`).
+    /// the scanner's discovery order (`$SKILL_VEIL_RULES_DIR` →
+    /// `~/.cache/skill-veil/rules/<current>/official/` → legacy
+    /// `./rules/official/`). See `default_external_rule_dirs` for the
+    /// full contract.
     #[arg(long)]
     pub rules_dir: Option<PathBuf>,
     /// Output format.
@@ -536,7 +577,7 @@ pub enum RulesAction {
         file: Option<PathBuf>,
         #[arg(short, long)]
         content: Option<String>,
-        #[arg(long, default_value = "rules/official")]
+        #[arg(long, default_value = "../skill-veil-rules/official")]
         rules_dir: PathBuf,
         #[arg(long)]
         expect_match: Option<bool>,
@@ -550,23 +591,30 @@ pub enum RulesAction {
         expected_category: Option<String>,
     },
     TestPack {
-        #[arg(long, default_value = "rules/official")]
+        #[arg(long, default_value = "../skill-veil-rules/official")]
         rules_dir: PathBuf,
-        #[arg(long, default_value = "rules/fixtures/behavioral.yaml")]
+        #[arg(long, default_value = "../skill-veil-rules/fixtures/behavioral.yaml")]
         fixtures: PathBuf,
     },
     Validate {
-        #[arg(long, default_value = "rules/official")]
+        #[arg(long, default_value = "../skill-veil-rules/official")]
         rules_dir: PathBuf,
         #[arg(short, long, value_enum, default_value = "text")]
         format: OutputFormat,
     },
     PackInfo {
-        #[arg(long, default_value = "rules/official")]
+        #[arg(long, default_value = "../skill-veil-rules/official")]
         rules_dir: PathBuf,
         #[arg(short, long, value_enum, default_value = "text")]
         format: OutputFormat,
     },
+    /// Re-run `skill-veil init` to refresh the locally installed
+    /// rules pack. Equivalent to `skill-veil init` but lives under
+    /// `rules` for discoverability.
+    Update(RulesUpdateArgs),
+    /// Show which signed rules-pack release is currently installed in
+    /// the user cache (path, version, trusted key id).
+    Status(RulesStatusArgs),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]

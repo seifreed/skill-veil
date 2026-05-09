@@ -9,7 +9,9 @@
 Until additional maintainers are added, the repository owner is responsible for:
 
 - release approval
-- rule pack curation for `rules/official/`
+- rule pack curation for [`skill-veil-rules/official/`](https://github.com/seifreed/skill-veil-rules)
+- release-signing key custody (Ed25519, see
+  [`skill-veil-rules/KEYS.md`](https://github.com/seifreed/skill-veil-rules/blob/main/KEYS.md))
 - security triage
 - benchmark quality gates
 - roadmap acceptance and scope decisions
@@ -20,7 +22,9 @@ Maintainers are expected to:
 
 - review code, rule, and benchmark changes
 - preserve compatibility promises documented in [versioning.md](versioning.md)
-- keep `rules/official/` curated and reproducible
+- keep `skill-veil-rules/official/` curated and reproducible
+- own the Ed25519 signing keypair lifecycle (rotation, revocation,
+  embedded-key updates in `crates/skill-veil-cli/src/init/keys.rs`)
 - review vulnerability and bypass reports through the maintainer contact process
 - ensure releases follow [release-process.md](release-process.md)
 
@@ -43,6 +47,7 @@ by person:
 
 - core engine: `crates/skill-veil-core/`
 - CLI and integration UX: `crates/skill-veil-cli/`
-- official rule packs: `rules/official/`
+- embedded baseline rules: `crates/skill-veil-core/src/builtin_rules.yaml` and `crates/skill-veil-core/resources/official/`
+- distributed rule packs: [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) repo (separate)
 - benchmark corpus and dashboards: `benchmarks/`
-- release and CI automation: `.github/workflows/`
+- release and CI automation: `.github/workflows/` (this repo) and `skill-veil-rules/.github/workflows/release.yml` (rules repo)

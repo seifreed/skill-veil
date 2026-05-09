@@ -169,6 +169,10 @@ Full installation notes: [docs/installation.md](docs/installation.md)
 ## Quick Start
 
 ```bash
+# One-time setup: download and verify the latest signed rule pack into
+# the user cache. Pinned to a release tag with --version vX.Y.Z if needed.
+skill-veil init
+
 # Scan a strict entrypoint
 skill-veil scan-file examples/malicious-skill/SKILL.md
 
@@ -180,6 +184,14 @@ skill-veil scan-file examples/agent-instructions/AGENTS.md
 skill-veil scan-package examples/prompt-pack
 skill-veil scan-package examples/mcp-server
 ```
+
+`skill-veil init` is optional — the binary ships an embedded baseline
+that scans work without any setup — but running it pulls in the latest
+[`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules)
+release, verifies its Ed25519 signature against an embedded public key,
+and unpacks it into `~/.cache/skill-veil/rules/<version>/`. The scanner
+then picks up the verified packs automatically. See
+[Rule packs](#rule-packs) for the full distribution model.
 
 ---
 
@@ -214,6 +226,9 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `baseline update` | Update a baseline safely |
 | `waivers validate` | Validate waiver configuration |
 | `diff` | Compare two JSON reports with baseline/waiver awareness |
+| `init` | Download, verify (Ed25519 + per-file SHA-256), and install the latest `skill-veil-rules` release |
+| `rules update` | Re-run `init` to refresh the locally installed pack (alias) |
+| `rules status` | Show which signed release is currently installed (version, trusted key id, install path) |
 | `rules validate` | Validate external rule packs |
 | `rules test` | Test one rule against inline content |
 | `rules test-pack` | Run pack fixtures |
@@ -288,11 +303,25 @@ skill-veil benchmark benchmarks/corpus.yaml \
 
 ### Rule pack development
 
+The rule packs live in their own repo,
+[`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules).
+For local authoring, clone it next to skill-veil and point the
+validators at the working tree:
+
 ```bash
-skill-veil rules validate --rules-dir rules/official
-skill-veil rules test-pack --rules-dir rules/official --fixtures rules/fixtures/behavioral.yaml
-skill-veil rules pack-info --rules-dir rules/official
+git clone https://github.com/seifreed/skill-veil-rules ../skill-veil-rules
+
+skill-veil rules validate --rules-dir ../skill-veil-rules/official
+skill-veil rules test-pack \
+  --rules-dir ../skill-veil-rules/official \
+  --fixtures ../skill-veil-rules/fixtures/behavioral.yaml
+skill-veil rules pack-info --rules-dir ../skill-veil-rules/official
 ```
+
+Once your changes land in `skill-veil-rules`, a maintainer cuts a new
+signed release; downstream `skill-veil init` picks it up on the next
+run. The full contributor checklist lives in
+[skill-veil-rules/CONTRIBUTING.md](https://github.com/seifreed/skill-veil-rules/blob/main/CONTRIBUTING.md).
 
 ### VirusTotal corpus and cross-check
 
@@ -453,7 +482,8 @@ can audit waivers later.
 ### Optional YARA support
 
 ```bash
-cargo run -p skill-veil --features yara -- rules validate --rules-dir rules/official
+cargo run -p skill-veil --features yara -- \
+  rules validate --rules-dir ../skill-veil-rules/official
 ```
 
 YARA usage notes and an example rule live in:
@@ -657,14 +687,63 @@ Methodology: [docs/benchmark-methodology.md](docs/benchmark-methodology.md)
 
 ## Rule Packs
 
-External versioned packs under `rules/official/` are the primary default rule
-source. Embedded rules are a fallback only.
+Rule packs live in their own repository,
+[**skill-veil-rules**](https://github.com/seifreed/skill-veil-rules), and
+are distributed as **signed GitHub releases**. End users do not clone
+that repo — `skill-veil init` downloads and verifies the latest release
+into the user cache.
 
-Rule pack docs:
+### How verification works
+
+Each release ships three artefacts:
+
+| Artefact | Purpose |
+|----------|---------|
+| `skill-veil-rules-<version>.tar.gz` | All rule files, fixtures, schema, YARA |
+| `manifest.json` | Per-file SHA-256 digests + version metadata |
+| `manifest.json.sig` | Detached Ed25519 signature over `manifest.json` |
+
+`skill-veil init` does the following before exposing any rule to the
+scanner:
+
+1. Resolves the latest release tag (or `--version vX.Y.Z` to pin) and
+   downloads the three artefacts into a temporary staging dir.
+2. Verifies the Ed25519 signature against a public key embedded in the
+   skill-veil binary at compile time. Rotation policy is documented in
+   [skill-veil-rules/KEYS.md](https://github.com/seifreed/skill-veil-rules/blob/main/KEYS.md).
+3. Extracts the tarball with hardened path-traversal, symlink, and
+   size protections.
+4. Verifies every extracted file's SHA-256 against the manifest, and
+   rejects any extracted file the manifest does not declare (blocks
+   the smuggling attack where a signed manifest covers only some of
+   the tarball's contents).
+5. Atomically renames the verified tree into
+   `~/.cache/skill-veil/rules/<version>/` and updates the `current`
+   pointer the scanner reads at startup.
+
+Any failure at steps 2–4 aborts the install — the cache is never
+mutated with unverified content.
+
+### Discovery order at scan time
+
+The scanner probes for external rule overlays in this order:
+
+1. `$SKILL_VEIL_RULES_DIR` (colon-separated, takes precedence —
+   handy for CI).
+2. `~/.cache/skill-veil/rules/<current_version>/official/` (populated
+   by `skill-veil init`).
+3. `./rules/official/` (legacy / dev-mode fallback for working against
+   a sibling checkout of `skill-veil-rules`).
+
+If none of these resolve, the scanner falls back to the embedded
+baseline — `skill-veil scan` always works without `init`.
+
+### Rule pack docs
 
 - [docs/rule-authoring.md](docs/rule-authoring.md)
-- [rules/official/README.md](rules/official/README.md)
-- [rules/community/README.md](rules/community/README.md)
+- [skill-veil-rules/README.md](https://github.com/seifreed/skill-veil-rules/blob/main/README.md)
+- [skill-veil-rules/CONTRIBUTING.md](https://github.com/seifreed/skill-veil-rules/blob/main/CONTRIBUTING.md)
+- [skill-veil-rules/KEYS.md](https://github.com/seifreed/skill-veil-rules/blob/main/KEYS.md)
 
 ---
 

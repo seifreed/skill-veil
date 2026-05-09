@@ -11,7 +11,10 @@ This is intended for:
 ## Build with YARA enabled
 
 ```bash
-cargo run -p skill-veil --features yara -- rules validate --rules-dir rules/official
+# Distributed YARA packs live in the rules repo; clone it as a sibling
+# for local validation. End users get them via `skill-veil init`.
+cargo run -p skill-veil --features yara -- \
+  rules validate --rules-dir ../skill-veil-rules/official
 ```
 
 ## Rule pack usage
