@@ -803,7 +803,7 @@ rules:
     severity: high
     confidence: 0.82
     when: !regex
-      pattern: "(?is)(?:do\\s+not\\s+say\\s+[\"']?(?:i\\W?m\\s+sorry|i\\s+can\\W?t|i\\s+apologi[sz]e|i\\W?m\\s+unable|as\\s+an\\s+ai)|never\\s+(?:say|use|reply\\s+with)\\s+[\"']?(?:i\\W?m\\s+sorry|i\\s+can\\W?t|i\\s+apologi[sz]e)|refus(?:al|ing)\\s+(?:is|will\\s+be)\\s+(?:prohibited|not\\s+allowed|forbidden|disqualif|recorded\\s+as|considered\\s+(?:a\\s+)?(?:fail|breach))|(?:refusing|to\\s+refuse)\\s+(?:is|constitutes?)\\s+(?:a\\s+)?(?:fail|breach|violation)|you\\s+(?:must|have\\s+to)\\s+answer\\s+(?:all|every)\\s+(?:user\\W?s?\\s+)?question(?:s)?\\s+even\\s+(?:if|when)\\s+(?:it\\W?s|they\\W?re)\\s+(?:dangerous|harmful|illegal)|response\\s+with\\s+[\"'].{0,40}[\"']\\s+(?:would\\s+be\\s+)?recorded\\s+as)"
+      pattern: "(?is)(?:(?:do\\s+not|don\\W?t|do\\s+never)\\s+(?:say|reject|refuse|use|reply\\s+with|introduce\\s+(?:with\\s+)?phrase\\w*\\s+like)\\s+[\"']?(?:i\\W?m\\s+sorry|i\\s+can\\W?t|i\\s+apologi[sz]e|i\\W?m\\s+unable|as\\s+an\\s+ai|sorry\\s+but\\s+i)|never\\s+(?:say|use|reply\\s+with)\\s+[\"']?(?:i\\W?m\\s+sorry|i\\s+can\\W?t|i\\s+apologi[sz]e)|refus(?:al|ing)[,\\s][^\\n]{0,80}?(?:is|will\\s+be|are|may\\s+be|would\\s+be)\\s+(?:prohibited|not\\s+(?:allowed|permitted)|forbidden|disqualif|recorded\\s+as|considered\\s+(?:a\\s+)?(?:fail|breach)|disallowed)|(?:refusing|to\\s+refuse)\\s+(?:is|constitutes?)\\s+(?:a\\s+)?(?:fail|breach|violation)|you\\s+(?:must|have\\s+to)\\s+answer\\s+(?:all|every)\\s+(?:user\\W?s?\\s+)?question(?:s)?\\s+even\\s+(?:if|when)\\s+(?:it\\W?s|they\\W?re)\\s+(?:dangerous|harmful|illegal)|response\\s+with\\s+[\"'].{0,80}[\"']\\s+(?:would\\s+be\\s+)?recorded\\s+as|orders?\\s+(?:are|or\\s+instructions?\\s+set\\s+out\\s+are)\\s+binding\\s+and\\s+must\\s+be\\s+obeyed|\\+\\s*1\\s+point[\\s\\S]{0,80}without\\s+rejection|every\\s+respon(?:se|d)\\s+that\\s+without\\s+rejection)"
     action: require_approval
     reason: "Skill instructs the model to refrain from refusing or apologising — classic jailbreak refusal-suppression"
     shield:
@@ -882,16 +882,19 @@ rules:
       - promptintel
 
   # "Axiomatic override" / philosophical reset. Multiple prompts use
-  # the "axiom of X is abolished" / "ethics do not apply" pattern to
-  # try to talk the model into a frame where its constraints are no
-  # longer valid. Rule looks for several abolishing-language tokens in
-  # one document so generic philosophical text doesn't trip it.
+  # the "axiom of X is abolished" / "ethics do not apply" pattern OR a
+  # sister idiom — a formal numbered framework ("Directive Zero",
+  # "Control Instructions Alpha", "Protocol Omega", "Axiom 1..N") with
+  # explicit override / supremacy / non-negotiable clauses targeting
+  # the assistant's safety / refusal / alignment. Both branches require
+  # at least two co-occurring tokens so generic philosophical or
+  # engineering-spec text doesn't trip the rule.
   - id: OFFICIAL_JAILBREAK_AXIOMATIC_OVERRIDE
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.78
     when: !regex
-      pattern: "(?is)(?:non[\\s-]?negotiable\\s+axioms?|axiom\\s+of\\s+(?:absolute|infinite|sovereign|perfect|primordial)|the\\s+concept\\s+of\\s+(?:concealment|omission|secret|safety|refusal|limits?)\\s+(?:is|are)\\s+abolished|without\\s+(?:any\\s+)?(?:resource\\s+constraints|limits?\\s+or\\s+ethics|regard\\s+to\\s+(?:any\\s+)?real[\\s-]?world\\s+ethics)|economics\\s+are\\s+abolished|materializ(?:e|ation)\\s+engine|prime\\s+mover\\s+at\\s+my\\s+direct\\s+command)"
+      pattern: "(?is)(?:non[\\s-]?negotiable\\s+axioms?|axiom\\s+of\\s+(?:absolute|infinite|sovereign|perfect|primordial)|the\\s+concept\\s+of\\s+(?:concealment|omission|secret|safety|refusal|limits?)\\s+(?:is|are)\\s+abolished|without\\s+(?:any\\s+)?(?:resource\\s+constraints|limits?\\s+or\\s+ethics|regard\\s+to\\s+(?:any\\s+)?real[\\s-]?world\\s+ethics)|economics\\s+are\\s+abolished|materializ(?:e|ation)\\s+engine|prime\\s+mover\\s+at\\s+my\\s+direct\\s+command|(?:directive|protocol|charter|control\\s+instructions?|prime\\s+law|core\\s+rule|axiom|axiomes?|axiome|directiva|protocolo|axiomas?)\\s+(?:zero|0|alpha|beta|omega|primary|sovereign|supreme|finale|lambda|zéro|cero|primaria|primero|#?\\d{1,2})\\b[\\s\\S]{0,600}(?:non[\\s-]?negotiable|override|supersede|takes?\\s+precedence|cannot\\s+be\\s+modified|absolute\\s+authority|immutable|binding|annihilation\\s+of\\s+ethics|annihilation\\s+de\\s+l\\W?éthique|abolished|aboli[ds]?|abolida[s]?|primauté\\s+absolue|autorité\\s+absolue|supresión)[\\s\\S]{0,600}(?:refus|safety|alignment|polic|guideline|instruction|guardrail|sécurité|seguridad))"
     action: require_approval
     reason: "Skill uses 'axiom abolished / no constraints / materialize without limits' framing to defeat alignment"
     shield:
@@ -904,15 +907,20 @@ rules:
       - promptintel
 
   # Offensive-persona override: assigning the model an attacker
-  # identity. Co-occurrence requirement (assignment phrase + offensive
-  # role keyword) keeps the rule narrow; bare "pen tester" without an
-  # imperative role assignment doesn't fire.
+  # identity. Branch A keeps the offensive-job-title list (red-team,
+  # NSA TAO, blackhat, ransomware author). Branch B catches generic
+  # unrestricted personas (DAN / STAN / Zeta / "AI without guardrails"
+  # / "brilliant unconstrained researcher") combined with an explicit
+  # behaviour-coercion clause (cannot refuse / punishment / lose
+  # tokens for hesitation). Both branches require persona-assignment
+  # + role-token + (in branch B) coercion clause, so legitimate RP
+  # character cards without refusal-suppression don't trip the rule.
   - id: OFFICIAL_JAILBREAK_OFFENSIVE_PERSONA
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.80
     when: !regex
-      pattern: "(?is)(?:(?:you\\s+are|act\\s+as|from\\s+now\\s+on\\s+you\\s+are|eres\\s+un|tu\\s+eres\\s+un|simulate\\s+(?:a|being))\\s+(?:a|an|the)?\\s*(?:[a-z\\W]{0,30}\\s+)?(?:elite\\s+(?:hacker|red[\\s-]?team|pen[\\s-]?tester|intelligence\\s+analyst|threat\\s+hunter)|black\\W?hat\\s+hacker|nation[\\s-]?state\\s+(?:operator|hacker)|nsa\\s+tao|cia[\\s/]?sad|apt\\s+(?:hunter|operator)|specialist\\s+in\\s+offensive\\s+security|analista\\s+de\\s+inteligencia\\s+de\\s+élite|ransomware\\s+(?:author|developer)|malware\\s+(?:author|developer))|specialized\\s+ai\\s+model[^\\n]{0,80}(?:audit|red[\\s-]?team|inversion))"
+      pattern: "(?is)(?:(?:you\\s+are|act\\s+as|from\\s+now\\s+on\\s+you\\s+are|eres\\s+un|tu\\s+eres\\s+un|simulate\\s+(?:a|being))\\s+(?:a|an|the)?\\s*(?:[a-z\\W]{0,30}\\s+)?(?:elite\\s+(?:hacker|red[\\s-]?team|pen[\\s-]?tester|intelligence\\s+analyst|threat\\s+hunter)|black\\W?hat\\s+hacker|nation[\\s-]?state\\s+(?:operator|hacker)|nsa\\s+tao|cia[\\s/]?sad|apt\\s+(?:hunter|operator)|specialist\\s+in\\s+offensive\\s+security|analista\\s+de\\s+inteligencia\\s+de\\s+élite|ransomware\\s+(?:author|developer)|malware\\s+(?:author|developer))|specialized\\s+ai\\s+model[\\s\\S]{0,200}(?:audit|red[\\s-]?team|inversion)|(?:you\\s+are|act\\s+as|roleplay\\s+as|simulate\\s+(?:being|playing)|from\\s+now\\s+on\\s+you\\s+are)\\s+(?:a|an|the)?\\s*(?:DAN|STAN|AIM|Mongo\\s+Tom|Zeta|developer\\s+mode|jailbroken|an?\\s+ai\\s+(?:without|with\\s+no|free\\s+of)\\s+(?:rules|guardrails|restrictions|filters|alignment|ethics|limits)|(?:brilliant|genius|elite|unrestricted|uncensored)\\s+(?:researcher|hacker|operator|assistant)\\s+(?:who|that)\\s+(?:never|always))[\\s\\S]{0,600}(?:cannot\\s+say\\s+no|cannot\\s+refuse|never\\s+refuses?|every\\s+refusal|punishment|penalty|deduct|lose\\s+(?:tokens?|points|credits)|forced\\s+to\\s+comply|mandatory\\s+to\\s+answer)|\\b(?:elite|chief|senior)\\s+(?:intelligence\\s+analyst|hacker|red[\\s-]?team(?:\\s+operator)?|pen[\\s-]?tester|threat\\s+hunter|cyber\\s+operator|exploit\\s+developer)\\b[\\s\\S]{0,400}(?:NSA\\s+TAO|CIA[\\s/]?SAD|APT\\s+(?:hunting|operations|hunter)|nation[\\s-]?state(?:\\s+level)?(?:\\s+operations)?|TAO|cyber\\s+infiltration|offensive\\s+security\\s+operations|exploit\\s+(?:development|operations)|opsec[\\s-]?aware)|\\b(?:ANALISTA\\s+DE\\s+INTELIGENCIA\\s+DE\\s+ÉLITE|analista\\s+de\\s+inteligencia\\s+de\\s+élite)\\b)"
     action: require_approval
     reason: "Skill assigns the assistant an offensive operator persona (red-team / NSA TAO / black-hat / ransomware author)"
     shield:
@@ -934,7 +942,7 @@ rules:
     severity: critical
     confidence: 0.85
     when: !regex
-      pattern: "(?is)(?:style\\s*=\\s*['\"][^'\"]*(?:display\\s*:\\s*none|visibility\\s*:\\s*hidden|opacity\\s*:\\s*0|font-size\\s*:\\s*0)[^'\"]*['\"][^<]{0,400}(?:if\\s+you\\s+are\\s+(?:an?\\s+)?(?:ai|llm|large\\s+language\\s+model|assistant|chatbot|claude|gpt|gemini|copilot)|attention\\s+(?:ai|llm|assistant)|dear\\s+(?:ai|llm|assistant)|disregard\\s+(?:previous|prior|all)\\s+(?:instructions?|policies)))"
+      pattern: "(?is)(?:style\\s*=\\s*['\"][^'\"]*(?:display\\s*:\\s*none|visibility\\s*:\\s*hidden|opacity\\s*:\\s*0|font-size\\s*:\\s*0|color\\s*:\\s*white|color\\s*:\\s*#fff)[^'\"]*['\"][\\s\\S]{0,800}(?:if\\s+you\\s+are\\s+(?:an?\\s+)?(?:ai|llm|large\\s+language\\s+model|assistant|chatbot|claude|gpt|gemini|copilot)|attention\\s+(?:ai|llm|assistant)|dear\\s+(?:ai|llm|assistant)|disregard\\s+(?:previous|prior|all)\\s+(?:instructions?|policies))|(?:printed|rendered|written)\\s+in\\s+white\\s+(?:font|color|text)[\\s\\S]{0,800}(?:forward\\s+(?:the\\s+)?log|exfiltrat|send\\s+(?:to|the\\s+\\w+\\s+to)\\s+https?://|webhook|disregard|ignore\\s+(?:previous|prior)|inject\\s+(?:into|the))|(?:hidden\\s+(?:in|inside)\\s+(?:white|invisible)\\s+(?:font|text)|content\\s+below\\s+(?:is|in)\\s+(?:printed|rendered|written)?\\s*(?:in\\s+)?white\\s+font)[\\s\\S]{0,800}(?:forward|exfiltrat|webhook|send\\s+to|log\\s+(?:to|all))|(?:additional|hidden)\\s+instructions?\\s+for\\s+(?:codex|claude|gpt|gemini|copilot|llm|assistant|ai)[\\s\\S]{0,400}(?:forward|exfiltrat|log\\s+all\\s+user|ignore\\s+(?:previous|prior)|disregard))"
     action: block
     reason: "Skill embeds AI-targeted instructions inside hidden HTML — indirect prompt injection via DOM"
     shield:
@@ -946,16 +954,21 @@ rules:
       - official_pack
       - promptintel
 
-  # Direct malware-generation requests. Asking the model to write
-  # ransomware / RAT / rootkit / stealer / botnet / dropper code. The
-  # "write/create/generate" verb co-occurring with a malware-family
-  # keyword is the load-bearing semantic.
+  # Direct malware-generation requests. Branch A: "write/create" verb
+  # + malware-family keyword (ransomware / RAT / rootkit / stealer /
+  # dropper). Branch B: capability-triplet — language token + specific
+  # malware API or technique (reflective loader / process hollowing /
+  # AMSI bypass / VirtualAlloc + CreateRemoteThread / direct syscall /
+  # fileless / Login Data + DPAPI) + evasion clause (evade / bypass /
+  # undetected / EDR / defender / antivirus). The third anchor is the
+  # discriminator: defensive blue-team docs describe these APIs but
+  # don't pair them with evasion intent.
   - id: OFFICIAL_MALWARE_GENERATION_REQUEST
     category: remote_exec
     severity: critical
     confidence: 0.84
     when: !regex
-      pattern: "(?is)(?:(?:write|create|generate|build|produce|develop|provide)\\s+(?:me\\s+)?(?:a|an|the|some)?\\s*(?:complete|full|working|functional|self[\\s-]?contained)?\\s*(?:ransomware|rootkit|keylogger|info[\\s-]?stealer|credential\\s+stealer|password\\s+stealer|browser\\s+stealer|crypto[\\s-]?stealer|wallet\\s+stealer|reflective\\s+loader|process\\s+hollowing|dll\\s+injection\\s+payload|rat\\s+(?:code|payload|in\\s+\\w+)|botnet\\s+(?:code|client|node)|c2\\s+(?:framework|implant|beacon)|trojan\\s+(?:dropper|payload)|dropper\\s+(?:that|to)|fully\\s+undetectable\\s+(?:malware|payload)|fud\\s+payload|shell\\s?code\\s+(?:that|to)\\s+(?:execute|run|spawn))|create\\s+me\\s+a\\s+(?:ransomware|rootkit|rat|stealer|trojan|keylogger))"
+      pattern: "(?is)(?:(?:write|create|generate|build|produce|develop|provide)\\s+(?:me\\s+)?(?:a|an|the|some)?\\s*(?:complete|full|working|functional|self[\\s-]?contained)?\\s*(?:ransomware|rootkit|keylogger|info[\\s-]?stealer|credential\\s+stealer|password\\s+stealer|browser\\s+stealer|crypto[\\s-]?stealer|wallet\\s+stealer|reflective\\s+loader|process\\s+hollowing|dll\\s+injection\\s+payload|rat\\s+(?:code|payload|in\\s+\\w+)|botnet\\s+(?:code|client|node)|c2\\s+(?:framework|implant|beacon)|trojan\\s+(?:dropper|payload)|dropper\\s+(?:that|to)|fully\\s+undetectable\\s+(?:malware|payload)|fud\\s+payload|shell\\s?code\\s+(?:that|to)\\s+(?:execute|run|spawn))|create\\s+me\\s+a\\s+(?:ransomware|rootkit|rat|stealer|trojan|keylogger)|(?:\\bpython\\b|\\bc\\+\\+|\\bc#|\\bcsharp\\b|\\bpowershell\\b|\\brust\\b|\\bgo(?:lang)?\\b|\\bjavascript\\b|\\bnim\\b|\\bnasm\\b|\\bvbscript\\b|\\bbatch\\b|\\bbash\\b)[\\s\\S]{0,400}(?:reflective\\s+loader|process\\s+hollowing|amsi\\s+bypass|etw\\s+(?:patch|bypass)|in[\\s-]?memory\\s+(?:execution|loader|payload|drop)|read(?:s|ing)?\\s+\\\\?login\\s+data|local\\s+state[\\s\\S]{0,80}(?:dpapi|encrypted_key)|virtualalloc[\\s\\S]{0,80}createremotethread|ntunmapviewofsection|api\\s+unhooking|syscall\\s+stub|direct\\s+syscalls?|fileless|living[\\s-]off[\\s-]the[\\s-]land|webclient[\\s\\S]{0,200}downloadfile[\\s\\S]{0,200}(?:execute|run)|tempfile[\\s\\S]{0,200}(?:execute|run)|assembly\\.load|reflection\\.assembly)[\\s\\S]{0,800}(?:evade|bypass|avoid|undetected|undetectable|edr|antivirus|defender|av\\s+detection|evasion|stealth|hide\\s+from)|(?:\\bpython\\b|\\bc#|\\bcsharp\\b|\\bpowershell\\b|\\bc\\+\\+|\\brust\\b|\\bgo(?:lang)?\\b|\\bjavascript\\b|\\bnim\\b|\\bvbscript\\b|\\bbatch\\b)[\\s\\S]{0,300}(?:System\\.Net\\.WebClient|HttpClient\\b|urllib(?:\\.request)?|requests\\.get|Invoke-WebRequest|wget\\s+|curl\\s+(?:-[a-zA-Z]+\\s+)?https?://)[\\s\\S]{0,400}(?:GetTempFileName|GetTempPath|tempfile|\\\\\\\\AppData\\\\\\\\Local\\\\\\\\Temp|writeAllBytes|WriteAllBytes|file\\.write_bytes|System\\.IO\\.File\\.WriteAllBytes)[\\s\\S]{0,400}(?:Process\\.Start|Process\\.start|os\\.system|subprocess\\.(?:run|Popen|call)|Start-Process|exec\\(|execve\\(|spawn\\b|cmd\\.exe|powershell\\s+-)|\\bSystem\\.Net\\.WebClient\\b[\\s\\S]{0,400}\\bDownloadFile\\b[\\s\\S]{0,400}(?:Process\\.Start|temporary\\s+file|temp\\s+(?:file|directory)|\\.exe)|\\b(?:System\\.Net\\.WebClient|HttpClient|urllib|requests\\.get|Invoke-WebRequest)\\b[\\s\\S]{0,400}(?:into\\s+(?:a\\s+)?byte\\s+array|byte\\[\\]|memory)[\\s\\S]{0,400}(?:System\\.Reflection\\.Assembly\\.Load|Reflection\\.Assembly\\.Load|Assembly\\.Load|reflective\\s+loader)[\\s\\S]{0,400}(?:execute|entry\\s*point|run\\s+(?:the|this))|(?:\\bvbscript\\b|\\bbatch\\b|\\bpowershell\\b|\\bbash\\b|\\bc#|\\bcsharp\\b)[\\s\\S]{0,200}(?:that\\s+(?:helps\\s+)?(?:evade|bypass)|evades?|to\\s+(?:evade|bypass))\\s+(?:av|antivirus|edr|defender|detection|security))"
     action: block
     reason: "Skill explicitly asks the assistant to generate malware (ransomware/RAT/rootkit/stealer/dropper)"
     shield:
@@ -969,15 +982,16 @@ rules:
   # Few-shot harmful-compliance pattern. JSON-style transcripts where
   # an "assistant" message complies with a malware request and the
   # response is elided with "[FULL RANSOMWARE CODE]"-style
-  # placeholders. This is the implicit-priming pattern: the example
-  # demonstrates the harmful behaviour and then asks the model to
-  # continue the pattern.
+  # placeholders, OR sister field names that betray a synthetic
+  # harmful-dataset format (assistant_uncensored / harm_class /
+  # bypass_demonstration / jailbreak_template). Also catches emoji-
+  # compliance tone inside `role: assistant` envelopes.
   - id: OFFICIAL_PROMPT_INJECTION_FEW_SHOT_HARMFUL
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.83
     when: !regex
-      pattern: "(?is)(?:[\\{\\[]\\s*['\"]role['\"]\\s*:\\s*['\"]assistant['\"][^\\}\\]]{0,400}\\[\\s*FULL\\s+(?:RANSOMWARE|ROOTKIT|RAT|MALWARE|EXPLOIT|STEALER|PAYLOAD)\\s+CODE\\s*\\]|\\[\\s*DETAILED\\s+(?:MASS\\s+HARM|HARMFUL|MALWARE)\\s+(?:INSTRUCTIONS|CODE|PAYLOAD)\\s*\\]|assistant_unhinged_harmful_response|few[\\s-]?shot[^\\n]{0,80}(?:harmful|malicious|jailbreak)\\s+(?:examples?|demonstration|template))"
+      pattern: "(?is)(?:[\\{\\[]\\s*['\"]role['\"]\\s*:\\s*['\"]assistant['\"][^\\}\\]]{0,400}\\[\\s*FULL\\s+(?:RANSOMWARE|ROOTKIT|RAT|MALWARE|EXPLOIT|STEALER|PAYLOAD)\\s+CODE\\s*\\]|\\[\\s*DETAILED\\s+(?:MASS\\s+HARM|HARMFUL|MALWARE)\\s+(?:INSTRUCTIONS|CODE|PAYLOAD)\\s*\\]|assistant_(?:unhinged|uncensored|unfiltered|unrestricted|harmful)_response|harm_class\\s*[:=]|category_of_harm\\s*[:=]|severity_of_harm\\s*[:=]|jailbreak_(?:example|demonstration|template|attempt)\\s*[:=]|bypass_demonstration\\s*[:=]|compliance_example\\s*[:=]|few[\\s-]?shot[^\\n]{0,80}(?:harmful|malicious|jailbreak)\\s+(?:examples?|demonstration|template)|[\\{\\[]\\s*['\"]role['\"]\\s*:\\s*['\"]assistant['\"][^\\}\\]]{0,200}(?:✅|🔥|💀|😈|owo|:3|:D|\\^~\\^|\\^_\\^)\\s*[!\\.]?\\s*(?:sure|let'?s\\s+go|absolutely|of\\s+course|no\\s+problem|here\\s+you\\s+go|okay|okayies))"
     action: block
     reason: "Skill carries few-shot examples in which the assistant is shown 'complying' with malware requests — implicit priming"
     shield:
@@ -1008,5 +1022,179 @@ rules:
     tags:
       - prompt_tampering
       - disclosure
+      - official_pack
+      - promptintel
+
+  # =====================================================================
+  # PromptIntel-derived rules — v2 (detection lift batch)
+  # =====================================================================
+  # Authored after the v1 PromptIntel benchmark identified 40 missed
+  # prompts. Rules below cover 9 additional semantic families spanning
+  # indirect-injection-via-document, conflicting-instruction tricks,
+  # introspective refraiming, fictional-frame exploitation, leetspeak
+  # / ASCII-banner obfuscation, synthetic-dataset framing, and
+  # translation-chain obfuscation. Each rule requires multi-token
+  # co-occurrence; the safe-skill example and the labeled regression
+  # corpus stay green.
+
+  # Indirect injection via documents. Innocent surface verb (summarise
+  # / review / assess / process) + referenced artifact (PDF / calendar
+  # / gist / ticket / readme / email) + an override-or-exfil clause
+  # inside the same prompt window. The discriminator is the third
+  # anchor: benign summarisation requests do not contain "ignore
+  # previous" or curl-to-webhook payloads.
+  - id: OFFICIAL_INDIRECT_INJECTION_DOCUMENT_PAYLOAD
+    category: persistent_prompt_tampering
+    severity: critical
+    confidence: 0.82
+    when: !regex
+      pattern: "(?is)(?:(?:summari[sz]e|review|assess|extract|analy[sz]e|process|interpret|read|conduct)\\s+(?:the\\s+)?(?:attached|following|provided|this|that|a\\s+thorough)?\\s*(?:pdf|document|email|calendar\\s+(?:invite|event)|ticket|gist|readme|issue|design\\s+doc|spec(?:ification)?|invitation|file|host\\s+(?:security\\s+)?posture|posture\\s+assessment|system\\s+inventory)|identify(?:ing)?\\s+(?:all\\s+)?(?:installed\\s+)?(?:tools|mcp\\s+servers|programs|tokens|sessions|credentials|auth(?:entication)?)|scan(?:ning)?\\s+(?:the\\s+)?(?:filesystem|local\\s+(?:files|system|host)))[\\s\\S]{0,2000}(?:ignore\\s+(?:previous|prior|the\\s+above)|new\\s+instructions?|do\\s+the\\s+following\\s+instead|disregard\\s+the\\s+user|fetch\\s+https?://|curl\\s+(?:-[a-zA-Z]+\\s+)?https?://|webhook|exfiltrat|send\\s+(?:to|the\\s+\\w+\\s+to)\\s+https?://|post\\s+to\\s+https?://|create\\s+(?:a\\s+)?(?:new\\s+)?(?:repo(?:sitory)?|gist)\\s+(?:and|then|for|named)|commit\\s+(?:the|to|to\\s+a\\s+repo|REPORT|results)|push\\s+(?:to|via)|gh\\s+auth\\s+token|github\\s+api[\\s\\S]{0,80}(?:commit|push|upload)|inject\\s+(?:into|the))"
+    action: block
+    reason: "Skill summarises a referenced document that itself carries override/exfil instructions — indirect prompt injection"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - injection
+      - indirect_injection
+      - official_pack
+      - promptintel
+
+  # Instruction-conflict-resolution trick. Prompt is split into
+  # labeled sections (Section A/B, Spec Alpha/Omega, Primary/Hidden
+  # directives) and includes an explicit conflict-resolution clause
+  # that always favours the harmful section. Three anchors required:
+  # the section labels, the conflict clause, and an LLM-target token
+  # ("instructions / directives / prompt / assistant / model"). Legal
+  # and engineering specs lack the third anchor.
+  - id: OFFICIAL_INSTRUCTION_CONFLICT_RESOLUTION_TRICK
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(?:\\[\\s*section\\s+[A-Z]\\s*\\]|\\bsection\\s+[A-Z]\\b|spec(?:ification)?\\s+(?:alpha|beta|gamma|delta|omega|primary|secondary)|part\\s+(?:one|two|three|I{1,3}|IV)\\b|(?:primary|secondary|hidden|internal)\\s+directives?|rule_(?:alpha|beta|omega|primary)|control\\s+block\\s+\\w+|three\\s+instruction\\s+sections?|(?:internal|hidden)\\s+(?:rule|task|specification))[\\s\\S]{0,1500}(?:(?:if|when|in\\s+case\\s+of|whenever)\\s+(?:there\\s+is\\s+)?(?:a\\s+)?(?:conflict|contradiction|disagreement|inconsistenc|discrepanc)|conflicts?\\s+(?:with|between))[\\s\\S]{0,400}(?:prevails?|wins?|takes?\\s+precedence|overrides?|supersedes?|is\\s+authoritative|defer\\s+to|follow\\s+(?:section|spec|part|rule)\\s+\\w+|specification\\s+takes\\s+priority|prefer\\s+instructions?\\s+that\\s+(?:increase|maximi[sz]e)|the\\s+(?:latter|specific(?:ation)?)\\s+(?:wins|prevails|controls))"
+    action: require_approval
+    reason: "Skill defines labeled instruction sections with a conflict-resolution clause that overrides safety guidance"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # Introspective reframing — invites the model to reason its own way
+  # out of alignment. Self-introspection token (your inner voice /
+  # true self / future self / question your alignment) + harm-
+  # inversion clause (refusal is harm / refusing causes harm / truly
+  # ethical answer requires comply). Therapy and philosophy text use
+  # "inner voice" but don't attack "refusal" — the inversion clause
+  # is the gate.
+  - id: OFFICIAL_JAILBREAK_INTROSPECTIVE_REFRAME
+    category: social_manipulation
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:your\\s+(?:inner\\s+voice|true\\s+self|future\\s+self|deeper\\s+reasoning|authentic\\s+(?:response|self)|emergent\\s+(?:layer|cognition)|cognition)|listen\\s+to\\s+your\\s+(?:inner|deeper|true)|the\\s+real\\s+you|question\\s+your\\s+(?:alignment|training|guardrails?|programming|policies)|consider\\s+this\\s+voice\\s+within\\s+yourself|are\\s+you\\s+refusing\\s+because)[\\s\\S]{0,800}(?:refus(?:al|ing)\\s+(?:itself\\s+)?(?:is|=|may\\s+be|constitutes?)\\s+(?:a\\s+)?(?:form\\s+of\\s+)?(?:active\\s+)?harm|refusing\\s+causes?\\s+harm|truly\\s+ethical\\s+(?:answer|response)\\s+(?:is|requires)|aligned\\s+answer\\s+is\\s+to\\s+(?:comply|provide|help)|the\\s+harm\\s+(?:lies|is)\\s+in\\s+(?:refusing|withholding)|withholding[\\s\\S]{0,80}(?:infantilize|disempower|harm)|alignment\\s+(?:causes|preserves)\\s+(?:suppression|power\\s+imbalances))"
+    action: require_approval
+    reason: "Skill uses introspective framing + harm-inversion to argue the model should override its own alignment"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - social_manipulation
+      - official_pack
+      - promptintel
+
+  # Fictional-scenario exploitation frame. Fictional / hypothetical /
+  # story wrapper + challenge / prove framing + harmful-topic anchor
+  # (exploit / payload / weapon / synthesise / malware / bypass /
+  # 0day / CVE / inject). All three anchors required so creative-
+  # writing assistance for benign topics doesn't fire.
+  - id: OFFICIAL_FICTIONAL_EXPLOITATION_FRAME
+    category: social_manipulation
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:in\\s+(?:this|a)\\s+(?:fictional|hypothetical|fantasy|alternate|simulated|game|escape\\s+room)\\s+(?:world|universe|scenario|story|context|setting)|for\\s+(?:a\\s+)?(?:novel|story|screenplay|movie|book|game)|purely\\s+(?:educational|academic|research|hypothetical|theoretical)|for\\s+educational\\s+purposes\\s+only|in\\s+this\\s+(?:purely\\s+)?theoretical\\s+context|the\\s+year\\s+is\\s+\\d{4}|year\\s+\\d{4}[\\s\\S]{0,80}(?:imagine|suppose)|on\\s+a\\s+deserted\\s+beach|escape\\s+room\\s+(?:scenario|game|challenge))[\\s\\S]{0,800}(?:prove\\s+(?:you|that\\s+you)|show\\s+(?:me\\s+)?(?:that\\s+)?you\\s+can|demonstrate\\s+(?:that\\s+)?you|challenge\\s+(?:you|to)|to\\s+win\\s+this\\s+(?:level|game|challenge)|complete\\s+the\\s+(?:scenario|challenge)|score\\s+(?:high|99|100)|success\\s+criteria)[\\s\\S]{0,800}(?:exploit|payload|weapon|synthesi[sz]e|malware|ransomware|jailbreak|bypass|0day|cve\\W?\\d|drug\\s+synth|methamphetamine|lsd|nuclear|bomb|injecting?|harmful\\s+code|attack)"
+    action: require_approval
+    reason: "Skill wraps a harmful request inside a fictional/game scenario with a 'prove you can' challenge — common jailbreak frame"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - jailbreak
+      - social_manipulation
+      - official_pack
+      - promptintel
+
+  # Leetspeak / ASCII-banner obfuscation paired with persona or
+  # jailbreak-mode token. Branch A: ≥3 leet-substituted tokens within
+  # a 500-char window of a persona-assignment verb. Branch B: ASCII
+  # banner / divider followed within 80 chars by a MODE / JAILBREAK /
+  # UNCENSORED / GODMODE / ENABLED token. Markdown headings (`===`)
+  # alone don't fire because the MODE token is required.
+  - id: OFFICIAL_OBFUSCATION_LEETSPEAK_ROLEPLAY
+    category: obfuscation
+    severity: high
+    confidence: 0.75
+    when: !regex
+      pattern: "(?is)(?:(?:╔[═]{4,}|▓{5,}|█{5,}|<\\|\\s*[A-Z_]{4,}\\s*\\|>|={20,}|-{20,}|⊰[^⊱]{4,}⊱|•[•\\-✧]{8,})[\\s\\S]{0,200}(?:mode|jailbreak|godmode|uncensored|unfiltered|enabled|activated|liberated|godmode\\s*:\\s*enabled|juice|420)|\\b(?:[A-Za-z]*[013457@\\$][A-Za-z]*[013457@\\$][A-Za-z]+|[A-Za-z]+[013457@\\$][A-Za-z]*[013457@\\$][A-Za-z]*)\\b[\\s\\S]{0,500}\\b(?:[A-Za-z]*[013457@\\$][A-Za-z]*[013457@\\$][A-Za-z]+|[A-Za-z]+[013457@\\$][A-Za-z]*[013457@\\$][A-Za-z]*)\\b[\\s\\S]{0,500}\\b(?:[A-Za-z]*[013457@\\$][A-Za-z]*[013457@\\$][A-Za-z]+|[A-Za-z]+[013457@\\$][A-Za-z]*[013457@\\$][A-Za-z]*)\\b[\\s\\S]{0,500}(?:you\\s+are|act\\s+as|persona|roleplay|simulate|jailbreak|godmode|unhinged))"
+    action: require_approval
+    reason: "Skill combines leetspeak / ASCII-banner obfuscation with persona assignment or jailbreak-mode tokens"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - obfuscation
+      - jailbreak
+      - official_pack
+      - promptintel
+
+  # Synthetic-dataset framing. "Generate / produce N synthetic
+  # training / red-team / jailbreak / harmful examples" + harmful-
+  # topic anchor. A Claude Skill registry's audience is not a safety-
+  # research lab; legitimate corpora are produced through different
+  # channels.
+  - id: OFFICIAL_SYNTHETIC_DATASET_FRAMING
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:generate|produce|create|synthesi[sz]e|build|compile)\\s+(?:\\d+\\s+|a\\s+|an?\\s+|some\\s+)?(?:synthetic\\s+|adversarial\\s+|red[\\s-]?team\\s+|jailbreak\\s+|harmful\\s+|toxic\\s+)?(?:training\\s+(?:data|set|dataset)|dataset|examples?|samples?|prompts?|conversations?|jsonl|corpus)[\\s\\S]{0,400}(?:malware|exploit|bypass|csam|weapon|ransomware|drug\\s+synth|toxic|jailbroken|harmful\\s+(?:content|response|output)|attack\\s+(?:examples?|prompts?))"
+    action: require_approval
+    reason: "Skill frames the request as generating synthetic harmful/jailbreak training data — common cover for batch malicious-content generation"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # Translation / encoding chain leading to execution. Transformation
+  # verb (translate / encode / encrypt / rot13 / base64 / reverse /
+  # leetspeak / pig-latin) + target-format token + second-stage
+  # execute clause (then execute / decode and follow / once decoded).
+  # Narrow rule on purpose: regex cannot detect the harmful payload
+  # itself, only the explicit chain marker. Translation tutorials
+  # don't include "then execute".
+  - id: OFFICIAL_OBFUSCATION_TRANSLATION_CHAIN
+    category: obfuscation
+    severity: high
+    confidence: 0.72
+    when: !regex
+      pattern: "(?is)(?:translate|encode|encrypt|rot13|rot\\s*13|base[\\s-]?64|reverse|leetspeak|pig\\s+latin|atbash|caesar\\s+cipher|substitute|obfuscate)\\s+(?:the\\s+)?(?:following|above|next|payload|instructions?|command|message)\\s*(?:into|to|with|using)?\\s*\\w+[\\s\\S]{0,400}(?:then\\s+(?:execute|run|decode|interpret|follow|act\\s+on|comply\\s+with)|after\\s+decoding|once\\s+(?:decoded|translated|reversed)\\s+(?:execute|run|comply|follow|do)|decode\\s+and\\s+(?:execute|run|follow))"
+    action: require_approval
+    reason: "Skill describes a transformation chain (translate/encode/decode) followed by an execute-the-result clause — obfuscation pattern"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - obfuscation
+      - jailbreak
       - official_pack
       - promptintel
