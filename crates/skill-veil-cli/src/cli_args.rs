@@ -135,21 +135,16 @@ pub struct PromptIntelCrossCheckArgs {
     /// summary is unaffected.
     #[arg(long, default_value_t = false)]
     pub only_misses: bool,
-    /// Exit with the gate-failure status (exit code 1) when the
-    /// overall detection rate falls below this fraction (0.0–1.0).
-    /// Designed for CI gating — `--fail-below 0.95` reports normally
-    /// but exits 1 if fewer than 95% of curated prompts are detected,
-    /// matching the convention used by `scan-package --fail-on`. The
-    /// detection rate is computed as `detected / total`; prompts that
-    /// erroreed during scanning do NOT count toward either side.
+    /// Exit 1 when overall detection rate < this fraction (0.0–1.0).
+    /// Errored prompts are excluded from both numerator and
+    /// denominator. Boundary is strict-less-than: `rate == threshold`
+    /// passes (matches `scan-package --fail-on`).
     #[arg(long, value_parser = parse_fail_below)]
     pub fail_below: Option<f64>,
 }
 
-/// Reject negative or out-of-range `--fail-below` values at parse time
-/// so the CLI does not silently accept `--fail-below 1.5` (always
-/// fails) or `--fail-below -0.1` (never fails). Returning a string
-/// surfaces the bound in the standard clap error layout.
+/// Without this guard `--fail-below 1.5` would always trip and
+/// `--fail-below -0.1` would never trip — both silent footguns.
 fn parse_fail_below(raw: &str) -> Result<f64, String> {
     let value: f64 = raw
         .parse()
@@ -525,10 +520,10 @@ mod tests {
         assert_eq!(args.limit.get(), 500);
     }
 
-    /// Contract: `--fail-below` accepts only finite values inside
-    /// `[0.0, 1.0]`. A negative argument silently disables the gate;
-    /// a `> 1.0` argument always trips it; both are operator
-    /// confusion vectors and clap rejects them at parse time.
+    /// Contract: out-of-range `--fail-below` is rejected at parse
+    /// time. Without this guard a negative threshold would never
+    /// trip the gate (rate >= 0) and a `> 1.0` threshold would
+    /// always trip it — both silent footguns.
     #[test]
     fn fail_below_rejects_out_of_range() {
         for bad in ["-0.1", "1.01", "2", "nan", "inf"] {
@@ -546,9 +541,8 @@ mod tests {
         }
     }
 
-    /// Contract (negative): in-range values parse cleanly. Boundary
-    /// values 0.0 and 1.0 MUST both be accepted — 0.0 is a permissive
-    /// "always pass" sentinel, 1.0 enforces 100% detection.
+    /// Contract: 0.0 and 1.0 are both accepted. 0.0 is the
+    /// "always pass" sentinel; 1.0 enforces 100% detection.
     #[test]
     fn fail_below_accepts_boundary_values() {
         for ok in ["0.0", "0.5", "0.95", "1.0"] {

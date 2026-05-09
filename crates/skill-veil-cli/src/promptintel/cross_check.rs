@@ -27,12 +27,10 @@ pub(crate) struct CrossCheckOptions {
     /// to misses only — handy when authoring rules and scanning hundreds
     /// of prompts.
     pub(crate) only_misses: bool,
-    /// Optional explicit rule pack directory. CLI users leave this at
-    /// `None` so the scanner's normal cwd-relative discovery picks up
-    /// `rules/official/`; the regression test pins this to the
-    /// workspace-absolute path so the suite is reproducible from any
-    /// working directory and so it tests the canonical pack — not the
-    /// pack embedded in the binary at compile time.
+    /// `None` defers to the scanner's cwd-relative pack discovery.
+    /// `Some(path)` pins the pack so callers reproduce the run from
+    /// any cwd and test the authored pack rather than the copy
+    /// embedded in the binary at compile time.
     pub(crate) rules_dir: Option<PathBuf>,
 }
 
@@ -273,15 +271,9 @@ fn truncate(s: &str, max: usize) -> String {
     out
 }
 
-/// Default scan options for the cross-check pipeline. Single-file
-/// markdown mode without policy/profile/baseline so the scanner uses
-/// the canonical rule pack and we measure detection of the rules
-/// themselves, not of an operator-specific policy.
-///
-/// `rules_dir` is forwarded into `ScanOptions::rules_dir` when supplied
-/// so the regression test can pin the canonical workspace pack
-/// independent of the test-runner cwd. CLI users always pass `None`
-/// and inherit the scanner's normal cwd-relative discovery.
+/// Single-file markdown mode without policy/profile/baseline so the
+/// run measures detection by the rule pack itself, not by an
+/// operator-specific policy.
 fn scan_options(rules_dir: Option<PathBuf>) -> ScanOptions {
     ScanOptions {
         recursive: false,
@@ -387,14 +379,6 @@ mod tests {
         assert_eq!(truncate("short", 80), "short".to_string());
     }
 
-    /// Contract: scanning the vendored PromptIntel corpus
-    /// (`benchmarks/promptintel-corpus/`) MUST clear the per-severity
-    /// regression gates below. The thresholds intentionally allow some
-    /// drift (one high miss, five medium misses) so isolated rule
-    /// adjustments do not require regenerating the snapshot, but a
-    /// cohort-wide regression — e.g. a refactor that breaks regex
-    /// compilation in the official pack — fails CI.
-    ///
     /// Refresh procedure when the snapshot legitimately moves: see
     /// `benchmarks/promptintel-corpus/README.md`. Do NOT relax the
     /// thresholds without a paired commit that explains the labelling
@@ -427,9 +411,9 @@ mod tests {
              or the scanner cannot read a referenced markdown file"
         );
 
-        // Snapshot shape — pin the per-severity distribution so a
-        // future refresh that silently drops `critical` entries cannot
-        // satisfy the percentage gates by reducing the denominator.
+        // Snapshot shape: a future refresh that silently drops
+        // `critical` entries must not satisfy the percentage gates
+        // by reducing the denominator.
         let critical = summary
             .by_severity
             .get("critical")
@@ -451,8 +435,7 @@ mod tests {
             medium.total,
         );
 
-        // Per-severity gates. Critical never tolerates a miss — those
-        // are the highest-leverage prompts we ship rules for.
+        // Critical never tolerates a miss.
         assert_eq!(
             critical.detected,
             critical.total,
@@ -471,9 +454,8 @@ mod tests {
             medium.detection_rate_pct(),
         );
 
-        // Overall gate. We currently ship at 100%; allow one miss of
-        // headroom (≥ 49/50) so unrelated rule churn does not flake CI,
-        // but anything below that is a real regression.
+        // ≥ 98% leaves one prompt of headroom for isolated rule
+        // churn; below that is cohort-wide regression.
         let overall_pct = (f64::from(u32::try_from(summary.detected).unwrap_or(0))
             / f64::from(u32::try_from(summary.total.max(1)).unwrap_or(1)))
             * 100.0;

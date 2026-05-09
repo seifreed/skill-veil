@@ -68,21 +68,14 @@ fn run_cross_check(args: PromptIntelCrossCheckArgs) -> Result<bool> {
     Ok(detection_below_gate(&summary, args.fail_below))
 }
 
-/// Decide whether `summary` tripped the optional `--fail-below` gate.
-///
-/// Lives in its own function so the threshold semantics can be unit
-/// tested without spinning up the scanner.
-///
 /// # Contract
-/// - Empty corpora (`summary.total == 0`) NEVER trip the gate; the
-///   user supplied a bad path or an empty index, surfaced as
-///   `summary.errors`, and silently failing CI on top of that would
-///   double-charge the operator for the same diagnostic.
-/// - Errored prompts are excluded from the denominator: a
-///   `--fail-below 0.95` run with 50 prompts and 2 scan errors must
-///   fail iff `detected / (total - errors) < 0.95`.
-/// - The threshold is inclusive at the boundary: `rate == threshold`
-///   passes. Mirrors the boundary used by `scan-package --fail-on`.
+/// - `total - errors == 0` never trips: empty/all-errored corpora
+///   are already surfaced via `summary.errors`; a doubled CI failure
+///   would mask the real "bad path" diagnostic.
+/// - Errored prompts are excluded from the denominator:
+///   `detected / (total - errors) < threshold`.
+/// - Boundary is strict-less-than: `rate == threshold` passes.
+///   Matches `scan-package --fail-on`.
 fn detection_below_gate(summary: &cross_check::CrossCheckSummary, threshold: Option<f64>) -> bool {
     let Some(threshold) = threshold else {
         return false;
@@ -116,56 +109,43 @@ mod tests {
         }
     }
 
-    /// Contract: `None` threshold MUST never trip the gate. CI users
-    /// who run `cross-check` without `--fail-below` expect the same
-    /// exit semantics as before this flag landed.
     #[test]
     fn no_threshold_never_trips() {
         assert!(!detection_below_gate(&summary(50, 0, 0), None));
         assert!(!detection_below_gate(&summary(50, 50, 0), None));
     }
 
-    /// Contract: empty corpora do not trip the gate even with a strict
-    /// threshold. The empty case is already surfaced via
-    /// `summary.errors`; double-failing on it would mask the real
-    /// "operator pointed at a bad path" diagnostic.
     #[test]
     fn empty_corpus_passes_any_threshold() {
         assert!(!detection_below_gate(&summary(0, 0, 0), Some(0.95)));
         assert!(!detection_below_gate(&summary(0, 0, 0), Some(1.0)));
     }
 
-    /// Contract: a corpus where every prompt errored (denominator
-    /// `total - errors == 0`) MUST NOT trip — same reasoning as the
-    /// empty corpus above.
     #[test]
     fn all_errors_do_not_trip() {
         assert!(!detection_below_gate(&summary(10, 0, 10), Some(0.95)));
     }
 
-    /// Contract: errored prompts are excluded from the denominator.
-    /// 48 detected of 50, with 2 errors → 48/(50-2) = 100%, must pass
-    /// `--fail-below 0.95`.
+    /// 48 detected of 50, with 2 errors → 48/(50-2) = 100%; passes
+    /// `--fail-below 0.95` because errors are excluded from the
+    /// denominator.
     #[test]
     fn errors_excluded_from_denominator() {
         assert!(!detection_below_gate(&summary(50, 48, 2), Some(0.95)));
     }
 
-    /// Contract: equality at the threshold passes (gate is strict
-    /// less-than). `48/50 == 0.96` does NOT trip `--fail-below 0.96`.
+    /// `48/50 == 0.96` does NOT trip `--fail-below 0.96`.
     #[test]
     fn boundary_equal_passes() {
         assert!(!detection_below_gate(&summary(50, 48, 0), Some(0.96)));
     }
 
-    /// Contract: a single miss below threshold trips. 47/50 = 0.94 <
-    /// 0.95.
+    /// `47/50 == 0.94 < 0.95` trips.
     #[test]
     fn below_threshold_trips() {
         assert!(detection_below_gate(&summary(50, 47, 0), Some(0.95)));
     }
 
-    /// Contract: zero detections trips on any positive threshold.
     #[test]
     fn zero_detections_trips() {
         assert!(detection_below_gate(&summary(50, 0, 0), Some(0.01)));
