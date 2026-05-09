@@ -315,11 +315,22 @@ skill-veil vt cross-check --dir data --format markdown --only-mismatches
 
 ### PromptIntel: jailbreak corpus, agent-feed enrichment, threat-intel reports
 
-PromptIntel (`api.promptintel.novahunting.ai`) is a curated database of
-malicious prompts plus a community-driven threat-intel feed. skill-veil
-integrates with both — the corpus pins detection regression tests, the
-feed enriches every scan with offline IOC matching, and the report
-endpoints close the feedback loop.
+[PromptIntel](https://promptintel.novahunting.ai/) is the curated
+threat-intel platform from [NovaHunting](https://novahunting.ai/) —
+maintained by [Thomas Roccia (@fr0gger_)](https://x.com/fr0gger_) and
+the PromptIntel community. It hosts a labelled jailbreak / abuse
+corpus, the official 4-bucket / 38-threat taxonomy, and a public
+agent-feed of community-submitted IOCs.
+
+skill-veil integrates with all three — the corpus pins detection
+regression tests, the feed enriches every scan with offline IOC
+matching, and the report endpoints close the feedback loop.
+
+**The taxonomy, corpus, and threat-intel feed are PromptIntel's work**;
+skill-veil consumes them and renders them locally. Anyone running
+`promptintel feed sync` should sign up at
+[promptintel.novahunting.ai](https://promptintel.novahunting.ai/) for
+their own API key.
 
 ```bash
 # One-time setup: ~/.skill-veil.toml
@@ -690,6 +701,30 @@ Start here:
 
 ---
 
+## Acknowledgments
+
+skill-veil stands on third-party threat-intel platforms and open
+research. Specifically:
+
+- **PromptIntel / NovaHunting** — [Thomas Roccia (@fr0gger_)](https://x.com/fr0gger_)
+  and the [PromptIntel](https://promptintel.novahunting.ai/) community.
+  They publish the curated jailbreak corpus, the official 4-bucket /
+  38-threat taxonomy used by `promptintel cross-check` and `promptintel
+  coverage`, and the agent-feed of community-submitted IOCs that powers
+  the `promptintel feed` enrichment block. The taxonomy, corpus, and
+  feed are their work; skill-veil only consumes them. Operators who
+  run `promptintel feed sync` should grab their own API key at
+  [promptintel.novahunting.ai](https://promptintel.novahunting.ai/).
+- **VirusTotal / Google** — for the VT Intelligence corpus and Code
+  Insight verdicts that the `vt download / report / cross-check`
+  family integrates with.
+- **The LLM cohort** — the v6/v7 detection rules were drafted with help
+  from a multi-LLM consultation: Grok-4-fast (xAI), GPT-4o (OpenAI),
+  DeepSeek-v3.1:671b, and Qwen3-coder:480b (both via Ollama Cloud).
+  Co-authoring credit lives in the relevant commit messages.
+
+---
+
 ## Support the Project
 
 If `skill-veil` is useful to you, consider supporting its maintenance:
@@ -704,8 +739,17 @@ If `skill-veil` is useful to you, consider supporting its maintenance:
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
+skill-veil is an independent open-source project. PromptIntel,
+VirusTotal, and the LLM providers listed under
+[Acknowledgments](#acknowledgments) are external services accessed via
+their respective APIs and are governed by their own terms; this
+repository does not redistribute their content beyond the curated
+benchmark snapshots explicitly checked into
+`benchmarks/promptintel-corpus/`.
+
 **Attribution:**
 - Repository: [github.com/seifreed/skill-veil](https://github.com/seifreed/skill-veil)
+- Threat-intel taxonomy + corpus: PromptIntel / NovaHunting (Thomas Roccia)
 
 ---
 
