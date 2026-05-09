@@ -100,16 +100,23 @@ pub enum PromptIntelAction {
     /// scans with community-curated IOCs.
     #[command(subcommand)]
     Feed(PromptIntelFeedAction),
+    /// Submit threat-intel reports to PromptIntel and inspect prior
+    /// submissions. Rate-limited (5/h, 20/d for submission; 60/h for
+    /// listing).
+    #[command(subcommand)]
+    Report(PromptIntelReportAction),
 }
 
 #[derive(Subcommand, Clone)]
 pub enum PromptIntelFeedAction {
-    /// Pull the PromptIntel agent-feed and overwrite the local cache.
-    /// Rate limit: 120/hour. A single pull suffices for the current
-    /// dataset (~55 entries today).
+    /// Pull the PromptIntel agent-feed into the local cache. Default
+    /// is incremental (`?since=<last_sync>`); `--full` forces a
+    /// complete re-pull so revocations propagate.
     Sync(PromptIntelFeedSyncArgs),
-    /// List cached entries and recent IOC counts.
+    /// List cached entries.
     List(PromptIntelFeedListArgs),
+    /// Show the persisted client-side rate-limit budget.
+    Budget(PromptIntelFeedBudgetArgs),
 }
 
 #[derive(Args, Clone)]
@@ -117,6 +124,11 @@ pub struct PromptIntelFeedSyncArgs {
     /// Cache root override. Defaults to `dirs::cache_dir()/skill-veil/`.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+    /// Force a full re-pull instead of an incremental delta. Required
+    /// to propagate revocations because the upstream `?since=` filter
+    /// does not return entries that were revoked since `last_sync`.
+    #[arg(long, default_value_t = false)]
+    pub full: bool,
 }
 
 #[derive(Args, Clone)]
@@ -124,6 +136,58 @@ pub struct PromptIntelFeedListArgs {
     /// Cache root override. Defaults to `dirs::cache_dir()/skill-veil/`.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: PromptIntelCrossCheckFormat,
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelFeedBudgetArgs {
+    /// Cache root override. Defaults to `dirs::cache_dir()/skill-veil/`.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+}
+
+/// Subcommand family for `POST /agents/reports` (5/h, 20/d) and
+/// `GET /agents/reports/mine` (60/h).
+#[derive(Subcommand, Clone)]
+pub enum PromptIntelReportAction {
+    /// Submit a draft report to PromptIntel. The body MUST be a JSON
+    /// file conforming to the [`ReportDraft`] schema; validate locally
+    /// with `--dry-run` before spending hourly quota.
+    Submit(PromptIntelReportSubmitArgs),
+    /// List reports the authenticated agent has previously submitted.
+    List(PromptIntelReportListArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelReportSubmitArgs {
+    /// JSON file holding the report draft. See `ReportDraft` for the
+    /// expected shape; required fields are `category`, `severity`,
+    /// `confidence`, `fingerprint`, `title` (5–100 chars).
+    #[arg(long)]
+    pub file: PathBuf,
+    /// Cache root override (used by the rate-limit tracker).
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+    /// Validate the draft and print the JSON that would be submitted
+    /// without contacting the API. Recommended before every real
+    /// submission since the hourly cap is just 5/h.
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelReportListArgs {
+    /// Cache root override (used by the rate-limit tracker).
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+    /// Page size; clamped client-side to ≥1.
+    #[arg(long, default_value_t = 20)]
+    pub limit: u32,
+    /// Page offset.
+    #[arg(long, default_value_t = 0)]
+    pub offset: u32,
     /// Output format.
     #[arg(long, value_enum, default_value = "text")]
     pub format: PromptIntelCrossCheckFormat,

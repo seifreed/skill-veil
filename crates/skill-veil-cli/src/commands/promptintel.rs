@@ -6,14 +6,20 @@
 
 use crate::cli_args::{
     PromptIntelAction, PromptIntelCrossCheckArgs, PromptIntelCrossCheckFormat,
-    PromptIntelDownloadArgs, PromptIntelFeedAction, PromptIntelFeedListArgs,
-    PromptIntelFeedSyncArgs,
+    PromptIntelDownloadArgs, PromptIntelFeedAction, PromptIntelFeedBudgetArgs,
+    PromptIntelFeedListArgs, PromptIntelFeedSyncArgs, PromptIntelReportAction,
+    PromptIntelReportListArgs, PromptIntelReportSubmitArgs,
 };
 use crate::promptintel::client::PromptIntelClient;
 use crate::promptintel::config::PromptIntelConfig;
 use crate::promptintel::corpus::{self, DownloadOptions};
 use crate::promptintel::cross_check::{self, CrossCheckOptions};
-use crate::promptintel::feed::{store::FeedStore, sync as feed_sync};
+use crate::promptintel::feed::{
+    ratelimit::RateLimitState,
+    store::FeedStore,
+    sync::{self as feed_sync, SyncMode},
+};
+use crate::promptintel::types::ReportDraft;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -26,6 +32,7 @@ pub(crate) fn run_promptintel(action: PromptIntelAction) -> Result<bool> {
         PromptIntelAction::Download(args) => run_download(args).map(|()| false),
         PromptIntelAction::CrossCheck(args) => run_cross_check(args),
         PromptIntelAction::Feed(action) => run_feed(action).map(|()| false),
+        PromptIntelAction::Report(action) => run_report(action).map(|()| false),
     }
 }
 
@@ -33,20 +40,152 @@ fn run_feed(action: PromptIntelFeedAction) -> Result<()> {
     match action {
         PromptIntelFeedAction::Sync(args) => run_feed_sync(args),
         PromptIntelFeedAction::List(args) => run_feed_list(args),
+        PromptIntelFeedAction::Budget(args) => run_feed_budget(args),
     }
 }
 
 fn run_feed_sync(args: PromptIntelFeedSyncArgs) -> Result<()> {
     let cache_root = resolve_cache_root(args.cache_dir)?;
     let client = build_client()?;
-    let summary = feed_sync::run_sync(&client, &cache_root)
+    let mode = if args.full {
+        SyncMode::Full
+    } else {
+        SyncMode::Incremental
+    };
+    let summary = feed_sync::run_sync(&client, &cache_root, mode)
         .with_context(|| format!("syncing PromptIntel feed into {}", cache_root.display()))?;
+    let mode_label = match summary.mode {
+        feed_sync::ResolvedSyncMode::Full => "full",
+        feed_sync::ResolvedSyncMode::Incremental => "incremental",
+        feed_sync::ResolvedSyncMode::IncrementalUpgradedToFull => {
+            "incremental → upgraded to full (no prior cache)"
+        }
+    };
     println!(
-        "PromptIntel feed sync complete: {} entries cached at {} (was {})",
-        summary.total_pulled,
-        cache_root.join("promptintel-feed").display(),
-        summary.previous_total,
+        "PromptIntel feed sync complete ({mode}): pulled={pulled} merged={merged} previous={prev}\nCache: {cache}",
+        mode = mode_label,
+        pulled = summary.pulled,
+        merged = summary.new_total,
+        prev = summary.previous_total,
+        cache = cache_root.join("promptintel-feed").display(),
     );
+    Ok(())
+}
+
+fn run_feed_budget(args: PromptIntelFeedBudgetArgs) -> Result<()> {
+    let cache_root = resolve_cache_root(args.cache_dir)?;
+    let state = RateLimitState::load(&cache_root).with_context(|| {
+        format!(
+            "loading PromptIntel rate-limit state from {}",
+            cache_root.display()
+        )
+    })?;
+    println!("{}", state.render_summary());
+    Ok(())
+}
+
+fn run_report(action: PromptIntelReportAction) -> Result<()> {
+    match action {
+        PromptIntelReportAction::Submit(args) => run_report_submit(args),
+        PromptIntelReportAction::List(args) => run_report_list(args),
+    }
+}
+
+fn run_report_submit(args: PromptIntelReportSubmitArgs) -> Result<()> {
+    let cache_root = resolve_cache_root(args.cache_dir.clone())?;
+
+    let raw = std::fs::read_to_string(&args.file)
+        .with_context(|| format!("reading report draft {}", args.file.display()))?;
+    let draft: ReportDraft = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing report draft as JSON: {}", args.file.display()))?;
+
+    let validation = draft.validate();
+    if !validation.is_empty() {
+        for err in &validation {
+            eprintln!("  - {err}");
+        }
+        anyhow::bail!(
+            "report draft has {} client-side validation error(s); fix and retry",
+            validation.len()
+        );
+    }
+
+    let body = serde_json::to_string_pretty(&draft).context("serialising report draft")?;
+    if args.dry_run {
+        println!("{body}");
+        eprintln!("\n--dry-run: not sent to api.promptintel.novahunting.ai");
+        return Ok(());
+    }
+
+    let mut rate_state = RateLimitState::load(&cache_root)?;
+    rate_state
+        .check_can_call(crate::promptintel::feed::ratelimit::endpoint::REPORTS_SUBMIT)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let client = build_client()?;
+    let (response, response_meta) = client
+        .submit_report(&body)
+        .context("submitting report to api.promptintel.novahunting.ai")?;
+
+    rate_state.record_call(
+        crate::promptintel::feed::ratelimit::endpoint::REPORTS_SUBMIT,
+        response_meta.ratelimit_remaining,
+    );
+    rate_state.save(&cache_root)?;
+
+    if !response.success {
+        anyhow::bail!(
+            "PromptIntel reported success=false. Response body: {}",
+            serde_json::to_string(&response.extra).unwrap_or_default()
+        );
+    }
+    println!(
+        "Report submitted: id={}",
+        response.id.as_deref().unwrap_or("(server returned no id)")
+    );
+    Ok(())
+}
+
+fn run_report_list(args: PromptIntelReportListArgs) -> Result<()> {
+    let cache_root = resolve_cache_root(args.cache_dir.clone())?;
+    let mut rate_state = RateLimitState::load(&cache_root)?;
+    rate_state
+        .check_can_call(crate::promptintel::feed::ratelimit::endpoint::REPORTS_MINE)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let client = build_client()?;
+    let (envelope, response_meta) = client
+        .list_my_reports(args.limit.max(1), args.offset)
+        .context("fetching agents/reports/mine")?;
+
+    rate_state.record_call(
+        crate::promptintel::feed::ratelimit::endpoint::REPORTS_MINE,
+        response_meta.ratelimit_remaining,
+    );
+    rate_state.save(&cache_root)?;
+
+    match args.format {
+        PromptIntelCrossCheckFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&envelope.data)?);
+        }
+        PromptIntelCrossCheckFormat::Text => {
+            let total = envelope.pagination.as_ref().map(|p| p.total).unwrap_or(0);
+            println!(
+                "=== Reports submitted by this agent ({} returned, {} total) ===",
+                envelope.data.len(),
+                total
+            );
+            for entry in &envelope.data {
+                println!(
+                    "[{sev:<8}] {action:<16} {id}  {title}",
+                    sev = entry.severity.as_str(),
+                    action = format!("{:?}", entry.action).to_lowercase(),
+                    id = entry.id,
+                    title = entry.title.chars().take(70).collect::<String>(),
+                );
+            }
+        }
+    }
     Ok(())
 }
 

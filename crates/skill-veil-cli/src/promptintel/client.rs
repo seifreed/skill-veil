@@ -8,7 +8,9 @@
 //! failures (401) from quota / transient faults.
 
 use super::config::PromptIntelConfig;
-use super::types::{FeedResponse, PromptListEnvelope};
+use super::types::{
+    FeedResponse, PromptListEnvelope, ReportListEnvelope, ReportSubmissionResponse,
+};
 use std::io::{self, Read};
 use std::time::Duration;
 use thiserror::Error;
@@ -77,26 +79,57 @@ impl PromptIntelClient {
 
     /// Fetch the agent threat-intel feed.
     ///
-    /// Rate limit: 120/hour, ~2/min. Callers MUST persist a sync
-    /// timestamp and pass it as `since` so re-syncs only pull deltas.
-    /// `since` accepts ISO-8601 (e.g. `2026-05-09T12:00:00Z`).
-    ///
-    /// `limit` is upstream-clamped; passing 200 returns the full
-    /// dataset today (≈55 entries), so a single call suffices for an
-    /// initial sync.
-    pub(crate) fn agent_feed(&self, limit: u32, since: Option<&str>) -> Result<FeedResponse> {
+    /// Rate limit: 120/hour, ~2/min. Callers should pass
+    /// `since=<RFC3339>` for incremental pulls; without it, the
+    /// upstream returns the full dataset.
+    pub(crate) fn agent_feed(
+        &self,
+        limit: u32,
+        since: Option<&str>,
+    ) -> Result<(FeedResponse, ResponseMeta)> {
         let mut url = format!("{BASE_URL}/agent-feed?limit={limit}");
         if let Some(s) = since {
-            // ureq automatically percent-encodes the value at send time.
             url.push_str("&since=");
             url.push_str(s);
         }
-        let body = self.get_json(&url)?;
+        let (body, meta) = self.get_json_with_meta(&url)?;
         let response: FeedResponse = serde_json::from_str(&body)?;
-        Ok(response)
+        Ok((response, meta))
+    }
+
+    /// List reports the authenticated agent has previously submitted.
+    /// Rate limit: 60/hour. Pagination is `?limit=&offset=`.
+    pub(crate) fn list_my_reports(
+        &self,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(ReportListEnvelope, ResponseMeta)> {
+        let url = format!("{BASE_URL}/agents/reports/mine?limit={limit}&offset={offset}");
+        let (body, meta) = self.get_json_with_meta(&url)?;
+        let envelope: ReportListEnvelope = serde_json::from_str(&body)?;
+        Ok((envelope, meta))
+    }
+
+    /// Submit a new threat-intel report. Rate limit: 5/hour, 20/day.
+    ///
+    /// `body_json` MUST be a serialised JSON object with at minimum
+    /// `category`, `severity`, `confidence`, `fingerprint`, `title`
+    /// (validated client-side by [`super::types::ReportDraft`]).
+    pub(crate) fn submit_report(
+        &self,
+        body_json: &str,
+    ) -> Result<(ReportSubmissionResponse, ResponseMeta)> {
+        let url = format!("{BASE_URL}/agents/reports");
+        let (body, meta) = self.post_json_with_meta(&url, body_json)?;
+        let response: ReportSubmissionResponse = serde_json::from_str(&body)?;
+        Ok((response, meta))
     }
 
     fn get_json(&self, url: &str) -> Result<String> {
+        Ok(self.get_json_with_meta(url)?.0)
+    }
+
+    fn get_json_with_meta(&self, url: &str) -> Result<(String, ResponseMeta)> {
         let mut backoff_ms = INITIAL_BACKOFF_MS;
         let mut attempts_remaining = MAX_ADDITIONAL_ATTEMPTS;
         loop {
@@ -108,7 +141,10 @@ impl PromptIntelClient {
                 .set("User-Agent", USER_AGENT)
                 .call();
             match response {
-                Ok(resp) => return bounded_read_response(resp),
+                Ok(resp) => {
+                    let meta = ResponseMeta::from_headers(&resp);
+                    return bounded_read_response(resp).map(|body| (body, meta));
+                }
                 Err(ureq::Error::Status(status, resp)) => {
                     let body = drain_error_body(status, resp);
                     if matches!(status, 429 | 500..=599) && attempts_remaining > 0 {
@@ -139,6 +175,79 @@ impl PromptIntelClient {
                     return Err(PromptIntelError::Transport(t.to_string()));
                 }
             }
+        }
+    }
+
+    fn post_json_with_meta(&self, url: &str, body_json: &str) -> Result<(String, ResponseMeta)> {
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
+        let mut attempts_remaining = MAX_ADDITIONAL_ATTEMPTS;
+        loop {
+            let response = self
+                .agent
+                .post(url)
+                .set("Authorization", &format!("Bearer {}", self.config.apikey))
+                .set("Accept", "application/json")
+                .set("Content-Type", "application/json")
+                .set("User-Agent", USER_AGENT)
+                .send_string(body_json);
+            match response {
+                Ok(resp) => {
+                    let meta = ResponseMeta::from_headers(&resp);
+                    return bounded_read_response(resp).map(|body| (body, meta));
+                }
+                Err(ureq::Error::Status(status, resp)) => {
+                    let body = drain_error_body(status, resp);
+                    // 4xx (other than 429) are operator-fixable; do not
+                    // retry — the same body would re-trip the same
+                    // validation. 429 / 5xx are transient enough to
+                    // warrant the existing backoff.
+                    if matches!(status, 429 | 500..=599) && attempts_remaining > 0 {
+                        tracing::warn!(
+                            "PromptIntel POST returned HTTP {} — sleeping {}ms before retry",
+                            status,
+                            backoff_ms
+                        );
+                        std::thread::sleep(Duration::from_millis(backoff_ms));
+                        backoff_ms = backoff_ms.saturating_mul(2);
+                        attempts_remaining -= 1;
+                        continue;
+                    }
+                    return Err(PromptIntelError::HttpStatus { status, body });
+                }
+                Err(ureq::Error::Transport(t)) => {
+                    if attempts_remaining > 0 {
+                        tracing::warn!(
+                            "PromptIntel POST transport error, sleeping {}ms: {}",
+                            backoff_ms,
+                            t
+                        );
+                        std::thread::sleep(Duration::from_millis(backoff_ms));
+                        backoff_ms = backoff_ms.saturating_mul(2);
+                        attempts_remaining -= 1;
+                        continue;
+                    }
+                    return Err(PromptIntelError::Transport(t.to_string()));
+                }
+            }
+        }
+    }
+}
+
+/// Per-response observability fields the rate-limit tracker captures.
+/// `ratelimit_remaining` mirrors the upstream `x-ratelimit-remaining`
+/// header when present; the value is informational and the gating
+/// decision uses our own client-side history regardless.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResponseMeta {
+    pub(crate) ratelimit_remaining: Option<u32>,
+}
+
+impl ResponseMeta {
+    fn from_headers(resp: &ureq::Response) -> Self {
+        Self {
+            ratelimit_remaining: resp
+                .header("x-ratelimit-remaining")
+                .and_then(|s| s.parse().ok()),
         }
     }
 }

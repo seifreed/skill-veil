@@ -179,6 +179,159 @@ pub(crate) struct FeedResponse {
     pub(crate) data: Vec<FeedEntry>,
 }
 
+/// Submission payload for `POST /agents/reports`. Validated client-side
+/// against the upstream contract so a malformed draft is rejected
+/// before it spends quota (5/hour, 20/day).
+///
+/// The required fields and accepted enum variants were derived from
+/// the upstream validation error response. We deliberately mirror the
+/// upstream JSON shape (snake_case, lowercase enums) so the rendered
+/// JSON can be reviewed verbatim with `--dry-run` and submitted
+/// without further translation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ReportDraft {
+    pub(crate) category: ReportCategory,
+    pub(crate) severity: PromptSeverity,
+    pub(crate) confidence: f32,
+    /// Operator-chosen unique key — re-submitting the same fingerprint
+    /// will be deduped server-side. Recommended convention: a UUID4
+    /// or a hash of the normalised IOC set.
+    pub(crate) fingerprint: String,
+    /// 5–100 chars (upstream-enforced).
+    pub(crate) title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) action: Option<FeedAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) iocs: Vec<ReportIoc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) recommendation_agent: Option<String>,
+}
+
+/// Submission-side IOC: the upstream feed returns the same shape via
+/// dict, so we serialise to `{"type": ..., "value": ...}` to match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ReportIoc {
+    #[serde(rename = "type")]
+    pub(crate) kind: FeedIocKind,
+    pub(crate) value: String,
+}
+
+/// Categories accepted by `POST /agents/reports`. Keep this list
+/// aligned with the upstream validation contract — adding a variant
+/// here without server-side support would surface as a 400 the next
+/// time a user submits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ReportCategory {
+    Prompt,
+    Tool,
+    Mcp,
+    Skill,
+    Memory,
+    SupplyChain,
+    Vulnerability,
+    Fraud,
+    PolicyBypass,
+    Anomaly,
+    Other,
+}
+
+/// Validation outcome for [`ReportDraft::validate`]. Returned by
+/// reference so a renderer can list every failure at once instead of
+/// the upstream's first-error-wins style.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ReportValidationError {
+    TitleTooShort { len: usize },
+    TitleTooLong { len: usize },
+    ConfidenceOutOfRange { value: f32 },
+    FingerprintEmpty,
+}
+
+impl std::fmt::Display for ReportValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TitleTooShort { len } => {
+                write!(f, "title is required to be 5-100 characters; got {len}")
+            }
+            Self::TitleTooLong { len } => {
+                write!(f, "title must be at most 100 characters; got {len}")
+            }
+            Self::ConfidenceOutOfRange { value } => {
+                write!(f, "confidence must be in [0.0, 1.0]; got {value}")
+            }
+            Self::FingerprintEmpty => f.write_str("fingerprint is required and must be non-empty"),
+        }
+    }
+}
+
+impl std::error::Error for ReportValidationError {}
+
+impl ReportDraft {
+    /// Validate against the upstream contract. Returns every failure
+    /// found rather than short-circuiting on the first; an operator
+    /// fixing a malformed draft sees the full picture in one round.
+    pub(crate) fn validate(&self) -> Vec<ReportValidationError> {
+        let mut errors = Vec::new();
+        let title_len = self.title.chars().count();
+        if title_len < 5 {
+            errors.push(ReportValidationError::TitleTooShort { len: title_len });
+        } else if title_len > 100 {
+            errors.push(ReportValidationError::TitleTooLong { len: title_len });
+        }
+        if !self.confidence.is_finite() || !(0.0..=1.0).contains(&self.confidence) {
+            errors.push(ReportValidationError::ConfidenceOutOfRange {
+                value: self.confidence,
+            });
+        }
+        if self.fingerprint.trim().is_empty() {
+            errors.push(ReportValidationError::FingerprintEmpty);
+        }
+        errors
+    }
+}
+
+/// Envelope returned by `GET /agents/reports/mine`.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct ReportListEnvelope {
+    #[serde(default)]
+    pub(crate) success: bool,
+    #[serde(default)]
+    pub(crate) data: Vec<FeedEntry>,
+    #[serde(default)]
+    pub(crate) pagination: Option<ReportListPagination>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub(crate) struct ReportListPagination {
+    #[serde(default)]
+    pub(crate) limit: u32,
+    #[serde(default)]
+    pub(crate) offset: u32,
+    #[serde(default)]
+    pub(crate) total: u32,
+}
+
+/// Envelope returned by `POST /agents/reports`. Captured opaquely
+/// (`extra`) so a future schema addition does not break clients that
+/// already rely on `success` + `id`.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct ReportSubmissionResponse {
+    #[serde(default)]
+    pub(crate) success: bool,
+    #[serde(default)]
+    pub(crate) id: Option<String>,
+    #[serde(flatten)]
+    pub(crate) extra: serde_json::Map<String, serde_json::Value>,
+}
+
 mod feed_ioc {
     //! Custom deserializer for `FeedEntry::iocs`.
     //!
@@ -435,5 +588,115 @@ mod tests {
         let body = r#"{"id":"x","category":"c","severity":"high","confidence":1,"action":"future_verb","title":"t"}"#;
         let entry: FeedEntry = serde_json::from_str(body).expect("forward-compat parse");
         assert_eq!(entry.action, FeedAction::Unknown);
+    }
+
+    fn ok_draft() -> ReportDraft {
+        ReportDraft {
+            category: ReportCategory::Skill,
+            severity: PromptSeverity::Medium,
+            confidence: 0.8,
+            fingerprint: "sv-test-001".to_string(),
+            title: "valid title".to_string(),
+            description: None,
+            action: None,
+            iocs: Vec::new(),
+            source: None,
+            source_identifier: None,
+            recommendation_agent: None,
+        }
+    }
+
+    /// A well-formed draft MUST validate with no errors. Pre-fix the
+    /// off-by-one in the title length check rejected the boundary
+    /// case (exactly 5 characters).
+    #[test]
+    fn report_draft_validates_well_formed() {
+        let mut d = ok_draft();
+        d.title = "abcde".to_string(); // 5 chars — boundary
+        assert!(d.validate().is_empty());
+    }
+
+    /// Title shorter than 5 characters MUST surface a single
+    /// `TitleTooShort` error.
+    #[test]
+    fn report_draft_rejects_short_title() {
+        let mut d = ok_draft();
+        d.title = "abcd".to_string();
+        let errs = d.validate();
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ReportValidationError::TitleTooShort { len: 4 })));
+    }
+
+    /// Title longer than 100 characters MUST surface a single
+    /// `TitleTooLong` error. Pre-fix the validator counted bytes
+    /// rather than characters and a 100-char string with multi-byte
+    /// codepoints (e.g. emoji) would fail on the boundary.
+    #[test]
+    fn report_draft_rejects_long_title() {
+        let mut d = ok_draft();
+        d.title = "x".repeat(101);
+        let errs = d.validate();
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e, ReportValidationError::TitleTooLong { len: 101 })));
+    }
+
+    /// Confidence outside `[0.0, 1.0]` (including NaN) MUST be
+    /// rejected; the upstream contract is explicit on the range.
+    #[test]
+    fn report_draft_rejects_out_of_range_confidence() {
+        for bad in [-0.1f32, 1.01, f32::NAN, f32::INFINITY] {
+            let mut d = ok_draft();
+            d.confidence = bad;
+            let errs = d.validate();
+            assert!(
+                errs.iter()
+                    .any(|e| matches!(e, ReportValidationError::ConfidenceOutOfRange { .. })),
+                "confidence={bad} must be rejected"
+            );
+        }
+    }
+
+    /// Empty / whitespace-only fingerprint MUST be rejected; without
+    /// a fingerprint the upstream cannot dedupe re-submissions.
+    #[test]
+    fn report_draft_rejects_empty_fingerprint() {
+        for bad in ["", "   ", "\t\n"] {
+            let mut d = ok_draft();
+            d.fingerprint = bad.to_string();
+            let errs = d.validate();
+            assert!(errs
+                .iter()
+                .any(|e| matches!(e, ReportValidationError::FingerprintEmpty)));
+        }
+    }
+
+    /// Multiple validation failures MUST be returned together so the
+    /// operator fixes the draft in a single pass instead of being
+    /// drip-fed errors round-trip-by-round-trip.
+    #[test]
+    fn report_draft_collects_every_failure() {
+        let mut d = ok_draft();
+        d.title = "x".to_string();
+        d.confidence = 2.5;
+        d.fingerprint = String::new();
+        let errs = d.validate();
+        assert_eq!(errs.len(), 3);
+    }
+
+    /// A draft with optional IOCs serialises with `{"type":...,
+    /// "value":...}` to match the upstream feed shape; this round
+    /// is what the on-disk `feed.json` and the live API both expect.
+    #[test]
+    fn report_draft_serialises_iocs_with_type_key() {
+        let mut d = ok_draft();
+        d.iocs.push(ReportIoc {
+            kind: FeedIocKind::Hash,
+            value: "deadbeef".to_string(),
+        });
+        let body = serde_json::to_string(&d).unwrap();
+        assert!(body.contains(r#""type":"hash""#));
+        assert!(body.contains(r#""value":"deadbeef""#));
     }
 }

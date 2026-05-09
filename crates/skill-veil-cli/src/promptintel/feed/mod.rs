@@ -4,5 +4,6 @@
 //! mutates the scanner's verdict, risk score, or finding set.
 
 pub(crate) mod enrich;
+pub(crate) mod ratelimit;
 pub(crate) mod store;
 pub(crate) mod sync;
