@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 mod cache;
 mod llm;
+mod nova_run;
 mod promptintel;
 mod vt;
 
@@ -47,6 +48,33 @@ pub(crate) fn load_rule_engine_from_dir(
         .load_from_dir(&fs, rules_dir)
         .with_context(|| format!("Failed to load rules from {}", rules_dir.display()))?;
     Ok(engine)
+}
+
+/// Best-effort startup notifier — checks GitHub once per 24h for
+/// newer skill-veil-rules releases and NOVA commits. Never blocks,
+/// never errors. Honours `--no-update-check` and the
+/// `SKILL_VEIL_NO_UPDATE_CHECK` env var (handled internally).
+fn run_update_notifier(args: &ScanArgs) {
+    use crate::init::update_check::{maybe_notify, Behaviour};
+    let behaviour = if args.no_update_check {
+        Behaviour::Skipped
+    } else {
+        Behaviour::Notify
+    };
+    let cache_root = args
+        .cache_dir
+        .clone()
+        .or_else(|| dirs::cache_dir().map(|d| d.join("skill-veil")));
+    let Some(cache_root) = cache_root else {
+        return;
+    };
+    let install = match crate::init::current_install(Some(cache_root.clone())) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let sv_pin = install.skill_veil.as_ref().map(|s| s.version.as_str());
+    let nova_pin = install.nova.as_ref().map(|n| n.commit_sha.as_str());
+    maybe_notify(behaviour, &cache_root, sv_pin, nova_pin);
 }
 
 pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
@@ -85,6 +113,15 @@ pub(crate) fn run_scan(
         color_choice,
         args.output.is_none() && std::io::stdout().is_terminal(),
     );
+
+    // Best-effort startup notifier — checks once per 24h whether
+    // either rule source has a newer pin upstream. Never blocks the
+    // scan; failures degrade silently. Honours `--no-update-check`
+    // and `SKILL_VEIL_NO_UPDATE_CHECK=1`.
+    if !quiet {
+        run_update_notifier(&args);
+    }
+
     let text_options = TextOutputOptions {
         quiet_summary: args.quiet_summary,
         explain_policy: args.explain_policy,
@@ -181,6 +218,14 @@ pub(crate) fn run_scan(
             quiet,
         )? {
             print!("{pi_block}");
+        }
+    }
+
+    if !args.no_nova {
+        if let Some(nova_block) =
+            nova_run::try_scan_with_nova(&args.path, args.cache_dir.as_deref(), quiet)?
+        {
+            print!("{nova_block}");
         }
     }
 

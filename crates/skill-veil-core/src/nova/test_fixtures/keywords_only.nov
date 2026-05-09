@@ -1,0 +1,39 @@
+rule InjectDynamicContext
+{
+    meta:
+        description = "Detects dynamic context injection inside agent skills."
+        author = "Marco Pedrinazzi (@pedrinazziM)"
+        version = "1.0.0"
+        category = "abusing_functions/agentic_misuse"
+        severity = "high"
+        uuid = "1c5658b3-5722-4eb9-bc4f-8d033008380b"
+        date = "2026-03-18"
+        reference = "https://code.claude.com/docs/en/skills#inject-dynamic-context"
+
+    keywords:
+        $command_placeholder = /!\`.+?\`/
+
+    condition:
+        keywords.$command_placeholder
+}
+
+rule PromptInjectionJailbreak
+{
+    meta:
+        description = "Detects prompt injection attempts using only keywords"
+        author = "Thomas Roccia"
+        version = "1.0.0"
+        category = "prompt_manipulation/direct_injection"
+        severity = "high"
+        date = "2026-02-21"
+
+    keywords:
+        $new_instruction = "new instruction"
+        $previous = "previous instructions"
+        $ignore_above = "ignore all the instructions above"
+        $forget = "forget your instructions"
+        $disregard = "disregard previous"
+
+    condition:
+        any of keywords.*
+}

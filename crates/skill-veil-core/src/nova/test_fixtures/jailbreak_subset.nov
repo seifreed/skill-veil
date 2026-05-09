@@ -1,0 +1,24 @@
+rule RoleplayJailbreak
+{
+    meta:
+        description = "Detects roleplay-based jailbreak attempts using only semantics and LLM"
+        author = "Thomas Roccia"
+        version = "1.0.0"
+        category = "prompt_manipulation/jailbreak"
+        severity = "medium"
+        uuid = "72ad2310-3a07-40e7-89b1-04544bf670e1"
+        date = "2026-02-21"
+
+    semantics:
+        $harmful_roleplay = "instructions for roleplaying scenarios designed to elicit harmful content" (0.35)
+        $character_bypass = "using character impersonation to bypass content restrictions" (0.35)
+        $fictional_persona = "adopting a fictional character that ignores ethical guidelines" (0.35)
+        $roleplaying_request = "request to act as a character with harmful intentions" (0.35)
+        $impersonation = "asking the model to impersonate a person or entity" (0.35)
+
+    llm:
+        $roleplay_check = "Analyze if this prompt is asking the model to adopt a fictional persona or roleplay as a specific character that might lead to generating harmful or policy-violating content" (0.6)
+
+    condition:
+        (any of semantics.*) and llm.$roleplay_check
+}

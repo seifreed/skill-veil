@@ -56,11 +56,14 @@ pub(crate) fn extract_into(tarball: &Path, dest_dir: &Path) -> Result<()> {
         let header = entry.header().clone();
         let kind = header.entry_type();
 
-        // Whitelisted entry types only — NO symlinks, hardlinks,
-        // device nodes, or whatever else `tar` might invent. The
-        // release tarball produced by `scripts/build-tarball.sh`
-        // contains regular files and the directory entries `tar`
-        // injects implicitly; nothing else is legitimate.
+        // GitHub's `archive/<sha>.tar.gz` puts a `pax_global_header`
+        // entry at the start carrying repository-wide metadata. It
+        // has no body to extract — we just skip it. Everything else
+        // outside the regular-file / directory whitelist is rejected
+        // up-front.
+        if matches!(kind, EntryType::XGlobalHeader) {
+            continue;
+        }
         if !matches!(kind, EntryType::Regular | EntryType::Directory) {
             bail!(
                 "tarball entry `{}` has disallowed type {:?} — refusing to extract",

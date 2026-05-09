@@ -24,6 +24,8 @@ mod download;
 mod extract;
 mod keys;
 mod manifest;
+pub(crate) mod nova;
+pub(crate) mod update_check;
 mod verify;
 
 use anyhow::{anyhow, Context, Result};
@@ -37,11 +39,20 @@ pub(crate) use download::ReleaseAssets;
 pub(crate) const CURRENT_POINTER_FILENAME: &str = "current.json";
 
 /// Outcome of a successful `init` run, returned to the CLI for human
-/// rendering.
+/// rendering. Carries both the skill-veil-rules side and the NOVA
+/// side; either may be `None` if that source was skipped.
 #[derive(Debug)]
 pub(crate) struct InitOutcome {
     pub(crate) version: String,
     pub(crate) trusted_key_id: &'static str,
+    pub(crate) install_dir: PathBuf,
+    pub(crate) file_count: usize,
+    pub(crate) nova: Option<NovaOutcome>,
+}
+
+#[derive(Debug)]
+pub(crate) struct NovaOutcome {
+    pub(crate) commit_sha: String,
     pub(crate) install_dir: PathBuf,
     pub(crate) file_count: usize,
 }
@@ -119,17 +130,77 @@ pub(crate) fn run_init(
     write_current_pointer(&install_root, &version, trusted_key_id)?;
 
     let file_count = manifest.files.len();
+
+    // NOVA side. Failures here MUST NOT abort the skill-veil-rules
+    // install (which already succeeded); we surface them as a
+    // warning and let the operator re-run `rules update`. NOVA is
+    // an additional rule source, not a hard dependency of the
+    // scanner.
+    let nova_outcome = match install_nova_pinned_to_latest(&install_root) {
+        Ok(out) => Some(out),
+        Err(err) => {
+            tracing::warn!(
+                "NOVA install failed (skill-veil-rules install OK): {err:#}; \
+                 retry with `skill-veil rules update`"
+            );
+            None
+        }
+    };
+
     Ok(InitOutcome {
         version,
         trusted_key_id,
         install_dir,
         file_count,
+        nova: nova_outcome,
     })
 }
 
-/// Render outcome details for `skill-veil rules status`.
-pub(crate) fn current_install(cache_root: Option<PathBuf>) -> Result<Option<CurrentInstall>> {
+/// Resolve the latest NOVA commit SHA, download the matching
+/// tarball, verify its size + SHA-256, extract it, and atomically
+/// rename into `<install_root>/nova-<sha>/`.
+pub(crate) fn install_nova_pinned_to_latest(install_root: &Path) -> Result<NovaOutcome> {
+    let sha = nova::resolve_latest_sha().context("resolving latest NOVA commit SHA")?;
+    install_nova_pinned_to(install_root, &sha)
+}
+
+pub(crate) fn install_nova_pinned_to(install_root: &Path, sha: &str) -> Result<NovaOutcome> {
+    let staging = tempfile::tempdir_in(install_root)
+        .with_context(|| format!("creating staging dir under {}", install_root.display()))?;
+    let (pointer, extracted_root) = nova::download_and_extract(&sha.to_string(), staging.path())
+        .context("downloading NOVA tarball")?;
+
+    let install_dir = install_root.join(format!("nova-{sha}"));
+    if install_dir.exists() {
+        std::fs::remove_dir_all(&install_dir).ok();
+    }
+    std::fs::rename(&extracted_root, &install_dir).with_context(|| {
+        format!(
+            "atomic rename {} -> {}",
+            extracted_root.display(),
+            install_dir.display()
+        )
+    })?;
+    nova::write_pointer(install_root, &pointer)?;
+    Ok(NovaOutcome {
+        commit_sha: pointer.commit_sha,
+        install_dir,
+        file_count: pointer.file_count,
+    })
+}
+
+/// Render outcome details for `skill-veil rules status`. Carries
+/// both the skill-veil-rules install (`Some` when an `init` has
+/// completed for it) and the NOVA install (`Some` when an `init` /
+/// `rules update` has run NOVA download successfully).
+pub(crate) fn current_install(cache_root: Option<PathBuf>) -> Result<CombinedInstall> {
     let install_root = resolve_cache_root(cache_root)?.join("rules");
+    let skill_veil = read_skill_veil_install(&install_root)?;
+    let nova = read_nova_install(&install_root);
+    Ok(CombinedInstall { skill_veil, nova })
+}
+
+fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>> {
     let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
     if !pointer_path.exists() {
         return Ok(None);
@@ -146,11 +217,36 @@ pub(crate) fn current_install(cache_root: Option<PathBuf>) -> Result<Option<Curr
     }))
 }
 
+fn read_nova_install(install_root: &Path) -> Option<NovaInstallSnapshot> {
+    let pointer = nova::load_pointer(install_root).ok().flatten()?;
+    let install_dir = install_root.join(format!("nova-{}", pointer.commit_sha));
+    Some(NovaInstallSnapshot {
+        commit_sha: pointer.commit_sha,
+        tarball_sha256: pointer.tarball_sha256,
+        install_dir,
+        file_count: pointer.file_count,
+    })
+}
+
+#[derive(Debug)]
+pub(crate) struct CombinedInstall {
+    pub(crate) skill_veil: Option<CurrentInstall>,
+    pub(crate) nova: Option<NovaInstallSnapshot>,
+}
+
 #[derive(Debug)]
 pub(crate) struct CurrentInstall {
     pub(crate) version: String,
     pub(crate) trusted_key_id: String,
     pub(crate) install_dir: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct NovaInstallSnapshot {
+    pub(crate) commit_sha: String,
+    pub(crate) tarball_sha256: String,
+    pub(crate) install_dir: PathBuf,
+    pub(crate) file_count: usize,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -260,29 +356,59 @@ mod tests {
     }
 
     /// Contract: when no `init` has run, `current_install` returns
-    /// `None` rather than erroring. The CLI treats this as "scanner
-    /// will fall back to embedded rules" instead of a fatal error.
+    /// a `CombinedInstall` whose `skill_veil` AND `nova` fields are
+    /// both `None`. Treated by the CLI as "scanner will fall back to
+    /// embedded rules" instead of a fatal error.
     #[test]
-    fn current_install_is_none_when_pointer_missing() {
+    fn current_install_is_empty_when_pointers_missing() {
         let tmp = tempfile::TempDir::new().unwrap();
         let result = current_install(Some(tmp.path().to_path_buf())).unwrap();
-        assert!(result.is_none());
+        assert!(result.skill_veil.is_none());
+        assert!(result.nova.is_none());
     }
 
-    /// Contract: after `init` writes the pointer, `current_install`
-    /// surfaces it. The pointer payload is JSON so external tooling
-    /// can read it (e.g. CI dashboards) without invoking the binary.
+    /// Contract: after `init` writes the pointer, the skill-veil
+    /// side of `current_install` surfaces it. The pointer payload is
+    /// JSON so external tooling (CI dashboards) can read it without
+    /// invoking the binary.
     #[test]
-    fn write_and_read_pointer_round_trip() {
+    fn write_and_read_skill_veil_pointer_round_trip() {
         let tmp = tempfile::TempDir::new().unwrap();
         let install_root = tmp.path().join("rules");
         std::fs::create_dir_all(&install_root).unwrap();
         write_current_pointer(&install_root, "v0.1.0", "skill-veil-rules-2026").unwrap();
-        let install = current_install(Some(tmp.path().to_path_buf()))
-            .unwrap()
-            .expect("pointer must be readable after write");
-        assert_eq!(install.version, "v0.1.0");
-        assert_eq!(install.trusted_key_id, "skill-veil-rules-2026");
-        assert_eq!(install.install_dir, install_root.join("v0.1.0"));
+        let install = current_install(Some(tmp.path().to_path_buf())).unwrap();
+        let sv = install
+            .skill_veil
+            .expect("skill-veil pointer must be readable after write");
+        assert_eq!(sv.version, "v0.1.0");
+        assert_eq!(sv.trusted_key_id, "skill-veil-rules-2026");
+        assert_eq!(sv.install_dir, install_root.join("v0.1.0"));
+        // NOVA side is independent — must remain absent until its
+        // own pointer is written.
+        assert!(install.nova.is_none());
+    }
+
+    /// Contract: the NOVA pointer round-trips independently of the
+    /// skill-veil pointer. An operator who has run `init` once but
+    /// never rotated NOVA still gets the skill-veil install reported,
+    /// and vice versa.
+    #[test]
+    fn nova_pointer_round_trips_independently() {
+        use super::nova::{write_pointer, NovaInstallPointer};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        std::fs::create_dir_all(&install_root).unwrap();
+        let pointer = NovaInstallPointer {
+            commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
+            tarball_sha256: "abc123".into(),
+            file_count: 16,
+        };
+        write_pointer(&install_root, &pointer).unwrap();
+        let install = current_install(Some(tmp.path().to_path_buf())).unwrap();
+        assert!(install.skill_veil.is_none());
+        let nova = install.nova.expect("NOVA pointer must round-trip");
+        assert_eq!(nova.commit_sha, pointer.commit_sha);
+        assert_eq!(nova.file_count, 16);
     }
 }

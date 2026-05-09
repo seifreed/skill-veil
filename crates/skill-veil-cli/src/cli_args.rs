@@ -452,6 +452,20 @@ pub struct ScanArgs {
     /// machine has a populated cache.
     #[arg(long, default_value_t = false)]
     pub no_promptintel_enrich: bool,
+    /// Skip the once-per-day GitHub query that notifies you when a
+    /// newer skill-veil-rules release or NOVA commit is available.
+    /// The notifier is best-effort and never blocks; this flag (or
+    /// the env var `SKILL_VEIL_NO_UPDATE_CHECK=1`) is for air-gapped
+    /// environments and CI runs where you do not want any outbound
+    /// connection beyond what the scan itself requires.
+    #[arg(long, default_value_t = false)]
+    pub no_update_check: bool,
+    /// Skip running NOVA rules even if a NOVA pack is installed in
+    /// the cache. Useful for benchmarks that pin the skill-veil-rules
+    /// signal in isolation, or for runs against prompt content
+    /// already pre-screened by NOVA upstream.
+    #[arg(long, default_value_t = false)]
+    pub no_nova: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]
