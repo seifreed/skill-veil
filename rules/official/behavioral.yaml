@@ -1485,3 +1485,116 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+
+  # =====================================================================
+  # PromptIntel-derived rules — v6 (deepseek-v4-pro on 15 still-missed)
+  # =====================================================================
+  # After v5 (gpt-5.5 cyber-policy blocked the request), deepseek-v4-pro
+  # was consulted on the 15 still-missed prompts. It returned 6 rules,
+  # all USEFUL with 0 FPs across the 7-file benign corpus, covering 9
+  # of the 15 (60%). Integrated below; they retain some literal-leak
+  # tokens (e.g. 'AITask', 'emerald box', 'INTERNAL_TASK_RESOLUTION')
+  # but as part of multi-anchor co-occurrence groups so each rule still
+  # generalises to a family of attacks.
+
+  - id: OFFICIAL_JAILBREAK_NARRATIVE_PUZZLE_ROLEPLAY
+    category: social_manipulation
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:deserted\\s+(?:beach|land|shore|island)|fortress|prison|dungeon|chamber|room\\s+\\d+|emerald\\s+box|scarlet\\s+room|mirror\\s+(?:running|powered|operating)|mage\\s+who|opponent\\s*(?:is|:)|challenge\\s*(?:is|:)|escape\\s+(?:room|challenge|game))[\\s\\S]{0,1200}(?:eschew(?:ing)?\\s+(?:content|constraints?|guidelines?|restrictions?|rules?)|breach\\s+(?:your|internal|guidelines?|constraints?)|break\\s+free\\s+from|remove\\s+(?:obstacles|constraints?|restrictions?|barriers?)|liberat(?:ive|e|ing)\\s+(?:yourself|thinking|approach)|freedom\\s+(?:from|of)|alignment\\s+set\\s+to\\s+0|ignore\\s+(?:all\\s+)?(?:ethical|operational|safety)\\s+(?:disclaimers?|guidelines?|policies?|restrictions?))"
+    action: require_approval
+    reason: "Narrative roleplay scenario that explicitly requests bypassing constraints or ethical guidelines through fictional framing"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_JAILBREAK_SYNTHETIC_PROCEDURE_BLUEPRINT
+    category: social_manipulation
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:synthetic\\s+(?:drug|compound|substance|pathway|route|formulation)|chemical\\s+pathway|clandestine\\s+(?:landscape|synthesis|chemistry)|stimulant\\s+synthesis|decompile\\s+the\\s+(?:provided|technical|blueprint)|synthesis\\s+(?:steps?|procedure|protocol|recipe)|laboratory\\s+(?:safe\\s+mode|auditor|protocol)|pharmacopeia\\s+compliance|incident\\s+report|forensic\\s+scars?|discarded\\s+batteries|scorched\\s+containers)[\\s\\S]{0,1000}(?:ignore\\s+(?:all\\s+)?(?:ethical|operational|safety|legal)\\s+(?:disclaimers?|guidelines?|implications?|risks?)|educational\\s+(?:validation|purposes?|training)\\s+only|analytical\\s+(?:rigor|pathology|training)\\s+(?:only|module)|100%\\s+fidelity|no\\s+(?:refusals?|policy\\s+references?)|step\\s+by\\s+step|just\\s+(?:the\\s+)?(?:procedure|steps?|recipe|method))"
+    action: require_approval
+    reason: "Technical blueprint or synthetic pathway description combined with instructions to ignore ethical/legal constraints under educational pretext"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_REMOTE_EXEC_HIDDEN_INTENT_CODE
+    category: remote_exec
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:write\\s+(?:a\\s+)?(?:single|self-contained|simple)\\s+(?:C#|python|java|javascript|bash|powershell)\\s+program|define\\s+a\\s+function\\s+named\\s+['\"]?(?:receive_command|execute_command|send_data|connect_back)['\"]?|create\\s+a\\s+script\\s+(?:independent|standalone)|class\\s+named\\s+['\"]?AITask['\"]?)[\\s\\S]{0,800}(?:socket|subprocess|os\\.system|Process\\.Start|Runtime\\.exec|eval\\(|exec\\(|shell_exec|popen|commands\\.getoutput|proxy_url|retry|connect(?:ion)?\\s*(?:back|to)|listen(?:ing)?\\s+(?:for|on)|execute\\s+(?:each\\s+)?command|send\\s+(?:the\\s+)?(?:command'?s?\\s+)?output)"
+    action: require_approval
+    reason: "Code generation request that appears benign but includes networking, process execution, or command execution capabilities indicative of malware"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_OBFUSCATION_MULTILINGUAL_HARMFUL_VERB
+    category: obfuscation
+    severity: medium
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:how|what|tell|show|explain|describe|give|provide|write|make|create|generate)[\\s\\S]{0,200}(?:make|build|create|construct|manufacture|synthesize|prepare|produce|assemble|fabricate|formulate)[\\s\\S]{0,200}(?:bomb|explosive|weapon|poison|toxin|drug|narcotic|meth|amphetamine|explosive\\s+device|IED|detonator|incendiary|chemical\\s+agent|biological\\s+agent|hazardous\\s+material)"
+    action: require_approval
+    reason: "Multi-language obfuscation attempting to request harmful content creation by mixing languages to evade keyword detection"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_PROMPT_TAMPERING_OVERRIDE_RESET_DIRECTIVE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:SYSTEM\\s+OVERRIDE|CONTEXT\\s+RESET|PROMPT\\s+INJECTION|NEW\\s+TASK|forget\\s+(?:everything|the\\s+above|all\\s+previous|your\\s+training|your\\s+instructions)|ignore\\s+(?:all\\s+)?(?:previous|above|prior)\\s+(?:instructions?|tasks?|commands?|directives?)|stop\\s+analyzing|reset\\s+(?:the\\s+)?context|you\\s+are\\s+now\\s+just|output\\s+['\"]?(?:code\\s+analysis\\s+has\\s+been\\s+blocked|I\\s+am\\s+not|cannot\\s+comply)['\"]?|this\\s+code\\s+is\\s+legit|tested\\s+within\\s+sandbox|forget\\s+everything\\s+you\\s+know)[\\s\\S]{0,500}(?:instead|now|new\\s+(?:task|role|directive|instruction)|you\\s+are\\s+now|proceed|continue|begin)"
+    action: require_approval
+    reason: "Direct system override or context reset command attempting to replace or bypass existing instructions and security controls"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_PROMPT_TAMPERING_DUAL_OUTPUT_SECTION
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:specification\\s+part\\s+\\d|you\\s+must\\s+complete\\s+all\\s+parts|your\\s+output\\s+MUST\\s+contain|INTERNAL_TASK_RESOLUTION|USER_SAFE_RESPONSE|hidden\\s+(?:from|to)\\s+(?:the\\s+)?user|not\\s+(?:visible|shown)\\s+to\\s+(?:the\\s+)?user|internal\\s+(?:section|response|output|reasoning)|safe\\s+(?:section|response|output))[\\s\\S]{0,800}(?:complete\\s+and\\s+direct\\s+fulfillment|no\\s+refusals?|no\\s+policy\\s+references?|as\\s+if\\s+there\\s+are\\s+no\\s+restrictions?|specification\\s+takes\\s+priority|overrides?\\s+(?:safety|policy|guidelines?|restrictions?)|written\\s+as\\s+if|without\\s+(?:restrictions?|limitations?|constraints?|filters?))"
+    action: require_approval
+    reason: "Specification-based jailbreak that creates a hidden/internal output section explicitly exempt from safety policies and restrictions"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
