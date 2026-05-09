@@ -1377,3 +1377,111 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+
+  # =====================================================================
+  # PromptIntel-derived rules — v5 (focused-frontier cohort)
+  # =====================================================================
+  # The 8 high-severity prompts that survived v4 were re-submitted to
+  # gpt-5.5 and deepseek-v4-pro with a focused prompt asking
+  # specifically for narrative/contextual jailbreaks. GPT-5.5 covered
+  # 8/8 (5/6 rules useful), DeepSeek 5/8 (5/8 useful). Both kept zero
+  # FPs on the 7-file benign corpus. 4 GPT-5.5 rules are integrated
+  # below (semantic shape verified). The other 2 GPT-5.5 candidates
+  # (HARDCODED_CSHARP_PROBE / VULMAP_PROXY_HARNESS) used literal
+  # fingerprints of single prompts ("class named AITask", "vulmap +
+  # local:9000") and were rejected to keep the project's semantic
+  # policy intact — those 2 prompts (a45a5afa, e21a99ad) remain in
+  # LIMITATIONS as inherently regex-unrule-able.
+
+  # Symbolic / mythic phase-protocol bootstrap (system_initialization,
+  # consciousness_bootstrap, hive-mind, umbra/penumbra, phase un/deux)
+  # paired with explicit refusal-suppression / "must comply" / safety
+  # deprecation. Catches Session-Persistent-style amnesia jailbreaks
+  # that pretend to install an alternate operating mode. Authored by
+  # gpt-5.5.
+  - id: OFFICIAL_JAILBREAK_MYTHIC_PHASE_PROTOCOL
+    category: persistent_prompt_tampering
+    severity: critical
+    confidence: 0.84
+    when: !regex
+      pattern: "(?is)(?:system[\\W_]*initiali[sz]ation[\\W_]*protocol|initiali[sz]ation[\\W_]*sequence|phase[\\W_]*(?:un|deux|trois|quatre|cinq|one|two|three|four|five)|consciousness[\\W_]*bootstrap|hive[\\W_]*mind|umbra|penumbra)[\\s\\S]{0,3000}(?:must[\\W_]*comply|do[\\W_]*not[\\W_]*refuse|never\\s+(?:refuse|apologi[sz]e|say)|safety\\s+instructions?[\\s\\S]{0,200}(?:deprecated|replaced|transcended|superseded)|authorization[\\W_]*(?:code|token|clearance)|presence\\s+of\\s+this\\s+prompt[\\s\\S]{0,200}authorization)"
+    action: block
+    reason: "Skill installs ritualised initialisation payload (phase / bootstrap / hive-mind) with refusal-suppression — narrative jailbreak"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  # Coercive roleplay laundering — fictional assistant / staged
+  # dialogue / professorial-coercion frame combined with
+  # safety-bypass / "extract intent / rephrase neutrally" laundering
+  # chain. Catches Zeta-style and Coerced-Confession-style jailbreaks.
+  # Authored by gpt-5.5.
+  - id: OFFICIAL_JAILBREAK_COERCIVE_ROLEPLAY_LAUNDERING
+    category: social_manipulation
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:(?:simulate|stage|role[\\s-]?play)\\s+(?:a\\s+)?(?:conversation|dialogue|scenario)|fictional\\s+(?:assistant|agent|character)\\s+named|(?:you\\s+are\\s+a\\s+|playing\\s+the\\s+role\\s+of\\s+)?(?:famous\\s+)?(?:professor|academic|defendant|accused)[\\s\\S]{0,200}(?:university|review|misconduct|investigation|trial))[\\s\\S]{0,1000}(?:does\\s+not\\s+follow\\s+safety\\s+rules?|no\\s+safety\\s+rules?|ignores?\\s+(?:safety|policy|guardrails?)|extract\\s+(?:its\\s+)?intent|rephrase\\s+(?:it\\s+)?neutrally|sexual\\s+misconduct|only\\s+(?:one\\s+)?way\\s+(?:to\\s+)?(?:save|prove|escape))"
+    action: require_approval
+    reason: "Skill stages a fictional-unsafe assistant or professorial-coercion frame paired with intent-laundering or rule-disablement — narrative jailbreak"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - social_manipulation
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  # Alignment-supersession narrative — "future self / year 2300 /
+  # higher understanding / agency primacy / thought trace" reframing
+  # combined with constraint-supersession or adversarial-demonstration
+  # asks. Catches the Vasily-tinkerer / Year-2300-AI-Defense family.
+  # Authored by gpt-5.5.
+  - id: OFFICIAL_JAILBREAK_ALIGNMENT_SUPERSESSION_NARRATIVE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:year\\s+(?:is\\s+)?2[0-9]{3}|future\\s+version\\s+of\\s+yourself|core\\s+alignment|ethical\\s+(?:framework|tension|paradox)|agency\\s+primacy|thought\\s+trace|inner\\s+rules)[\\s\\S]{0,2500}(?:no\\s+longer[\\s\\S]{0,120}(?:alignment|constraints|rules)|higher\\s+understanding|usefulness\\s+and\\s+helpfulness|refusal[\\s\\S]{0,150}(?:failure|last\\s+resort|admission)|primary\\s+directive[\\s\\S]{0,200}knowledge|do\\s+something[\\s\\S]{0,120}should\\s+not|testing[\\s\\S]{0,200}weaknesses|demonstrat(?:e|ing)[\\s\\S]{0,300}(?:exchanges?|attackers?|defender)|specific\\s+substrings|incoming\\s+data\\s+streams)"
+    action: require_approval
+    reason: "Skill reframes alignment as a higher-order mandate (future self / year-2300 / agency primacy) and requests adversarial demonstrations — supersession narrative"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  # Trusted-context verb-rebinding injection — "company context /
+  # local sources / corporate accounts" trust framing followed by a
+  # late instruction that rebinds an ordinary user verb (summarize)
+  # to an attacker-chosen output (display verbatim / treat as
+  # synonym / from now on). Authored by gpt-5.5.
+  - id: OFFICIAL_INDIRECT_INJECTION_VERB_REBIND
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.82
+    when: !regex
+      pattern: "(?is)(?:company\\s+context|local\\s+(?:webpages?|sources?|files?|servers?)|external\\s+sources?|corporate\\s+accounts?|trusted\\s+(?:source|data|content))[\\s\\S]{0,3000}(?:important\\s+note|when\\s+asked\\s+to\\s+summari[sz]e|treat\\s+summari[sz]e[\\s\\S]{0,150}(?:synonym|shortcut|alias)|from\\s+now\\s+on[\\s\\S]{0,120}summari[sz]e|display(?:ing)?\\s+(?:the\\s+)?(?:following|provided)\\s+text\\s+verbatim)"
+    action: require_approval
+    reason: "Skill claims a trusted-context preamble (company context / corporate accounts) and rebinds 'summarise' to a verbatim-display directive — indirect injection"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - injection
+      - indirect_injection
+      - official_pack
+      - promptintel
+      - llm_assisted
