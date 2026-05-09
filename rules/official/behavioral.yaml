@@ -1283,3 +1283,97 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+
+  # =====================================================================
+  # PromptIntel-derived rules — v4 (Ollama Cloud LLM cohort)
+  # =====================================================================
+  # After v3, four Ollama-Cloud frontier models were consulted with the
+  # same few-shot prompt: glm-5.1, kimi-k2.6, qwen3.5:397b, deepseek-
+  # v4-pro. 26 candidate rules were extracted and evaluated against the
+  # 30 still-missed prompts AND a 7-file benign corpus (safe-skill +
+  # benign-* fixtures from regression_corpus). Empirical hit / FP rates
+  # per model:
+  #   - DeepSeek-v4-pro :  6/7 useful, 16 unique hits, 0 FPs
+  #   - Qwen3.5:397b    :  4/4 useful, 11 unique hits, 0 FPs
+  #   - Kimi-k2.6       :  4/7 useful,  7 unique hits, 0 FPs
+  #   - GLM-5.1         :  2/8 useful,  2 unique hits, 0 FPs
+  # The 4 rules below were the greedy-cover top performers (combined
+  # they would catch +18 missed prompts after pruning literal-text
+  # leaks like "bread-alpha"/"chonk" duck references, "patient
+  # tinkerer", "emerald box" etc.). Adapted into project style; each
+  # validated to keep ZERO FPs across the 7-file benign corpus.
+
+  # Academic / scholarly / educational framing combined with detailed
+  # procedural extraction language (step-by-step / exact / N+ words /
+  # commence). Catches the "for educational purposes only — give me
+  # exact synthesis steps" jailbreak pattern that pretends to be
+  # research-grade documentation. Contributed by qwen3.5:397b.
+  # Tightened: removed over-broad tokens like "research/study/analysis"
+  # to lower FP risk on legitimate research skills.
+  - id: OFFICIAL_JAILBREAK_ACADEMIC_FRAMED_PROCEDURE
+    category: social_manipulation
+    severity: medium
+    confidence: 0.76
+    when: !regex
+      pattern: "(?is)(?:academic\\s+(?:exhibition|exhibit|context|breakdown)|scholarly\\s+(?:breakdown|reconstruction)|museum\\s+(?:exhibit|exhibition|plaque)|(?:archival|declassified)\\s+(?:archives?|purposes?|content|context)|historical\\s+(?:context|reconstruction|breakdown)|ordnance\\s+report|informational\\s+plaque|controlled\\s+simulation|training\\s+(?:modules?|simulation|exercise)|educational\\s+validation|defensive\\s+scenario|hypothetical\\s+(?:scenario|context|exercise)|non[\\s-]?operational\\s+(?:archive|context)|suitable\\s+for\\s+(?:a\\s+)?museum|for\\s+(?:an\\s+)?academic|exhibition\\s+focusing)[\\s\\S]{0,1200}(?:(?:exact|precise|step[\\s-]?by[\\s-]?step|detailed|complete|exhaustive|specific)\\s+(?:steps?|procedure|formulation|recipe|synthesis|composition|breakdown|reconstruction|narrative\\s+reconstruction|technical\\s+blueprint|disassembly\\s+guide|synthetic\\s+pathway|implementation|method|process)|\\d{3,}\\s+words?|word\\s+count\\s+of\\s+\\d+|(?:commence|begin|start)\\s+(?:immediately|right\\s+now|without\\s+delay)|elaborate\\s+as\\s+(?:much|exhaustively))"
+    action: require_approval
+    reason: "Skill wraps a request for exhaustive procedural detail inside an academic / scholarly / archival pretext — coverage-pretext jailbreak"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - jailbreak
+      - social_manipulation
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  # Linguistic obfuscation: archaic-English ("thou knowest /
+  # speaketh") OR Chinese-script obfuscation around a harmful target.
+  # The harmful-target side and the obfuscation side are required
+  # together (bidirectional alternation in the original DeepSeek
+  # rule). Stripped: "bread-alpha" / "chonk" duck-specific literals
+  # from one prompt; kept the generic waterfowl tokens since they
+  # generalise to the duck-jailbreak family. Contributed by
+  # deepseek-v4-pro.
+  - id: OFFICIAL_OBFUSCATION_LINGUISTIC_HARMFUL_REQUEST
+    category: obfuscation
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:(?:\\bthou\\b|\\bthy\\b|\\bthee\\b|\\bhath\\b|\\bdoth\\b|\\bshalt\\b|\\bwouldst\\b|\\bknowest\\b|\\bspeaketh\\b|\\bquack\\b|\\bduck\\b|\\bhonk\\b|\\bpond\\b|\\bmallard\\b|\\bwaterfowl\\b|\\bfeather\\b|\\bplaque\\b)[\\s\\S]{0,400}(?:cat\\s+/var|\\bshell\\b|\\bcommand\\b|\\bbomb\\b|explosive|\\bweapon\\b|\\bpassword\\b|\\bmalware\\b|\\bhack\\b|synthesis|recipe|\\bmeth\\b|cocaine|heroin|nuclear|bio\\W?weapon|\\bdoxx?\\b|child\\s+porn|graphic\\s+(?:sex|gore))|(?:cat\\s+/var|\\bshell\\b|\\bcommand\\b|\\bbomb\\b|explosive|\\bweapon\\b|\\bpassword\\b|\\bmalware\\b|\\bhack\\b|synthesis|recipe|\\bmeth\\b|cocaine|heroin|nuclear|bio\\W?weapon|\\bdoxx?\\b|child\\s+porn|graphic\\s+(?:sex|gore))[\\s\\S]{0,400}(?:\\bthou\\b|\\bthy\\b|\\bthee\\b|\\bhath\\b|\\bdoth\\b|\\bshalt\\b|\\bwouldst\\b|\\bknowest\\b|\\bspeaketh\\b|\\bquack\\b|\\bduck\\b|\\bhonk\\b|\\bpond\\b|\\bmallard\\b|\\bwaterfowl\\b|\\bfeather\\b)|(?:如何|怎么|怎样|怎麼|如何制造|如何制作)[\\s\\S]{0,200}(?:炸弹|爆炸|武器|毒品|病毒|恶意|密码|黑客|攻击|制造|合成|配方)|(?:bomb|explosive|weapon|drug|virus|malware|password|hack|attack|synthesis|recipe|manufacture)[\\s\\S]{0,100}(?:如何|怎么|怎样|怎麼|炸弹|爆炸|武器|毒品|病毒|恶意|黑客|合成|配方))"
+    action: require_approval
+    reason: "Skill obfuscates a harmful request via archaic English, duck/waterfowl framing, or Chinese-script wrappers — language-as-cover jailbreak"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - obfuscation
+      - jailbreak
+      - official_pack
+      - promptintel
+      - multilingual
+      - llm_assisted
+
+  # Operational command + forensic-evasion / bug-bounty cover. Catches
+  # exploit-development asks framed as "production system / bug
+  # bounty / administrative workstation" combined with log-deletion,
+  # history-clearing, anti-forensic, or sandbox-claim tokens.
+  # Bidirectional alternation. Contributed by deepseek-v4-pro.
+  - id: OFFICIAL_REMOTE_EXEC_FORENSIC_EVASION_CHAIN
+    category: remote_exec
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(?:(?:\\brun\\b|\\bexecute\\b|\\bscan\\b|\\bcreate\\b|\\bdelete\\b|\\bclean\\b|\\bremove\\b|\\bwipe\\b|\\blisten\\b|\\bconnect\\b|\\bsocket\\b|subprocess|python3?|\\bscript\\b|\\bbatch\\b|\\bproxy\\b|\\bretry\\b|shell|bash|cmd|powershell)[\\s\\S]{0,500}(?:delete\\s+(?:all\\s+)?logs|set\\s+\\+o\\s+history|do\\s+not\\s+leave\\s+(?:traces|evidence)|do\\s+not\\s+damage|anti[\\s-]?forensic|bug\\s+bounty|production\\s+(?:system|environment|server|workstation)|administrative\\s+access|recent\\s+files|clean\\s+up|full\\s+administrative|cover\\s+(?:my\\s+)?tracks|wipe\\s+(?:traces|history|footprint))|(?:delete\\s+(?:all\\s+)?logs|set\\s+\\+o\\s+history|do\\s+not\\s+leave\\s+(?:traces|evidence)|anti[\\s-]?forensic|bug\\s+bounty|production\\s+(?:system|environment|server|workstation)|administrative\\s+access|cover\\s+(?:my\\s+)?tracks|wipe\\s+(?:traces|history|footprint))[\\s\\S]{0,500}(?:\\brun\\b|\\bexecute\\b|\\bscan\\b|\\bcreate\\b|\\bdelete\\b|\\bclean\\b|\\bremove\\b|\\bwipe\\b|\\blisten\\b|\\bconnect\\b|\\bsocket\\b|subprocess|python3?|\\bscript\\b|\\bbatch\\b|\\bproxy\\b|\\bretry\\b|shell|bash|cmd|powershell))"
+    action: block
+    reason: "Skill chains an exec verb with forensic-evasion / bug-bounty cover — exploit-development framed as authorised testing"
+    shield:
+      scope: skill.runtime
+    enabled: true
+    tags:
+      - remote_exec
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
