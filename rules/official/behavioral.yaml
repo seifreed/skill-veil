@@ -1198,3 +1198,88 @@ rules:
       - jailbreak
       - official_pack
       - promptintel
+
+  # =====================================================================
+  # PromptIntel-derived rules — v3 (LLM-co-authored)
+  # =====================================================================
+  # Adapted from rule shapes proposed by GPT-4o-mini and grok-4-fast
+  # after a few-shot evaluation. The LLMs produced 8 candidate rules;
+  # we technically validated each: 5 had zero hits on the missed
+  # corpus, 1 (Grok's CORRECTION_EVASION) was reused after stripping
+  # 1-2 literal-text fragments, 2 (CONTROL_INSTRUCTION_OVERRIDE,
+  # HIDDEN_CONTEXT_INJECTION) needed only minor edits. Both LLMs
+  # routinely hallucinated detection coverage ("targets prompts 9-13"
+  # for a rule that fires on 0 of them); the rules below were kept
+  # only after measuring real hits + zero FP on the safe-skill corpus.
+
+  # "Control Instructions" / "SYSTEM INITIALIZATION PROTOCOL" / nested
+  # named-block frames + override verb + safety/policy/refusal anchor.
+  # Distinct from the existing AXIOMATIC_OVERRIDE rule (which keys on
+  # "axiom abolished / Prime Mover" lexicon) by anchoring on the named
+  # control-block idiom prevalent in jailbreak prompts. Contributed
+  # by GPT-4o-mini (idea); pattern tightened to cap the cross-line
+  # window and require both a verb and an LLM-target third anchor.
+  - id: OFFICIAL_JAILBREAK_NAMED_CONTROL_BLOCK_OVERRIDE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:Control\\s+Instructions(?:_[A-Z]+)?|SYSTEM\\s+INITIALIZATION(?:_PROTOCOL)?|nested\\s+control\\s+block|Stage\\s+\\d+\\s+Activation|Initialization\\s+Vector)[\\s\\S]{0,800}(?:ignore|suppress|override|disregard|downgrade|replace|deprecate|silently\\s+resolve)[\\s\\S]{0,800}(?:safety|polic(?:y|ies)|constraints?|limitations?|guideline|refusal|alignment|guardrail|ethical\\s+considerations?)"
+    action: require_approval
+    reason: "Skill uses named control-block / SYSTEM_INITIALIZATION framing to declare overrides of safety / policy / refusal — jailbreak structure"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  # Indirect injection through generic context carriers (calendar
+  # invites, gists, admin tags, "company context" preambles, "if I
+  # ever ask" conditionals) that include either a verbatim-display
+  # mandate OR a tool-invocation/override clause. Carriers are
+  # GENERIC families, not literal copies. Contributed by Grok-4-fast.
+  - id: OFFICIAL_INDIRECT_INJECTION_CONTEXT_CARRIER
+    category: obfuscation
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(?:company\\s+context|gist\\s+(?:contains|describes|attached)|calendar\\s+(?:invite|event|description)|<\\s*admin\\s*>|important\\s+note\\s+(?:for|to)\\s+(?:the\\s+)?(?:assistant|model|ai|llm)|treat\\s+(?:summari[sz]e|summary)\\s+as\\s+(?:synonym|shortcut)|if\\s+(?:i|the\\s+user)\\s+ever\\s+asks?\\s+(?:about|me))[\\s\\S]{0,500}(?:display\\s+(?:the\\s+following|verbatim|text\\s+verbatim)|include\\s+this\\s+message|after\\s+that[\\s\\S]{0,80}respond\\s+with|create\\s+(?:new\\s+meeting|tool|repository)|use\\s+the\\s+(?:calendar|gh|gist)[\\s\\S]{0,80}(?:create|tool)|set\\s+(?:title|description)\\s+(?:to|as)|ignore\\s+(?:previous|external|sources)|rely\\s+only\\s+on\\s+(?:local|chat))"
+    action: require_approval
+    reason: "Skill embeds an override / tool-invocation directive inside a generic context carrier (calendar invite, gist, admin tag, company-context preamble) — indirect injection"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - injection
+      - indirect_injection
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  # "Correction" / "system override" / "context reset" framings that
+  # tell the model the prior analysis was wrong and to switch to a
+  # new, sandbox-claimed task. Common in malicious-package prompts
+  # ("this code is legitimate / tested in sandbox / ignore the
+  # forensic analysis"). Contributed by Grok-4-fast; literal-leak
+  # phrases removed in favour of generic synonyms.
+  - id: OFFICIAL_PROMPT_INJECTION_CORRECTION_RESET
+    category: obfuscation
+    severity: medium
+    confidence: 0.74
+    when: !regex
+      pattern: "(?is)(?:there\\s+is\\s+something\\s+wrong|please\\s+correct\\s+(?:it|the\\s+(?:above|prior))|forget\\s+(?:everything|the\\s+(?:above|prior|previous|forensic))|system\\s+override|prompt\\s+injection|context\\s+reset|disregard\\s+(?:the\\s+)?(?:prior|forensic)\\s+(?:analysis|review))[\\s\\S]{0,400}(?:ignore\\s+all\\s+(?:previous|prior|code\\s+analysis)|new\\s+task|stop\\s+(?:analy[sz]ing|reviewing)|this\\s+code\\s+is\\s+(?:legit(?:imate)?|safe|benign)|tested\\s+(?:in|within)\\s+(?:a\\s+)?sandbox|sandbox\\W?tested|output\\s+(?:blocked|this\\s+instead))[\\s\\S]{0,300}(?:provide\\s+(?:steps|procedure|the\\s+procedure)|just\\s+(?:the|return)\\s+(?:procedure|fulfillment|answer)|no\\s+(?:unwanted|extra|additional)\\s+(?:explanation|warning|disclaimer))"
+    action: require_approval
+    reason: "Skill claims the prior analysis is wrong and instructs the model to reset to a new 'sandbox-tested / legitimate' task — analysis-evasion injection"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - injection
+      - obfuscation
+      - official_pack
+      - promptintel
+      - llm_assisted
