@@ -590,6 +590,21 @@ mod tests {
     /// `benchmarks/promptintel-corpus/README.md`. Do NOT relax the
     /// thresholds without a paired commit that explains the labelling
     /// change.
+    ///
+    /// # Why `rules_dir: None`
+    ///
+    /// The official `core.yaml` + `behavioral.yaml` packs that drive
+    /// PromptIntel detection are mirrored byte-for-byte into the
+    /// embedded baseline at
+    /// `crates/skill-veil-core/resources/official/`. Passing `None`
+    /// makes the test load the embedded baseline (plus whatever
+    /// `default_external_rule_dirs` finds), which is the exact
+    /// ruleset shipped in every binary release. Pre-fix the test
+    /// hardcoded `crates/skill-veil-cli/../../rules/official`, which
+    /// broke after the rules tree migrated out of this repo into
+    /// the dedicated `skill-veil-rules` repo (CI now has no
+    /// `<repo>/rules/` directory at all; locally the path may exist
+    /// only because of leftover Claude memory files).
     #[test]
     fn promptintel_vendored_corpus_meets_baseline() {
         let corpus_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -598,16 +613,10 @@ mod tests {
             .join("benchmarks")
             .join("promptintel-corpus");
 
-        let rules_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("rules")
-            .join("official");
-
         let summary = build_summary(&CrossCheckOptions {
             corpus_dir,
             only_misses: false,
-            rules_dir: Some(rules_dir),
+            rules_dir: None,
         })
         .expect("vendored PromptIntel corpus must be scannable");
 
