@@ -52,11 +52,25 @@ pub(super) struct FileFormat {
     /// is absent.
     #[serde(default)]
     pub(super) vt: Option<FileVtSection>,
+    /// Optional `[promptintel]` section for the PromptIntel
+    /// (`api.promptintel.novahunting.ai`) corpus. Mirrors `[vt]`: the
+    /// `PROMPTINTEL` environment variable wins, then this section, then
+    /// "not configured". Same `apikey` shape so operators only have to
+    /// learn one schema.
+    #[serde(default)]
+    pub(super) promptintel: Option<FilePromptIntelSection>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileVtSection {
+    #[serde(default)]
+    pub(super) apikey: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FilePromptIntelSection {
     #[serde(default)]
     pub(super) apikey: Option<String>,
 }

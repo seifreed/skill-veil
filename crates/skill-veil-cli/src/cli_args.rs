@@ -82,6 +82,65 @@ pub enum Commands {
         #[command(subcommand)]
         action: VtAction,
     },
+    /// PromptIntel corpus management and benchmark cross-check tooling.
+    #[command(name = "promptintel", alias = "prompt-intel")]
+    PromptIntel {
+        #[command(subcommand)]
+        action: PromptIntelAction,
+    },
+}
+
+#[derive(Subcommand, Clone)]
+pub enum PromptIntelAction {
+    /// Download the PromptIntel corpus into a scannable directory.
+    Download(PromptIntelDownloadArgs),
+    /// Scan the downloaded corpus and report detection gaps.
+    CrossCheck(PromptIntelCrossCheckArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelDownloadArgs {
+    /// Destination directory for the downloaded corpus. Reports are
+    /// written to `<dest>/prompts/` plus an `_index.json` and `_meta.json`.
+    #[arg(long, default_value = "data/promptintel")]
+    pub dest: PathBuf,
+    /// Per-page size requested from the API (max 100).
+    #[arg(long, default_value_t = 100)]
+    pub page_size: u32,
+    /// Per-request delay in milliseconds between paginated requests.
+    /// Default 200ms is a polite client; the API does not publish a hard
+    /// rate limit.
+    #[arg(long, default_value_t = 200)]
+    pub rate_limit_ms: u64,
+    /// Optional cap on total prompts written. Useful when iterating on
+    /// rules locally without re-downloading the entire corpus each time.
+    /// Must be ≥ 1 when supplied; clap rejects `--limit 0` at parse time.
+    #[arg(long)]
+    pub limit: Option<NonZeroUsize>,
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelCrossCheckArgs {
+    /// Corpus directory previously populated via
+    /// `skill-veil promptintel download`.
+    #[arg(long, default_value = "data/promptintel")]
+    pub dir: PathBuf,
+    /// Output format for the cross-check report.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: PromptIntelCrossCheckFormat,
+    /// Optional output file. Defaults to stdout.
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+    /// Only list prompts skill-veil failed to flag. Detection rate
+    /// summary is unaffected.
+    #[arg(long, default_value_t = false)]
+    pub only_misses: bool,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum PromptIntelCrossCheckFormat {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand, Clone)]

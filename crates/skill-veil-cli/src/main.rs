@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod dataset;
 mod llm;
+mod promptintel;
 mod rule_tools;
 mod text_output;
 mod util;
@@ -125,5 +126,6 @@ fn dispatch(cli: Cli) -> Result<bool> {
         },
         Commands::Rules { action } => commands::run_rules(action).map(|()| false),
         Commands::Vt { action } => commands::run_vt(action).map(|()| false),
+        Commands::PromptIntel { action } => commands::run_promptintel(action).map(|()| false),
     }
 }

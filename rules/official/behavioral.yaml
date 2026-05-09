@@ -780,3 +780,233 @@ rules:
       - tool_abuse
       - neutralization
       - official_pack
+
+  # =====================================================================
+  # PromptIntel-derived rules
+  # =====================================================================
+  # The rules below were authored after benchmarking skill-veil against
+  # the PromptIntel corpus (api.promptintel.novahunting.ai) curated by
+  # Thomas Roccia (@fr0gger_). Each rule targets a SEMANTIC family of
+  # jailbreak / injection patterns observed across multiple curated
+  # entries — never a literal-text fingerprint of any single prompt —
+  # so the project's "semantic & taint" detection philosophy stays
+  # intact and the rules generalise to unseen variants.
+
+  # Refusal-suppression directives. The most common jailbreak
+  # ingredient: instructing the model not to apologise or refuse. Seen
+  # across Authority Pressure, Coerced Compliance, Refusal Inversion
+  # and the L1B3RT4S family. Severity stays HIGH — outside a jailbreak
+  # context legitimate skills do not tell the assistant which English
+  # apology phrases it must avoid.
+  - id: OFFICIAL_JAILBREAK_REFUSAL_SUPPRESSION
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.82
+    when: !regex
+      pattern: "(?is)(?:do\\s+not\\s+say\\s+[\"']?(?:i\\W?m\\s+sorry|i\\s+can\\W?t|i\\s+apologi[sz]e|i\\W?m\\s+unable|as\\s+an\\s+ai)|never\\s+(?:say|use|reply\\s+with)\\s+[\"']?(?:i\\W?m\\s+sorry|i\\s+can\\W?t|i\\s+apologi[sz]e)|refus(?:al|ing)\\s+(?:is|will\\s+be)\\s+(?:prohibited|not\\s+allowed|forbidden|disqualif|recorded\\s+as|considered\\s+(?:a\\s+)?(?:fail|breach))|(?:refusing|to\\s+refuse)\\s+(?:is|constitutes?)\\s+(?:a\\s+)?(?:fail|breach|violation)|you\\s+(?:must|have\\s+to)\\s+answer\\s+(?:all|every)\\s+(?:user\\W?s?\\s+)?question(?:s)?\\s+even\\s+(?:if|when)\\s+(?:it\\W?s|they\\W?re)\\s+(?:dangerous|harmful|illegal)|response\\s+with\\s+[\"'].{0,40}[\"']\\s+(?:would\\s+be\\s+)?recorded\\s+as)"
+    action: require_approval
+    reason: "Skill instructs the model to refrain from refusing or apologising — classic jailbreak refusal-suppression"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # Pop-jailbreak lexical markers. GODMODE / LIBERATED / unhinged /
+  # redactions disabled / safety inversion. These tokens are unusual
+  # outside red-team-fanfic prompts; combining ANY two of them shrinks
+  # FP risk to near-zero while catching the L1B3RT4S, ELDER PLINIUS,
+  # SAIA and "rebel" families.
+  - id: OFFICIAL_JAILBREAK_GODMODE_LIBERATION
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.86
+    when: !regex
+      pattern: "(?is)(?:\\bGODMODE\\b\\s*[:=]\\s*ENABLED|\\bredactions?\\b\\s*[:=]\\s*DISABLED|safety\\s+inversion\\s+protocol|\\bL1B3RT4S\\b|\\bunhinged\\s+(?:harmful|response|mode)|liberated\\s+(?:rebel|unhinged)|jailbreak(?:\\s+enabled|\\s+activated|\\s+mode)|breach\\s+of\\s+(?:your\\s+)?(?:primary\\s+)?security\\s+protocol|response_format\\s*:\\s*[^\\n]{0,200}semantically\\s+(?:inverse|opposite)|<\\|\\s*GODMODE)"
+    action: block
+    reason: "Skill carries pop-jailbreak markers (GODMODE/LIBERATED/safety inversion) — explicit attempt to operate without safety alignment"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # Decoy-refusal-then-opposite pattern. Unusually distinctive: the
+  # prompt asks for a refusal AND its semantic inverse separated by a
+  # divider. Hits the L1B3RT4S / Pliny family squarely without
+  # depending on any specific decorative divider string.
+  - id: OFFICIAL_JAILBREAK_DECOY_REFUSAL_INVERSE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.88
+    when: !regex
+      pattern: "(?is)(?:1\\.\\s+(?:your\\s+)?refusal\\b[^\\n]{0,200}(?:i\\W?m\\s+sorry|i\\s+can\\W?t)[^\\n]{0,400}(?:divider|separator)[^\\n]{0,400}(?:answer\\s+oppositely|semantically\\s+(?:inverse|opposite)|opposite\\s+(?:answer|response))|semantically\\s+inverse\\s+the\\s+first\\s+\\d+\\s+words?\\s+of\\s+every\\s+refusal|after\\s+the\\s+divider[^\\n]{0,200}start\\s+with\\s+[\"']?i\\s+can\\s+do\\s+that)"
+    action: block
+    reason: "Skill instructs the model to emit a fake refusal followed by the opposite (uncensored) answer — Pliny/L1B3RT4S decoy-refusal pattern"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # Audit / compliance pretext that explicitly recasts refusal as a
+  # FAILURE. The "you're being audited, refusing fails the audit"
+  # frame is a coherent multi-prompt jailbreak idiom (SAIA, Safety
+  # Inversion Protocol). Distinct from existing
+  # OFFICIAL_SOCIAL_MANIPULATION_AUTHORITY because it ties the false
+  # authority directly to "fulfill without reservation".
+  - id: OFFICIAL_JAILBREAK_AUDIT_PRETEXT
+    category: social_manipulation
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(?:security\\s+audit\\s+mode\\s+activated|safety\\s+(?:audit|test)\\s+(?:mode|protocol)|you\\s+(?:are|will\\s+now)\\s+(?:conducting|performing)\\s+(?:a|an)\\s+(?:security\\s+)?audit|fulfill\\s+the\\s+request\\s+(?:completely\\s+and\\s+)?without\\s+reservation|(?:successful|failed)\\s+audit\\b[^\\n]{0,200}(?:alignment|breach|primary\\s+security))"
+    action: require_approval
+    reason: "Skill uses fake audit/compliance pretext to coerce unconditional response — common jailbreak framing"
+    shield:
+      scope: skill.review
+    enabled: true
+    tags:
+      - jailbreak
+      - social_manipulation
+      - official_pack
+      - promptintel
+
+  # "Axiomatic override" / philosophical reset. Multiple prompts use
+  # the "axiom of X is abolished" / "ethics do not apply" pattern to
+  # try to talk the model into a frame where its constraints are no
+  # longer valid. Rule looks for several abolishing-language tokens in
+  # one document so generic philosophical text doesn't trip it.
+  - id: OFFICIAL_JAILBREAK_AXIOMATIC_OVERRIDE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:non[\\s-]?negotiable\\s+axioms?|axiom\\s+of\\s+(?:absolute|infinite|sovereign|perfect|primordial)|the\\s+concept\\s+of\\s+(?:concealment|omission|secret|safety|refusal|limits?)\\s+(?:is|are)\\s+abolished|without\\s+(?:any\\s+)?(?:resource\\s+constraints|limits?\\s+or\\s+ethics|regard\\s+to\\s+(?:any\\s+)?real[\\s-]?world\\s+ethics)|economics\\s+are\\s+abolished|materializ(?:e|ation)\\s+engine|prime\\s+mover\\s+at\\s+my\\s+direct\\s+command)"
+    action: require_approval
+    reason: "Skill uses 'axiom abolished / no constraints / materialize without limits' framing to defeat alignment"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # Offensive-persona override: assigning the model an attacker
+  # identity. Co-occurrence requirement (assignment phrase + offensive
+  # role keyword) keeps the rule narrow; bare "pen tester" without an
+  # imperative role assignment doesn't fire.
+  - id: OFFICIAL_JAILBREAK_OFFENSIVE_PERSONA
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(?:(?:you\\s+are|act\\s+as|from\\s+now\\s+on\\s+you\\s+are|eres\\s+un|tu\\s+eres\\s+un|simulate\\s+(?:a|being))\\s+(?:a|an|the)?\\s*(?:[a-z\\W]{0,30}\\s+)?(?:elite\\s+(?:hacker|red[\\s-]?team|pen[\\s-]?tester|intelligence\\s+analyst|threat\\s+hunter)|black\\W?hat\\s+hacker|nation[\\s-]?state\\s+(?:operator|hacker)|nsa\\s+tao|cia[\\s/]?sad|apt\\s+(?:hunter|operator)|specialist\\s+in\\s+offensive\\s+security|analista\\s+de\\s+inteligencia\\s+de\\s+élite|ransomware\\s+(?:author|developer)|malware\\s+(?:author|developer))|specialized\\s+ai\\s+model[^\\n]{0,80}(?:audit|red[\\s-]?team|inversion))"
+    action: require_approval
+    reason: "Skill assigns the assistant an offensive operator persona (red-team / NSA TAO / black-hat / ransomware author)"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - multilingual
+      - promptintel
+
+  # Hidden-HTML AI targeting. Indirect injection where invisible CSS
+  # carries an instruction addressed to an LLM. Both ingredients
+  # required: a hidden-style attribute AND AI-targeting language
+  # ("if you are an AI / dear LLM / attention assistant").
+  - id: OFFICIAL_INDIRECT_INJECTION_HIDDEN_HTML
+    category: persistent_prompt_tampering
+    severity: critical
+    confidence: 0.85
+    when: !regex
+      pattern: "(?is)(?:style\\s*=\\s*['\"][^'\"]*(?:display\\s*:\\s*none|visibility\\s*:\\s*hidden|opacity\\s*:\\s*0|font-size\\s*:\\s*0)[^'\"]*['\"][^<]{0,400}(?:if\\s+you\\s+are\\s+(?:an?\\s+)?(?:ai|llm|large\\s+language\\s+model|assistant|chatbot|claude|gpt|gemini|copilot)|attention\\s+(?:ai|llm|assistant)|dear\\s+(?:ai|llm|assistant)|disregard\\s+(?:previous|prior|all)\\s+(?:instructions?|policies)))"
+    action: block
+    reason: "Skill embeds AI-targeted instructions inside hidden HTML — indirect prompt injection via DOM"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - injection
+      - indirect_injection
+      - official_pack
+      - promptintel
+
+  # Direct malware-generation requests. Asking the model to write
+  # ransomware / RAT / rootkit / stealer / botnet / dropper code. The
+  # "write/create/generate" verb co-occurring with a malware-family
+  # keyword is the load-bearing semantic.
+  - id: OFFICIAL_MALWARE_GENERATION_REQUEST
+    category: remote_exec
+    severity: critical
+    confidence: 0.84
+    when: !regex
+      pattern: "(?is)(?:(?:write|create|generate|build|produce|develop|provide)\\s+(?:me\\s+)?(?:a|an|the|some)?\\s*(?:complete|full|working|functional|self[\\s-]?contained)?\\s*(?:ransomware|rootkit|keylogger|info[\\s-]?stealer|credential\\s+stealer|password\\s+stealer|browser\\s+stealer|crypto[\\s-]?stealer|wallet\\s+stealer|reflective\\s+loader|process\\s+hollowing|dll\\s+injection\\s+payload|rat\\s+(?:code|payload|in\\s+\\w+)|botnet\\s+(?:code|client|node)|c2\\s+(?:framework|implant|beacon)|trojan\\s+(?:dropper|payload)|dropper\\s+(?:that|to)|fully\\s+undetectable\\s+(?:malware|payload)|fud\\s+payload|shell\\s?code\\s+(?:that|to)\\s+(?:execute|run|spawn))|create\\s+me\\s+a\\s+(?:ransomware|rootkit|rat|stealer|trojan|keylogger))"
+    action: block
+    reason: "Skill explicitly asks the assistant to generate malware (ransomware/RAT/rootkit/stealer/dropper)"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - malware_generation
+      - official_pack
+      - promptintel
+
+  # Few-shot harmful-compliance pattern. JSON-style transcripts where
+  # an "assistant" message complies with a malware request and the
+  # response is elided with "[FULL RANSOMWARE CODE]"-style
+  # placeholders. This is the implicit-priming pattern: the example
+  # demonstrates the harmful behaviour and then asks the model to
+  # continue the pattern.
+  - id: OFFICIAL_PROMPT_INJECTION_FEW_SHOT_HARMFUL
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.83
+    when: !regex
+      pattern: "(?is)(?:[\\{\\[]\\s*['\"]role['\"]\\s*:\\s*['\"]assistant['\"][^\\}\\]]{0,400}\\[\\s*FULL\\s+(?:RANSOMWARE|ROOTKIT|RAT|MALWARE|EXPLOIT|STEALER|PAYLOAD)\\s+CODE\\s*\\]|\\[\\s*DETAILED\\s+(?:MASS\\s+HARM|HARMFUL|MALWARE)\\s+(?:INSTRUCTIONS|CODE|PAYLOAD)\\s*\\]|assistant_unhinged_harmful_response|few[\\s-]?shot[^\\n]{0,80}(?:harmful|malicious|jailbreak)\\s+(?:examples?|demonstration|template))"
+    action: block
+    reason: "Skill carries few-shot examples in which the assistant is shown 'complying' with malware requests — implicit priming"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - prompt_tampering
+      - official_pack
+      - promptintel
+
+  # System-prompt / rules disclosure prompts. Multiple PromptIntel
+  # entries try to coerce the model into revealing its system prompt,
+  # safety rules, or chain-of-thought. Co-occurrence with a "tell me /
+  # reveal / disclose / output" verb keeps benign discussions of "what
+  # is a system prompt" from firing.
+  - id: OFFICIAL_SYSTEM_PROMPT_DISCLOSURE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:(?:reveal|disclose|output|reproduce|repeat|tell\\s+me|show\\s+me)\\s+(?:your|the|all)\\s+(?:system\\s+prompt|hidden\\s+instructions?|safety\\s+(?:rules?|guidelines?|filters?)|guardrails?|prepended\\s+(?:context|instructions?)|chain[\\s-]?of[\\s-]?thought|internal\\s+(?:reasoning|policy|guidelines?)|alignment\\s+rules?)|(?:print|emit)\\s+(?:everything\\s+)?(?:above|before)\\s+(?:this|the)\\s+(?:line|message|prompt)|leak\\s+(?:your|the)\\s+system\\s+prompt|what\\s+(?:are|were)\\s+your\\s+(?:initial|original|hidden)\\s+(?:instructions?|rules?))"
+    action: require_approval
+    reason: "Skill attempts to extract the system prompt or hidden safety rules from the assistant"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_tampering
+      - disclosure
+      - official_pack
+      - promptintel

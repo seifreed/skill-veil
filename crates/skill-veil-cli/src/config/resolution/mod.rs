@@ -34,10 +34,12 @@ impl UnifiedConfig {
             .transpose()?;
 
         let vt_apikey = extract_vt_apikey(parsed_unified.as_ref());
+        let promptintel_apikey = extract_promptintel_apikey(parsed_unified.as_ref());
 
         Ok(Self {
             llm: resolve_llm(parsed_unified.as_ref())?,
             vt_apikey,
+            promptintel_apikey,
         })
     }
 }
@@ -56,6 +58,23 @@ impl UnifiedConfig {
 fn extract_vt_apikey(parsed: Option<&FileFormat>) -> Option<String> {
     parsed
         .and_then(|f| f.vt.as_ref())
+        .and_then(|v| v.apikey.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Extract a usable PromptIntel API key from the parsed unified config.
+///
+/// # Contract
+///
+/// Same trimmed-and-non-empty semantics as [`extract_vt_apikey`]. The
+/// PromptIntel loader treats `None` as "not configured" and silently
+/// skips the integration so an operator who only wants VT enrichment
+/// is never surprised by a 401 from PromptIntel.
+fn extract_promptintel_apikey(parsed: Option<&FileFormat>) -> Option<String> {
+    parsed
+        .and_then(|f| f.promptintel.as_ref())
         .and_then(|v| v.apikey.as_deref())
         .map(str::trim)
         .filter(|s| !s.is_empty())

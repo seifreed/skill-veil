@@ -45,6 +45,11 @@ pub(crate) struct UnifiedConfig {
     /// ([`crate::vt::config::VtConfig`]) consults this as a fallback when
     /// the legacy standalone file is absent.
     pub vt_apikey: Option<String>,
+    /// Optional PromptIntel API key sourced from the `[promptintel]`
+    /// section of `~/.skill-veil.toml`. Mirrors `vt_apikey`: the
+    /// `PROMPTINTEL` environment variable wins, then this field, then
+    /// "not configured".
+    pub promptintel_apikey: Option<String>,
 }
 
 #[derive(Debug, Clone)]
