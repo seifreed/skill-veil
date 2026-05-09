@@ -33,8 +33,93 @@ impl UnifiedConfig {
             })
             .transpose()?;
 
+        let vt_apikey = extract_vt_apikey(parsed_unified.as_ref());
+
         Ok(Self {
             llm: resolve_llm(parsed_unified.as_ref())?,
+            vt_apikey,
         })
+    }
+}
+
+/// Extract a usable VT API key from the parsed unified config.
+///
+/// # Contract
+///
+/// - Returns `Some(trimmed)` only when `[vt].apikey` is present AND
+///   non-empty after trimming whitespace. An empty / whitespace-only
+///   value yields `None` so the VT loader's "not configured" silent-skip
+///   path remains reachable from the unified file (matching the
+///   semantics of the legacy `~/.vt.toml` empty-string check).
+/// - Returns `None` for an absent `[vt]` section, an absent `apikey`
+///   key, or a missing config file altogether.
+fn extract_vt_apikey(parsed: Option<&FileFormat>) -> Option<String> {
+    parsed
+        .and_then(|f| f.vt.as_ref())
+        .and_then(|v| v.apikey.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Contract: a populated `[vt].apikey` in `~/.skill-veil.toml`
+    /// surfaces on `UnifiedConfig::vt_apikey` so the VT loader's
+    /// unified-file fallback can resolve credentials without the
+    /// legacy `~/.vt.toml`. Pre-fix the `[vt]` section was rejected
+    /// outright by the TOML parser.
+    #[test]
+    fn extract_vt_apikey_returns_trimmed_value_when_present() {
+        let parsed: FileFormat = toml::from_str(
+            r#"
+[vt]
+apikey = "  key-with-padding  "
+"#,
+        )
+        .expect("parses");
+        let got = extract_vt_apikey(Some(&parsed));
+        assert_eq!(got.as_deref(), Some("key-with-padding"));
+    }
+
+    /// Contract (negative): a whitespace-only `[vt].apikey` MUST yield
+    /// `None`. The VT loader treats an empty value as a configuration
+    /// error on the legacy `~/.vt.toml` path; on the unified-file
+    /// fallback path we instead silently skip (the user can still
+    /// supply credentials via env or `~/.vt.toml`), which is friendlier
+    /// while still preventing a blank string from being sent as a
+    /// bearer token.
+    #[test]
+    fn extract_vt_apikey_drops_whitespace_only_value() {
+        let parsed: FileFormat = toml::from_str(
+            r#"
+[vt]
+apikey = "   "
+"#,
+        )
+        .expect("parses");
+        let got = extract_vt_apikey(Some(&parsed));
+        assert!(
+            got.is_none(),
+            "whitespace-only apikey MUST NOT surface as a usable credential"
+        );
+    }
+
+    /// Contract (negative): an absent `[vt]` section MUST yield `None`
+    /// without panicking, so a user who configures only `[llm]` in the
+    /// unified file does not see spurious VT activity.
+    #[test]
+    fn extract_vt_apikey_returns_none_when_section_absent() {
+        let parsed: FileFormat = toml::from_str(
+            r#"
+[llm]
+provider = "lmstudio"
+"#,
+        )
+        .expect("parses");
+        assert!(extract_vt_apikey(Some(&parsed)).is_none());
+        assert!(extract_vt_apikey(None).is_none());
     }
 }

@@ -40,6 +40,11 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct UnifiedConfig {
     pub llm: Option<LlmConfigSection>,
+    /// Optional VirusTotal API key sourced from the `[vt]` section of
+    /// `~/.skill-veil.toml`. The dedicated `~/.vt.toml` loader
+    /// ([`crate::vt::config::VtConfig`]) consults this as a fallback when
+    /// the legacy standalone file is absent.
+    pub vt_apikey: Option<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -176,6 +176,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified));
         assert!(got.is_err());
@@ -189,6 +190,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         assert_eq!(got.provider, LlmProviderKind::Ollama);
@@ -215,6 +217,7 @@ model = "gpt-4o-mini"
                 },
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let ant = got
@@ -237,6 +240,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let oc = got
@@ -258,6 +262,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let g = got.provider_configs.get(&LlmProviderKind::Grok).unwrap();
@@ -276,6 +281,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let g = got.provider_configs.get(&LlmProviderKind::Grok).unwrap();
@@ -294,6 +300,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let g = got.provider_configs.get(&LlmProviderKind::Grok).unwrap();
@@ -313,6 +320,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let p = got
@@ -334,6 +342,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let p = got
@@ -355,6 +364,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let p = got
@@ -377,6 +387,7 @@ model = "gpt-4o-mini"
                 providers: BTreeMap::new(),
                 limits: None,
             }),
+            vt: None,
         };
         let got = resolve_llm(Some(&unified)).unwrap().unwrap();
         let oc = got
@@ -403,6 +414,7 @@ model = "gpt-4o-mini"
                 providers,
                 limits: None,
             }),
+            vt: None,
         }
     }
 

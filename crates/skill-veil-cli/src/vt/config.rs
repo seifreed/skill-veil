@@ -3,6 +3,8 @@
 //! Resolution order (first non-empty wins):
 //!   1. `VT_APIKEY` environment variable
 //!   2. `~/.vt.toml` with `apikey = "…"`
+//!   3. `~/.skill-veil.toml` `[vt]` section (`apikey = "…"`) — lets users
+//!      centralise both LLM and VT credentials in a single file.
 //!
 //! The key is never logged, never surfaced in error messages, and never
 //! accepted via a CLI flag (to keep it out of shell history / `ps` output).
@@ -57,10 +59,11 @@ impl VtConfig {
     /// without a single warning.
     ///
     /// Returns:
-    /// - `Ok(Some(cfg))` — credentials were resolved (env var or file).
-    /// - `Ok(None)` — neither the env var nor `~/.vt.toml` is present.
-    /// - `Err(_)` — the config exists but cannot be used (I/O error,
-    ///   parse error, missing or empty `apikey` field).
+    /// - `Ok(Some(cfg))` — credentials were resolved (env var, legacy
+    ///   `~/.vt.toml`, or unified `~/.skill-veil.toml` `[vt]` section).
+    /// - `Ok(None)` — none of the three sources are present.
+    /// - `Err(_)` — the legacy `~/.vt.toml` exists but cannot be used
+    ///   (I/O error, parse error, missing or empty `apikey` field).
     pub(crate) fn load_optional() -> Result<Option<Self>> {
         if let Ok(env_key) = std::env::var(API_KEY_ENV_VAR) {
             let trimmed = env_key.trim();
@@ -71,6 +74,18 @@ impl VtConfig {
             }
         }
 
+        if let Some(cfg) = Self::load_from_legacy_file()? {
+            return Ok(Some(cfg));
+        }
+
+        Ok(Self::load_from_unified_config())
+    }
+
+    /// Read the legacy `~/.vt.toml`. `Ok(None)` means the file does not
+    /// exist; an `Err` signals a real misconfiguration the caller should
+    /// surface (we never want a typo'd `~/.vt.toml` to silently fall
+    /// through to a different source and confuse the operator).
+    fn load_from_legacy_file() -> Result<Option<Self>> {
         let path = Self::config_path()?;
 
         // Surface the world-readable warning before materialising the
@@ -85,8 +100,8 @@ impl VtConfig {
         // concurrent symlink swap between the existence check and the
         // open could change the file under us. NotFound here means the
         // user simply hasn't created `~/.vt.toml` yet, which is not an
-        // error — return `Ok(None)` so the auto-enrichment path silently
-        // skips VT without surfacing a guidance message.
+        // error — return `Ok(None)` so the unified-config fallback can
+        // run.
         let contents = match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
@@ -107,6 +122,17 @@ impl VtConfig {
             return Err(anyhow!("{} has an empty `apikey` value", path.display()));
         }
         Ok(Some(Self { apikey }))
+    }
+
+    /// Resolve the VT API key from the unified `~/.skill-veil.toml`
+    /// `[vt]` section. This is a best-effort fallback: if the unified
+    /// loader fails (e.g. unrelated `[llm]` section is malformed), we
+    /// silently return `None` rather than masking the legacy
+    /// `~/.vt.toml` not-found path with a confusing parse error from a
+    /// different file.
+    fn load_from_unified_config() -> Option<Self> {
+        let unified = crate::config::UnifiedConfig::load().ok()?;
+        unified.vt_apikey.map(|apikey| Self { apikey })
     }
 
     fn config_path() -> Result<PathBuf> {

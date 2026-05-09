@@ -45,6 +45,20 @@ pub(super) fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
 pub(super) struct FileFormat {
     #[serde(default)]
     pub(super) llm: Option<FileLlmSection>,
+    /// Optional `[vt]` section so users can centralise both LLM and
+    /// VirusTotal credentials in a single `~/.skill-veil.toml`. The
+    /// legacy standalone `~/.vt.toml` keeps working — `vt::config`
+    /// consults this section only as a fallback when the legacy file
+    /// is absent.
+    #[serde(default)]
+    pub(super) vt: Option<FileVtSection>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileVtSection {
+    #[serde(default)]
+    pub(super) apikey: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -84,6 +98,50 @@ pub(super) struct FileLlmLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Contract: `~/.skill-veil.toml` accepts a `[vt]` section alongside
+    /// `[llm]` so users can centralise both LLM and VirusTotal
+    /// credentials in a single file. Pre-fix `FileFormat` only knew
+    /// about `[llm]` and `#[serde(deny_unknown_fields)]` rejected
+    /// `[vt]` with `unknown field 'vt', expected 'llm'`, masking VT
+    /// integration as "LLM enrichment skipped" warnings on every scan.
+    #[test]
+    fn parses_unified_toml_with_vt_and_llm_sections() {
+        let src = r#"
+[vt]
+apikey = "vt-test-key"
+
+[llm]
+provider = "lmstudio"
+
+[llm.lmstudio]
+model = "qwen/qwen3-coder-30b"
+"#;
+        let f: FileFormat = toml::from_str(src).expect("must accept [vt] alongside [llm]");
+        let vt = f.vt.as_ref().expect("vt section must parse");
+        assert_eq!(vt.apikey.as_deref(), Some("vt-test-key"));
+        let llm = f.llm.as_ref().expect("llm section must still parse");
+        assert_eq!(llm.provider.as_deref(), Some("lmstudio"));
+    }
+
+    /// Contract: `[vt]` sub-keys honour `deny_unknown_fields` so typos
+    /// like `api_key` (underscore) or `apikey_value` surface as a clear
+    /// parse error rather than silently producing `apikey: None` and
+    /// then "VT not configured". Mirrors the same defensive contract on
+    /// `[llm]` provider params and on the legacy `~/.vt.toml` schema.
+    #[test]
+    fn vt_section_rejects_unknown_subkeys() {
+        let src = r#"
+[vt]
+api_key = "typo-with-underscore"
+"#;
+        let result: Result<FileFormat, _> = toml::from_str(src);
+        assert!(
+            result.is_err(),
+            "FileVtSection MUST reject unknown field 'api_key'; \
+             pre-fix typos would silently yield apikey=None"
+        );
+    }
 
     /// Contract: `~/.skill-veil.toml` parses every documented `[llm.*]`
     /// sub-table — the active provider, per-provider sections, and the
