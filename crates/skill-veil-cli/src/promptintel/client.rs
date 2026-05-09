@@ -8,7 +8,7 @@
 //! failures (401) from quota / transient faults.
 
 use super::config::PromptIntelConfig;
-use super::types::PromptListEnvelope;
+use super::types::{FeedResponse, PromptListEnvelope};
 use std::io::{self, Read};
 use std::time::Duration;
 use thiserror::Error;
@@ -73,6 +73,27 @@ impl PromptIntelClient {
         let body = self.get_json(&url)?;
         let envelope: PromptListEnvelope = serde_json::from_str(&body)?;
         Ok(envelope)
+    }
+
+    /// Fetch the agent threat-intel feed.
+    ///
+    /// Rate limit: 120/hour, ~2/min. Callers MUST persist a sync
+    /// timestamp and pass it as `since` so re-syncs only pull deltas.
+    /// `since` accepts ISO-8601 (e.g. `2026-05-09T12:00:00Z`).
+    ///
+    /// `limit` is upstream-clamped; passing 200 returns the full
+    /// dataset today (≈55 entries), so a single call suffices for an
+    /// initial sync.
+    pub(crate) fn agent_feed(&self, limit: u32, since: Option<&str>) -> Result<FeedResponse> {
+        let mut url = format!("{BASE_URL}/agent-feed?limit={limit}");
+        if let Some(s) = since {
+            // ureq automatically percent-encodes the value at send time.
+            url.push_str("&since=");
+            url.push_str(s);
+        }
+        let body = self.get_json(&url)?;
+        let response: FeedResponse = serde_json::from_str(&body)?;
+        Ok(response)
     }
 
     fn get_json(&self, url: &str) -> Result<String> {

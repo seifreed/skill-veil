@@ -6,13 +6,16 @@
 
 use crate::cli_args::{
     PromptIntelAction, PromptIntelCrossCheckArgs, PromptIntelCrossCheckFormat,
-    PromptIntelDownloadArgs,
+    PromptIntelDownloadArgs, PromptIntelFeedAction, PromptIntelFeedListArgs,
+    PromptIntelFeedSyncArgs,
 };
 use crate::promptintel::client::PromptIntelClient;
 use crate::promptintel::config::PromptIntelConfig;
 use crate::promptintel::corpus::{self, DownloadOptions};
 use crate::promptintel::cross_check::{self, CrossCheckOptions};
+use crate::promptintel::feed::{store::FeedStore, sync as feed_sync};
 use anyhow::{Context, Result};
+use std::path::PathBuf;
 
 /// Returns `Ok(true)` when the action ran successfully but a CI gate
 /// (e.g. `cross-check --fail-below`) was tripped, `Ok(false)` otherwise.
@@ -22,7 +25,82 @@ pub(crate) fn run_promptintel(action: PromptIntelAction) -> Result<bool> {
     match action {
         PromptIntelAction::Download(args) => run_download(args).map(|()| false),
         PromptIntelAction::CrossCheck(args) => run_cross_check(args),
+        PromptIntelAction::Feed(action) => run_feed(action).map(|()| false),
     }
+}
+
+fn run_feed(action: PromptIntelFeedAction) -> Result<()> {
+    match action {
+        PromptIntelFeedAction::Sync(args) => run_feed_sync(args),
+        PromptIntelFeedAction::List(args) => run_feed_list(args),
+    }
+}
+
+fn run_feed_sync(args: PromptIntelFeedSyncArgs) -> Result<()> {
+    let cache_root = resolve_cache_root(args.cache_dir)?;
+    let client = build_client()?;
+    let summary = feed_sync::run_sync(&client, &cache_root)
+        .with_context(|| format!("syncing PromptIntel feed into {}", cache_root.display()))?;
+    println!(
+        "PromptIntel feed sync complete: {} entries cached at {} (was {})",
+        summary.total_pulled,
+        cache_root.join("promptintel-feed").display(),
+        summary.previous_total,
+    );
+    Ok(())
+}
+
+fn run_feed_list(args: PromptIntelFeedListArgs) -> Result<()> {
+    let cache_root = resolve_cache_root(args.cache_dir)?;
+    let store = FeedStore::load(&cache_root).with_context(|| {
+        format!(
+            "loading PromptIntel feed cache from {}",
+            cache_root.display()
+        )
+    })?;
+    if store.entries.is_empty() {
+        println!(
+            "PromptIntel feed cache is empty at {}. Run `skill-veil promptintel feed sync` first.",
+            cache_root.join("promptintel-feed").display()
+        );
+        return Ok(());
+    }
+    match args.format {
+        PromptIntelCrossCheckFormat::Json => {
+            let body =
+                serde_json::to_string_pretty(&store.entries).context("serialising feed entries")?;
+            println!("{body}");
+        }
+        PromptIntelCrossCheckFormat::Text => {
+            println!(
+                "=== PromptIntel feed cache ({} entries) ===",
+                store.entries.len()
+            );
+            for entry in store.active_entries() {
+                println!(
+                    "[{sev:<8}] {action:<16} {id}  {title}",
+                    sev = entry.severity.as_str(),
+                    action = format!("{:?}", entry.action).to_lowercase(),
+                    id = entry.id,
+                    title = entry.title.chars().take(70).collect::<String>(),
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolve the on-disk cache root for the PromptIntel feed. Prefers
+/// the explicit `--cache-dir` override, then `dirs::cache_dir()`, then
+/// the system temp directory as a last resort so the command can still
+/// run on systems without an XDG cache home.
+fn resolve_cache_root(override_dir: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(dir) = override_dir {
+        return Ok(dir);
+    }
+    Ok(dirs::cache_dir()
+        .map(|d| d.join("skill-veil"))
+        .unwrap_or_else(std::env::temp_dir))
 }
 
 fn run_download(args: PromptIntelDownloadArgs) -> Result<()> {

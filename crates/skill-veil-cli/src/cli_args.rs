@@ -96,6 +96,37 @@ pub enum PromptIntelAction {
     Download(PromptIntelDownloadArgs),
     /// Scan the downloaded corpus and report detection gaps.
     CrossCheck(PromptIntelCrossCheckArgs),
+    /// Manage the local PromptIntel agent-feed cache used to enrich
+    /// scans with community-curated IOCs.
+    #[command(subcommand)]
+    Feed(PromptIntelFeedAction),
+}
+
+#[derive(Subcommand, Clone)]
+pub enum PromptIntelFeedAction {
+    /// Pull the PromptIntel agent-feed and overwrite the local cache.
+    /// Rate limit: 120/hour. A single pull suffices for the current
+    /// dataset (~55 entries today).
+    Sync(PromptIntelFeedSyncArgs),
+    /// List cached entries and recent IOC counts.
+    List(PromptIntelFeedListArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelFeedSyncArgs {
+    /// Cache root override. Defaults to `dirs::cache_dir()/skill-veil/`.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelFeedListArgs {
+    /// Cache root override. Defaults to `dirs::cache_dir()/skill-veil/`.
+    #[arg(long)]
+    pub cache_dir: Option<PathBuf>,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: PromptIntelCrossCheckFormat,
 }
 
 #[derive(Args, Clone)]
@@ -288,6 +319,13 @@ pub struct ScanArgs {
     /// section. Enrichment is otherwise auto-activated when config exists.
     #[arg(long, default_value_t = false)]
     pub no_llm_enrich: bool,
+    /// Disable PromptIntel feed enrichment. The lookup is offline and
+    /// only adds hits from the cache populated by
+    /// `skill-veil promptintel feed sync`; this flag exists for CI
+    /// where deterministic output is required regardless of which
+    /// machine has a populated cache.
+    #[arg(long, default_value_t = false)]
+    pub no_promptintel_enrich: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]

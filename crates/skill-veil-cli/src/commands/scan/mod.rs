@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 mod cache;
 mod llm;
+mod promptintel;
 mod vt;
 
 /// Shared cap for short error blurbs (LLM parse error, VT enrichment
@@ -170,6 +171,16 @@ pub(crate) fn run_scan(
             quiet,
         )? {
             print!("{llm_block}");
+        }
+    }
+
+    if !args.no_promptintel_enrich {
+        if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
+            &scan_result,
+            args.cache_dir.as_deref(),
+            quiet,
+        )? {
+            print!("{pi_block}");
         }
     }
 
