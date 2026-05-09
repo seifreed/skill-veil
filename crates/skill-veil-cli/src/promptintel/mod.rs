@@ -17,6 +17,8 @@
 pub(crate) mod client;
 pub(crate) mod config;
 pub(crate) mod corpus;
+pub(crate) mod coverage;
 pub(crate) mod cross_check;
 pub(crate) mod feed;
+pub(crate) mod taxonomy;
 pub(crate) mod types;

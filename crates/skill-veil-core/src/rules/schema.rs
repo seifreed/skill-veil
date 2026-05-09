@@ -45,6 +45,15 @@ pub struct Rule {
     /// Tags for filtering
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional list of upstream PromptIntel threat names this rule
+    /// covers (e.g. `["Jailbreak", "Hidden instruction in code or
+    /// comments"]`). Used by the `promptintel coverage` command to
+    /// build a per-threat audit table; left empty for rules that do
+    /// not target prompt-layer attacks. Validation against the
+    /// canonical taxonomy happens in the CLI, not at parse time, so
+    /// an upstream rename does not brick rule loading.
+    #[serde(default)]
+    pub promptintel_threats: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

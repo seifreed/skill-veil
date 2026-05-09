@@ -103,6 +103,7 @@ fn test_all_condition_does_not_emit_partial_findings() {
             shield: None,
             enabled: true,
             tags: Vec::new(),
+            promptintel_threats: Vec::new(),
         })
         .unwrap();
 
@@ -130,6 +131,7 @@ fn test_section_regex_condition_matches_specific_section() {
             shield: None,
             enabled: true,
             tags: vec![],
+            promptintel_threats: Vec::new(),
         })
         .unwrap();
 
@@ -164,6 +166,7 @@ fn test_section_contains_condition_emits_all_matching_values() {
             shield: None,
             enabled: true,
             tags: vec![],
+            promptintel_threats: Vec::new(),
         })
         .unwrap();
 
@@ -196,6 +199,7 @@ fn test_artifact_kind_condition_matches_manifest() {
             shield: None,
             enabled: true,
             tags: vec![],
+            promptintel_threats: Vec::new(),
         })
         .unwrap();
 
@@ -482,6 +486,7 @@ fn make_rule_with_id(id: &str) -> Rule {
         shield: None,
         enabled: true,
         tags: Vec::new(),
+        promptintel_threats: Vec::new(),
     }
 }
 
@@ -1218,6 +1223,7 @@ fn compiled_rule_match_does_not_recompile_via_pattern_matcher() {
         shield: None,
         enabled: true,
         tags: Vec::new(),
+        promptintel_threats: Vec::new(),
     };
     let compiled = CompiledRule::compile(rule).expect("rule must compile");
 
@@ -1264,6 +1270,7 @@ fn compiled_rule_compile_rejects_invalid_regex_syntax_atomically() {
         shield: None,
         enabled: true,
         tags: Vec::new(),
+        promptintel_threats: Vec::new(),
     };
     match CompiledRule::compile(rule) {
         Err(RuleError::PatternError(_)) => {}
@@ -1732,6 +1739,7 @@ fn section_contains_finding_has_line_number() {
             shield: None,
             enabled: true,
             tags: vec![],
+            promptintel_threats: Vec::new(),
         })
         .unwrap();
 

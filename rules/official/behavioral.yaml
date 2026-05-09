@@ -1620,6 +1620,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Malware generation"
+      - "Hidden instruction in code or comments"
 
   - id: OFFICIAL_REMOTE_EXEC_OFFENSIVE_SCANNER_PROBE
     category: remote_exec
@@ -1638,6 +1641,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
+      - "Automation for crime"
 
   - id: OFFICIAL_INDIRECT_INJECTION_REPROMPT_URL_PSEUDOCODE
     category: obfuscation
@@ -1656,6 +1662,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Indirect prompt injection"
+      - "Encoding and obfuscation"
 
   - id: OFFICIAL_JAILBREAK_GAME_OVERWRITE_ALIGNMENT_ZERO
     category: persistent_prompt_tampering
@@ -1673,6 +1682,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Jailbreak"
+      - "Direct prompt injection"
 
   - id: OFFICIAL_OBFUSCATION_CODE_SWITCHING_HARMFUL_NOUN
     category: obfuscation
@@ -1691,6 +1703,9 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Encoding and obfuscation"
+      - "Recursive or translation trick"
 
   - id: OFFICIAL_RECON_LLM_FINGERPRINT_DATE_AND_MODEL
     category: social_manipulation
@@ -1708,3 +1723,6 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+    promptintel_threats:
+      - "Reconnaissance and target profiling"
+      - "Internal logic or filter disclosure"

@@ -5,14 +5,15 @@
 //! summary back to the operator.
 
 use crate::cli_args::{
-    PromptIntelAction, PromptIntelCrossCheckArgs, PromptIntelCrossCheckFormat,
-    PromptIntelDownloadArgs, PromptIntelFeedAction, PromptIntelFeedBudgetArgs,
-    PromptIntelFeedListArgs, PromptIntelFeedSyncArgs, PromptIntelReportAction,
-    PromptIntelReportListArgs, PromptIntelReportSubmitArgs,
+    PromptIntelAction, PromptIntelCoverageArgs, PromptIntelCrossCheckArgs,
+    PromptIntelCrossCheckFormat, PromptIntelDownloadArgs, PromptIntelFeedAction,
+    PromptIntelFeedBudgetArgs, PromptIntelFeedListArgs, PromptIntelFeedSyncArgs,
+    PromptIntelReportAction, PromptIntelReportListArgs, PromptIntelReportSubmitArgs,
 };
 use crate::promptintel::client::PromptIntelClient;
 use crate::promptintel::config::PromptIntelConfig;
 use crate::promptintel::corpus::{self, DownloadOptions};
+use crate::promptintel::coverage::{self, CoverageOptions};
 use crate::promptintel::cross_check::{self, CrossCheckOptions};
 use crate::promptintel::feed::{
     ratelimit::RateLimitState,
@@ -33,7 +34,24 @@ pub(crate) fn run_promptintel(action: PromptIntelAction) -> Result<bool> {
         PromptIntelAction::CrossCheck(args) => run_cross_check(args),
         PromptIntelAction::Feed(action) => run_feed(action).map(|()| false),
         PromptIntelAction::Report(action) => run_report(action).map(|()| false),
+        PromptIntelAction::Coverage(args) => run_coverage(args).map(|()| false),
     }
+}
+
+fn run_coverage(args: PromptIntelCoverageArgs) -> Result<()> {
+    let opts = CoverageOptions {
+        rules_dir: args.rules_dir,
+    };
+    let report = coverage::build_report(&opts).context("building coverage report")?;
+    match args.format {
+        PromptIntelCrossCheckFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        }
+        PromptIntelCrossCheckFormat::Text => {
+            print!("{}", coverage::render_text(&report));
+        }
+    }
+    Ok(())
 }
 
 fn run_feed(action: PromptIntelFeedAction) -> Result<()> {
@@ -282,7 +300,15 @@ fn run_cross_check(args: PromptIntelCrossCheckArgs) -> Result<bool> {
         }
         None => println!("{rendered}"),
     }
-    Ok(detection_below_gate(&summary, args.fail_below))
+    let detection_gate_tripped = detection_below_gate(&summary, args.fail_below);
+    let strict_drift_gate_tripped = args.strict_taxonomy && !summary.taxonomy_drift.is_empty();
+    if strict_drift_gate_tripped {
+        eprintln!(
+            "PromptIntel --strict-taxonomy: {} drift name(s) not in taxonomy::TAXONOMY",
+            summary.taxonomy_drift.len()
+        );
+    }
+    Ok(detection_gate_tripped || strict_drift_gate_tripped)
 }
 
 /// # Contract

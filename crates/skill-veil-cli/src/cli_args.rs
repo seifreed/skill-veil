@@ -105,6 +105,21 @@ pub enum PromptIntelAction {
     /// listing).
     #[command(subcommand)]
     Report(PromptIntelReportAction),
+    /// Audit which PromptIntel taxonomy threats are covered by at
+    /// least one rule in the loaded packs. Pure-offline analysis;
+    /// does not contact the API.
+    Coverage(PromptIntelCoverageArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct PromptIntelCoverageArgs {
+    /// Optional override for the rule pack directory. Defaults to
+    /// the scanner's normal cwd-relative discovery (`./rules/official/`).
+    #[arg(long)]
+    pub rules_dir: Option<PathBuf>,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: PromptIntelCrossCheckFormat,
 }
 
 #[derive(Subcommand, Clone)]
@@ -236,6 +251,12 @@ pub struct PromptIntelCrossCheckArgs {
     /// passes (matches `scan-package --fail-on`).
     #[arg(long, value_parser = parse_fail_below)]
     pub fail_below: Option<f64>,
+    /// Promote PromptIntel taxonomy drift to a CI gate failure (exit 1).
+    /// Drift means the corpus carries a threat name that isn't in
+    /// `taxonomy::TAXONOMY`; the renderer surfaces such names in a
+    /// `[Drift]` section regardless of this flag.
+    #[arg(long, default_value_t = false)]
+    pub strict_taxonomy: bool,
 }
 
 /// Without this guard `--fail-below 1.5` would always trip and

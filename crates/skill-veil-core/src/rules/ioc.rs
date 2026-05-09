@@ -113,6 +113,7 @@ fn push_ioc_rule(
         shield: None,
         enabled: true,
         tags: vec!["ioc".to_string(), spec.ioc_tag.to_string()],
+        promptintel_threats: Vec::new(),
     });
     Ok(())
 }

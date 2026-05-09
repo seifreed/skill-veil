@@ -229,6 +229,7 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `promptintel feed budget` | Show the persisted client-side rate-limit budget per endpoint |
 | `promptintel report submit` | Submit a threat-intel report (5/h, 20/d) with client-side validation and `--dry-run` |
 | `promptintel report list` | List reports the authenticated agent has previously submitted |
+| `promptintel coverage` | Audit which threats in the official taxonomy are covered by at least one rule (offline; renders gaps per bucket) |
 
 ### Useful Options
 
@@ -347,6 +348,15 @@ skill-veil promptintel feed sync --full         # full pull (revocation
 skill-veil promptintel feed list
 skill-veil promptintel feed budget
 
+# Audit which PromptIntel threats are covered by at least one rule.
+skill-veil promptintel coverage
+# === PromptIntel Rule Coverage ===
+# rules total: 204  with promptintel_threats tag: 6
+#   [Prompt Manipulation]  5/7 threats covered
+#     [GAP ] Model Behavior Manipulation via Feedback Loops    rules: (none)
+#     [OK  ] Jailbreak                                         rules: OFFICIAL_JAILBREAK_GAME_OVERWRITE_ALIGNMENT_ZERO
+#     ...
+
 # Subsequent scan-package runs automatically match scan IOCs (URLs,
 # domains, IPs, file hashes) against the cache; no extra API call.
 skill-veil scan-package examples/manifest-package
@@ -377,6 +387,19 @@ The rate-limit tracker persists to
 `<cache_root>/promptintel-feed/ratelimit.json` and enforces the
 documented per-endpoint quotas (`agent-feed` 120/h, `agents/reports/mine`
 60/h, `agents/reports` 5/h + 20/d). Failed calls do not spend quota.
+
+The cross-check renderer groups threats by the official 4-bucket
+taxonomy (`Prompt Manipulation` / `Abusing Legitimate Functions` /
+`Suspicious Prompt Patterns` / `Abnormal Outputs`) so coverage gaps
+surface per group instead of in an alphabetical jumble. The
+`coverage` command builds the same audit from the rule pack: rules
+opt in by adding `promptintel_threats: ["Jailbreak", ...]` to their
+YAML, and any threat name that's not in the canonical taxonomy
+surfaces in a separate `[Drift]` block to flag upstream renames.
+
+`cross-check --strict-taxonomy` promotes drift to a CI gate failure
+(exit 1), pairing well with `--fail-below` for tight regression
+tracking.
 
 ### LLM enrichment as a third scoring engine
 

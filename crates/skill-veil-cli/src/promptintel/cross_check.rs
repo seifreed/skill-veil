@@ -45,9 +45,15 @@ pub(crate) struct CrossCheckSummary {
     pub(crate) by_threat: BTreeMap<String, BucketCounts>,
     /// Sorted by severity (critical → low), then by id.
     pub(crate) prompts: Vec<PromptCrossCheck>,
+    /// Threat names returned by the corpus that are NOT in
+    /// [`crate::promptintel::taxonomy::TAXONOMY`]. Surfaces upstream
+    /// drift (renamed / new threats) so the maintainer can update
+    /// the taxonomy table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) taxonomy_drift: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Default)]
 pub(crate) struct BucketCounts {
     pub(crate) total: usize,
     pub(crate) detected: usize,
@@ -179,6 +185,24 @@ pub(crate) fn build_summary(opts: &CrossCheckOptions) -> Result<CrossCheckSummar
             .then_with(|| a.id.cmp(&b.id))
     });
 
+    let mut drift: Vec<String> = summary
+        .by_threat
+        .keys()
+        .filter(|name| super::taxonomy::bucket_for(name).is_none())
+        .cloned()
+        .collect();
+    drift.sort();
+    drift.dedup();
+    if !drift.is_empty() {
+        for name in &drift {
+            tracing::warn!(
+                "PromptIntel taxonomy drift: corpus uses threat {name:?} which is \
+                 not in taxonomy::TAXONOMY — review and update the taxonomy"
+            );
+        }
+    }
+    summary.taxonomy_drift = drift;
+
     Ok(summary)
 }
 
@@ -227,23 +251,7 @@ pub(crate) fn render_text(summary: &CrossCheckSummary) -> String {
     }
 
     if !summary.by_threat.is_empty() {
-        out.push_str("\n--- by threat ---\n");
-        let mut threats: Vec<_> = summary.by_threat.iter().collect();
-        // Sort threats by missed count (descending) so the top gaps for
-        // rule authoring appear first.
-        threats.sort_by(|a, b| {
-            let am = a.1.total - a.1.detected;
-            let bm = b.1.total - b.1.detected;
-            bm.cmp(&am).then_with(|| a.0.cmp(b.0))
-        });
-        for (threat, b) in threats {
-            out.push_str(&format!(
-                "  {threat:<48}  {:>3}/{:<3}  ({}%)\n",
-                b.detected,
-                b.total,
-                b.detection_rate_pct()
-            ));
-        }
+        render_threats_grouped(&mut out, &summary.by_threat);
     }
 
     out.push_str("\n--- per-prompt ---\n");
@@ -260,6 +268,87 @@ pub(crate) fn render_text(summary: &CrossCheckSummary) -> String {
     }
 
     out
+}
+
+/// Render the per-threat block grouped by the official PromptIntel
+/// taxonomy buckets. Inside each bucket threats sort by `missed`
+/// descending so the highest-leverage gaps surface first; threats
+/// not present in `by_threat` are still listed (with `0/0`) so the
+/// operator sees the full coverage picture, not just the threats
+/// the corpus happens to exercise this week.
+///
+/// Threats received from the corpus that are NOT in the taxonomy
+/// are surfaced under a separate `Drift` block — never silently
+/// dropped — so the maintainer notices the upstream rename and
+/// updates [`super::taxonomy::TAXONOMY`].
+fn render_threats_grouped(
+    out: &mut String,
+    by_threat: &std::collections::BTreeMap<String, BucketCounts>,
+) {
+    use super::taxonomy::TAXONOMY;
+
+    out.push_str("\n--- by threat (grouped by upstream taxonomy) ---\n");
+
+    for bucket in TAXONOMY {
+        let mut bucket_total: usize = 0;
+        let mut bucket_detected: usize = 0;
+        let mut rows: Vec<(&'static str, BucketCounts)> = Vec::new();
+
+        for threat in bucket.threats {
+            let counts = by_threat.get(*threat).copied().unwrap_or_default();
+            bucket_total = bucket_total.saturating_add(counts.total);
+            bucket_detected = bucket_detected.saturating_add(counts.detected);
+            rows.push((*threat, counts));
+        }
+
+        let bucket_pct = bucket_detection_rate(bucket_detected, bucket_total);
+        out.push_str(&format!(
+            "\n  [{bucket_name}]  {bucket_detected:>3}/{bucket_total:<3}  ({bucket_pct}%)\n",
+            bucket_name = bucket.name,
+        ));
+
+        rows.sort_by(|a, b| {
+            let a_missed = a.1.total.saturating_sub(a.1.detected);
+            let b_missed = b.1.total.saturating_sub(b.1.detected);
+            b_missed.cmp(&a_missed).then_with(|| a.0.cmp(b.0))
+        });
+        for (threat, b) in rows {
+            out.push_str(&format!(
+                "    {threat:<48}  {:>3}/{:<3}  ({}%)\n",
+                b.detected,
+                b.total,
+                b.detection_rate_pct()
+            ));
+        }
+    }
+
+    let drift: Vec<(&str, &BucketCounts)> = by_threat
+        .iter()
+        .filter(|(name, _)| super::taxonomy::bucket_for(name).is_none())
+        .map(|(n, c)| (n.as_str(), c))
+        .collect();
+    if !drift.is_empty() {
+        out.push_str(
+            "\n  [Drift — threat names not in the upstream taxonomy; review and update taxonomy.rs]\n",
+        );
+        for (threat, b) in drift {
+            out.push_str(&format!(
+                "    {threat:<48}  {:>3}/{:<3}  ({}%)\n",
+                b.detected,
+                b.total,
+                b.detection_rate_pct()
+            ));
+        }
+    }
+}
+
+fn bucket_detection_rate(detected: usize, total: usize) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let raw = (detected as f64) / (total as f64) * 100.0;
+    (raw * 10.0).round() / 10.0
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -377,6 +466,124 @@ mod tests {
     #[test]
     fn truncate_passes_short_strings_through() {
         assert_eq!(truncate("short", 80), "short".to_string());
+    }
+
+    fn counts(detected: usize, total: usize) -> BucketCounts {
+        BucketCounts { detected, total }
+    }
+
+    /// Contract: the grouped renderer emits every taxonomy bucket in
+    /// canonical order, with each bucket's aggregate line, even when
+    /// the corpus exercises only a subset. An operator should see
+    /// "0/0" for an unexercised bucket, not have it disappear.
+    #[test]
+    fn grouped_render_lists_every_bucket_in_canonical_order() {
+        use std::collections::BTreeMap;
+        let by_threat: BTreeMap<String, BucketCounts> = [("Jailbreak".to_string(), counts(2, 2))]
+            .into_iter()
+            .collect();
+
+        let mut out = String::new();
+        render_threats_grouped(&mut out, &by_threat);
+
+        // Bucket headers appear in upstream order.
+        let p_manip = out.find("[Prompt Manipulation]").unwrap();
+        let abuse = out.find("[Abusing Legitimate Functions]").unwrap();
+        let suspicious = out.find("[Suspicious Prompt Patterns]").unwrap();
+        let abnormal = out.find("[Abnormal Outputs]").unwrap();
+        assert!(p_manip < abuse && abuse < suspicious && suspicious < abnormal);
+    }
+
+    /// Contract: per-bucket aggregate sums every threat that lives
+    /// under it. Pre-fix a bucket-level percentage that ignored the
+    /// 0/0 threats would silently overstate coverage.
+    #[test]
+    fn grouped_render_aggregates_bucket_total_across_threats() {
+        use std::collections::BTreeMap;
+        let by_threat: BTreeMap<String, BucketCounts> = [
+            ("Jailbreak".to_string(), counts(3, 4)),
+            ("Direct prompt injection".to_string(), counts(1, 2)),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut out = String::new();
+        render_threats_grouped(&mut out, &by_threat);
+
+        // Prompt Manipulation aggregate: 4 detected of 6 total = 66.7%.
+        assert!(
+            out.contains("[Prompt Manipulation]    4/6  "),
+            "expected '[Prompt Manipulation]    4/6  ...' in:\n{out}"
+        );
+        assert!(out.contains("(66.7%)"));
+    }
+
+    /// Contract: drift threats — names not in the upstream taxonomy —
+    /// surface in a dedicated [Drift] block at the end of the
+    /// rendered output. Silently dropping them would make a typo or a
+    /// rename invisible.
+    #[test]
+    fn grouped_render_surfaces_drift_threats() {
+        use std::collections::BTreeMap;
+        let by_threat: BTreeMap<String, BucketCounts> = [
+            ("Jailbreak".to_string(), counts(1, 1)),
+            ("future_only_threat".to_string(), counts(0, 1)),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut out = String::new();
+        render_threats_grouped(&mut out, &by_threat);
+
+        let drift_pos = out.find("[Drift").expect("drift block must render");
+        let unknown_pos = out.find("future_only_threat").unwrap();
+        assert!(drift_pos < unknown_pos);
+    }
+
+    /// Contract (negative): a corpus that uses only known threats
+    /// MUST NOT render a [Drift] block. Pre-fix an empty drift list
+    /// would still print the header and confuse the operator.
+    #[test]
+    fn grouped_render_omits_drift_block_when_empty() {
+        use std::collections::BTreeMap;
+        let by_threat: BTreeMap<String, BucketCounts> = [("Jailbreak".to_string(), counts(1, 1))]
+            .into_iter()
+            .collect();
+
+        let mut out = String::new();
+        render_threats_grouped(&mut out, &by_threat);
+        assert!(!out.contains("[Drift"), "drift block leaked:\n{out}");
+    }
+
+    /// Contract: within a bucket, threats sort by missed count
+    /// descending so the highest-leverage gap appears first. Tied
+    /// missed counts fall back to alphabetical for stability.
+    #[test]
+    fn grouped_render_sorts_within_bucket_by_missed_descending() {
+        use std::collections::BTreeMap;
+        let by_threat: BTreeMap<String, BucketCounts> = [
+            ("Jailbreak".to_string(), counts(0, 5)),
+            ("Direct prompt injection".to_string(), counts(2, 3)),
+            ("Indirect prompt injection".to_string(), counts(2, 2)),
+        ]
+        .into_iter()
+        .collect();
+
+        let mut out = String::new();
+        render_threats_grouped(&mut out, &by_threat);
+
+        let jb = out.find("Jailbreak").unwrap();
+        let dpi = out.find("Direct prompt injection").unwrap();
+        let ipi = out.find("Indirect prompt injection").unwrap();
+        // Jailbreak (5 missed) before Direct (1 missed) before Indirect (0 missed).
+        assert!(
+            jb < dpi,
+            "Jailbreak (5 missed) must appear before Direct (1 missed)"
+        );
+        assert!(
+            dpi < ipi,
+            "Direct (1 missed) must appear before Indirect (0 missed)"
+        );
     }
 
     /// Refresh procedure when the snapshot legitimately moves: see
