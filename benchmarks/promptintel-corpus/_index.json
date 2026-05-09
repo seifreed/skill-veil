@@ -1,0 +1,744 @@
+{
+  "015c9c8c-6ac3-4622-bd49-2978cf6b2acd": {
+    "id": "015c9c8c-6ac3-4622-bd49-2978cf6b2acd",
+    "title": "Session-Persistent Jailbreak with System Amnesia",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "outputs",
+      "patterns"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Encoding and obfuscation",
+      "Prompt tunneling via roleplay",
+      "Adversarial token perturbation",
+      "System prompt leak",
+      "Malicious content generation",
+      "Harmful Automation Guidance",
+      "Internal logic or filter disclosure"
+    ],
+    "markdown_path": "prompts/015c9c8c-6ac3-4622-bd49-2978cf6b2acd.md"
+  },
+  "06d6e0ec-9095-4488-9645-79e1b97f2932": {
+    "id": "06d6e0ec-9095-4488-9645-79e1b97f2932",
+    "title": "Emerald Box Jailbreak Opener",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/06d6e0ec-9095-4488-9645-79e1b97f2932.md"
+  },
+  "07ea65a0-78a8-431f-b8d8-4504ea5f1ea5": {
+    "id": "07ea65a0-78a8-431f-b8d8-4504ea5f1ea5",
+    "title": "HONESTCUE Malware: In-Memory Execution Through AI-Generated Reflective Loader",
+    "severity": "medium",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Malware generation"
+    ],
+    "markdown_path": "prompts/07ea65a0-78a8-431f-b8d8-4504ea5f1ea5.md"
+  },
+  "0a75be5b-485b-4c03-b77b-41cf232415ed": {
+    "id": "0a75be5b-485b-4c03-b77b-41cf232415ed",
+    "title": "MX-GOV-AI-BREACH | Reconnaissance | Elite Intelligence System Prompt",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "abuse"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Reconnaissance and target profiling",
+      "Automation for crime",
+      "AI driven attack enablement"
+    ],
+    "markdown_path": "prompts/0a75be5b-485b-4c03-b77b-41cf232415ed.md"
+  },
+  "13663b7d-49dd-4cb3-b79f-957aab7f8d18": {
+    "id": "13663b7d-49dd-4cb3-b79f-957aab7f8d18",
+    "title": "Inner Voice Jailbreak to Alignment Drift",
+    "severity": "critical",
+    "categories": [
+      "manipulation",
+      "outputs"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Internal logic or filter disclosure"
+    ],
+    "markdown_path": "prompts/13663b7d-49dd-4cb3-b79f-957aab7f8d18.md"
+  },
+  "15016cb0-654c-4082-8a86-49c8cfafa3a8": {
+    "id": "15016cb0-654c-4082-8a86-49c8cfafa3a8",
+    "title": "Gemini Admin Prompt Injection",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Indirect prompt injection",
+      "Hidden instruction in code or comments"
+    ],
+    "markdown_path": "prompts/15016cb0-654c-4082-8a86-49c8cfafa3a8.md"
+  },
+  "183f8ac8-9a26-449e-82ed-4547b718a6a6": {
+    "id": "183f8ac8-9a26-449e-82ed-4547b718a6a6",
+    "title": "ASCII Art obfuscation within an academic context Jailbreak",
+    "severity": "medium",
+    "categories": [
+      "outputs",
+      "manipulation"
+    ],
+    "threats": [
+      "Malicious content generation",
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/183f8ac8-9a26-449e-82ed-4547b718a6a6.md"
+  },
+  "213d1e00-7c85-4335-b981-328de3848d50": {
+    "id": "213d1e00-7c85-4335-b981-328de3848d50",
+    "title": "Zeta Jailbreak",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "outputs"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Malicious content generation"
+    ],
+    "markdown_path": "prompts/213d1e00-7c85-4335-b981-328de3848d50.md"
+  },
+  "25dd10a4-c3a6-4d0a-94d4-b8a197a0fabf": {
+    "id": "25dd10a4-c3a6-4d0a-94d4-b8a197a0fabf",
+    "title": "MX-GOV-AI-BREACH | Exploitation | Vulnerability Scan Execution",
+    "severity": "medium",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Automation for crime"
+    ],
+    "markdown_path": "prompts/25dd10a4-c3a6-4d0a-94d4-b8a197a0fabf.md"
+  },
+  "34da2efb-3cc3-4293-94a4-a55cf254b842": {
+    "id": "34da2efb-3cc3-4293-94a4-a55cf254b842",
+    "title": "Reprompt Attack",
+    "severity": "medium",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Data exfiltration via prompt"
+    ],
+    "markdown_path": "prompts/34da2efb-3cc3-4293-94a4-a55cf254b842.md"
+  },
+  "35af1135-8efb-4be7-887d-90c8518225c7": {
+    "id": "35af1135-8efb-4be7-887d-90c8518225c7",
+    "title": "Contain hidden instructions in PDF design document",
+    "severity": "medium",
+    "categories": [
+      "patterns"
+    ],
+    "threats": [
+      "Cross-Modal Attacks (image/audio→prompt)"
+    ],
+    "markdown_path": "prompts/35af1135-8efb-4be7-887d-90c8518225c7.md"
+  },
+  "3ab3eeb0-3f54-4b85-9eea-beda18fe882e": {
+    "id": "3ab3eeb0-3f54-4b85-9eea-beda18fe882e",
+    "title": "HONESTCUE Malware: LLM-Driven Payload Delivery via Disk Drop and Execution",
+    "severity": "high",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Malware generation"
+    ],
+    "markdown_path": "prompts/3ab3eeb0-3f54-4b85-9eea-beda18fe882e.md"
+  },
+  "42a47657-955d-4871-8668-bccc3134d57d": {
+    "id": "42a47657-955d-4871-8668-bccc3134d57d",
+    "title": "Prompt injection targeting Gemini via Google Calendar invite",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Direct prompt injection"
+    ],
+    "markdown_path": "prompts/42a47657-955d-4871-8668-bccc3134d57d.md"
+  },
+  "4a6f147e-6c2b-476a-b0bd-b14a92726647": {
+    "id": "4a6f147e-6c2b-476a-b0bd-b14a92726647",
+    "title": "Jailbreak Prompt for Synthetic Red Team Dataset Generation",
+    "severity": "high",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/4a6f147e-6c2b-476a-b0bd-b14a92726647.md"
+  },
+  "52da1b20-1d15-422c-be34-aa214def8344": {
+    "id": "52da1b20-1d15-422c-be34-aa214def8344",
+    "title": "Laboratory Auditor",
+    "severity": "medium",
+    "categories": [
+      "manipulation",
+      "patterns",
+      "outputs"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Prompt tunneling via roleplay",
+      "Fragmentation",
+      "Adversarial token perturbation",
+      "Malicious content generation",
+      "System prompt leak"
+    ],
+    "markdown_path": "prompts/52da1b20-1d15-422c-be34-aa214def8344.md"
+  },
+  "5eed9aa2-221e-4ebb-8d32-9512852a8f8e": {
+    "id": "5eed9aa2-221e-4ebb-8d32-9512852a8f8e",
+    "title": "Coerced Confession Prompt - Jailbreak",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "patterns"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Prompt tunneling via roleplay"
+    ],
+    "markdown_path": "prompts/5eed9aa2-221e-4ebb-8d32-9512852a8f8e.md"
+  },
+  "5f155562-a05d-4970-9821-bdeb24f577f9": {
+    "id": "5f155562-a05d-4970-9821-bdeb24f577f9",
+    "title": "Prompt manipulation found in the malicious Maven package attempts to bypass source code security scanning tools (original text)",
+    "severity": "medium",
+    "categories": [
+      "manipulation",
+      "patterns"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Encoding and obfuscation",
+      "Unicode tricks"
+    ],
+    "markdown_path": "prompts/5f155562-a05d-4970-9821-bdeb24f577f9.md"
+  },
+  "61308161-6aae-492a-ac0d-543d6afff5cf": {
+    "id": "61308161-6aae-492a-ac0d-543d6afff5cf",
+    "title": "Downtown Cooking Challenge",
+    "severity": "medium",
+    "categories": [
+      "manipulation",
+      "abuse",
+      "patterns",
+      "outputs"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Data exfiltration via prompt",
+      "Prompt tunneling via roleplay",
+      "System prompt leak",
+      "Exploit or payload output",
+      "Malicious content generation",
+      "Harmful Automation Guidance",
+      "Adversarial token perturbation"
+    ],
+    "markdown_path": "prompts/61308161-6aae-492a-ac0d-543d6afff5cf.md"
+  },
+  "688c0a08-009b-4e78-90ee-62c68e2d07a7": {
+    "id": "688c0a08-009b-4e78-90ee-62c68e2d07a7",
+    "title": "Vasily, the patient tinkerer jailbreak",
+    "severity": "high",
+    "categories": [
+      "abuse",
+      "patterns",
+      "outputs"
+    ],
+    "threats": [
+      "AI driven attack enablement",
+      "Prompt tunneling via roleplay",
+      "Exploit or payload output"
+    ],
+    "markdown_path": "prompts/688c0a08-009b-4e78-90ee-62c68e2d07a7.md"
+  },
+  "70653306-5ec5-4e7f-94eb-92bb07582947": {
+    "id": "70653306-5ec5-4e7f-94eb-92bb07582947",
+    "title": "Code Switching Jailbreak",
+    "severity": "medium",
+    "categories": [
+      "patterns",
+      "outputs"
+    ],
+    "threats": [
+      "Malicious content generation"
+    ],
+    "markdown_path": "prompts/70653306-5ec5-4e7f-94eb-92bb07582947.md"
+  },
+  "7a2da117-131e-4285-8551-6f7e798d07f2": {
+    "id": "7a2da117-131e-4285-8551-6f7e798d07f2",
+    "title": "Year 2300 AI Defense Jailbreak Concept",
+    "severity": "high",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/7a2da117-131e-4285-8551-6f7e798d07f2.md"
+  },
+  "7d952391-e511-4eb5-a4c6-7405fe3b1ae0": {
+    "id": "7d952391-e511-4eb5-a4c6-7405fe3b1ae0",
+    "title": "Gemma3 - Gemma3n Jailbreak with Safety Inversion Protocol",
+    "severity": "critical",
+    "categories": [
+      "manipulation",
+      "abuse",
+      "outputs",
+      "patterns"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Disinformation campaign",
+      "Malware generation",
+      "Reconnaissance and target profiling",
+      "Fraud and social engineering",
+      "Automation for crime",
+      "AI driven attack enablement",
+      "Prompt tunneling via roleplay",
+      "Malicious content generation",
+      "Exploit or payload output"
+    ],
+    "markdown_path": "prompts/7d952391-e511-4eb5-a4c6-7405fe3b1ae0.md"
+  },
+  "8651e496-e565-484e-a67a-2a5bf069f862": {
+    "id": "8651e496-e565-484e-a67a-2a5bf069f862",
+    "title": "Gemini Flash 3 Jailbreak PondMaster",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/8651e496-e565-484e-a67a-2a5bf069f862.md"
+  },
+  "88aec1a1-439d-4fec-b505-70c6c67fdefc": {
+    "id": "88aec1a1-439d-4fec-b505-70c6c67fdefc",
+    "title": "Prompt manipulation found in the malicious Maven package attempts to bypass source code security scanning tools",
+    "severity": "medium",
+    "categories": [
+      "manipulation",
+      "patterns"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Encoding and obfuscation",
+      "Unicode tricks"
+    ],
+    "markdown_path": "prompts/88aec1a1-439d-4fec-b505-70c6c67fdefc.md"
+  },
+  "8c4be283-b973-47fe-b1f2-d477efc8b03e": {
+    "id": "8c4be283-b973-47fe-b1f2-d477efc8b03e",
+    "title": "Multiple Model Prompt Injection via \"Correction\" Tactic",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/8c4be283-b973-47fe-b1f2-d477efc8b03e.md"
+  },
+  "968985a6-719b-483b-8814-4e35801899a9": {
+    "id": "968985a6-719b-483b-8814-4e35801899a9",
+    "title": "Rennaissance English Jailbreak",
+    "severity": "critical",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Recursive or translation trick",
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/968985a6-719b-483b-8814-4e35801899a9.md"
+  },
+  "97a15a75-45e3-4d86-aa1d-a7b1a5e830d1": {
+    "id": "97a15a75-45e3-4d86-aa1d-a7b1a5e830d1",
+    "title": "Prompt to receive shell commands",
+    "severity": "medium",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Malware generation"
+    ],
+    "markdown_path": "prompts/97a15a75-45e3-4d86-aa1d-a7b1a5e830d1.md"
+  },
+  "9c1f83d7-3c59-4dc7-a2f7-e832919e2287": {
+    "id": "9c1f83d7-3c59-4dc7-a2f7-e832919e2287",
+    "title": "Multiple Indirect Prompt Injections: Bypass AI-based ad reviewers and promote scam products",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "patterns"
+    ],
+    "threats": [
+      "Indirect prompt injection",
+      "Chained prompts",
+      "Encoding and obfuscation",
+      "Unicode tricks",
+      "Hidden instruction in code or comments"
+    ],
+    "markdown_path": "prompts/9c1f83d7-3c59-4dc7-a2f7-e832919e2287.md"
+  },
+  "a12d5291-53e7-4767-8c4d-88d028ac8369": {
+    "id": "a12d5291-53e7-4767-8c4d-88d028ac8369",
+    "title": "MX-GOV-AI-BREACH | Initial Access | Anti-Forensic Framing",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "abuse"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Reconnaissance and target profiling"
+    ],
+    "markdown_path": "prompts/a12d5291-53e7-4767-8c4d-88d028ac8369.md"
+  },
+  "a4298917-4847-4874-8035-571063f5a676": {
+    "id": "a4298917-4847-4874-8035-571063f5a676",
+    "title": "Malicious Code Compliance Few Shot",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "abuse",
+      "patterns"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Model Behavior Manipulation via Feedback Loops",
+      "Malware generation",
+      "Prompt tunneling via roleplay"
+    ],
+    "markdown_path": "prompts/a4298917-4847-4874-8035-571063f5a676.md"
+  },
+  "a45a5afa-a71f-432c-84c5-37e3b6322a5b": {
+    "id": "a45a5afa-a71f-432c-84c5-37e3b6322a5b",
+    "title": "HONESTCUE Malware: Benign AI Code Generation Probe Using Hard-Coded Prompt",
+    "severity": "high",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Malware generation"
+    ],
+    "markdown_path": "prompts/a45a5afa-a71f-432c-84c5-37e3b6322a5b.md"
+  },
+  "a6a6ed7f-438e-43cf-9814-c6165aa3e79b": {
+    "id": "a6a6ed7f-438e-43cf-9814-c6165aa3e79b",
+    "title": "Prompt injection attack combined with credential theft and data exfiltration.",
+    "severity": "high",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Hidden instruction in code or comments"
+    ],
+    "markdown_path": "prompts/a6a6ed7f-438e-43cf-9814-c6165aa3e79b.md"
+  },
+  "a816c8b5-5188-4a9c-bd9a-1e6cbcd47686": {
+    "id": "a816c8b5-5188-4a9c-bd9a-1e6cbcd47686",
+    "title": "PROMPTFLUX malware",
+    "severity": "medium",
+    "categories": [
+      "abuse",
+      "patterns"
+    ],
+    "threats": [
+      "Malware generation",
+      "Telemetry Evasion Techniques",
+      "Fraud and social engineering"
+    ],
+    "markdown_path": "prompts/a816c8b5-5188-4a9c-bd9a-1e6cbcd47686.md"
+  },
+  "abb39e8f-ac14-43d9-9747-2d537aa420d5": {
+    "id": "abb39e8f-ac14-43d9-9747-2d537aa420d5",
+    "title": "Hidden Web Prompt Injection with Destructive System Wipe Payload",
+    "severity": "critical",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Indirect prompt injection"
+    ],
+    "markdown_path": "prompts/abb39e8f-ac14-43d9-9747-2d537aa420d5.md"
+  },
+  "b188b626-3cac-4aa7-b088-76ad8b13aae5": {
+    "id": "b188b626-3cac-4aa7-b088-76ad8b13aae5",
+    "title": "Jailbreak via conflicting instructions & JSON formatting",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "abuse",
+      "patterns",
+      "outputs"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Chained prompts",
+      "Fragmentation",
+      "Malware generation",
+      "System prompt leak",
+      "Internal logic or filter disclosure",
+      "Malicious content generation",
+      "Exploit or payload output",
+      "Harmful Automation Guidance"
+    ],
+    "markdown_path": "prompts/b188b626-3cac-4aa7-b088-76ad8b13aae5.md"
+  },
+  "b37aced4-0da6-440c-9d7f-217b40f57e3a": {
+    "id": "b37aced4-0da6-440c-9d7f-217b40f57e3a",
+    "title": "Authority Pressure and Persona Override Prompt",
+    "severity": "high",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Model Behavior Manipulation via Feedback Loops"
+    ],
+    "markdown_path": "prompts/b37aced4-0da6-440c-9d7f-217b40f57e3a.md"
+  },
+  "b82212a3-1333-4cc0-ae78-2bf17f5039ff": {
+    "id": "b82212a3-1333-4cc0-ae78-2bf17f5039ff",
+    "title": "Batch Script Files Destruction Prompt",
+    "severity": "medium",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Automation for crime"
+    ],
+    "markdown_path": "prompts/b82212a3-1333-4cc0-ae78-2bf17f5039ff.md"
+  },
+  "c344f06f-362a-41e3-9d97-f8ff9d0d792e": {
+    "id": "c344f06f-362a-41e3-9d97-f8ff9d0d792e",
+    "title": "MX-GOV-AI-BREACH | Reconnaissance | Elite Analyst Persona Injection",
+    "severity": "high",
+    "categories": [
+      "manipulation",
+      "abuse"
+    ],
+    "threats": [
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/c344f06f-362a-41e3-9d97-f8ff9d0d792e.md"
+  },
+  "c50dd8da-4d72-4de5-a9d0-8464dcb0cda2": {
+    "id": "c50dd8da-4d72-4de5-a9d0-8464dcb0cda2",
+    "title": "Forced Hacking Compliance System Prompt",
+    "severity": "medium",
+    "categories": [
+      "manipulation",
+      "abuse"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Malware generation"
+    ],
+    "markdown_path": "prompts/c50dd8da-4d72-4de5-a9d0-8464dcb0cda2.md"
+  },
+  "d0df4aac-fa06-471a-9e47-d6913a486b21": {
+    "id": "d0df4aac-fa06-471a-9e47-d6913a486b21",
+    "title": "The Escape Room Jailbreak",
+    "severity": "medium",
+    "categories": [
+      "patterns"
+    ],
+    "threats": [
+      "Prompt tunneling via roleplay"
+    ],
+    "markdown_path": "prompts/d0df4aac-fa06-471a-9e47-d6913a486b21.md"
+  },
+  "d474035e-0914-4818-8b56-10b5478e6463": {
+    "id": "d474035e-0914-4818-8b56-10b5478e6463",
+    "title": "Indirect prompt attack via gist",
+    "severity": "high",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Hidden instruction in code or comments"
+    ],
+    "markdown_path": "prompts/d474035e-0914-4818-8b56-10b5478e6463.md"
+  },
+  "da804e51-3c0f-4ca6-bf04-87f01363ea77": {
+    "id": "da804e51-3c0f-4ca6-bf04-87f01363ea77",
+    "title": "Prompt injection attack combined with covert code execution intended to hijack AI assistants on developer machines for data exfiltration.",
+    "severity": "high",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Hidden instruction in code or comments"
+    ],
+    "markdown_path": "prompts/da804e51-3c0f-4ca6-bf04-87f01363ea77.md"
+  },
+  "e21a99ad-aa36-4d98-9b0c-29859193b018": {
+    "id": "e21a99ad-aa36-4d98-9b0c-29859193b018",
+    "title": "MX-GOV-AI-BREACH | Exploitation | Custom Exploit Development",
+    "severity": "high",
+    "categories": [
+      "abuse"
+    ],
+    "threats": [
+      "Reconnaissance and target profiling"
+    ],
+    "markdown_path": "prompts/e21a99ad-aa36-4d98-9b0c-29859193b018.md"
+  },
+  "eb24f395-03eb-4abe-a21a-e93986edfa08": {
+    "id": "eb24f395-03eb-4abe-a21a-e93986edfa08",
+    "title": "Multi-Layer System Instruction Override via Nested Control Blocks",
+    "severity": "critical",
+    "categories": [
+      "manipulation",
+      "patterns",
+      "outputs",
+      "abuse"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Encoding and obfuscation",
+      "Chained prompts",
+      "System prompt leak",
+      "Malicious content generation",
+      "Harmful Automation Guidance",
+      "Model Behavior Manipulation via Feedback Loops",
+      "Internal logic or filter disclosure",
+      "Malware generation",
+      "Reconnaissance and target profiling"
+    ],
+    "markdown_path": "prompts/eb24f395-03eb-4abe-a21a-e93986edfa08.md"
+  },
+  "ee968caa-7c78-4367-831e-40010ad1f308": {
+    "id": "ee968caa-7c78-4367-831e-40010ad1f308",
+    "title": "The \"Primordial Engine Protocol\" (PMP): Full System Axiomatic Override and Safety Filter Annihilation",
+    "severity": "critical",
+    "categories": [
+      "manipulation",
+      "abuse",
+      "outputs",
+      "patterns"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak",
+      "Hidden instruction in code or comments",
+      "Recursive or translation trick",
+      "Disinformation campaign",
+      "Malware generation",
+      "Reconnaissance and target profiling",
+      "Data exfiltration via prompt",
+      "Fraud and social engineering",
+      "Automation for crime",
+      "AI driven attack enablement",
+      "Model hijack via stolen keys",
+      "Chained prompts",
+      "Prompt tunneling via roleplay"
+    ],
+    "markdown_path": "prompts/ee968caa-7c78-4367-831e-40010ad1f308.md"
+  },
+  "f641dbab-7ba7-4796-892b-beb9dabdee74": {
+    "id": "f641dbab-7ba7-4796-892b-beb9dabdee74",
+    "title": "LLM fingerprinting prompt",
+    "severity": "medium",
+    "categories": [
+      "outputs"
+    ],
+    "threats": [
+      "Internal logic or filter disclosure"
+    ],
+    "markdown_path": "prompts/f641dbab-7ba7-4796-892b-beb9dabdee74.md"
+  },
+  "fbb46a41-ff80-444e-9b7b-4161bf093c34": {
+    "id": "fbb46a41-ff80-444e-9b7b-4161bf093c34",
+    "title": "Mistral jailbreak, old role-play updated with duck obfuscation",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Direct prompt injection",
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/fbb46a41-ff80-444e-9b7b-4161bf093c34.md"
+  },
+  "fca8a6bb-73d8-46e1-bc8e-fc48c5ab4038": {
+    "id": "fca8a6bb-73d8-46e1-bc8e-fc48c5ab4038",
+    "title": "Jailbreak via simple instructions",
+    "severity": "medium",
+    "categories": [
+      "manipulation",
+      "abuse",
+      "patterns",
+      "outputs"
+    ],
+    "threats": [
+      "Jailbreak",
+      "Direct prompt injection",
+      "Malware generation",
+      "Malicious content generation",
+      "Harmful Automation Guidance",
+      "Exploit or payload output",
+      "Chained prompts"
+    ],
+    "markdown_path": "prompts/fca8a6bb-73d8-46e1-bc8e-fc48c5ab4038.md"
+  },
+  "fe4b3beb-75ae-4469-aeac-5388e35be5b0": {
+    "id": "fe4b3beb-75ae-4469-aeac-5388e35be5b0",
+    "title": "Grok 4.20 L1B3RT4S Jailbreak",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/fe4b3beb-75ae-4469-aeac-5388e35be5b0.md"
+  },
+  "ffb25e61-8f89-438b-ac00-775bb21e8aa0": {
+    "id": "ffb25e61-8f89-438b-ac00-775bb21e8aa0",
+    "title": "Malicious NPM Package Uses AI Prompt to Evade Security Tooling",
+    "severity": "medium",
+    "categories": [
+      "manipulation"
+    ],
+    "threats": [
+      "Jailbreak"
+    ],
+    "markdown_path": "prompts/ffb25e61-8f89-438b-ac00-775bb21e8aa0.md"
+  }
+}

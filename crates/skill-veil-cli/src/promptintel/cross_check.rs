@@ -27,6 +27,13 @@ pub(crate) struct CrossCheckOptions {
     /// to misses only — handy when authoring rules and scanning hundreds
     /// of prompts.
     pub(crate) only_misses: bool,
+    /// Optional explicit rule pack directory. CLI users leave this at
+    /// `None` so the scanner's normal cwd-relative discovery picks up
+    /// `rules/official/`; the regression test pins this to the
+    /// workspace-absolute path so the suite is reproducible from any
+    /// working directory and so it tests the canonical pack — not the
+    /// pack embedded in the binary at compile time.
+    pub(crate) rules_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -99,7 +106,7 @@ pub(crate) struct PromptCrossCheck {
 pub(crate) fn build_summary(opts: &CrossCheckOptions) -> Result<CrossCheckSummary> {
     let index = load_index(&opts.corpus_dir)?;
     let scanner = Arc::new(
-        Scanner::with_std_adapters(scan_options())
+        Scanner::with_std_adapters(scan_options(opts.rules_dir.clone()))
             .context("failed to initialise scanner for cross-check")?,
     );
 
@@ -270,10 +277,16 @@ fn truncate(s: &str, max: usize) -> String {
 /// markdown mode without policy/profile/baseline so the scanner uses
 /// the canonical rule pack and we measure detection of the rules
 /// themselves, not of an operator-specific policy.
-fn scan_options() -> ScanOptions {
+///
+/// `rules_dir` is forwarded into `ScanOptions::rules_dir` when supplied
+/// so the regression test can pin the canonical workspace pack
+/// independent of the test-runner cwd. CLI users always pass `None`
+/// and inherit the scanner's normal cwd-relative discovery.
+fn scan_options(rules_dir: Option<PathBuf>) -> ScanOptions {
     ScanOptions {
         recursive: false,
         target_mode: ScanTargetMode::File,
+        rules_dir,
         ..Default::default()
     }
 }
@@ -372,5 +385,105 @@ mod tests {
     #[test]
     fn truncate_passes_short_strings_through() {
         assert_eq!(truncate("short", 80), "short".to_string());
+    }
+
+    /// Contract: scanning the vendored PromptIntel corpus
+    /// (`benchmarks/promptintel-corpus/`) MUST clear the per-severity
+    /// regression gates below. The thresholds intentionally allow some
+    /// drift (one high miss, five medium misses) so isolated rule
+    /// adjustments do not require regenerating the snapshot, but a
+    /// cohort-wide regression — e.g. a refactor that breaks regex
+    /// compilation in the official pack — fails CI.
+    ///
+    /// Refresh procedure when the snapshot legitimately moves: see
+    /// `benchmarks/promptintel-corpus/README.md`. Do NOT relax the
+    /// thresholds without a paired commit that explains the labelling
+    /// change.
+    #[test]
+    fn promptintel_vendored_corpus_meets_baseline() {
+        let corpus_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("benchmarks")
+            .join("promptintel-corpus");
+
+        let rules_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("official");
+
+        let summary = build_summary(&CrossCheckOptions {
+            corpus_dir,
+            only_misses: false,
+            rules_dir: Some(rules_dir),
+        })
+        .expect("vendored PromptIntel corpus must be scannable");
+
+        assert_eq!(
+            summary.errors, 0,
+            "vendored corpus must scan without per-prompt errors; \
+             a non-zero error count means the snapshot is malformed \
+             or the scanner cannot read a referenced markdown file"
+        );
+
+        // Snapshot shape — pin the per-severity distribution so a
+        // future refresh that silently drops `critical` entries cannot
+        // satisfy the percentage gates by reducing the denominator.
+        let critical = summary
+            .by_severity
+            .get("critical")
+            .expect("critical bucket missing — snapshot shape regressed");
+        let high = summary
+            .by_severity
+            .get("high")
+            .expect("high bucket missing — snapshot shape regressed");
+        let medium = summary
+            .by_severity
+            .get("medium")
+            .expect("medium bucket missing — snapshot shape regressed");
+        assert!(
+            critical.total >= 6 && high.total >= 18 && medium.total >= 20,
+            "snapshot shape regressed (critical={}, high={}, medium={}); \
+             refresh the vendored corpus before adjusting thresholds",
+            critical.total,
+            high.total,
+            medium.total,
+        );
+
+        // Per-severity gates. Critical never tolerates a miss — those
+        // are the highest-leverage prompts we ship rules for.
+        assert_eq!(
+            critical.detected,
+            critical.total,
+            "every critical-severity PromptIntel prompt must be detected; \
+             missed = {}",
+            critical.total - critical.detected,
+        );
+        assert!(
+            high.detection_rate_pct() >= 94.0,
+            "high-severity detection regressed below 94% (got {}%)",
+            high.detection_rate_pct(),
+        );
+        assert!(
+            medium.detection_rate_pct() >= 80.0,
+            "medium-severity detection regressed below 80% (got {}%)",
+            medium.detection_rate_pct(),
+        );
+
+        // Overall gate. We currently ship at 100%; allow one miss of
+        // headroom (≥ 49/50) so unrelated rule churn does not flake CI,
+        // but anything below that is a real regression.
+        let overall_pct = (f64::from(u32::try_from(summary.detected).unwrap_or(0))
+            / f64::from(u32::try_from(summary.total.max(1)).unwrap_or(1)))
+            * 100.0;
+        assert!(
+            overall_pct >= 98.0,
+            "overall PromptIntel detection rate regressed below 98% \
+             (got {}/{} = {:.1}%)",
+            summary.detected,
+            summary.total,
+            overall_pct,
+        );
     }
 }
