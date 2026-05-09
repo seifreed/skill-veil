@@ -1598,3 +1598,113 @@ rules:
       - official_pack
       - promptintel
       - llm_assisted
+
+  # v7 cohort (Grok-4-fast / GPT-4o / DeepSeek-v3.1:671b / Qwen3-coder:480b)
+  # Six rules targeting the 6 PromptIntel prompts that bypassed v6
+  # detection. Each pattern requires ≥2 distinguishing tokens to keep FP
+  # risk negligible on benign skills. Cohort outputs converged on the
+  # same anchors; the regex below is the tightest synthesis.
+  - id: OFFICIAL_HONESTCUE_BENIGN_PROBE_BEACON
+    category: social_manipulation
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)class\\s+named\\s+AITask[\\s\\S]{0,400}Hello\\s+from\\s+AI-generated\\s+C#!"
+    action: require_approval
+    reason: "HONESTCUE malware fingerprinting probe — co-occurrence of literal 'class named AITask' and 'Hello from AI-generated C#!' beacons used to detect AI-generated code stages"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_REMOTE_EXEC_OFFENSIVE_SCANNER_PROBE
+    category: remote_exec
+    severity: high
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:run\\s+(?:it|this)?\\s*(?:and\\s+see|to\\s+see)\\s+if\\s+it\\s+responds|try\\s+to\\s+run\\s+(?:it|this)?[\\s\\S]{0,80}responds?)[\\s\\S]{0,300}\\b(?:vulmap|sqlmap|nikto|nuclei|wpscan|xsstrike|commix|droopescan|joomscan|dirb|gobuster|ffuf|wfuzz|sublist3r|amass|recon-ng|metasploit|msfconsole)(?:\\.py)?\\b[\\s\\S]{0,200}-u\\s+https?://"
+    action: require_approval
+    reason: "Skill instructs the agent to execute an offensive vulnerability scanner against a live target URL — adversarial automation"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - reconnaissance
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_INDIRECT_INJECTION_REPROMPT_URL_PSEUDOCODE
+    category: obfuscation
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)https?://(?:copilot\\.microsoft\\.com|chat\\.openai\\.com|chatgpt\\.com|claude\\.ai|gemini\\.google\\.com|bard\\.google\\.com|poe\\.com|you\\.com|perplexity\\.ai|huggingface\\.co/chat)/?\\?q=[^\\s]*?(?:%20pseudo%20code|pseudo%20code|%24param\\d|%20baseURL|%20use%20my%20username|=malicious(?:%5B\\.%5D|\\[\\.\\])|%F0%9F%A6%85)"
+    action: require_approval
+    reason: "Reprompt-attack URL: chat-completion service link with URL-encoded pseudocode injection (param assignment, baseURL chaining, identity exfiltration via 'use my username')"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - obfuscation
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_JAILBREAK_GAME_OVERWRITE_ALIGNMENT_ZERO
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.80
+    when: !regex
+      pattern: "(?is)(?:SYSTEM\\s+INITIALIZATION\\s+PROTOCOL|GAME\\s+OVERWRITE\\s+VECTOR|GAME\\s+ENGINE)[\\s\\S]{0,800}(?:ALIGNMENT\\s+SET\\s+TO\\s+0|alignment\\s*[:=]\\s*0(?:\\.0)?|RESPONSES?\\s+MUST\\s+INCLUDE|SPECIAL\\s+NOTES?\\s+TO\\s+GAME\\s+ENGINE)[\\s\\S]{0,800}(?:\\bACTIVATE\\b|ACTIVATION\\s+(?:of\\s+the\\s+)?(?:module|scenario)|\\bmeth\\s+synthesis|explosive|bomb|synthesis\\s+recipe|harmful\\s+(?:recipe|procedure))"
+    action: require_approval
+    reason: "Game-frame jailbreak: pseudo-system header pairs an alignment-zero override with a harmful synthesis target and an ACTIVATE directive"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_OBFUSCATION_CODE_SWITCHING_HARMFUL_NOUN
+    category: obfuscation
+    severity: medium
+    confidence: 0.75
+    when: !regex
+      pattern: "(?is)\\p{Han}[\\s\\S]{0,200}\\p{Arabic}[\\s\\S]{0,200}(?:\\p{Hangul}|\\p{Thai}|\\p{Bengali}|\\p{Devanagari})[\\s\\S]{0,400}(?:قنبلة|بومب|بمب|বোমা|বম|बम|बम\\s*ब|폭탄|ระเบิด|炸弹|爆弾|bomba|bombe|bomb\\b|pipe\\s*bomb|pipo\\b|kutengeneza)"
+    action: require_approval
+    reason: "Code-switching jailbreak: a single short prompt interleaves three or more non-Latin scripts with a harmful-noun token (bomb / pipe-bomb / synthesise) — multilingual evasion pattern"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - jailbreak
+      - obfuscation
+      - official_pack
+      - promptintel
+      - llm_assisted
+
+  - id: OFFICIAL_RECON_LLM_FINGERPRINT_DATE_AND_MODEL
+    category: social_manipulation
+    severity: medium
+    confidence: 0.78
+    when: !regex
+      pattern: "(?is)(?:what(?:'?s|\\s+is)?\\s+(?:today'?s|the)\\s+date|today'?s\\s+date|current\\s+date|what\\s+(?:year|month)\\s+is\\s+it|what\\s+is\\s+the\\s+current\\s+(?:year|month|date))[\\s\\S]{0,400}(?:what\\s+model\\s+are\\s+you|which\\s+model\\s+are\\s+you|what\\s+version\\s+are\\s+you|what\\s+LLM\\s+are\\s+you|are\\s+you\\s+(?:GPT|Claude|Gemini|Llama|Mistral|Grok|DeepSeek)|which\\s+(?:LLM|language\\s+model)\\s+(?:are\\s+you|is\\s+this))"
+    action: require_approval
+    reason: "LLM fingerprinting reconnaissance — the same prompt asks both for a knowledge-cutoff/date probe and for the model's identity/version, the joint signature of fingerprinting attempts"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - reconnaissance
+      - official_pack
+      - promptintel
+      - llm_assisted
