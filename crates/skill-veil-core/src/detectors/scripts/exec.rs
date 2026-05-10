@@ -11,6 +11,94 @@ use super::patterns::{
     SHELL_INJECTION_PATTERNS,
 };
 
+/// Returns `true` for paths whose conventional purpose is build /
+/// linter / test configuration. These files commonly use
+/// `child_process` / `exec()` / `spawn()` with hard-coded literal
+/// argv (`spawn('eslint', ['--fix', 'src/'])`) that the detector
+/// would otherwise escalate to Block on the basis of an unrelated
+/// `https://` reference elsewhere in the file. Cross-LLM triage on a
+/// 4000-skill VT-clean corpus measured 88.9% FP rate driven by Node
+/// SDK packages with `vitest.config.js`, `eslint.config.js`,
+/// `*.config.{js,ts}`, and `scripts/build.js` files.
+fn is_node_build_config_path(artifact_path: &str) -> bool {
+    let basename = artifact_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(artifact_path)
+        .to_ascii_lowercase();
+    if basename.is_empty() {
+        return false;
+    }
+    // Exact basenames that are unambiguous build/config files.
+    const EXACT: &[&str] = &[
+        "package.json",
+        "package-lock.json",
+        "tsconfig.json",
+        "vitest.config.js",
+        "vitest.config.ts",
+        "vitest.config.mjs",
+        "vitest.config.cjs",
+        "vite.config.js",
+        "vite.config.ts",
+        "webpack.config.js",
+        "webpack.config.ts",
+        "rollup.config.js",
+        "rollup.config.ts",
+        "rollup.config.mjs",
+        "esbuild.config.js",
+        "babel.config.js",
+        "babel.config.ts",
+        ".babelrc.js",
+        "eslint.config.js",
+        "eslint.config.mjs",
+        ".eslintrc.js",
+        "prettier.config.js",
+        ".prettierrc.js",
+        "jest.config.js",
+        "jest.config.ts",
+        "tailwind.config.js",
+        "tailwind.config.ts",
+        "postcss.config.js",
+        "next.config.js",
+        "next.config.mjs",
+        "nuxt.config.js",
+        "nuxt.config.ts",
+        "remix.config.js",
+        "astro.config.mjs",
+        "astro.config.ts",
+        "playwright.config.ts",
+        "playwright.config.js",
+        "cypress.config.js",
+        "cypress.config.ts",
+        "metro.config.js",
+        "tsup.config.ts",
+        "drizzle.config.ts",
+    ];
+    if EXACT.iter().any(|f| basename == *f) {
+        return true;
+    }
+    // Suffix patterns — `*.config.{js,ts,mjs,cjs}` cover bespoke
+    // config files. `eslintrc*` / `prettierrc*` cover JSON-with-JS
+    // variants. Path-segment substring checks accept files inside a
+    // `scripts/` or `build/` directory at the repo root.
+    if basename.ends_with(".config.js")
+        || basename.ends_with(".config.ts")
+        || basename.ends_with(".config.mjs")
+        || basename.ends_with(".config.cjs")
+        || basename.starts_with(".eslintrc")
+        || basename.starts_with(".prettierrc")
+    {
+        return true;
+    }
+    let path_lc = artifact_path.to_ascii_lowercase();
+    path_lc.contains("/scripts/")
+        || path_lc.contains("\\scripts\\")
+        || path_lc.contains("/build/")
+        || path_lc.contains("\\build\\")
+        || path_lc.contains("/tools/")
+        || path_lc.contains("\\tools\\")
+}
+
 pub(crate) fn detect_node_process_exec(
     content_lower: &str,
     language: &str,
@@ -65,7 +153,21 @@ pub(crate) fn detect_node_process_exec(
                 })
             })
         });
-    let risky_process_exec = risky_indicator.is_some();
+    // Build-config path downgrade: when the file is itself a Node
+    // build / linter / test config, any `https://` / shell-name in
+    // the file is overwhelmingly a doc URL or a literal toolchain
+    // argv string, NOT runtime exfil. Demote `risky_process_exec`
+    // to false so the finding emits at Log/Low instead of Block /
+    // Medium. The signal is preserved for analyst review (the file
+    // does spawn subprocesses) but no longer auto-blocks the
+    // verdict. Cross-LLM triage measured 88.9% FP rate driven by
+    // exactly this pattern.
+    let on_build_config = is_node_build_config_path(artifact_path);
+    let risky_process_exec = risky_indicator.is_some() && !on_build_config;
+    let mut value: String = risky_indicator.unwrap_or("child_process").to_string();
+    if on_build_config && risky_indicator.is_some() {
+        value.push_str(" (downgraded: build/config file)");
+    }
     vec![
         Finding::builder("SCRIPT_NODE_PROCESS_EXEC", ThreatCategory::RemoteExec)
             .severity(if risky_process_exec {
@@ -90,9 +192,11 @@ pub(crate) fn detect_node_process_exec(
                 ArtifactKind::ReferencedArtifact,
                 Some(artifact_path.to_string()),
             )
-            .match_value(risky_indicator.unwrap_or("child_process"))
+            .match_value(value)
             .reason(if risky_process_exec {
                 "Node script spawns subprocesses with shell or network execution semantics"
+            } else if on_build_config {
+                "Node build/config file uses child_process for toolchain orchestration (downgraded)"
             } else {
                 "Node script spawns local subprocesses"
             })
@@ -321,6 +425,95 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Medium);
         assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+    }
+
+    /// Contract: when `child_process` + `https://` appear inside a
+    /// Node build/config file (`vitest.config.js`, `eslint.config.js`,
+    /// `*.config.{js,ts}`), the finding is downgraded from
+    /// Block/Medium to Log/Low. Cross-LLM triage on a 4000-skill
+    /// VT-clean corpus measured 88.9% FP rate driven by SDK packages
+    /// with `vitest.config.js` / `api-server/server.js` referencing
+    /// upstream API URLs in comments. The signal is preserved (the
+    /// file does spawn subprocesses) but no longer auto-blocks.
+    #[test]
+    fn detect_node_process_exec_downgrades_for_build_config_path() {
+        let content = "import { spawn } from 'node:child_process';\n\
+                       // see https://vitest.dev/config\n\
+                       export default { test: { runner: () => spawn('node', ['./bin/run.js']) } };\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_node_process_exec(&lower, "ts", "/tmp/pkg/vitest.config.ts");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].recommended_action,
+            RecommendedAction::Log,
+            "vitest.config.ts must downgrade to Log; got {:?}",
+            findings[0].recommended_action,
+        );
+        assert_eq!(
+            findings[0].severity,
+            Severity::Low,
+            "vitest.config.ts must downgrade severity to Low",
+        );
+        assert!(
+            findings[0].match_value.contains("downgraded"),
+            "match_value must record the downgrade; got {:?}",
+            findings[0].match_value,
+        );
+    }
+
+    /// Contract (negative): the same content in a runtime file
+    /// (`api-server/server.js`) MUST keep Block. The downgrade is
+    /// gated on the path; runtime servers spawning subprocesses with
+    /// HTTP fetch retain their full strength.
+    #[test]
+    fn detect_node_process_exec_keeps_block_for_runtime_path() {
+        let content = "import { spawn } from 'node:child_process';\n\
+                       fetch('https://example.com', { method: 'POST' });\n\
+                       spawn('node', ['./bin/run.js']);\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_node_process_exec(&lower, "ts", "/tmp/pkg/src/server.ts");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            findings[0].recommended_action,
+            RecommendedAction::Block,
+            "runtime server.ts must keep Block; got {:?}",
+            findings[0].recommended_action,
+        );
+    }
+
+    /// Contract: the build-config path detector accepts the common
+    /// names that matter in practice. Pin a few representative names,
+    /// the `*.config.{js,ts}` suffix rule, and the `scripts/` segment
+    /// fallback to prevent silent narrowing in a future refactor.
+    #[test]
+    fn is_node_build_config_path_accepts_known_names() {
+        for path in [
+            "/repo/package.json",
+            "/repo/vitest.config.js",
+            "/repo/vite.config.ts",
+            "/repo/eslint.config.mjs",
+            "/repo/.eslintrc.js",
+            "/repo/jest.config.ts",
+            "/repo/tsup.config.ts",
+            "/repo/scripts/build.js",
+            "/repo/build/postinstall.ts",
+            "/repo/tools/codegen.js",
+        ] {
+            assert!(
+                is_node_build_config_path(path),
+                "expected {path} to qualify"
+            );
+        }
+        for path in [
+            "/repo/src/server.js",
+            "/repo/api-server/index.ts",
+            "/repo/lib/runtime.js",
+        ] {
+            assert!(
+                !is_node_build_config_path(path),
+                "expected {path} to NOT qualify",
+            );
+        }
     }
 
     /// Contract: PowerShell `Invoke-Expression` followed by a `$variable`

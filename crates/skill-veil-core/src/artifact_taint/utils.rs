@@ -1,6 +1,7 @@
 use super::patterns::{
     looks_like_external_sink, looks_like_identity_target, looks_like_secret_target,
 };
+use super::trusted_hosts::is_trusted_api_host;
 use super::{TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
@@ -73,6 +74,46 @@ pub(super) fn node_has_source(
                 })
         }
     }
+}
+
+/// `true` if `node_path` has at least one external-network sink AND
+/// every such sink resolves to a host on the trusted-API allowlist.
+///
+/// # Why
+///
+/// `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK` and
+/// `ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK` legitimately fire on
+/// every benign skill that integrates with an upstream API: the
+/// skill reads `<API>_KEY` from env (source) and posts to that
+/// upstream API (sink). The cross-LLM triage on a 4000-skill
+/// VT-clean corpus showed this pair contributes ~272 of ~449
+/// consensus FPs. When EVERY external sink for the node is a
+/// well-known API host, the calling code downgrades the rule's
+/// emitted finding from `block` / `MaliciousBehavior` to
+/// `require_approval` / `ReviewSignal` rather than suppressing it
+/// outright.
+///
+/// Returns `false` when no external-network sink is present (so
+/// callers get a clean "downgrade does not apply" signal) AND when
+/// at least one sink is untrusted (the operator-relevant case).
+pub(super) fn all_external_sinks_trusted(graph: &ArtifactGraph, node_path: &str) -> bool {
+    let mut saw_external = false;
+    for edge in &graph.edges {
+        if edge.from != node_path {
+            continue;
+        }
+        if !matches!(edge.relation, ArtifactRelation::ConnectsTo) {
+            continue;
+        }
+        if !looks_like_external_sink(edge) {
+            continue;
+        }
+        saw_external = true;
+        if !is_trusted_api_host(&edge.to) {
+            return false;
+        }
+    }
+    saw_external
 }
 
 pub(super) fn node_has_sink(graph: &ArtifactGraph, node_path: &str, sink: TaintSinkKind) -> bool {

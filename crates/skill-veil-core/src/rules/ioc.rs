@@ -114,6 +114,9 @@ fn push_ioc_rule(
         enabled: true,
         tags: vec!["ioc".to_string(), spec.ioc_tag.to_string()],
         promptintel_threats: Vec::new(),
+        requires_code_artifact: false,
+        downgrade_when_confirmation_gate: false,
+        downgrade_when_documentation_context: false,
     });
     Ok(())
 }

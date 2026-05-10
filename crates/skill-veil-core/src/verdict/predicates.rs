@@ -31,6 +31,24 @@ pub(super) struct VerdictPredicates {
     /// group — even one sharing (scope, category) — does not block the Benign
     /// downgrade for this group.
     pub(super) isolated_weak_signal_key: Option<(ArtifactScope, ThreatCategory, SignalClass)>,
+    /// `true` when the package has independent corroboration for a
+    /// `Malicious` verdict: ≥2 distinct rules contribute
+    /// `MaliciousBehavior + Block` findings AND those rules differ on
+    /// at least one of `(category, artifact_scope)`. Without this,
+    /// a single rule (e.g. `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK`
+    /// firing on a benign API skill) escalates to `Malicious` on its
+    /// own. Cross-LLM triage on a 4000-skill VT-clean corpus showed
+    /// single-rule escalations dominate the residual FP set after
+    /// the per-rule downgrades shipped earlier.
+    ///
+    /// The corroboration check still allows the historical "primary
+    /// block + conclusive supporting evidence" path
+    /// ([`has_supporting_block`] && [`has_conclusive_supporting_malicious`])
+    /// and the compound-reasons path ([`has_compound_malicious`]) to
+    /// fire on their own — those already encode multi-signal
+    /// reasoning. Only the unconditional-on-MaliciousBehavior
+    /// triggers gain the corroboration gate.
+    pub(super) has_independent_malicious_corroboration: bool,
 }
 
 impl VerdictPredicates {
@@ -129,6 +147,34 @@ impl VerdictPredicates {
                 && group.signal_class != SignalClass::Hygiene
         });
 
+        // Compute independent-corroboration: collect distinct
+        // (rule_id, category, scope) keys among Block-action
+        // MaliciousBehavior findings. Two findings with the SAME
+        // rule_id but different scope still count as a single rule
+        // signal (deduped by rule_id below); independence requires
+        // either two different rule_ids OR one rule_id firing on
+        // two different (category, scope) combinations — which is
+        // already a structural anomaly worth corroborating with.
+        let mut malicious_block_rule_ids: std::collections::BTreeSet<&str> =
+            std::collections::BTreeSet::new();
+        let mut malicious_block_keys: std::collections::BTreeSet<(ThreatCategory, ArtifactScope)> =
+            std::collections::BTreeSet::new();
+        for f in *findings {
+            if f.signal_class == SignalClass::MaliciousBehavior
+                && f.recommended_action == RecommendedAction::Block
+            {
+                malicious_block_rule_ids.insert(f.rule_id.as_str());
+                malicious_block_keys.insert((f.category, f.artifact_scope));
+            }
+        }
+        // Corroboration: at least two distinct rule_ids OR one
+        // rule firing across two distinct (category, scope) pairs.
+        // The second branch catches the common case where the SAME
+        // taint rule lands on both AgentEntrypoint and
+        // SupportingArtifact — a stronger signal than a single fire.
+        let has_independent_malicious_corroboration =
+            malicious_block_rule_ids.len() >= 2 || malicious_block_keys.len() >= 2;
+
         Self {
             has_malicious_behavior,
             has_compound_malicious,
@@ -142,6 +188,7 @@ impl VerdictPredicates {
             isolated_weak_package_root_signal,
             has_non_hygiene_primary_block,
             isolated_weak_signal_key,
+            has_independent_malicious_corroboration,
         }
     }
 
@@ -151,10 +198,23 @@ impl VerdictPredicates {
         primary_summary: &FindingSummary,
         package_summary: &FindingSummary,
     ) -> Verdict {
-        if self.has_malicious_behavior
+        // The two unconditional escalation triggers
+        // (`has_malicious_behavior`, `has_non_hygiene_primary_block`)
+        // gate on `has_independent_malicious_corroboration`. A single
+        // rule firing once cannot push the package to Malicious; a
+        // second independent rule (or the same rule across two
+        // category/scope pairs) is required.
+        //
+        // The `has_compound_malicious` and `has_supporting_block +
+        // has_conclusive_supporting_malicious` paths preserve their
+        // historical behaviour: those already encode multi-signal
+        // reasoning by construction.
+        let unconditional_escalation = (self.has_malicious_behavior
+            || self.has_non_hygiene_primary_block)
+            && self.has_independent_malicious_corroboration;
+        if unconditional_escalation
             || self.has_compound_malicious
             || (self.has_supporting_block && self.has_conclusive_supporting_malicious)
-            || self.has_non_hygiene_primary_block
         {
             return Verdict::Malicious;
         }

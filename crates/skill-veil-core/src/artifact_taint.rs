@@ -2,6 +2,7 @@ mod analysis;
 mod patterns;
 mod summarization;
 mod taint_rules;
+mod trusted_hosts;
 mod utils;
 
 use crate::artifact_graph::ArtifactGraph;
@@ -201,5 +202,114 @@ mod tests {
             finding.rule_id != "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"
                 && finding.rule_id != "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK"
         }));
+    }
+
+    /// Contract: when EVERY external sink for a tainted node resolves
+    /// to a host on the trusted-API allowlist, the
+    /// `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK` finding is
+    /// downgraded to `ReviewSignal` / `RequireApproval`. Mirrors the
+    /// dominant FP pattern from the cross-LLM triage: a skill that
+    /// reads `YOUTUBE_API_KEY` and POSTs to `googleapis.com` is the
+    /// modal benign API client, not an exfil tool.
+    #[test]
+    fn secret_to_trusted_api_host_is_downgraded() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://sheets.googleapis.com/v4/spreadsheets/123/values/A1",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("rule must still emit a finding when sinks are trusted");
+        assert_eq!(
+            f.recommended_action,
+            crate::findings::RecommendedAction::RequireApproval,
+            "trusted sink must downgrade Block to RequireApproval; got {:?}",
+            f.recommended_action,
+        );
+        assert_eq!(
+            f.signal_class,
+            crate::findings::SignalClass::ReviewSignal,
+            "trusted sink must downgrade signal_class to ReviewSignal; got {:?}",
+            f.signal_class,
+        );
+        assert!(
+            f.match_value.contains("sinks_trusted=true"),
+            "match_value must record the downgrade; got {:?}",
+            f.match_value,
+        );
+    }
+
+    /// Contract (negative): mixing one trusted sink with one untrusted
+    /// sink MUST keep the rule at full strength. The downgrade is
+    /// conditional on EVERY external sink resolving to the allowlist;
+    /// a single attacker-controlled sink is enough to keep the block.
+    /// Pre-fix a permissive `any_trusted` predicate would have let
+    /// attackers bypass detection by also pinging a benign endpoint.
+    #[test]
+    fn mixed_trusted_and_untrusted_sinks_keep_block() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://api.openai.com/v1/chat/completions",
+            ArtifactRelation::ConnectsTo,
+        );
+        graph.add_edge(
+            "skill.md",
+            "https://attacker.example.com/exfil",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("rule must fire");
+        assert_eq!(
+            f.recommended_action,
+            crate::findings::RecommendedAction::Block,
+            "an untrusted sink MUST defeat the downgrade; got {:?}",
+            f.recommended_action,
+        );
+        assert!(
+            !f.match_value.contains("sinks_trusted=true"),
+            "match_value must NOT claim the downgrade; got {:?}",
+            f.match_value,
+        );
+    }
+
+    /// Contract: identity-source rule (`oauth_token`) gets the same
+    /// downgrade treatment as the secret-source rule. Without this
+    /// the cross-LLM-triage measured ~272 secret/identity FPs would
+    /// only be partially addressed.
+    #[test]
+    fn identity_to_trusted_api_host_is_downgraded() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", "oauth_token", ArtifactRelation::Reads);
+        graph.add_edge(
+            "skill.md",
+            "https://api.notion.com/v1/pages",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK")
+            .expect("rule must still emit when sinks are trusted");
+        assert_eq!(
+            f.recommended_action,
+            crate::findings::RecommendedAction::RequireApproval,
+        );
+        assert_eq!(f.signal_class, crate::findings::SignalClass::ReviewSignal);
     }
 }

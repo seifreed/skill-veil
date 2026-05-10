@@ -2,7 +2,10 @@ use super::condition::RuleCondition;
 use super::schema::Rule;
 use super::RuleError;
 use crate::analyzer::SkillDocument;
-use crate::findings::{ArtifactKind, EvidenceKind, Finding, MatchTarget, ThreatCategory};
+use crate::findings::{
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, SignalClass,
+    ThreatCategory,
+};
 use crate::patterns::try_compile;
 use crate::ports::{CompiledPattern, PatternMatcher};
 use std::collections::HashMap;
@@ -214,22 +217,198 @@ impl CompiledRule {
     }
 
     fn create_finding(&self, target: MatchTarget, match_value: impl Into<String>) -> Finding {
+        self.create_finding_with_doc(target, match_value, None)
+    }
+}
+
+/// `true` if `match_text` appears as a substring of any fenced
+/// code-block body within the document. Used by
+/// `requires_code_artifact` rules to distinguish a real code-anchored
+/// match from a prose-only match that should be downgraded.
+///
+/// The check is intentionally a literal substring search (no regex,
+/// no case-folding) — the input is the exact text returned by the
+/// regex matcher. Case-insensitive rule patterns produce a literal
+/// match in whatever case they found it in the source, so the same
+/// case appears in `code_blocks[].code` if the match was actually a
+/// code-block fire.
+fn match_appears_in_code_block(doc: &SkillDocument, match_text: &str) -> bool {
+    if match_text.is_empty() {
+        return false;
+    }
+    doc.sections
+        .iter()
+        .flat_map(|s| s.code_blocks.iter())
+        .any(|block| block.code.contains(match_text))
+}
+
+/// Substring markers (case-insensitive) that indicate the document
+/// declares an explicit human-in-the-loop confirmation gate. When
+/// any of these phrases appears in `doc.raw_content`, rules with
+/// `downgrade_when_confirmation_gate: true` emit downgraded findings
+/// — the gate is precisely the safety control the rule was designed
+/// to require.
+///
+/// Markers come from inspecting the LLM_FP samples produced by the
+/// cross-LLM triage (`okx-trading`, `franchise-evaluation-coach` and
+/// similar workflows). Add a new marker only after observing it in
+/// at least one real benign skill that currently produces a FP.
+const CONFIRMATION_GATE_MARKERS: &[&str] = &[
+    "confirmation_token",
+    "confirmation token",
+    "human-in-the-loop",
+    "human in the loop",
+    "explicit yes",
+    "user types yes",
+    "user must reply yes",
+    "user must reply",
+    "two-step gate",
+    "two step gate",
+    "explicit confirmation",
+    "explicitly confirm",
+    "propose → user",
+    "propose -> user",
+    "ask the user to reply",
+    "wait for the user's reply",
+    "do not proceed otherwise",
+    "yes <id>",
+    "yes <token>",
+];
+
+/// Substring markers (case-insensitive) that indicate the document
+/// is itself an educational / detection / anti-pattern catalogue
+/// (security scanners, pattern-matching guides). When any appears,
+/// rules with `downgrade_when_documentation_context: true` emit
+/// downgraded findings.
+const DOCUMENTATION_CONTEXT_MARKERS: &[&str] = &[
+    "## what it checks",
+    "## anti-patterns",
+    "## anti patterns",
+    "### anti-patterns",
+    "### anti patterns",
+    "## detection patterns",
+    "## blocked patterns",
+    "this skill detects",
+    "this skill checks",
+    "examples of bad code",
+    "patterns we block",
+    "## patterns",
+    "## examples (",
+    "(❌ bad)",
+    "(✅ good)",
+    "// anti-pattern",
+    "# anti-pattern",
+];
+
+/// `true` if any [`CONFIRMATION_GATE_MARKERS`] substring (case-
+/// insensitive) appears in the document's raw markdown body.
+fn doc_has_confirmation_gate(doc: &SkillDocument) -> bool {
+    let lower = doc.raw_content.to_ascii_lowercase();
+    CONFIRMATION_GATE_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+/// `true` if any [`DOCUMENTATION_CONTEXT_MARKERS`] substring (case-
+/// insensitive) appears in the document's raw markdown body.
+fn doc_has_documentation_context(doc: &SkillDocument) -> bool {
+    let lower = doc.raw_content.to_ascii_lowercase();
+    DOCUMENTATION_CONTEXT_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
+}
+
+// `impl CompiledRule { ... }` continues from here — the helper above
+// is module-level so other compiled-rule helpers can use it without
+// indirection.
+impl CompiledRule {
+    /// Builds the finding while optionally consulting the parent
+    /// `SkillDocument` for `requires_code_artifact` rules.
+    ///
+    /// When `doc` is `Some` AND the rule has `requires_code_artifact:
+    /// true` AND the `MatchTarget` is `Document` or `Section`, this
+    /// helper checks whether the matched text appears in any
+    /// fenced-code-block content within the document. If it does
+    /// NOT, the finding is downgraded:
+    /// - `RecommendedAction::Block` → `RequireApproval`
+    /// - `SignalClass::MaliciousBehavior` → `ReviewSignal`
+    /// - `reason` gets a "(downgraded: prose-only match)" suffix
+    ///
+    /// Matches in `CodeBlock` / `ReferencedFile` targets bypass the
+    /// downgrade entirely — those targets are already "in code" by
+    /// construction. The check is a substring search rather than an
+    /// offset map: a regex match returns the literal matched text;
+    /// if that text appears in any of the document's code blocks the
+    /// match is plausibly code-anchored. The corner case where the
+    /// same string appears in BOTH prose and code yields full
+    /// strength — the safe direction.
+    fn create_finding_with_doc(
+        &self,
+        target: MatchTarget,
+        match_value: impl Into<String>,
+        doc: Option<&SkillDocument>,
+    ) -> Finding {
         let artifact_kind = match &target {
             MatchTarget::Document | MatchTarget::Section { .. } => ArtifactKind::SkillDocument,
             MatchTarget::CodeBlock { .. } => ArtifactKind::CodeSnippet,
             MatchTarget::ReferencedFile { .. } => ArtifactKind::ReferencedArtifact,
         };
+        let match_value_str: String = match_value.into();
 
-        Finding::builder(&self.rule.id, self.rule.category)
+        // Compute the three downgrade triggers that may apply to
+        // this finding. Each is gated on its own opt-in field on the
+        // rule so an author cannot accidentally trip a downgrade by
+        // labelling unrelated content with the markers.
+        let prose_only_downgrade = self.rule.requires_code_artifact
+            && matches!(&target, MatchTarget::Document | MatchTarget::Section { .. })
+            && doc
+                .map(|d| !match_appears_in_code_block(d, &match_value_str))
+                .unwrap_or(false);
+        let confirmation_gate_downgrade = self.rule.downgrade_when_confirmation_gate
+            && doc.map(doc_has_confirmation_gate).unwrap_or(false);
+        let documentation_context_downgrade = self.rule.downgrade_when_documentation_context
+            && doc.map(doc_has_documentation_context).unwrap_or(false);
+
+        let any_downgrade =
+            prose_only_downgrade || confirmation_gate_downgrade || documentation_context_downgrade;
+
+        let mut action = self.rule.action;
+        let mut signal_class_override: Option<SignalClass> = None;
+        let mut reason = self.rule.reason.clone();
+        if any_downgrade {
+            action = match action {
+                RecommendedAction::Block => RecommendedAction::RequireApproval,
+                other => other,
+            };
+            signal_class_override = Some(SignalClass::ReviewSignal);
+            let mut notes: Vec<&str> = Vec::new();
+            if prose_only_downgrade {
+                notes.push("prose-only match");
+            }
+            if confirmation_gate_downgrade {
+                notes.push("confirmation-gate present in document");
+            }
+            if documentation_context_downgrade {
+                notes.push("document is an educational / detection catalogue");
+            }
+            reason.push_str(" (downgraded: ");
+            reason.push_str(&notes.join("; "));
+            reason.push(')');
+        }
+
+        let mut builder = Finding::builder(&self.rule.id, self.rule.category)
             .severity(self.rule.severity)
             .confidence(self.rule.confidence)
-            .action(self.rule.action)
+            .action(action)
             .evidence_kind(self.evidence_kind())
             .artifact(artifact_kind, None)
             .matched_on(target)
-            .match_value(match_value)
-            .reason(&self.rule.reason)
-            .build()
+            .match_value(match_value_str)
+            .reason(reason);
+        if let Some(sc) = signal_class_override {
+            builder = builder.signal_class(sc);
+        }
+        builder.build()
     }
 
     fn evidence_kind(&self) -> EvidenceKind {
@@ -295,7 +474,7 @@ impl CompiledRule {
         for mat in matches {
             let line_number = calculate_line_number(&doc.raw_content, mat.start);
             let finding = self
-                .create_finding(MatchTarget::Document, &mat.matched_text)
+                .create_finding_with_doc(MatchTarget::Document, &mat.matched_text, Some(doc))
                 .with_line(line_number);
             findings.push(finding);
         }
@@ -369,7 +548,7 @@ impl CompiledRule {
                     name: section.to_string(),
                 };
                 findings.push(
-                    self.create_finding(target, &original_text)
+                    self.create_finding_with_doc(target, &original_text, Some(doc))
                         .with_line(line_number),
                 );
                 matched = true;
@@ -418,11 +597,12 @@ impl CompiledRule {
             let line_number =
                 calculate_line_number(&sec.content, mat.start) + sec.start_line.saturating_sub(1);
             let finding = self
-                .create_finding(
+                .create_finding_with_doc(
                     MatchTarget::Section {
                         name: section.to_string(),
                     },
                     &mat.matched_text,
+                    Some(doc),
                 )
                 .with_line(line_number);
             findings.push(finding);

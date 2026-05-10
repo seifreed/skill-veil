@@ -215,6 +215,9 @@ mod tests {
             enabled: true,
             tags: Vec::new(),
             promptintel_threats: threats.iter().map(|s| (*s).to_string()).collect(),
+            requires_code_artifact: false,
+            downgrade_when_confirmation_gate: false,
+            downgrade_when_documentation_context: false,
         }
     }
 

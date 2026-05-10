@@ -156,6 +156,16 @@ rules:
     shield:
       scope: skill.network
     enabled: true
+    # IP:port literals frequently appear in prose as documentation
+    # ("if you see 192.168.1.10:8080 in your logs..."), in OpenAPI
+    # specs that mention example endpoints, and in Ollama/Prometheus
+    # localhost mentions. Cross-LLM triage on 4000 VT-clean skills
+    # measured 30.6% FP rate. Require the match to also appear in a
+    # fenced code block or a script artifact; prose-only matches are
+    # downgraded to ReviewSignal / RequireApproval. Also downgrade
+    # for forensic / network-monitoring detection catalogues.
+    requires_code_artifact: true
+    downgrade_when_documentation_context: true
     tags:
       - c2
       - ip_literal

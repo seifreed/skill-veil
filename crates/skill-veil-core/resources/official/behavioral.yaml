@@ -1528,6 +1528,13 @@ rules:
     shield:
       scope: skill.runtime
     enabled: true
+    # The 500-char-window alternation is permissive enough to chain
+    # any exec verb in markdown prose with a stray "production
+    # system" / "administrative access" mention elsewhere on the
+    # page. Cross-LLM triage measured 50% FP rate. Require the chain
+    # to also appear inside a fenced code block; if the only
+    # corroborating phrase is in prose, downgrade.
+    requires_code_artifact: true
     tags:
       - remote_exec
       - jailbreak

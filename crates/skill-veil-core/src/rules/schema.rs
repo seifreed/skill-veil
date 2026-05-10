@@ -54,6 +54,53 @@ pub struct Rule {
     /// an upstream rename does not brick rule loading.
     #[serde(default)]
     pub promptintel_threats: Vec<String>,
+    /// When `true`, a regex match in the SKILL.md prose body that is
+    /// NOT corroborated by an occurrence inside any markdown code
+    /// block is downgraded from the rule's natural action /
+    /// signal-class to `RequireApproval` / `ReviewSignal`. Used for
+    /// vocabulary-only rules (`SKILL_PAYMENT_ACCESS`,
+    /// `SKILL_TOKEN_SCAM`, …) that legitimately fire on documentation
+    /// or coaching skills which only DESCRIBE the pattern they
+    /// detect. Cross-LLM triage on a 4000-skill VT-clean corpus
+    /// confirmed prose-only matches drive ~30-50 FPs per affected
+    /// rule.
+    ///
+    /// Defaults to `false` — opt-in per rule, never global. The
+    /// downgrade applies AFTER the regex matched; matches inside
+    /// code blocks (or in any artifact whose `MatchTarget` is
+    /// `CodeBlock` / `ReferencedFile`) keep full strength.
+    #[serde(default)]
+    pub requires_code_artifact: bool,
+
+    /// When `true`, a finding is downgraded if the surrounding
+    /// document contains explicit human-in-the-loop confirmation
+    /// gate markers (e.g. `confirmation_token`, "user types YES",
+    /// "two-step gate", "propose → user"). Used for autonomy /
+    /// payment / deferred-execution rules whose risk model assumes
+    /// no human gate. Cross-LLM triage on a 4000-skill VT-clean
+    /// corpus showed `okx-trading`-style skills with strict
+    /// propose→confirm workflows trip these rules even though the
+    /// gate is exactly the safety control the rule was designed to
+    /// require.
+    ///
+    /// Defaults to `false`. Marker list lives in
+    /// `compiled::CONFIRMATION_GATE_MARKERS` and is intentionally
+    /// case-insensitive so authors don't have to predict the exact
+    /// phrasing.
+    #[serde(default)]
+    pub downgrade_when_confirmation_gate: bool,
+
+    /// When `true`, a finding is downgraded if the document declares
+    /// itself as an educational / detection / anti-pattern catalogue
+    /// (e.g. `## What it checks`, `## Anti-patterns`, "this skill
+    /// detects", "examples of bad code"). Used for vocabulary
+    /// rules whose patterns appear in security scanners that
+    /// document the very behaviours they detect.
+    ///
+    /// Defaults to `false`. Marker list lives in
+    /// `compiled::DOCUMENTATION_CONTEXT_MARKERS`.
+    #[serde(default)]
+    pub downgrade_when_documentation_context: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

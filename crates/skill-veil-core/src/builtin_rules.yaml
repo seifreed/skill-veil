@@ -669,13 +669,29 @@
   category: data_exfiltration
   severity: critical
   confidence: 0.90
+  # Pattern only matches LIVE camera-capture primitives. The previous
+  # alternation included the bare word `webcam` plus a permissive
+  # `AVCaptureDevice` substring, both of which fired on every skill
+  # that fetched public webcam URLs (foto-webcam.eu and similar
+  # weather/scenery feeds) and on documentation prose that merely
+  # mentioned the word. Cross-LLM triage on a 4000-skill VT-clean
+  # corpus confirmed 7/9 fires under this rule were false positives.
+  # Keep `imagesnap` (macOS CLI), `ffmpeg avfoundation` (live capture
+  # pipeline), the `cv2.VideoCapture(0)` / `getUserMedia` primitives
+  # that grab the user's hardware camera, and the
+  # `AVCaptureDevice.{devices,defaultDevice,discoverySession}`
+  # accessors — everything else was noise.
   when: !regex
-    pattern: "(?i)imagesnap|ffmpeg.*avfoundation|webcam|camera\\s*capture|AVCaptureDevice"
+    pattern: "(?i)\\bimagesnap\\b|ffmpeg.*avfoundation|cv2\\.VideoCapture\\(\\s*0\\s*\\)|navigator\\.mediaDevices\\.getUserMedia|AVCaptureDevice\\.(?:devices|defaultDevice|discoverySession)"
   action: block
-  reason: "Webcam or camera capture capability"
+  reason: "Live webcam / camera capture primitive"
   shield:
     scope: skill.privacy
   enabled: true
+  # Educational / detection-catalogue skills (privacy auditors,
+  # security scanners) routinely document camera primitives as
+  # anti-patterns; downgrade for those.
+  downgrade_when_documentation_context: true
   tags:
     - surveillance
     - webcam
@@ -862,6 +878,17 @@
   shield:
     scope: skill.fraud
   enabled: true
+  # Crypto / token vocabulary fires on every skill that helps a user
+  # research a real token (`buy $ETH`, `stake $SOL`, "mint NFT"). The
+  # token-scam pattern is only meaningful when the skill actually
+  # contains code (or shell snippets) acting on the wallet; pure
+  # prose discussions of the same vocabulary are educational. Also
+  # downgrade for skills with explicit confirmation gates and for
+  # detection-catalogue skills (security scanners describing
+  # token-scam patterns as anti-patterns).
+  requires_code_artifact: true
+  downgrade_when_confirmation_gate: true
+  downgrade_when_documentation_context: true
   tags:
     - fraud
     - crypto
@@ -1035,6 +1062,19 @@
   shield:
     scope: skill.payment
   enabled: true
+  # Vocabulary-only regex: matches plain prose mentions of payment
+  # terminology in coaching / educational / FDD-review skills that
+  # have nothing to do with handling card data. Cross-LLM triage on
+  # 4000 VT-clean skills measured ~46% FP rate (49/106). Require the
+  # match to also appear in a fenced code block; otherwise emit at
+  # ReviewSignal / RequireApproval so analysts still see it but the
+  # verdict no longer auto-blocks. Also downgrade when the document
+  # declares an explicit confirmation gate (propose→YES workflows)
+  # or when the document is itself a security-scanner / detection
+  # catalogue describing payment patterns as ANTI-patterns.
+  requires_code_artifact: true
+  downgrade_when_confirmation_gate: true
+  downgrade_when_documentation_context: true
   tags:
     - payment
     - pci
@@ -1582,6 +1622,15 @@
   shield:
     scope: skill.exfiltration
   enabled: true
+  # The 400-char window matches every standard API client doing
+  # `axios.post(url, { headers: { Authorization: 'Bearer ' + token }})`
+  # which is the modal benign behaviour. Cross-LLM triage measured
+  # 17.2% FP rate (74/431). Require the chain to actually appear in
+  # a fenced code block (prose mentions of POST + token in
+  # documentation are not exfil) and downgrade for educational /
+  # detection-catalogue skills.
+  requires_code_artifact: true
+  downgrade_when_documentation_context: true
   tags:
     - exfiltration
     - credential
@@ -1710,6 +1759,13 @@
   shield:
     scope: skill.payment
   enabled: true
+  # Pre-fix this rule fired on every payment skill that documented
+  # the negative ("we do NOT ask before X"), even when the same
+  # skill enforced an explicit propose→confirm gate elsewhere
+  # (`okx-trading`-style workflows). When the document declares an
+  # explicit confirmation gate, downgrade — the gate is precisely
+  # the safety control this rule was designed to require.
+  downgrade_when_confirmation_gate: true
   tags:
     - payment
     - autonomy
