@@ -1,10 +1,12 @@
-use crate::config::resolve_llm_provider_override;
+use crate::config::{resolve_llm_provider_override, UnifiedConfig};
+use crate::llm::providers::build_provider;
 use crate::text_output::{format_results, TextOutputOptions};
 use crate::{
     cli_args::{ColorChoiceArg, PolicyProfileArg, ScanArgs, ScanPresetArg, SeverityArg},
     color::ColorMode,
 };
 use anyhow::{Context, Result};
+use nova_llm_eval::ProviderLlmEvaluator;
 use skill_veil_core::{
     RegexPatternMatcher, ScanOptions, ScanTargetMode, Scanner, StdFileSystemProvider,
 };
@@ -14,7 +16,9 @@ use std::sync::Arc;
 
 mod cache;
 mod llm;
+mod nova_llm_eval;
 mod nova_run;
+mod nova_semantics_eval;
 mod promptintel;
 mod vt;
 
@@ -37,6 +41,94 @@ const FINDING_LIMIT_ENTERPRISE: std::num::NonZeroUsize = match std::num::NonZero
     Some(n) => n,
     None => panic!("FINDING_LIMIT_ENTERPRISE must be non-zero"),
 };
+
+/// Build the NOVA `llm:` evaluator from `~/.skill-veil.toml [llm]`,
+/// honouring the same `--llm-provider` override the regular LLM
+/// enrichment uses. Returns `None` (with a one-line operator note when
+/// `quiet=false`) if config loading fails, no `[llm]` section is
+/// present, the override string is invalid, or the provider can't be
+/// constructed (e.g. missing API key). The caller falls back to the
+/// `NotYetWiredLlm` stub on `None` so a misconfiguration cannot crash
+/// the scan; the rule's `condition:` requirement still surfaces under
+/// `skipped_capabilities`.
+fn build_nova_llm_eval(
+    provider_override_raw: Option<&str>,
+    quiet: bool,
+) -> Option<Box<ProviderLlmEvaluator>> {
+    let cfg = match UnifiedConfig::load() {
+        Ok(c) => c,
+        Err(err) => {
+            if !quiet {
+                eprintln!(
+                    "--nova-llm: config load failed, NOVA llm: patterns will be skipped: {err:#}"
+                );
+            }
+            return None;
+        }
+    };
+    let mut llm_section = cfg.llm?;
+    let provider_override = match resolve_llm_provider_override(provider_override_raw) {
+        Ok(v) => v,
+        Err(err) => {
+            if !quiet {
+                eprintln!("--nova-llm: provider override invalid, NOVA llm: patterns will be skipped: {err:#}");
+            }
+            return None;
+        }
+    };
+    if let Some(kind) = provider_override {
+        llm_section.provider = kind;
+    }
+    let provider: Arc<dyn crate::llm::client::LlmProvider> = match build_provider(&llm_section) {
+        Ok(p) => Arc::from(p),
+        Err(err) => {
+            if !quiet {
+                eprintln!(
+                    "--nova-llm: provider build failed, NOVA llm: patterns will be skipped: {err}"
+                );
+            }
+            return None;
+        }
+    };
+    Some(Box::new(ProviderLlmEvaluator::new(provider)))
+}
+
+/// Build the native NOVA `semantics:` evaluator. Returns `None` (and
+/// emits a one-line operator note unless `quiet`) when the binary was
+/// compiled without `--features nova-semantics` or when the underlying
+/// model fails to initialise. The caller falls back to the
+/// `NotYetWiredSemantic` stub on `None` so the scan keeps running and
+/// `SkippedCapability::Semantics` still surfaces for any rule that
+/// needed the channel.
+#[cfg(feature = "nova-semantics")]
+fn build_nova_semantic_eval(
+    quiet: bool,
+) -> Option<Box<dyn skill_veil_core::nova::SemanticEvaluator>> {
+    use nova_semantics_eval::fastembed_impl::FastembedSentenceEmbedder;
+    use nova_semantics_eval::CosineSemanticEvaluator;
+    match FastembedSentenceEmbedder::try_new() {
+        Ok(embedder) => Some(Box::new(CosineSemanticEvaluator::new(embedder))),
+        Err(err) => {
+            if !quiet {
+                eprintln!("--nova-semantics: model initialisation failed, NOVA semantics: patterns will be skipped: {err:?}");
+            }
+            None
+        }
+    }
+}
+
+#[cfg(not(feature = "nova-semantics"))]
+fn build_nova_semantic_eval(
+    quiet: bool,
+) -> Option<Box<dyn skill_veil_core::nova::SemanticEvaluator>> {
+    if !quiet {
+        eprintln!(
+            "--nova-semantics: this binary was built without `--features nova-semantics`; \
+             NOVA semantics: patterns will be skipped",
+        );
+    }
+    None
+}
 
 pub(crate) fn load_rule_engine_from_dir(
     rules_dir: &Path,
@@ -159,7 +251,42 @@ pub(crate) fn run_scan(
     let nova_report = if args.no_nova {
         None
     } else {
-        match nova_run::evaluate_against_target(&args.path, args.cache_dir.as_deref()) {
+        // Build the provider-backed NOVA `llm:` evaluator iff:
+        //   1. The user opted in with `--nova-llm`; and
+        //   2. `~/.skill-veil.toml` (or env vars) carries an `[llm]`
+        //      section the provider chain can build from.
+        // Either gate failing falls back to `NotYetWiredLlm` so the
+        // scan keeps running and any rule whose `condition:` requires
+        // `llm.` surfaces under `skipped_capabilities` with the
+        // existing operator note.
+        let nova_llm_eval = if args.nova_llm {
+            build_nova_llm_eval(args.llm_provider.as_deref(), quiet)
+        } else {
+            None
+        };
+        let llm_eval_ref = nova_llm_eval
+            .as_deref()
+            .map(|e| e as &dyn skill_veil_core::nova::LlmEvaluator);
+        // Build the native semantics evaluator iff the user opted in
+        // AND the binary was compiled with the `nova-semantics`
+        // feature. When the feature is off, `build_nova_semantic_eval`
+        // emits a one-line note (unless `--quiet`) and returns None,
+        // so the scan still runs and `SkippedCapability::Semantics`
+        // surfaces for any rule that needed the semantic channel.
+        let nova_sem_eval = if args.nova_semantics {
+            build_nova_semantic_eval(quiet)
+        } else {
+            None
+        };
+        let sem_eval_ref = nova_sem_eval
+            .as_deref()
+            .map(|e| e as &dyn skill_veil_core::nova::SemanticEvaluator);
+        match nova_run::evaluate_against_target(
+            &args.path,
+            args.cache_dir.as_deref(),
+            llm_eval_ref,
+            sem_eval_ref,
+        ) {
             Ok(r) => r,
             Err(err) => {
                 if !quiet {

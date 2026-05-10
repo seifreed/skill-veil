@@ -13,8 +13,37 @@ use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
 
+/// Default VT Intelligence query for the malicious-skill corpus. Used by
+/// `vt download` when no `--query` and no `--clean` are passed. Mirrors
+/// the query that seeded `benchmarks/corpus.yaml`.
 pub(crate) const DEFAULT_QUERY: &str =
     "entity:file has:codeinsight codeinsight:\"Type: OpenClaw Skill\" codeinsight_verdict:malicious";
+
+/// Default VT Intelligence query for the **clean** OpenClaw skill corpus.
+/// Used when `--clean` is passed. Mirrors [`DEFAULT_QUERY`] in shape but
+/// flips the codeinsight verdict so we pull skills VT considers benign —
+/// exactly the population we need to measure skill-veil's false-positive
+/// rate (we expect "benign" verdicts on these; any "malicious" or
+/// "suspicious" finding is a candidate FP to triage). The verdict label
+/// is `benign` (empirically confirmed against the live VT API);
+/// alternate spellings like `harmless` / `clean` / `safe` return zero
+/// hits.
+pub(crate) const DEFAULT_CLEAN_QUERY: &str =
+    "entity:file has:codeinsight codeinsight:\"Type: OpenClaw Skill\" codeinsight_verdict:benign";
+
+/// Pick the default VT search query when the user did not pass `--query`.
+/// `clean=false` returns [`DEFAULT_QUERY`] (the historical malicious
+/// corpus); `clean=true` returns [`DEFAULT_CLEAN_QUERY`] (the harmless
+/// counterpart used for false-positive sweeps).
+#[must_use]
+pub(crate) fn default_query(clean: bool) -> &'static str {
+    if clean {
+        DEFAULT_CLEAN_QUERY
+    } else {
+        DEFAULT_QUERY
+    }
+}
+
 pub(crate) const REPORTS_DIRNAME: &str = ".vt-reports";
 const PER_PAGE: usize = 40;
 
@@ -262,5 +291,67 @@ mod tests {
         let limit: usize = 5;
         let collected: usize = 7;
         assert_eq!(limit.saturating_sub(collected), 0);
+    }
+
+    /// Contract: `default_query(false)` returns the historical malicious-
+    /// corpus query verbatim. The string is part of the operator-facing
+    /// surface (anyone reading `--help` or running benchmarks expects
+    /// the same query that seeded `benchmarks/corpus.yaml`); changing it
+    /// silently would shift detection-rate numbers without anyone noticing.
+    #[test]
+    fn default_query_false_returns_malicious_corpus_query() {
+        let q = default_query(false);
+        assert_eq!(q, DEFAULT_QUERY);
+        assert!(
+            q.contains("codeinsight_verdict:malicious"),
+            "malicious verdict filter must be present, got: {q}",
+        );
+    }
+
+    /// Contract: `default_query(true)` returns the benign-corpus query
+    /// — the symmetric counterpart of the malicious default. Shape MUST
+    /// match the malicious query (entity / has:codeinsight / type
+    /// filter) so the two corpora are directly comparable; only the
+    /// verdict filter flips. A drift between the two queries would let
+    /// false-positive numbers blame the population rather than the
+    /// scanner. The verdict label is `benign` (the only value the live
+    /// VT API actually serves for this population — `harmless` /
+    /// `clean` / `safe` all return zero hits).
+    #[test]
+    fn default_query_true_returns_benign_corpus_query() {
+        let q = default_query(true);
+        assert_eq!(q, DEFAULT_CLEAN_QUERY);
+        assert!(
+            q.contains("codeinsight_verdict:benign"),
+            "benign verdict filter must be present, got: {q}",
+        );
+        assert!(
+            !q.contains("codeinsight_verdict:malicious"),
+            "benign query must NOT contain malicious filter, got: {q}",
+        );
+    }
+
+    /// Contract: the malicious + harmless defaults agree on every
+    /// non-verdict filter. The two corpora are intended as paired
+    /// populations for true-positive vs false-positive measurement;
+    /// any drift in `entity:`, `has:codeinsight`, or the
+    /// `codeinsight:"Type: OpenClaw Skill"` selector would invalidate
+    /// the comparison.
+    #[test]
+    fn malicious_and_clean_queries_share_corpus_shape() {
+        for needle in [
+            "entity:file",
+            "has:codeinsight",
+            "codeinsight:\"Type: OpenClaw Skill\"",
+        ] {
+            assert!(
+                DEFAULT_QUERY.contains(needle),
+                "malicious query missing shared selector {needle:?}",
+            );
+            assert!(
+                DEFAULT_CLEAN_QUERY.contains(needle),
+                "clean query missing shared selector {needle:?}",
+            );
+        }
     }
 }

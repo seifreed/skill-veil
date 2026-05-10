@@ -42,5 +42,22 @@ hex.workspace = true
 tar.workspace = true
 flate2.workspace = true
 
+# Optional: native sentence embeddings for NOVA `semantics:` patterns.
+# Build with `--features nova-semantics` to enable. Off by default
+# because the upstream crate pulls the ONNX runtime native library
+# (~30 MiB binary delta) and downloads `all-MiniLM-L6-v2` (~90 MiB)
+# into the HF hub cache on first use. Mirrors the pattern already used
+# for the optional `yara` integration.
+fastembed = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enable the native NOVA `semantics:` evaluator backed by
+# `all-MiniLM-L6-v2` via fastembed. The `--nova-semantics` runtime
+# flag is parsed regardless; without this feature it warns and falls
+# back to the `NotYetWiredSemantic` stub so the binary never fails
+# closed because of a build-time choice the user did not make.
+nova-semantics = ["dep:fastembed"]
+
 [dev-dependencies]
 tempfile.workspace = true

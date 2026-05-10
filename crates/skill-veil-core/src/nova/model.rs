@@ -109,12 +109,16 @@ pub struct NovaMatch {
 #[serde(rename_all = "snake_case")]
 pub enum SkippedCapability {
     /// The `semantics:` section requires sentence-embedding inference.
-    /// Pending: a `candle`/ONNX integration shipping the
-    /// `all-MiniLM-L6-v2` model.
+    /// The CLI ships an `all-MiniLM-L6-v2` evaluator behind
+    /// `--features nova-semantics`; without that build feature, or
+    /// when the runtime model fails to load, semantic patterns
+    /// surface here.
     Semantics,
     /// The `llm:` section requires routing to a configured LLM
-    /// provider. Pending: wiring NOVA `llm:` evaluation to the
-    /// existing `~/.skill-veil.toml [llm]` provider chain.
+    /// provider. The CLI wires NOVA `llm:` patterns into the
+    /// existing `~/.skill-veil.toml [llm]` provider chain when the
+    /// `--nova-llm` flag is passed; without that flag, or when the
+    /// provider call fails, llm patterns surface here.
     Llm,
 }
 

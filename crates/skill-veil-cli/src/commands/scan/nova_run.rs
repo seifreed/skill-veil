@@ -17,8 +17,9 @@
 use crate::init::{current_install, NovaInstallSnapshot};
 use anyhow::Result;
 use skill_veil_core::nova::{
-    evaluate_rule, mapping::nova_match_to_findings, parse_rules, NativeKeywordEvaluator,
-    NotYetWiredLlm, NotYetWiredSemantic, NovaMatch, NovaRule, SkippedCapability,
+    evaluate_rule, mapping::nova_match_to_findings, parse_rules, LlmEvaluator,
+    NativeKeywordEvaluator, NotYetWiredLlm, NotYetWiredSemantic, NovaMatch, NovaRule,
+    SemanticEvaluator, SkippedCapability,
 };
 use skill_veil_core::{ArtifactKind, ArtifactScope, Finding};
 use std::path::{Path, PathBuf};
@@ -75,6 +76,8 @@ impl NovaScanReport {
 pub(crate) fn evaluate_against_target(
     target: &Path,
     cache_dir_override: Option<&Path>,
+    llm_eval: Option<&dyn LlmEvaluator>,
+    semantic_eval: Option<&dyn SemanticEvaluator>,
 ) -> Result<Option<NovaScanReport>> {
     let install = current_install(cache_dir_override.map(Path::to_path_buf))?;
     let Some(nova) = install.nova else {
@@ -92,14 +95,21 @@ pub(crate) fn evaluate_against_target(
     }
 
     let kw = NativeKeywordEvaluator::new();
-    let sem = NotYetWiredSemantic;
-    let llm = NotYetWiredLlm;
+    let stub_sem = NotYetWiredSemantic;
+    let stub_llm = NotYetWiredLlm;
+    // Trait-object dispatch lets callers inject `--nova-llm` and
+    // `--nova-semantics` evaluators without monomorphising the engine
+    // for every combination. `engine::evaluate_rule` is `?Sized`-bound
+    // on every evaluator generic specifically to make this zero-cost
+    // ergonomic.
+    let llm_dispatch: &dyn LlmEvaluator = llm_eval.unwrap_or(&stub_llm);
+    let sem_dispatch: &dyn SemanticEvaluator = semantic_eval.unwrap_or(&stub_sem);
 
     let mut hits: Vec<NovaScanHit> = Vec::new();
     let mut skipped_caps: Vec<SkippedCapability> = Vec::new();
     for (path, body) in &bodies {
         for rule in &rules {
-            match evaluate_rule(rule, body, &kw, &sem, &llm) {
+            match evaluate_rule(rule, body, &kw, sem_dispatch, llm_dispatch) {
                 Ok(m) => {
                     if m.matched {
                         hits.push(NovaScanHit {
@@ -177,10 +187,10 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
         for cap in &report.skipped_capabilities {
             let label = match cap {
                 SkippedCapability::Semantics => {
-                    "semantics (sentence embeddings — pending native runtime)"
+                    "semantics (sentence embeddings — pending native runtime; opt-in: --nova-semantics)"
                 }
                 SkippedCapability::Llm => {
-                    "llm (provider routing — pending wiring to the existing skill-veil LLM chain)"
+                    "llm (opt-in with --nova-llm; otherwise patterns are skipped, see tracing warn for runtime errors)"
                 }
             };
             out.push_str(&format!("    - {label}\n"));

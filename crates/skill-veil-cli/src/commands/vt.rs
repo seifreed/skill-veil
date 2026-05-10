@@ -20,10 +20,16 @@ pub(crate) fn run_vt(action: VtAction) -> Result<()> {
 
 fn run_download(args: VtDownloadArgs) -> Result<()> {
     let client = build_client()?;
+    // `--query` and `--clean` are mutually exclusive at the clap layer
+    // (`conflicts_with`), so this branch is exhaustive: explicit query
+    // wins, else `default_query(clean)` picks the historical malicious
+    // default or the harmless mirror used for false-positive sweeps.
+    let resolved_query = args
+        .query
+        .clone()
+        .unwrap_or_else(|| download::default_query(args.clean).to_string());
     let opts = DownloadOptions {
-        query: args
-            .query
-            .unwrap_or_else(|| download::DEFAULT_QUERY.to_string()),
+        query: resolved_query,
         dest: args.dest,
         limit: args.limit.get(),
         report_only: args.report_only,

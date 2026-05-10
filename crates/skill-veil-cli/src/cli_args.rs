@@ -332,10 +332,19 @@ pub enum VtAction {
 
 #[derive(Args, Clone)]
 pub struct VtDownloadArgs {
-    /// VT Intelligence query string. Defaults to the OpenClaw skill malicious
-    /// corpus query.
-    #[arg(long)]
+    /// VT Intelligence query string. Defaults to the OpenClaw skill
+    /// malicious-corpus query (or the harmless-corpus query when
+    /// `--clean` is set).
+    #[arg(long, conflicts_with = "clean")]
     pub query: Option<String>,
+    /// Pull the **clean** OpenClaw skill corpus instead of the
+    /// malicious one — VT-rated harmless skills, used to measure
+    /// skill-veil's false-positive rate (any `Suspicious` /
+    /// `Malicious` verdict on this population is a candidate FP).
+    /// Mutually exclusive with `--query`; `--query` wins by clap
+    /// rejecting the combination at parse time.
+    #[arg(long, default_value_t = false)]
+    pub clean: bool,
     /// Destination directory for the downloaded corpus. Reports are written
     /// to `<dest>/.vt-reports/`.
     #[arg(long, default_value = "data")]
@@ -466,6 +475,24 @@ pub struct ScanArgs {
     /// already pre-screened by NOVA upstream.
     #[arg(long, default_value_t = false)]
     pub no_nova: bool,
+    /// Wire NOVA `llm:` patterns into the skill-veil LLM provider chain
+    /// (`~/.skill-veil.toml [llm]`). Without this flag, `llm:` patterns
+    /// are reported under `skipped_capabilities` and any rule whose
+    /// `condition:` requires the `llm.` namespace cannot fire. Opt-in
+    /// because each `llm:` pattern issues a provider call per scanned
+    /// body and burns tokens / quota.
+    #[arg(long, default_value_t = false)]
+    pub nova_llm: bool,
+    /// Run NOVA `semantics:` patterns through a native sentence-
+    /// embedding model (`all-MiniLM-L6-v2`) and compare via cosine
+    /// similarity. Requires the binary to be built with
+    /// `--features nova-semantics`; without that build feature, the
+    /// flag emits a one-line note and falls back to the `Skipped`
+    /// stub so the rule's `condition:` still reports the missing
+    /// capability. First use downloads the model (~90 MiB) into the
+    /// HF hub cache and is therefore opt-in.
+    #[arg(long, default_value_t = false)]
+    pub nova_semantics: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]
@@ -703,6 +730,65 @@ mod tests {
             panic!("expected vt download subcommand");
         };
         assert_eq!(args.limit.get(), 500);
+    }
+
+    /// Contract: `--clean` defaults to `false` so the historical
+    /// `vt download` invocation (no flags) keeps pulling the
+    /// malicious corpus. A silent default flip would shift every
+    /// benchmark + cross-check downstream.
+    #[test]
+    fn vt_download_clean_defaults_to_false() {
+        let cli = Cli::try_parse_from(["skill-veil", "vt", "download"]).unwrap();
+        let Commands::Vt {
+            action: VtAction::Download(args),
+        } = cli.command
+        else {
+            panic!("expected vt download subcommand");
+        };
+        assert!(!args.clean);
+        assert!(args.query.is_none());
+    }
+
+    /// Contract: passing `--clean` parses cleanly and surfaces as
+    /// `args.clean == true`. The downstream `default_query(true)` is
+    /// already pinned in `vt::download::tests` to return the
+    /// harmless-corpus query, so this test just guards the parse-
+    /// layer wiring.
+    #[test]
+    fn vt_download_clean_flag_is_parsed() {
+        let cli = Cli::try_parse_from(["skill-veil", "vt", "download", "--clean"]).unwrap();
+        let Commands::Vt {
+            action: VtAction::Download(args),
+        } = cli.command
+        else {
+            panic!("expected vt download subcommand");
+        };
+        assert!(args.clean);
+        assert!(args.query.is_none());
+    }
+
+    /// Contract: `--clean` and `--query` are mutually exclusive at the
+    /// clap layer. Both passed together MUST be a parse-time error so
+    /// that a confused operator never gets a silent precedence rule
+    /// (e.g. `--clean` ignored because `--query` won) for an audit-
+    /// affecting choice. The error message must mention both flag
+    /// names so the operator knows which to drop.
+    #[test]
+    fn vt_download_clean_conflicts_with_query() {
+        let err = match Cli::try_parse_from([
+            "skill-veil",
+            "vt",
+            "download",
+            "--clean",
+            "--query",
+            "tag:foo",
+        ]) {
+            Ok(_) => panic!("--clean + --query must be rejected"),
+            Err(e) => e,
+        };
+        let msg = err.to_string().to_lowercase();
+        assert!(msg.contains("clean"), "error must mention --clean: {err}");
+        assert!(msg.contains("query"), "error must mention --query: {err}");
     }
 
     /// Contract: out-of-range `--fail-below` is rejected at parse

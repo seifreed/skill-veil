@@ -7,12 +7,15 @@
 //! - **Keywords**: native, regex / literal substring, case-insensitive
 //!   by default. Reuses the `regex` crate already in our workspace.
 //! - **Semantics**: a `NotYetWired` stub that returns
-//!   `Outcome::Skipped`. The follow-up sprint will plug in
-//!   `candle`/`ort` + `all-MiniLM-L6-v2` here without touching the
-//!   parser, the engine, or any rule.
-//! - **LLM**: a `NotYetWired` stub. The follow-up sprint will plug in
-//!   the existing skill-veil LLM provider chain
-//!   (`~/.skill-veil.toml [llm]`) here.
+//!   `Outcome::Skipped` by default. The CLI ships a fastembed-backed
+//!   `all-MiniLM-L6-v2` evaluator behind the `nova-semantics` Cargo
+//!   feature; the runtime `--nova-semantics` flag swaps it in via the
+//!   `&dyn SemanticEvaluator` parameter on `evaluate_rule` so the
+//!   parser, the engine, and every rule stay untouched.
+//! - **LLM**: a `NotYetWired` stub by default. The CLI wires NOVA
+//!   `llm:` patterns into the existing skill-veil LLM provider chain
+//!   (`~/.skill-veil.toml [llm]`) when the runtime `--nova-llm` flag
+//!   is passed, again via the `&dyn LlmEvaluator` engine parameter.
 //!
 //! The trait is intentionally named after a NOVA section rather than
 //! "matcher" so the wiring of "section X is not implemented" surfaces
@@ -131,9 +134,12 @@ impl KeywordEvaluator for NativeKeywordEvaluator {
     }
 }
 
-/// Stub for semantic evaluation. Always returns `Skipped`. Replaced
-/// in a follow-up sprint by an embedding-backed evaluator (likely
-/// `candle` + `all-MiniLM-L6-v2`).
+/// Stub for semantic evaluation. Always returns `Skipped`. Used as
+/// the default when the CLI is not built with `--features nova-semantics`
+/// (or the runtime model fails to load). The CLI's
+/// `CosineSemanticEvaluator` (backed by `all-MiniLM-L6-v2` via
+/// fastembed) is the production replacement and is wired in via the
+/// `&dyn SemanticEvaluator` engine parameter.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NotYetWiredSemantic;
 
@@ -143,9 +149,12 @@ impl SemanticEvaluator for NotYetWiredSemantic {
     }
 }
 
-/// Stub for LLM evaluation. Always returns `Skipped`. Replaced in a
-/// follow-up sprint by routing to the configured LLM provider in
-/// `~/.skill-veil.toml`.
+/// Stub for LLM evaluation. Always returns `Skipped`. Used as the
+/// default when the CLI is not invoked with `--nova-llm` (or no
+/// `[llm]` section is configured). The CLI's `ProviderLlmEvaluator`
+/// (backed by the existing skill-veil provider chain) is the
+/// production replacement and is wired in via the `&dyn LlmEvaluator`
+/// engine parameter.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NotYetWiredLlm;
 

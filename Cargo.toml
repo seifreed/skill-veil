@@ -73,6 +73,19 @@ chrono = { version = "0.4", features = ["serde"] }
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"
 
+# Optional native sentence-embedding runtime, used only when the
+# `nova-semantics` feature is enabled on `skill-veil-cli`. The default
+# feature set on the upstream crate pulls `image-models` (~tens of MiB)
+# and `native-tls`; we opt out of both. `ort-download-binaries-rustls-tls`
+# means the ONNX runtime native lib is fetched at build time and
+# bundled into the binary; `hf-hub-rustls-tls` lets the runtime fetch
+# `all-MiniLM-L6-v2` from the Hugging Face hub on first use, cached
+# under `~/.cache/huggingface/hub/` (or `InitOptions::cache_dir`).
+fastembed = { version = "5.13", default-features = false, features = [
+    "ort-download-binaries-rustls-tls",
+    "hf-hub-rustls-tls",
+] }
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

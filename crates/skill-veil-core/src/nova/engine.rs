@@ -21,9 +21,9 @@ pub fn evaluate_rule<K, S, L>(
     llm_eval: &L,
 ) -> Result<NovaMatch, super::condition::EvalError>
 where
-    K: KeywordEvaluator,
-    S: SemanticEvaluator,
-    L: LlmEvaluator,
+    K: KeywordEvaluator + ?Sized,
+    S: SemanticEvaluator + ?Sized,
+    L: LlmEvaluator + ?Sized,
 {
     let mut ctx = EvalContext::default();
     let mut keyword_hits = BTreeMap::new();
