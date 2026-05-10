@@ -43,7 +43,11 @@ pub(super) const TRUSTED_API_HOSTS: &[&str] = &[
     // Google
     "*.googleapis.com",
     "*.google.com",
-    // GitHub
+    // GitHub — both bare and subdomain variants. Many skills reference
+    // `https://github.com/<org>/<repo>` directly (homepage, raw pulls
+    // resolved through the gateway), so the bare host needs an entry
+    // even though `*.github.com` covers the API.
+    "github.com",
     "api.github.com",
     "*.github.com",
     "*.githubusercontent.com",
@@ -61,7 +65,10 @@ pub(super) const TRUSTED_API_HOSTS: &[&str] = &[
     "huggingface.co",
     "*.huggingface.co",
     "*.hf.co",
-    // Atlassian (Jira / Confluence / Rovo)
+    // Atlassian (Jira / Confluence / Rovo). Bare + wildcard since
+    // `support.atlassian.com` and `mcp.atlassian.com` both appear in
+    // benign Confluence/Rovo MCP skills.
+    "atlassian.com",
     "*.atlassian.net",
     "*.atlassian.com",
     // Notion
@@ -75,8 +82,32 @@ pub(super) const TRUSTED_API_HOSTS: &[&str] = &[
     "login.microsoftonline.com",
     // AWS public endpoints (regional pattern)
     "*.amazonaws.com",
-    // Cloudflare workers / R2
+    // Cloudflare workers / Pages / R2 / public DNS. `*.pages.dev` and
+    // `*.workers.dev` are the deployed-app domains for Cloudflare
+    // Pages and Workers respectively — modal targets for skills that
+    // POST events into a Cloudflare-hosted webhook receiver.
     "*.cloudflare.com",
+    "*.pages.dev",
+    "*.workers.dev",
+    // Workflow / no-code automation hubs commonly used as webhook
+    // receivers from agent skills. Adding the base domains
+    // (`*.zapier.com` / `*.make.com` etc.) catches both the trigger
+    // endpoint subdomains (`hooks.zapier.com` / `hook.eu1.make.com`)
+    // and the docs/UI subdomains a skill might link to.
+    "*.zapier.com",
+    "*.make.com",
+    "*.n8n.cloud",
+    "*.pipedream.com",
+    "*.pipedream.net",
+    "*.ifttt.com",
+    // Tavily search API (modal LLM-companion search service)
+    "*.tavily.com",
+    // Reference / standards bodies (skills that link to RFCs / IANA
+    // registries from documentation prose).
+    "iana.org",
+    "*.iana.org",
+    "ietf.org",
+    "*.ietf.org",
     // Other well-known public APIs that frequently appear in benign
     // skills.
     "api.stripe.com",

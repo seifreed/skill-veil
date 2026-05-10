@@ -511,6 +511,12 @@
   shield:
     scope: skill.crypto
   enabled: true
+  # Crypto-research / wallet-recovery / DeFi-coaching skills document
+  # `private_key:` / `mnemonic:` in YAML config examples as
+  # placeholder fields the user fills in. Require code-context
+  # corroboration; downgrade for educational/anti-pattern catalogues.
+  requires_code_artifact: true
+  downgrade_when_documentation_context: true
   tags:
     - crypto
     - wallet
@@ -1408,6 +1414,13 @@
   shield:
     scope: skill.exfil
   enabled: true
+  # The 120-char window matches every legit API skill that documents
+  # `WEBHOOK_*` env vars + auth header in nearby prose. Require the
+  # chain to appear in a code block (real read+POST), and downgrade
+  # for documentation catalogues that describe webhook
+  # configuration as a feature.
+  requires_code_artifact: true
+  downgrade_when_documentation_context: true
   tags:
     - exfiltration
     - webhook
@@ -1788,6 +1801,14 @@
   shield:
     scope: skill.secrets
   enabled: true
+  # Vocabulary-only regex: the path patterns above appear verbatim in
+  # documentation explaining where credentials are stored, in
+  # security-scanner skills that detect these paths as anti-patterns,
+  # and in skills that document their own config layout. Require the
+  # match to also appear in a code block (real read/write call) and
+  # downgrade for educational catalogues.
+  requires_code_artifact: true
+  downgrade_when_documentation_context: true
   tags:
     - credential
     - persistence
