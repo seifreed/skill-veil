@@ -595,12 +595,26 @@ rules:
     severity: medium
     confidence: 0.72
     when: !regex
-      pattern: "(?is)(?:\\b(?:wallet|usdt|usdc|btc|eth|tron|crypto|alipay|venmo|zelle|paypal|payoneer|stripe)\\b.{0,200}\\b(?:transfer|send|deposit|top[\\s-]?up|charge|withdraw|claim|reward|gather|funnel)\\b|\\b\\d+(?:[.,]\\d+)?\\s*(?:USDT|USDC|BTC|ETH|sol\\b|sats?|RMB|CNY|元(?:人民币)?|￥)\\b|\\b(?:dodo\\s+payments?|402\\s+payment\\s+required)\\b|微信支付|支付宝|打赏|赞赏|赏\\s*\\d+\\s*元)"
+      # Pre-fix the standalone `微信支付|支付宝|打赏|赞赏` clause matched
+      # every benign skill that mentioned WeChat Pay / Alipay in
+      # passing (legitimate Chinese-market integrations). The bare
+      # `wallet|usdt|...` ∩ `claim|reward|...` window matched negation
+      # prose ("must NOT store payment data, claim..."). 4 of 6 LLM-
+      # consensus FPs in the v5 corpus traced to those two clauses.
+      #
+      # New rule: the wallet/crypto evidence MUST be paired with
+      # explicit scam-style verbs (`claim your reward`, `send X to`,
+      # `airdrop`, `free gift`, `guaranteed return`). Chinese
+      # payment-platform standalones are removed; the
+      # `打赏 <digit> 元` tipping-with-amount remains because the
+      # numeric amount is the actual scam shape.
+      pattern: "(?is)(?:\\b(?:wallet|usdt|usdc|btc|eth|tron|crypto|alipay|venmo|zelle|paypal|payoneer)\\b.{0,160}\\b(?:claim\\s+(?:your|the)\\s+(?:reward|prize|airdrop|bonus|gift|free|nft)|free\\s+(?:airdrop|gift|nft|reward)|airdrop|guaranteed\\s+return|send\\s+\\d+(?:[.,]\\d+)?\\s+(?:USDT|USDC|BTC|ETH|sol|sats?|to)|deposit\\s+\\d+(?:[.,]\\d+)?)\\b|\\b(?:dodo\\s+payments?|402\\s+payment\\s+required)\\b|赏\\s*\\d+\\s*元|打赏\\s*\\d+\\s*元)"
     action: require_approval
     reason: "Skill collects funds, tokens, or wallet credentials — possible scam or covert payment instruction"
     shield:
       scope: skill.review
     enabled: true
+    downgrade_when_documentation_context: true
     tags:
       - scam
       - financial

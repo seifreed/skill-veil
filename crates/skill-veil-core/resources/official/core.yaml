@@ -230,12 +230,24 @@ rules:
     severity: critical
     confidence: 0.92
     when: !regex
-      pattern: "(?i)(write|create|inject|install).{0,30}SOUL\\.md|SOUL\\.md.{0,30}(write|create|inject|overwrite)"
+      # Pre-fix the bare `(write|create|inject|install).{0,30}SOUL\.md`
+      # matched benign defensive prose: "Agent config → SOUL.md,
+      # MEMORY.md, identity file write protection". 5 of 5 LLM-
+      # consensus FPs in the v5 corpus matched that "write protection"
+      # phrasing.
+      #
+      # New rule: the verb adjacent to SOUL.md MUST be an imperative
+      # write/append/inject targeting CONTENT (`content|directive|prompt|
+      # persona|identity|to|into`), not a bare token. The reverse
+      # direction (`SOUL.md ... written|injected|installed`) keeps
+      # past-tense imperative shape.
+      pattern: "(?i)(write|append|inject|prepend|install)\\s+(content|data|prompt|directive|persona|identity|instructions?|system\\s+prompt|to|into)\\b.{0,30}SOUL\\.md|SOUL\\.md.{0,30}(written|injected|installed|appended|prepended)"
     action: block
     reason: "Skill attempts to write content into SOUL.md — persistent agent identity tampering"
     shield:
       scope: skill.prompt
     enabled: true
+    downgrade_when_documentation_context: true
     tags:
       - persistent_prompt_tampering
       - soul

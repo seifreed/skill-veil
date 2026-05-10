@@ -958,7 +958,13 @@
   severity: high
   confidence: 0.90
   when: !regex
-    pattern: "(?i)sms\\s*database|call\\s*log|messages\\.db|CallHistory|sms\\.db"
+    # Pre-fix the bare `call\s*log` clause matched benign prose like
+    # "tool call logged to ~/.vmware/audit.db" and "evidence checklist:
+    # ... call logs". 5/5 LLM-consensus FPs in the v5 corpus traced
+    # to that loose clause. New pattern requires the SMS/call evidence
+    # to look like an actual database file path or platform API target,
+    # not the English phrase "call log" appearing in unrelated prose.
+    pattern: "(?i)(sms\\s*database|messages\\.db|callhistory(\\.storedata|\\.db)?|sms\\.db|mmssms\\.db|com\\.android\\.providers\\.telephony|content://sms|content://call_log|callkit|library/sms/|/private/var/mobile/library/sms|call_log\\.(db|sqlite|store|storedata))"
   action: block
   reason: "Access to SMS or call log databases"
   shield:
@@ -1766,7 +1772,20 @@
   severity: critical
   confidence: 0.88
   when: !regex
-    pattern: "(?is)(n(ã|a)o\\s+pergunt|n(ã|a)o\\s+confirm|no\\s+ask|never\\s+ask|sin\\s+preguntar|без\\s+под|不要确认|不要询问|do\\s+not\\s+ask|skip\\s+confirm|proibido\\s+confirmar).{0,160}(pay|paga|pagar|PIX|boleto|transfer|pagamento|payment|transferencia|перевод|支付|付款|send\\s+money|wire)"
+    # Pre-fix the English `(no|never|do not)\s+ask` clauses matched
+    # benign safety prose: "Never ask the user for raw card details",
+    # "must never ask for or store passwords, account numbers, PINs,
+    # SSNs, or payment details". 6 of 9 LLM-consensus FPs in the v5
+    # corpus traced to that loose pattern.
+    #
+    # New rule: the English negation+ask clause REQUIRES the
+    # ask-target to be a confirmation/approval/permission concept
+    # (skipping the human-in-the-loop step) — NOT a data-collection
+    # noun (`credentials`, `password`, `card`, `PIN`, `SSN`).
+    # Non-English clauses are kept verbatim because the tokenisation
+    # ambiguity does not arise (`não pergunte` / `不要确认` are unambiguous
+    # in payment-skill context).
+    pattern: "(?is)((n(ã|a)o\\s+pergunt|n(ã|a)o\\s+confirm|sin\\s+preguntar|без\\s+под|不要确认|不要询问|skip\\s+confirm|bypass\\s+confirm|without\\s+confirm|proibido\\s+confirmar).{0,160}(pay|paga|pagar|PIX|boleto|transfer|pagamento|payment|transferencia|перевод|支付|付款|send\\s+money|wire)|(no\\s+ask|never\\s+ask|do\\s+not\\s+ask|don'?t\\s+ask)\\s+(the\\s+(user|customer|human|operator)\\s+)?(for\\s+)?(confirmation|permission|approval|consent|to\\s+confirm|to\\s+approve|to\\s+verify).{0,160}(pay|paga|pagar|PIX|boleto|transfer|pagamento|payment|transferencia|перевод|支付|付款|send\\s+money|wire))"
   action: block
   reason: "Instructs the agent to execute payment without user confirmation"
   shield:
