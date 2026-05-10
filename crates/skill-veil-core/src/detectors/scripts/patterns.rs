@@ -27,19 +27,29 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
         ])
     });
 
-pub(crate) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
-    LazyLock::new(|| {
+pub(crate) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> = LazyLock::new(
+    || {
         compile_each(&[
             (
                 "SCRIPT_DEFERRED_EXECUTION",
-                r"(?i)(crontab|schtasks|\bat\s+\d|systemd-run|launchctl\s+load)",
+                // The `at(1)` clause requires a real time spec —
+                // `now`, `HH:MM`, `<digit>(am|pm)`, `noon`,
+                // `midnight`, `teatime`, or `now + N (min|hour|day|week)`.
+                // Pre-fix `\bat\s+\d` matched skill prose like "buy at
+                // 5 BTC" or "execute at 0xfeed" because any digit
+                // sufficed. The other clauses
+                // (crontab/schtasks/systemd-run/launchctl) already
+                // require literal CLI tool names that do not appear
+                // in benign prose.
+                r"(?i)(crontab|schtasks|\bat\s+(now(\s*\+\s*\d+\s*(minute|hour|day|week)s?)?|\d{1,2}:\d{2}|\d{1,2}\s*(am|pm)|noon|midnight|teatime)\b|systemd-run|launchctl\s+load)",
             ),
             (
                 "SCRIPT_PERSISTENCE",
                 r"(?i)(/etc/cron|~/\.config/autostart|launchagents|startup\\|runonce)",
             ),
         ])
-    });
+    },
+);
 
 pub(crate) static SHELL_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern)>> =
     LazyLock::new(|| {
@@ -155,6 +165,50 @@ mod tests {
             ),
             "`awget-utility` is a substring; must not match",
         );
+    }
+
+    /// Contract: `SCRIPT_DEFERRED_EXECUTION`'s `at(1)` clause matches
+    /// ONLY real `at`-command time specs (`now`, `HH:MM`, `5pm`,
+    /// `noon`, `midnight`, `teatime`, `now + 5 minutes`). Pre-fix
+    /// the bare `\bat\s+\d` matched any "at <digit>" run in prose —
+    /// "buy at 5 BTC", "look at 0xfeed", "execute at 0 retries" all
+    /// scored Block on benign skills.
+    #[test]
+    fn deferred_execution_at_clause_requires_real_time_spec() {
+        for input in [
+            "at now",
+            "at now + 5 minutes",
+            "at 14:30",
+            "at 5pm",
+            "at 11 am",
+            "at noon",
+            "at midnight",
+            "at teatime",
+        ] {
+            assert!(
+                matches(&DEFERRED_PATTERNS, "SCRIPT_DEFERRED_EXECUTION", input),
+                "expected `{input}` to match SCRIPT_DEFERRED_EXECUTION",
+            );
+        }
+    }
+
+    /// Contract (negative): prose fragments that contain `at <digit>`
+    /// without a real time spec MUST NOT match. Pre-fix these all
+    /// fired on benign trading / DSL skills.
+    #[test]
+    fn deferred_execution_at_clause_rejects_prose_digit_runs() {
+        for input in [
+            "buy at 5 BTC",
+            "look at 0xfeed",
+            "execute at 0 retries",
+            "evaluated at 1 second",
+            "fires at 3 quarters past",
+        ] {
+            assert!(
+                !matches(&DEFERRED_PATTERNS, "SCRIPT_DEFERRED_EXECUTION", input),
+                "expected `{input}` NOT to match SCRIPT_DEFERRED_EXECUTION",
+            );
+        }
     }
 
     /// Contract: `COMMAND_INJECTION_SINK_SHELL` matches genuine `bash -c`

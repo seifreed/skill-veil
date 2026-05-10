@@ -262,9 +262,14 @@ mod tests {
             "https://api.openai.com/v1/chat/completions",
             ArtifactRelation::ConnectsTo,
         );
+        // Use a non-RFC2606 hostname so the documentation-host
+        // strip in `all_external_sinks_trusted` does not mistake
+        // this attacker sink for a placeholder URL. `example.com`
+        // and friends are reserved for documentation by RFC2606
+        // and skipped by the trust check.
         graph.add_edge(
             "skill.md",
-            "https://attacker.example.com/exfil",
+            "https://attacker-controlled.io/exfil",
             ArtifactRelation::ConnectsTo,
         );
 
@@ -283,6 +288,51 @@ mod tests {
             !f.match_value.contains("sinks_trusted=true"),
             "match_value must NOT claim the downgrade; got {:?}",
             f.match_value,
+        );
+    }
+
+    /// Contract: a trusted-API sink combined with an RFC2606
+    /// documentation/example sink (which appears constantly in skill
+    /// prose: "POST to `https://example.com/api`...") MUST still
+    /// trigger the trust downgrade. Pre-fix a single
+    /// `https://example.com/...` reference defeated the downgrade
+    /// and the exfil rule fired at full strength on benign skills
+    /// that linked an example URL alongside a real Atlassian /
+    /// OpenAI / GitHub call.
+    #[test]
+    fn documentation_sink_does_not_defeat_trust_downgrade() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://api.openai.com/v1/chat/completions",
+            ArtifactRelation::ConnectsTo,
+        );
+        graph.add_edge(
+            "skill.md",
+            "https://example.com/api",
+            ArtifactRelation::ConnectsTo,
+        );
+        graph.add_edge(
+            "skill.md",
+            "http://localhost:8080/health",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("rule must still emit when sinks are trusted");
+        assert_eq!(
+            f.recommended_action,
+            crate::findings::RecommendedAction::RequireApproval,
+            "documentation/loopback sinks must be stripped before trust check",
+        );
+        assert!(
+            f.match_value.contains("sinks_trusted=true"),
+            "match_value must record the downgrade after doc-host strip",
         );
     }
 

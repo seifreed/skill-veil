@@ -1,7 +1,7 @@
 use super::patterns::{
     looks_like_external_sink, looks_like_identity_target, looks_like_secret_target,
 };
-use super::trusted_hosts::is_trusted_api_host;
+use super::trusted_hosts::{is_documentation_or_reserved_host, is_trusted_api_host};
 use super::{TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
@@ -97,7 +97,7 @@ pub(super) fn node_has_source(
 /// callers get a clean "downgrade does not apply" signal) AND when
 /// at least one sink is untrusted (the operator-relevant case).
 pub(super) fn all_external_sinks_trusted(graph: &ArtifactGraph, node_path: &str) -> bool {
-    let mut saw_external = false;
+    let mut saw_real_external = false;
     for edge in &graph.edges {
         if edge.from != node_path {
             continue;
@@ -108,12 +108,21 @@ pub(super) fn all_external_sinks_trusted(graph: &ArtifactGraph, node_path: &str)
         if !looks_like_external_sink(edge) {
             continue;
         }
-        saw_external = true;
+        // Documentation / RFC2606-reserved / loopback hosts are not
+        // real exfil sinks — strip them before deciding whether the
+        // remaining real sinks are all trusted. Without this strip
+        // a single `https://example.com/...` reference in skill prose
+        // (or a `http://localhost:8080` self-talk URL) defeats the
+        // downgrade and the exfil rule fires at full strength.
+        if is_documentation_or_reserved_host(&edge.to) {
+            continue;
+        }
+        saw_real_external = true;
         if !is_trusted_api_host(&edge.to) {
             return false;
         }
     }
-    saw_external
+    saw_real_external
 }
 
 pub(super) fn node_has_sink(graph: &ArtifactGraph, node_path: &str, sink: TaintSinkKind) -> bool {

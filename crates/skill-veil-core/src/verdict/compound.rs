@@ -3,6 +3,21 @@ use crate::findings::{
     VerdictReason,
 };
 
+/// Rule IDs that emit `DataExfiltration` evidence and participate in
+/// the trusted-API-host downgrade. When EVERY data-exfiltration
+/// finding in the relevant scope is one of these rules AND every
+/// such finding is annotated with `sinks_trusted=true` in its
+/// `match_value`, the compound exfil chain downgrades from
+/// `MaliciousBehavior` to `ReviewSignal` — the per-finding downgrade
+/// would otherwise be silently re-escalated by the compound layer.
+///
+/// Limited to the SECRET / IDENTITY taint rules that opt into the
+/// downgrade in `artifact_taint::analysis::TRUSTED_HOST_DOWNGRADE_RULE_IDS`.
+const TRUSTED_HOST_DOWNGRADE_TAINT_RULES: &[&str] = &[
+    "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK",
+    "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK",
+];
+
 pub(super) fn detect_compound_verdict_reasons(
     findings: &[Finding],
     raw_root_cause_groups: &[RootCauseGroup],
@@ -125,7 +140,7 @@ fn detect_prompt_tampering_with_exec(
 }
 
 fn detect_credential_exfil_chain(
-    _findings: &[Finding],
+    findings: &[Finding],
     raw_root_cause_groups: &[RootCauseGroup],
 ) -> Option<VerdictReason> {
     let cred_scope = most_specific_scope_for_category(
@@ -139,13 +154,52 @@ fn detect_credential_exfil_chain(
     // primary entrypoint was previously labelled `SupportingArtifact`,
     // confusing audit trails and scope-keyed suppressions.
     let scope = cred_scope.min(exfil_scope);
+
+    // Trusted-host downgrade respect: when every actionable
+    // DataExfiltration finding in `scope` is a trust-downgraded
+    // taint match (sinks_trusted=true), the per-finding emission was
+    // already moved to ReviewSignal — re-escalating to
+    // MaliciousBehavior here defeats that downgrade. Drop to
+    // ReviewSignal so the compound chain still surfaces the chain
+    // shape but no longer auto-blocks. A SINGLE non-trust-downgraded
+    // exfil finding defeats the downgrade and the compound stays at
+    // MaliciousBehavior.
+    let exfil_findings_in_scope: Vec<&Finding> = findings
+        .iter()
+        .filter(|f| {
+            f.category == ThreatCategory::DataExfiltration
+                && f.artifact_scope == scope
+                && f.recommended_action != RecommendedAction::Log
+        })
+        .collect();
+    let signal_class = if !exfil_findings_in_scope.is_empty()
+        && exfil_findings_in_scope
+            .iter()
+            .all(|f| is_trust_downgraded_taint(f))
+    {
+        SignalClass::ReviewSignal
+    } else {
+        SignalClass::MaliciousBehavior
+    };
+
     Some(VerdictReason {
         scope,
         category: ThreatCategory::DataExfiltration,
-        signal_class: SignalClass::MaliciousBehavior,
+        signal_class,
         rationale: "Compound verdict: token or session access is paired with outbound transmission"
             .to_string(),
     })
+}
+
+/// `true` when `finding` is one of the trust-opt-in taint rules AND
+/// its `match_value` carries the `sinks_trusted=true` annotation
+/// emitted by `artifact_taint::analysis::build_taint_finding` when
+/// every external sink resolved to the API allowlist.
+fn is_trust_downgraded_taint(finding: &Finding) -> bool {
+    if !TRUSTED_HOST_DOWNGRADE_TAINT_RULES.contains(&finding.rule_id.as_str()) {
+        return false;
+    }
+    finding.match_value.contains("sinks_trusted=true")
 }
 
 fn detect_install_hook_with_exec_surface(
@@ -246,5 +300,137 @@ fn detect_mcp_remote_endpoint_with_exec(
         })
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::findings::Finding;
+
+    fn taint_finding(rule_id: &str, sinks_trusted: bool) -> Finding {
+        let suffix = if sinks_trusted {
+            " sinks_trusted=true"
+        } else {
+            ""
+        };
+        Finding {
+            rule_id: rule_id.to_string(),
+            category: ThreatCategory::DataExfiltration,
+            severity: crate::findings::Severity::Critical,
+            confidence: 0.9,
+            raw_confidence: 0.9,
+            confidence_rationale: String::new(),
+            matched_on: crate::findings::MatchTarget::ReferencedFile {
+                path: "SKILL.md".to_string(),
+            },
+            match_value: format!(
+                "family=exfil source=secret_access sink=https://api.openai.com/v1{suffix}"
+            ),
+            reason: String::new(),
+            remediation: String::new(),
+            recommended_action: if sinks_trusted {
+                RecommendedAction::RequireApproval
+            } else {
+                RecommendedAction::Block
+            },
+            evidence_kind: crate::findings::EvidenceKind::Behavior,
+            artifact_kind: crate::findings::ArtifactKind::SkillDocument,
+            artifact_scope: ArtifactScope::AgentEntrypoint,
+            signal_class: if sinks_trusted {
+                SignalClass::ReviewSignal
+            } else {
+                SignalClass::MaliciousBehavior
+            },
+            artifact_path: Some("SKILL.md".to_string()),
+            operational_contexts: Vec::new(),
+            line_number: None,
+            suppression: None,
+        }
+    }
+
+    fn cred_group() -> RootCauseGroup {
+        RootCauseGroup {
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::CredentialExposure,
+            signal_class: SignalClass::ReviewSignal,
+            finding_count: 1,
+            strongest_action: RecommendedAction::RequireApproval,
+            representative_rules: vec!["SKILL_SECRETS_DIR_WRITE".to_string()],
+        }
+    }
+
+    fn exfil_group() -> RootCauseGroup {
+        RootCauseGroup {
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::DataExfiltration,
+            signal_class: SignalClass::ReviewSignal,
+            finding_count: 1,
+            strongest_action: RecommendedAction::RequireApproval,
+            representative_rules: vec!["ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK".to_string()],
+        }
+    }
+
+    /// Contract: when EVERY DataExfiltration finding in scope is a
+    /// trust-downgraded taint (`sinks_trusted=true`), the compound
+    /// credential-exfil chain emits ReviewSignal — NOT
+    /// MaliciousBehavior. Pre-fix the per-finding trust downgrade
+    /// was silently re-escalated by the compound chain because the
+    /// chain only consulted raw_root_cause_groups; an Atlassian /
+    /// OpenAI / GitHub-only skill therefore stayed `malicious` at
+    /// the verdict layer.
+    #[test]
+    fn credential_exfil_chain_respects_trust_downgrade() {
+        let findings = vec![taint_finding(
+            "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK",
+            true,
+        )];
+        let groups = vec![cred_group(), exfil_group()];
+        let reason = detect_credential_exfil_chain(&findings, &groups)
+            .expect("chain should still emit a verdict reason");
+        assert_eq!(
+            reason.signal_class,
+            SignalClass::ReviewSignal,
+            "trust-downgraded taint must downgrade compound chain to ReviewSignal"
+        );
+    }
+
+    /// Contract (negative): a single non-trust-downgraded taint
+    /// finding defeats the trust downgrade — the compound chain
+    /// stays at MaliciousBehavior so a real exfil signal cannot be
+    /// laundered by mixing it with one trusted-host call.
+    #[test]
+    fn credential_exfil_chain_one_untrusted_defeats_downgrade() {
+        let findings = vec![
+            taint_finding("ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK", true),
+            taint_finding("ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK", false),
+        ];
+        let groups = vec![cred_group(), exfil_group()];
+        let reason = detect_credential_exfil_chain(&findings, &groups)
+            .expect("chain should still emit a verdict reason");
+        assert_eq!(
+            reason.signal_class,
+            SignalClass::MaliciousBehavior,
+            "one untrusted taint sink must keep compound chain at MaliciousBehavior"
+        );
+    }
+
+    /// Contract: when there is no DataExfiltration finding at all
+    /// in the scope under consideration (e.g. the exfil evidence is
+    /// in a different scope / artifact), the compound chain MUST
+    /// still emit MaliciousBehavior — the trust downgrade only
+    /// applies when actual taint findings are present and ALL
+    /// trust-downgraded.
+    #[test]
+    fn credential_exfil_chain_no_in_scope_findings_stays_malicious() {
+        let findings: Vec<Finding> = Vec::new();
+        let groups = vec![cred_group(), exfil_group()];
+        let reason = detect_credential_exfil_chain(&findings, &groups)
+            .expect("chain should still emit a verdict reason");
+        assert_eq!(
+            reason.signal_class,
+            SignalClass::MaliciousBehavior,
+            "no in-scope exfil findings must keep chain at MaliciousBehavior"
+        );
     }
 }

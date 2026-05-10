@@ -65,7 +65,16 @@ impl VerdictPredicates {
             group.signal_class == SignalClass::MaliciousBehavior
                 && group.strongest_action == RecommendedAction::Block
         });
-        let has_compound_malicious = !compound_reasons.is_empty();
+        // Only count compound reasons that are themselves
+        // `MaliciousBehavior`. Pre-fix any compound reason — including
+        // a downgraded `ReviewSignal` chain — flipped the unconditional
+        // escalation flag, which silently re-escalated the
+        // trusted-host-downgraded credential-exfil chain back to
+        // Malicious in the verdict layer even after `compound.rs`
+        // moved its own signal_class to ReviewSignal.
+        let has_compound_malicious = compound_reasons
+            .iter()
+            .any(|r| r.signal_class == SignalClass::MaliciousBehavior);
         let has_primary_block = primary_summary.recommended_action == RecommendedAction::Block;
         let has_supporting_block =
             supporting_summary.recommended_action == RecommendedAction::Block;
@@ -322,5 +331,55 @@ fn isolated_weak_package_root_group(
         Some(actionable_groups[0])
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::findings::VerdictReason;
+
+    fn malicious_reason() -> VerdictReason {
+        VerdictReason {
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::DataExfiltration,
+            signal_class: SignalClass::MaliciousBehavior,
+            rationale: "compound chain at full strength".to_string(),
+        }
+    }
+
+    fn downgraded_reason() -> VerdictReason {
+        VerdictReason {
+            scope: ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::DataExfiltration,
+            signal_class: SignalClass::ReviewSignal,
+            rationale: "compound chain downgraded to review".to_string(),
+        }
+    }
+
+    /// Contract: `has_compound_malicious` is `true` when AT LEAST ONE
+    /// compound reason carries `MaliciousBehavior`. Pre-fix the flag
+    /// fired on the mere presence of any compound reason — including
+    /// trust-downgraded `ReviewSignal` reasons emitted by the
+    /// credential-exfil chain — which silently re-escalated benign
+    /// API-key-using skills back to Malicious in
+    /// `verdict::predicates::verdict`.
+    #[test]
+    fn has_compound_malicious_only_counts_malicious_signal_class() {
+        let reasons_only_review = [downgraded_reason()];
+        assert!(
+            !reasons_only_review
+                .iter()
+                .any(|r| r.signal_class == SignalClass::MaliciousBehavior),
+            "review-signal-only compound reasons must NOT trip has_compound_malicious",
+        );
+
+        let reasons_with_malicious = [downgraded_reason(), malicious_reason()];
+        assert!(
+            reasons_with_malicious
+                .iter()
+                .any(|r| r.signal_class == SignalClass::MaliciousBehavior),
+            "any malicious-behavior compound reason MUST trip has_compound_malicious",
+        );
     }
 }

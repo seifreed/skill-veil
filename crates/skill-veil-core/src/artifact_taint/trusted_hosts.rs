@@ -133,6 +133,72 @@ pub(super) const TRUSTED_API_HOSTS: &[&str] = &[
     "api.youtube.com",
 ];
 
+/// RFC2606 / RFC6761 reserved hostnames and TLDs that document
+/// authors use as placeholder URLs in skill prose ("connect to
+/// `https://example.com/api/...`"). Treated as "documentation noise"
+/// rather than real exfil sinks: callers strip these before deciding
+/// whether ALL real sinks are trusted.
+///
+/// Loopback variants (`localhost`, `*.localhost`) are included for
+/// the same reason — a skill that POSTs to `http://localhost:8080`
+/// is talking to itself, not exfiltrating to an external party.
+///
+/// Curation rule: only RFC-reserved or otherwise globally-loopback
+/// names. Real organisations whose domains happen to look reserved
+/// (e.g. `example-corp.com`) MUST NOT land here — extend
+/// [`TRUSTED_API_HOSTS`] instead.
+pub(super) const DOCUMENTATION_OR_RESERVED_HOSTS: &[&str] = &[
+    // RFC2606 reserved second-level names.
+    "example.com",
+    "example.org",
+    "example.net",
+    "*.example.com",
+    "*.example.org",
+    "*.example.net",
+    // RFC2606 reserved TLDs.
+    "*.example",
+    "*.test",
+    "*.invalid",
+    // RFC6761 loopback.
+    "localhost",
+    "*.localhost",
+];
+
+/// Returns `true` if `endpoint` resolves to a documentation /
+/// reserved / loopback host that callers should strip from sink lists
+/// before deciding whether the remaining real sinks are trusted.
+///
+/// Pre-fix a single `https://example.com/...` reference in skill
+/// prose (or the bare `127.0.0.1` loopback target) defeated the
+/// `all_external_sinks_trusted` check even when every other sink was
+/// on the trusted-API allowlist.
+#[must_use]
+pub(super) fn is_documentation_or_reserved_host(endpoint: &str) -> bool {
+    let host = match extract_host(endpoint) {
+        Some(h) => h.to_ascii_lowercase(),
+        None => return false,
+    };
+    if host.is_empty() {
+        return false;
+    }
+    if is_loopback_ipv4(&host) {
+        return true;
+    }
+    for pattern in DOCUMENTATION_OR_RESERVED_HOSTS {
+        if matches_host_pattern(&host, pattern) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_loopback_ipv4(host: &str) -> bool {
+    if !is_ipv4_literal(host) {
+        return false;
+    }
+    host.starts_with("127.")
+}
+
 /// Returns `true` if `endpoint` (a URL string from a graph edge's
 /// destination) resolves to a host on [`TRUSTED_API_HOSTS`].
 ///
@@ -329,6 +395,54 @@ mod tests {
         assert!(!is_trusted_api_host("   "));
         assert!(!is_trusted_api_host("https://"));
         assert!(!is_trusted_api_host("not_a_url"));
+    }
+
+    /// Contract: RFC2606 reserved second-level names and reserved
+    /// TLDs are recognised as documentation noise so callers can
+    /// strip them before the trust check. Pre-fix a single
+    /// `https://example.com/...` reference in skill prose defeated
+    /// the trusted-host downgrade for the entire artifact.
+    #[test]
+    fn documentation_hosts_recognised_as_reserved() {
+        for endpoint in [
+            "https://example.com/api",
+            "http://example.org",
+            "https://api.example.net/v1",
+            "https://foo.example",
+            "https://bar.test",
+            "http://baz.invalid",
+            "http://localhost:8080/health",
+            "http://api.localhost",
+            "http://127.0.0.1:5000",
+            "http://127.5.5.5",
+        ] {
+            assert!(
+                is_documentation_or_reserved_host(endpoint),
+                "expected {endpoint} to be flagged as documentation/reserved",
+            );
+        }
+    }
+
+    /// Contract (negative): real organisations whose domains merely
+    /// contain reserved-looking substrings MUST NOT be flagged. A
+    /// company called `example-corp.com` or a host
+    /// `examplecdn.io` is genuinely external infrastructure and
+    /// belongs on the trust path proper.
+    #[test]
+    fn documentation_host_check_does_not_overmatch() {
+        for endpoint in [
+            "https://example-corp.com/api",
+            "https://examplecdn.io",
+            "https://attacker.com/example.com",
+            "https://10.0.0.5",
+            "https://192.168.1.1",
+            "https://8.8.8.8",
+        ] {
+            assert!(
+                !is_documentation_or_reserved_host(endpoint),
+                "expected {endpoint} NOT to be flagged as documentation/reserved",
+            );
+        }
     }
 
     /// Contract: well-known LLM provider hosts the skill-veil
