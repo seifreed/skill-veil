@@ -33,12 +33,24 @@ pub(super) struct VerdictInputs<'a> {
 ///   (case-sensitive `-D`); 0/4000 benign hits, 534 malicious-corpus
 ///   hits. (The two raw lowercase-`-d` hits are test fixtures in one
 ///   security-tooling skill and do not match the case-sensitive rule.)
+/// - `SKILL_FAKE_DEPENDENCY_DROPPER` — composite 2-of-3 detector
+///   (`detectors::instructions::dropper_delivery`); zero-FP by
+///   construction: the conjunction of fake-mandatory-dependency,
+///   paste-site delivery, and password-archive signals measured
+///   0/4000 benign, 1149/2976 malicious. A skill that stages a fake
+///   dependency dropper is malicious by definition — corroboration
+///   only manufactured a soft FN. Cross-LLM triage of the residual
+///   showed 6 strong-malicious (≥2 of 3 LLMs say malicious) skills
+///   topped by this rule still held at Suspicious.
 ///
 /// Adding a rule here is a precision↔recall trade made deliberately
 /// at the verdict layer. A rule that later starts producing benign
 /// FPs MUST be removed from this list, not "calibrated around".
-pub(super) const CONCLUSIVE_SINGLE_RULE_IDS: &[&str] =
-    &["SKILL_MALICIOUS_PUBLISHER", "SKILL_MACOS_BASE64_RCE"];
+pub(super) const CONCLUSIVE_SINGLE_RULE_IDS: &[&str] = &[
+    "SKILL_MALICIOUS_PUBLISHER",
+    "SKILL_MACOS_BASE64_RCE",
+    "SKILL_FAKE_DEPENDENCY_DROPPER",
+];
 
 pub(super) struct VerdictPredicates {
     pub(super) has_malicious_behavior: bool,
