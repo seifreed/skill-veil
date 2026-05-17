@@ -13,6 +13,33 @@ pub(super) struct VerdictInputs<'a> {
     pub(super) supporting_summary: &'a FindingSummary,
 }
 
+/// Rule IDs whose single Block-strength `MaliciousBehavior` finding is
+/// sufficient on its own to escalate the package to `Malicious`,
+/// bypassing the [`VerdictPredicates::has_independent_malicious_corroboration`]
+/// gate.
+///
+/// The corroboration gate (rounds 2–3 of FP reduction) was added
+/// because FP-prone rules like `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK`
+/// fire on benign API-client skills. But that gate over-applies: it
+/// also holds intrinsically-conclusive single signals at `Suspicious`,
+/// which is a soft false-negative on a confirmed-malicious skill.
+///
+/// Membership criterion — non-negotiable: a rule may appear here ONLY
+/// if it produces **zero** findings on the 4000-skill VT-clean
+/// `data-clean` corpus. Empirically verified at addition time:
+/// - `SKILL_MALICIOUS_PUBLISHER` — literal known-bad publisher IOC;
+///   0/4000 benign hits, 1037 malicious-corpus hits.
+/// - `SKILL_MACOS_BASE64_RCE` — `base64 -D | sh` macOS dropper
+///   (case-sensitive `-D`); 0/4000 benign hits, 534 malicious-corpus
+///   hits. (The two raw lowercase-`-d` hits are test fixtures in one
+///   security-tooling skill and do not match the case-sensitive rule.)
+///
+/// Adding a rule here is a precision↔recall trade made deliberately
+/// at the verdict layer. A rule that later starts producing benign
+/// FPs MUST be removed from this list, not "calibrated around".
+pub(super) const CONCLUSIVE_SINGLE_RULE_IDS: &[&str] =
+    &["SKILL_MALICIOUS_PUBLISHER", "SKILL_MACOS_BASE64_RCE"];
+
 pub(super) struct VerdictPredicates {
     pub(super) has_malicious_behavior: bool,
     pub(super) has_compound_malicious: bool,
@@ -23,6 +50,12 @@ pub(super) struct VerdictPredicates {
     pub(super) has_actionable_non_package_root: bool,
     pub(super) severe_hygiene_only: bool,
     pub(super) has_conclusive_supporting_malicious: bool,
+    /// `true` when at least one finding from a [`CONCLUSIVE_SINGLE_RULE_IDS`]
+    /// rule is still `MaliciousBehavior` + `Block` after calibration.
+    /// Such a finding escalates to `Malicious` on its own — these are
+    /// curated zero-FP rules, so the corroboration gate would only
+    /// create a soft false negative.
+    pub(super) has_conclusive_single_rule: bool,
     pub(super) isolated_weak_package_root_signal: bool,
     pub(super) has_non_hygiene_primary_block: bool,
     /// The (scope, category, signal_class) of the isolated weak package-root
@@ -147,6 +180,15 @@ impl VerdictPredicates {
         let has_conclusive_supporting_malicious = findings
             .iter()
             .any(Finding::is_conclusive_malicious_evidence);
+        // Calibration may have downgraded the finding (doc-context /
+        // requires-code-artifact). Gate on the POST-calibration
+        // signal_class + action so a downgraded base64-RCE in a
+        // detection-catalogue skill does not escalate.
+        let has_conclusive_single_rule = findings.iter().any(|f| {
+            CONCLUSIVE_SINGLE_RULE_IDS.contains(&f.rule_id.as_str())
+                && f.signal_class == SignalClass::MaliciousBehavior
+                && f.recommended_action == RecommendedAction::Block
+        });
         let isolated_weak_signal_key = isolated_weak_package_root_group(root_cause_groups)
             .map(|group| (group.scope, group.category, group.signal_class));
         let isolated_weak_package_root_signal = isolated_weak_signal_key.is_some();
@@ -194,6 +236,7 @@ impl VerdictPredicates {
             has_actionable_non_package_root,
             severe_hygiene_only,
             has_conclusive_supporting_malicious,
+            has_conclusive_single_rule,
             isolated_weak_package_root_signal,
             has_non_hygiene_primary_block,
             isolated_weak_signal_key,
@@ -218,10 +261,19 @@ impl VerdictPredicates {
         // has_conclusive_supporting_malicious` paths preserve their
         // historical behaviour: those already encode multi-signal
         // reasoning by construction.
+        //
+        // `has_conclusive_single_rule` is the recall counterpart of
+        // the corroboration gate: a curated set of zero-FP rules
+        // (`CONCLUSIVE_SINGLE_RULE_IDS`) escalates on a single fire.
+        // Without this, a confirmed `base64 -D | sh` dropper or a
+        // known-malicious-publisher IOC was held at `Suspicious`
+        // whenever it was the only Block-strength signal — a soft
+        // false negative on ~738 confirmed-malicious corpus skills.
         let unconditional_escalation = (self.has_malicious_behavior
             || self.has_non_hygiene_primary_block)
             && self.has_independent_malicious_corroboration;
         if unconditional_escalation
+            || self.has_conclusive_single_rule
             || self.has_compound_malicious
             || (self.has_supporting_block && self.has_conclusive_supporting_malicious)
         {
@@ -380,6 +432,124 @@ mod tests {
                 .iter()
                 .any(|r| r.signal_class == SignalClass::MaliciousBehavior),
             "any malicious-behavior compound reason MUST trip has_compound_malicious",
+        );
+    }
+
+    fn finding(
+        rule_id: &str,
+        signal_class: SignalClass,
+        action: RecommendedAction,
+    ) -> crate::findings::Finding {
+        crate::findings::Finding::builder(rule_id, ThreatCategory::RemoteExec)
+            .severity(crate::findings::Severity::Critical)
+            .confidence(0.99)
+            .action(action)
+            .evidence_kind(crate::findings::EvidenceKind::Behavior)
+            .artifact(
+                crate::findings::ArtifactKind::SkillDocument,
+                Some("SKILL.md".to_string()),
+            )
+            .matched_on(crate::findings::MatchTarget::Document)
+            .signal_class(signal_class)
+            .build()
+    }
+
+    fn predicates_for(findings: &[crate::findings::Finding]) -> VerdictPredicates {
+        let primary = FindingSummary::from_findings(findings);
+        let supporting = FindingSummary::from_findings(&[]);
+        let groups = super::super::root_causes::build_root_cause_groups(findings);
+        VerdictPredicates::compute(&VerdictInputs {
+            findings,
+            root_cause_groups: &groups,
+            raw_root_cause_groups: &groups,
+            compound_reasons: &[],
+            primary_summary: &primary,
+            supporting_summary: &supporting,
+        })
+    }
+
+    /// Contract: a SINGLE Block-strength `MaliciousBehavior` finding
+    /// from a `CONCLUSIVE_SINGLE_RULE_IDS` rule escalates to
+    /// `Malicious` on its own — it does NOT need independent
+    /// corroboration. Pins the recall fix for the ~738 confirmed-
+    /// malicious corpus skills (base64 dropper / known-bad publisher)
+    /// that the corroboration gate previously held at `Suspicious`.
+    #[test]
+    fn conclusive_single_rule_escalates_without_corroboration() {
+        for rule in CONCLUSIVE_SINGLE_RULE_IDS {
+            let findings = [finding(
+                rule,
+                SignalClass::MaliciousBehavior,
+                RecommendedAction::Block,
+            )];
+            let p = predicates_for(&findings);
+            assert!(
+                p.has_conclusive_single_rule,
+                "{rule} alone must set has_conclusive_single_rule",
+            );
+            assert!(
+                !p.has_independent_malicious_corroboration,
+                "{rule} fires once — corroboration must be absent (proves the \
+                 escalation is via the conclusive path, not corroboration)",
+            );
+            assert_eq!(
+                p.verdict(
+                    &[],
+                    &FindingSummary::from_findings(&findings),
+                    &FindingSummary::from_findings(&findings),
+                ),
+                Verdict::Malicious,
+                "{rule} alone must yield Malicious",
+            );
+        }
+    }
+
+    /// Contract (negative): a conclusive rule whose finding was
+    /// calibration-downgraded (e.g. detection-catalogue skill →
+    /// `ReviewSignal` / `RequireApproval`) MUST NOT escalate. The
+    /// conclusive bypass gates on the POST-calibration signal_class
+    /// and action, so a documented-anti-pattern base64 example does
+    /// not flip the verdict.
+    #[test]
+    fn downgraded_conclusive_rule_does_not_escalate() {
+        let findings = [finding(
+            "SKILL_MACOS_BASE64_RCE",
+            SignalClass::ReviewSignal,
+            RecommendedAction::RequireApproval,
+        )];
+        let p = predicates_for(&findings);
+        assert!(
+            !p.has_conclusive_single_rule,
+            "a downgraded conclusive finding must not set the flag",
+        );
+    }
+
+    /// Contract (negative): an FP-prone rule NOT on the curated list
+    /// (e.g. `SKILL_CRED_HARDCODED_KEY`, which has more benign than
+    /// malicious hits) firing once at Block strength MUST still be
+    /// gated by corroboration — it does not get the conclusive
+    /// bypass. Prevents the recall fix from re-opening the FP hole
+    /// rounds 1–4 closed.
+    #[test]
+    fn non_curated_rule_still_needs_corroboration() {
+        let findings = [finding(
+            "SKILL_CRED_HARDCODED_KEY",
+            SignalClass::MaliciousBehavior,
+            RecommendedAction::Block,
+        )];
+        let p = predicates_for(&findings);
+        assert!(
+            !p.has_conclusive_single_rule,
+            "a non-curated rule must NOT get the conclusive bypass",
+        );
+        assert_eq!(
+            p.verdict(
+                &[],
+                &FindingSummary::from_findings(&findings),
+                &FindingSummary::from_findings(&findings),
+            ),
+            Verdict::Suspicious,
+            "single non-curated MaliciousBehavior must stay Suspicious (corroboration gate)",
         );
     }
 }
