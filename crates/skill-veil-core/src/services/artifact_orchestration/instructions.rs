@@ -1,6 +1,7 @@
 use super::{ArtifactLink, ArtifactOrchestratorService};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
+use crate::detectors::instructions::dropper_delivery;
 use crate::detectors::instructions::intent_policy;
 use crate::detectors::instructions::signals::{
     RE_BROWSER_FULL, RE_COGNITIVE_ROOTKIT, RE_NETWORK, RE_OAUTH, RE_PERSISTENCE,
@@ -243,6 +244,11 @@ pub(super) fn permission_and_network_findings(
     findings.extend(network_and_intent_findings(path, content, artifact_kind));
     if let Some(doc) = document {
         findings.extend(intent_policy::remote_instruction_download_findings(
+            path,
+            doc,
+            artifact_kind,
+        ));
+        findings.extend(dropper_delivery::fake_dependency_dropper_findings(
             path,
             doc,
             artifact_kind,
