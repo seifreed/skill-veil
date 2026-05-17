@@ -180,13 +180,17 @@ impl VerdictPredicates {
         let has_conclusive_supporting_malicious = findings
             .iter()
             .any(Finding::is_conclusive_malicious_evidence);
-        // Calibration may have downgraded the finding (doc-context /
-        // requires-code-artifact). Gate on the POST-calibration
-        // signal_class + action so a downgraded base64-RCE in a
-        // detection-catalogue skill does not escalate.
+        // Gate on the POST-calibration action only. `Block` is
+        // preserved through calibration UNLESS a downgrade flag
+        // (doc-context / requires-code-artifact) lowered it to
+        // `RequireApproval` — so `action == Block` already means
+        // "curated finding, not calibration-downgraded". signal_class
+        // is intentionally NOT checked: it is a category-derived
+        // artifact (`supply_chain` → SuspiciousPackageBehavior), and
+        // a definitive known-bad-publisher IOC must escalate
+        // regardless of how its ThreatCategory happens to map.
         let has_conclusive_single_rule = findings.iter().any(|f| {
             CONCLUSIVE_SINGLE_RULE_IDS.contains(&f.rule_id.as_str())
-                && f.signal_class == SignalClass::MaliciousBehavior
                 && f.recommended_action == RecommendedAction::Block
         });
         let isolated_weak_signal_key = isolated_weak_package_root_group(root_cause_groups)
@@ -506,10 +510,9 @@ mod tests {
 
     /// Contract (negative): a conclusive rule whose finding was
     /// calibration-downgraded (e.g. detection-catalogue skill →
-    /// `ReviewSignal` / `RequireApproval`) MUST NOT escalate. The
-    /// conclusive bypass gates on the POST-calibration signal_class
-    /// and action, so a documented-anti-pattern base64 example does
-    /// not flip the verdict.
+    /// `RequireApproval`) MUST NOT escalate. The conclusive bypass
+    /// gates on the POST-calibration action, so a documented-anti-
+    /// pattern base64 example does not flip the verdict.
     #[test]
     fn downgraded_conclusive_rule_does_not_escalate() {
         let findings = [finding(
@@ -521,6 +524,36 @@ mod tests {
         assert!(
             !p.has_conclusive_single_rule,
             "a downgraded conclusive finding must not set the flag",
+        );
+    }
+
+    /// Contract: a curated IOC rule that emits `SuspiciousPackageBehavior`
+    /// (not `MaliciousBehavior`) because of its ThreatCategory mapping
+    /// (`supply_chain` → SuspiciousPackageBehavior) STILL escalates as
+    /// long as the action is `Block`. Pins the fix for
+    /// `SKILL_MALICIOUS_PUBLISHER` (405 corpus skills) whose finding
+    /// is `suspicious_package_behavior` + `block` + supporting scope.
+    #[test]
+    fn conclusive_rule_escalates_regardless_of_signal_class() {
+        let findings = [finding(
+            "SKILL_MALICIOUS_PUBLISHER",
+            SignalClass::SuspiciousPackageBehavior,
+            RecommendedAction::Block,
+        )];
+        let p = predicates_for(&findings);
+        assert!(
+            p.has_conclusive_single_rule,
+            "a curated IOC rule at Block must escalate even as \
+             SuspiciousPackageBehavior",
+        );
+        assert_eq!(
+            p.verdict(
+                &[],
+                &FindingSummary::from_findings(&findings),
+                &FindingSummary::from_findings(&findings),
+            ),
+            Verdict::Malicious,
+            "known-bad-publisher IOC alone must yield Malicious",
         );
     }
 
