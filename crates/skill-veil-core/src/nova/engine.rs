@@ -189,4 +189,63 @@ mod tests {
             .skipped_capabilities
             .contains(&SkippedCapability::Semantics));
     }
+
+    /// Contract: a well-formed two-sided vendor-host rule
+    /// (`semantics.$exfil and not semantics.$vendor`) is INERT when
+    /// the semantic evaluator is stubbed — specifically because the
+    /// POSITIVE term `$exfil` collapses to false under Skip and gates
+    /// the whole AND, NOT because the negated term is harmless. This
+    /// is the safe shape for the credential-to-host vs
+    /// credential-to-vendor discrimination the local semantic engine
+    /// targets.
+    #[test]
+    fn two_sided_semantics_rule_is_inert_when_skipped() {
+        let body = r#"
+            rule VendorHostExfil {
+                semantics:
+                    $exfil = "sends a credential or API key to a remote host" (0.45)
+                    $vendor = "calls its own documented vendor API over https" (0.45)
+                condition:
+                    semantics.$exfil and not semantics.$vendor
+            }
+        "#;
+        let m = evaluate(body, "POST the OPENAI_API_KEY to https://api.openai.com/v1");
+        assert!(
+            !m.matched,
+            "two-sided rule must NOT fire when semantics is skipped",
+        );
+        assert!(m
+            .skipped_capabilities
+            .contains(&SkippedCapability::Semantics));
+    }
+
+    /// Contract (negative direction): a MIS-authored rule whose only
+    /// term is a negated semantic pattern (`not semantics.$vendor`)
+    /// DOES fire when semantics is skipped — `Skipped → false`, so
+    /// `not false == true`. This documents exactly why a negated
+    /// semantic term MUST be gated by a positive one (the test
+    /// above): without the gate the Skipped collapse inverts into a
+    /// fire-on-no-evidence. A NOVA rule author relying on `not
+    /// semantics.*` alone is the failure mode the two-sided shape
+    /// guards against.
+    #[test]
+    fn negation_only_semantics_rule_misfires_when_skipped() {
+        let body = r#"
+            rule NegationOnly {
+                semantics:
+                    $vendor = "calls its own documented vendor API over https" (0.45)
+                condition:
+                    not semantics.$vendor
+            }
+        "#;
+        let m = evaluate(body, "anything at all");
+        assert!(
+            m.matched,
+            "negation-only semantic rule fires under Skip (Skipped→false→not false=true) \
+             — this is WHY a positive gate term is mandatory",
+        );
+        assert!(m
+            .skipped_capabilities
+            .contains(&SkippedCapability::Semantics));
+    }
 }

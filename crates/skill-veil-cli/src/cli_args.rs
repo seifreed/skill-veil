@@ -513,16 +513,22 @@ pub struct ScanArgs {
     /// body and burns tokens / quota.
     #[arg(long, default_value_t = false)]
     pub nova_llm: bool,
-    /// Run NOVA `semantics:` patterns through a native sentence-
-    /// embedding model (`all-MiniLM-L6-v2`) and compare via cosine
-    /// similarity. Requires the binary to be built with
-    /// `--features nova-semantics`; without that build feature, the
-    /// flag emits a one-line note and falls back to the `Skipped`
-    /// stub so the rule's `condition:` still reports the missing
-    /// capability. First use downloads the model (~90 MiB) into the
-    /// HF hub cache and is therefore opt-in.
-    #[arg(long, default_value_t = false)]
+    /// Deprecated / no-op: NOVA `semantics:` patterns now run by
+    /// default (subject to a `--features nova-semantics` build). Kept
+    /// as a hidden accepted flag for one release so existing
+    /// invocations keep parsing; use `--no-nova-semantics` to opt OUT.
+    #[arg(long, default_value_t = false, hide = true)]
     pub nova_semantics: bool,
+    /// Opt OUT of native NOVA `semantics:` evaluation. By default,
+    /// `semantics:` patterns run through the native sentence-embedding
+    /// model (`all-MiniLM-L6-v2`, cosine similarity) when the binary
+    /// is built with `--features nova-semantics`; first use downloads
+    /// the model (~90 MiB) into the HF hub cache. With this flag — or
+    /// on a binary built without the feature — `semantics:` patterns
+    /// fall back to the `Skipped` stub and any rule whose
+    /// `condition:` needs that channel cannot fire.
+    #[arg(long, default_value_t = false)]
+    pub no_nova_semantics: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]

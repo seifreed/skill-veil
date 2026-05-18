@@ -187,7 +187,7 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
         for cap in &report.skipped_capabilities {
             let label = match cap {
                 SkippedCapability::Semantics => {
-                    "semantics (sentence embeddings — pending native runtime; opt-in: --nova-semantics)"
+                    "semantics (sentence embeddings unavailable: build with --features nova-semantics, or this run passed --no-nova-semantics)"
                 }
                 SkippedCapability::Llm => {
                     "llm (opt-in with --nova-llm; otherwise patterns are skipped, see tracing warn for runtime errors)"

@@ -93,13 +93,16 @@ fn build_nova_llm_eval(
     Some(Box::new(ProviderLlmEvaluator::new(provider)))
 }
 
-/// Build the native NOVA `semantics:` evaluator. Returns `None` (and
-/// emits a one-line operator note unless `quiet`) when the binary was
-/// compiled without `--features nova-semantics` or when the underlying
-/// model fails to initialise. The caller falls back to the
-/// `NotYetWiredSemantic` stub on `None` so the scan keeps running and
+/// Build the native NOVA `semantics:` evaluator. Returns `None` when
+/// the binary was compiled without `--features nova-semantics` or the
+/// model fails to initialise; the caller falls back to the
+/// `NotYetWiredSemantic` stub so the scan keeps running and
 /// `SkippedCapability::Semantics` still surfaces for any rule that
-/// needed the channel.
+/// needed the channel. Now that semantics is default-on, the
+/// no-feature path is silent (per-scan nagging would be spam on every
+/// non-feature build); the skipped-capability label in the NOVA text
+/// block is the single, non-repetitive place this is communicated.
+/// A genuine model-init failure on a feature build IS surfaced.
 #[cfg(feature = "nova-semantics")]
 fn build_nova_semantic_eval(
     quiet: bool,
@@ -119,14 +122,8 @@ fn build_nova_semantic_eval(
 
 #[cfg(not(feature = "nova-semantics"))]
 fn build_nova_semantic_eval(
-    quiet: bool,
+    _quiet: bool,
 ) -> Option<Box<dyn skill_veil_core::nova::SemanticEvaluator>> {
-    if !quiet {
-        eprintln!(
-            "--nova-semantics: this binary was built without `--features nova-semantics`; \
-             NOVA semantics: patterns will be skipped",
-        );
-    }
     None
 }
 
@@ -282,16 +279,17 @@ pub(crate) fn run_scan(
         let llm_eval_ref = nova_llm_eval
             .as_deref()
             .map(|e| e as &dyn skill_veil_core::nova::LlmEvaluator);
-        // Build the native semantics evaluator iff the user opted in
-        // AND the binary was compiled with the `nova-semantics`
-        // feature. When the feature is off, `build_nova_semantic_eval`
-        // emits a one-line note (unless `--quiet`) and returns None,
-        // so the scan still runs and `SkippedCapability::Semantics`
-        // surfaces for any rule that needed the semantic channel.
-        let nova_sem_eval = if args.nova_semantics {
-            build_nova_semantic_eval(quiet)
-        } else {
+        // Native semantics runs by default; `--no-nova-semantics` opts
+        // out. It is still ultimately gated by the `nova-semantics`
+        // build feature: when the feature is off,
+        // `build_nova_semantic_eval` returns None and the scan keeps
+        // running with `SkippedCapability::Semantics` surfaced for any
+        // rule that needed the semantic channel — the Skipped → false
+        // collapse is preserved, so no rule fires on partial evidence.
+        let nova_sem_eval = if args.no_nova_semantics {
             None
+        } else {
+            build_nova_semantic_eval(quiet)
         };
         let sem_eval_ref = nova_sem_eval
             .as_deref()
@@ -542,7 +540,13 @@ mod tests {
     /// verdicts never depend on an external LLM.
     #[test]
     fn local_ci_strict_enterprise_presets_leave_taint_adjudication_off() {
-        for preset in [None, Some("local"), Some("ci"), Some("strict"), Some("enterprise")] {
+        for preset in [
+            None,
+            Some("local"),
+            Some("ci"),
+            Some("strict"),
+            Some("enterprise"),
+        ] {
             let a = preset_args(preset);
             assert!(
                 !a.llm_adjudicate_taint && !a.llm_adjudicate_upgrade,
@@ -561,5 +565,37 @@ mod tests {
         assert!(a.profile.is_none(), "triage must not pin a policy profile");
         assert!(a.fail_on.is_none(), "triage must not set fail_on");
         assert!(a.finding_limit.is_none(), "triage must not cap findings");
+    }
+
+    fn scan_args(extra: &[&str]) -> crate::cli_args::ScanArgs {
+        let mut argv = vec!["skill-veil", "scan"];
+        argv.extend_from_slice(extra);
+        argv.push("somepath");
+        match Cli::try_parse_from(argv).expect("cli parse").command {
+            Commands::Scan(a) => a,
+            _ => panic!("expected scan subcommand"),
+        }
+    }
+
+    /// Contract: NOVA semantics is default-ON (no opt-in flag needed);
+    /// `--no-nova-semantics` opts OUT; the deprecated `--nova-semantics`
+    /// flag still parses (hidden, one-release compat) and does NOT
+    /// disable semantics. The dispatch wants semantics whenever
+    /// `!no_nova_semantics`.
+    #[test]
+    fn nova_semantics_default_on_with_opt_out() {
+        let default = scan_args(&[]);
+        assert!(
+            !default.no_nova_semantics,
+            "semantics must be wanted by default (no opt-in flag)",
+        );
+        let opted_out = scan_args(&["--no-nova-semantics"]);
+        assert!(opted_out.no_nova_semantics, "--no-nova-semantics opts out");
+        // Legacy flag still parses and does not force semantics off.
+        let legacy = scan_args(&["--nova-semantics"]);
+        assert!(
+            !legacy.no_nova_semantics,
+            "deprecated --nova-semantics must not disable default-on semantics",
+        );
     }
 }
