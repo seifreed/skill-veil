@@ -44,8 +44,8 @@ use std::path::Path;
 use anyhow::Result;
 use skill_veil_core::services::ScanFilterService;
 use skill_veil_core::{
-    is_conclusive_single_rule_id, Finding, PackageScanResult, RecommendedAction, ScanOptions,
-    ScanResult, SignalClass, Verdict, VerdictReason,
+    is_conclusive_single_rule_id, ConsensusDiscrepancy, Finding, PackageScanResult, ProviderVote,
+    RecommendedAction, ScanOptions, ScanResult, SignalClass, Verdict, VerdictReason,
 };
 
 use crate::commands::scan::llm::{prepare_llm_inputs, LlmInputs};
@@ -460,12 +460,36 @@ pub(crate) fn run_adjudication(
     // 6. Consensus → per-direction changed maps.
     let mut downgraded: BTreeMap<usize, Vec<(String, Option<Verdict>)>> = BTreeMap::new();
     let mut upgraded: BTreeMap<usize, Vec<(String, Option<Verdict>)>> = BTreeMap::new();
+    // Packages where exactly one provider flipped to benign while ≥2
+    // disagreed (no errors). This is the prompt-injection signature
+    // ADR 0029's softening is vulnerable to — we BLOCK the downgrade
+    // and fail, turning the manipulation into a louder signal rather
+    // than a free path to a softer verdict.
+    let mut injection_suspected: BTreeMap<usize, String> = BTreeMap::new();
     for (fi, &orig_i) in eligible_idx.iter().enumerate() {
         let parsed: Vec<(String, Verdict)> = votes[fi]
             .iter()
             .filter_map(|(p, ov)| ov.map(|v| (p.clone(), v)))
             .collect();
         if is_downgrade.contains(&orig_i) {
+            let provider_votes: Vec<ProviderVote> = parsed
+                .iter()
+                .map(|(p, v)| ProviderVote {
+                    provider: p.clone(),
+                    verdict: *v,
+                    confidence: 0.0,
+                })
+                .collect();
+            let error_votes = votes[fi].iter().filter(|(_, ov)| ov.is_none()).count();
+            let discrepancy = ConsensusDiscrepancy::from_votes(provider_votes, error_votes);
+            if discrepancy.is_single_provider_benign_flip() {
+                let flipped = discrepancy.flipped_provider().unwrap_or("?").to_string();
+                injection_suspected.insert(orig_i, flipped);
+                // Do NOT downgrade a flip-detected package, even if a
+                // (counterfactually impossible) benign consensus were
+                // reached — the explicit guard documents the contract.
+                continue;
+            }
             let eff = effective_verdict(
                 Verdict::Malicious,
                 true,
@@ -492,7 +516,11 @@ pub(crate) fn run_adjudication(
     let filter = ScanFilterService::new(scan_options.clone());
     let mut effective_should_fail = false;
     for (i, r) in scan_result.results.iter().enumerate() {
-        let fails = if downgraded.contains_key(&i) {
+        let fails = if injection_suspected.contains_key(&i) {
+            // A flip-detected package ALWAYS fails — the injection
+            // signal raises the effective verdict, never softens it.
+            true
+        } else if downgraded.contains_key(&i) {
             downgraded_should_fail(&filter, r)
         } else if upgraded.contains_key(&i) {
             upgraded_should_fail(&filter, r)
@@ -509,6 +537,7 @@ pub(crate) fn run_adjudication(
         upgrade_opt_in,
         &downgraded,
         &upgraded,
+        &injection_suspected,
         &providers,
     );
 
@@ -577,18 +606,47 @@ fn render_changed_section(
     }
 }
 
+/// Synthetic rule id surfaced (in the report + exit code only — never
+/// injected into the immutable scan result) when a single provider was
+/// flipped benign against ≥2 dissenters.
+const INJECTION_RULE_ID: &str = "LLM_CONSENSUS_PROMPT_INJECTION_SUSPECTED";
+
 fn render_block(
     scan_result: &PackageScanResult,
     downgrade_opt_in: bool,
     upgrade_opt_in: bool,
     downgraded: &BTreeMap<usize, Vec<(String, Option<Verdict>)>>,
     upgraded: &BTreeMap<usize, Vec<(String, Option<Verdict>)>>,
+    injection_suspected: &BTreeMap<usize, String>,
     providers: &[LlmProviderKind],
 ) -> String {
     let mut out = String::new();
     out.push_str("\n=== LLM adjudication (consensus; AFFECTS effective verdict + exit code) ===\n");
     let trio: Vec<&str> = providers.iter().map(|p| p.as_str()).collect();
     let _ = writeln!(out, "consensus providers: {}", trio.join("+"));
+
+    if !injection_suspected.is_empty() {
+        let _ = writeln!(
+            out,
+            "⚠ {INJECTION_RULE_ID}: {} package(s) had a single-provider benign \
+             flip (≥2 dissenters, no errors) — downgrade BLOCKED, exit code \
+             FAILS:",
+            injection_suspected.len()
+        );
+        for (&i, flipped) in injection_suspected {
+            let id = scan_result.results[i]
+                .metadata
+                .package_id
+                .as_deref()
+                .map(|s| sanitise_for_terminal(&s.chars().take(12).collect::<String>()))
+                .unwrap_or_else(|| "(no id)".to_string());
+            let _ = writeln!(
+                out,
+                "  {id}… flipped provider: {}",
+                sanitise_for_terminal(flipped)
+            );
+        }
+    }
 
     if downgrade_opt_in {
         out.push_str(
@@ -972,5 +1030,78 @@ mod tests {
                 "verdict {v:?}: a package must never be both downgrade- and upgrade-eligible",
             );
         }
+    }
+
+    /// Mirror of the run_adjudication step-6 decision built from a
+    /// `votes[fi]`-shaped vector: (parsed votes, error count).
+    fn discrepancy_from(votes: &[(&str, Option<Verdict>)]) -> ConsensusDiscrepancy {
+        let provider_votes: Vec<ProviderVote> = votes
+            .iter()
+            .filter_map(|(p, ov)| {
+                ov.map(|v| ProviderVote {
+                    provider: (*p).to_string(),
+                    verdict: v,
+                    confidence: 0.0,
+                })
+            })
+            .collect();
+        let errors = votes.iter().filter(|(_, ov)| ov.is_none()).count();
+        ConsensusDiscrepancy::from_votes(provider_votes, errors)
+    }
+
+    /// Contract: a single-provider benign flip is detected on the
+    /// exact vote shape run_adjudication builds, so the downgrade is
+    /// blocked and the package fails (the injection vector ADR 0029
+    /// opens is closed, not widened).
+    #[test]
+    fn flip_signature_blocks_downgrade_path() {
+        let d = discrepancy_from(&[
+            ("openai", Some(Verdict::Benign)),
+            ("grok", Some(Verdict::Malicious)),
+            ("ollama-cloud", Some(Verdict::Malicious)),
+        ]);
+        assert!(d.is_single_provider_benign_flip());
+        // The downgrade consensus is NOT reached either (only 1 benign),
+        // so blocking is strictly additive: a flipped package can never
+        // reach a softer verdict.
+        assert!(!provider_consensus_benign(&[
+            ("openai".into(), Verdict::Benign),
+            ("grok".into(), Verdict::Malicious),
+            ("ollama-cloud".into(), Verdict::Malicious),
+        ]));
+    }
+
+    /// Contract (regression): the validated 2-of-3 benign consensus is
+    /// NOT a flip — it still downgrades. Pins that Phase 7 does not
+    /// break the 15.75:1 ADR-0029 trade.
+    #[test]
+    fn validated_two_benign_consensus_is_not_a_flip() {
+        let d = discrepancy_from(&[
+            ("openai", Some(Verdict::Benign)),
+            ("grok", Some(Verdict::Benign)),
+            ("ollama-cloud", Some(Verdict::Malicious)),
+        ]);
+        assert!(
+            !d.is_single_provider_benign_flip(),
+            "the validated downgrade consensus must NEVER be flagged as injection"
+        );
+        assert!(provider_consensus_benign(&[
+            ("openai".into(), Verdict::Benign),
+            ("grok".into(), Verdict::Benign),
+            ("ollama-cloud".into(), Verdict::Malicious),
+        ]));
+    }
+
+    /// Contract (negative): an error vote masks the round →
+    /// fail-closed, NOT treated as a flip (no injection finding
+    /// manufactured on ambiguous evidence).
+    #[test]
+    fn error_masked_round_is_not_a_flip() {
+        let d = discrepancy_from(&[
+            ("openai", Some(Verdict::Benign)),
+            ("grok", Some(Verdict::Malicious)),
+            ("ollama-cloud", None),
+        ]);
+        assert!(!d.is_single_provider_benign_flip());
     }
 }

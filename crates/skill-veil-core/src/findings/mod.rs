@@ -5,6 +5,7 @@
 mod builder;
 mod calibration;
 mod capability_scoring;
+mod consensus;
 mod dedup;
 mod enums;
 mod mapping;
@@ -16,6 +17,7 @@ mod weights;
 pub use builder::FindingBuilder;
 pub use calibration::default_operational_contexts;
 pub(crate) use calibration::{calibrate_confidence, default_remediation};
+pub use consensus::{ConsensusClass, ConsensusDiscrepancy, ProviderVote};
 pub(crate) use dedup::deduplicate_findings;
 pub(crate) use dedup::split_findings_by_scope;
 pub use dedup::DeduplicationSummary;

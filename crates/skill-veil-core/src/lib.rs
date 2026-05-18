@@ -97,10 +97,11 @@ pub use benchmark::{
 };
 pub use findings::{
     artifact_scope_for_kind, signal_class_for, ActionTrigger, ArtifactKind, ArtifactScope,
-    BlastRadiusLevel, BlastRadiusSummary, DeclaredPermission, DeduplicationSummary, EvidenceKind,
-    Finding, FindingSummary, HygieneSummary, MatchTarget, OperationalContext, PackageHealth,
-    PackageVerdictReport, RecommendedAction, RiskFactor, RootCauseGroup, Severity, SeverityCounts,
-    SignalClass, ThreatCategory, Verdict, VerdictReason, RISK_THRESHOLD_BLOCK,
+    BlastRadiusLevel, BlastRadiusSummary, ConsensusClass, ConsensusDiscrepancy, DeclaredPermission,
+    DeduplicationSummary, EvidenceKind, Finding, FindingSummary, HygieneSummary, MatchTarget,
+    OperationalContext, PackageHealth, PackageVerdictReport, ProviderVote, RecommendedAction,
+    RiskFactor, RootCauseGroup, Severity, SeverityCounts, SignalClass, ThreatCategory, Verdict,
+    VerdictReason, RISK_THRESHOLD_BLOCK,
 };
 pub use ioc_extraction::{ExtractedIocs, FileHash};
 pub use path_safety::path_stays_within_base;
