@@ -42,6 +42,11 @@ pub(super) struct VerdictInputs<'a> {
 ///   only manufactured a soft FN. Cross-LLM triage of the residual
 ///   showed 6 strong-malicious (≥2 of 3 LLMs say malicious) skills
 ///   topped by this rule still held at Suspicious.
+/// - `SKILL_TELEGRAM_BOT_TOKEN_HARDCODED` — a live
+///   `api.telegram.org/bot<id>:<token>` URL embedded in skill
+///   content; 0/4000 benign, 4/2976 malicious. Legitimate skills
+///   read the token from an env var and never embed the
+///   `<id>:<token>` secret literally — an exfil-credential IOC.
 ///
 /// Adding a rule here is a precision↔recall trade made deliberately
 /// at the verdict layer. A rule that later starts producing benign
@@ -50,6 +55,7 @@ pub(super) const CONCLUSIVE_SINGLE_RULE_IDS: &[&str] = &[
     "SKILL_MALICIOUS_PUBLISHER",
     "SKILL_MACOS_BASE64_RCE",
     "SKILL_FAKE_DEPENDENCY_DROPPER",
+    "SKILL_TELEGRAM_BOT_TOKEN_HARDCODED",
 ];
 
 pub(super) struct VerdictPredicates {

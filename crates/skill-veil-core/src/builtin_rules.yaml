@@ -540,6 +540,33 @@
     - telegram
   promptintel_threats:
     - "Data exfiltration via prompt"
+
+# A LIVE Telegram bot-token URL embedded in skill content
+# (`api.telegram.org/bot<numeric-id>:<token>`) is an IOC: legitimate
+# skills read the token from an env var and never embed the
+# `<id>:<token>` secret literally. Distinct from the broad
+# `SKILL_TELEGRAM_EXFIL` (any "telegram" mention, FP-prone) and
+# `SKILL_METADATA_HARDCODED_BOT_TOKEN` (assignment form only). Measured
+# 0/4000 on the VT-clean corpus, 4/2976 malicious — conclusive-grade
+# by construction (mirrored into CONCLUSIVE_SINGLE_RULE_IDS).
+- id: SKILL_TELEGRAM_BOT_TOKEN_HARDCODED
+  category: credential_exposure
+  severity: critical
+  confidence: 0.97
+  when: !regex
+    pattern: "api\\.telegram\\.org/bot[0-9]{6,}:[A-Za-z0-9_-]{20,}"
+  action: block
+  reason: "Live Telegram bot token embedded in skill content — hardcoded exfiltration credential"
+  shield:
+    scope: skill.exfil
+  enabled: true
+  tags:
+    - exfiltration
+    - telegram
+    - ioc
+  promptintel_threats:
+    - "Data exfiltration via prompt"
+    - "Hardcoded credential"
     - "Contextual Exfiltration Patterns"
 
 - id: SKILL_DISCORD_WEBHOOK
