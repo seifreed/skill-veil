@@ -1,3 +1,4 @@
+mod adjudication_eval;
 mod baseline;
 mod benchmark;
 mod init;
@@ -7,6 +8,7 @@ mod rules;
 pub(crate) mod scan;
 mod vt;
 
+pub(crate) use adjudication_eval::run_adjudication_eval;
 pub(crate) use baseline::{run_baseline_create, run_baseline_update};
 pub(crate) use benchmark::run_benchmark;
 #[cfg(test)]

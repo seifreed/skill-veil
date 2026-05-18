@@ -124,6 +124,7 @@ pub use scanner::{
     ScanResult, ScanTargetMode, Scanner,
 };
 pub use scanner_graph::{artifact_kind_for_path, derive_package_id};
+pub use verdict::is_conclusive_single_rule_id;
 
 // Port traits (interfaces for dependency injection)
 pub use ports::{

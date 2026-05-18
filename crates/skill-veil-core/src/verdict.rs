@@ -110,6 +110,17 @@ pub fn derive_package_verdict(
     }
 }
 
+/// `true` when `rule_id` is one of the curated zero-FP rules whose
+/// single Block-strength `MaliciousBehavior` finding escalates a
+/// package to `Malicious` on its own (the `CONCLUSIVE_SINGLE_RULE_IDS`
+/// set). Exposed so an out-of-crate adjudication gate can ask "would
+/// this already be conclusively malicious?" without duplicating — and
+/// drifting from — the curated list.
+#[must_use]
+pub fn is_conclusive_single_rule_id(rule_id: &str) -> bool {
+    predicates::CONCLUSIVE_SINGLE_RULE_IDS.contains(&rule_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,5 +150,24 @@ mod tests {
             "Trivial hygiene findings should produce NeedsReview, not Elevated"
         );
         assert_eq!(report.verdict, Verdict::Benign);
+    }
+
+    /// Contract: the public accessor mirrors the curated
+    /// `CONCLUSIVE_SINGLE_RULE_IDS` set exactly — positive for every
+    /// curated id, negative for a rule deliberately kept off the list
+    /// (`SKILL_CRED_HARDCODED_KEY` has more benign than malicious hits
+    /// and must stay corroboration-gated).
+    #[test]
+    fn is_conclusive_single_rule_id_matches_curated_set() {
+        for id in predicates::CONCLUSIVE_SINGLE_RULE_IDS {
+            assert!(
+                is_conclusive_single_rule_id(id),
+                "curated id {id} must be reported conclusive",
+            );
+        }
+        assert!(
+            !is_conclusive_single_rule_id("SKILL_CRED_HARDCODED_KEY"),
+            "a deliberately non-curated rule must not be reported conclusive",
+        );
     }
 }

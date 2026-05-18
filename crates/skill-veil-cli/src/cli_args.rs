@@ -92,6 +92,32 @@ pub enum Commands {
     /// release into the user cache. After init, `skill-veil scan` uses
     /// the downloaded packs automatically — no `--rules-dir` needed.
     Init(InitArgs),
+    /// Offline replay of recorded LLM-provider verdicts against the
+    /// labelled triage corpora. Reports ΔFP/ΔFN, precision/recall and
+    /// exact-label transitions with and without each adjudication
+    /// lever. Pure offline — never calls a provider. Run this to
+    /// quantify a lever's trade BEFORE wiring it default-on.
+    AdjudicationEval(AdjudicationEvalArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct AdjudicationEvalArgs {
+    /// Recorded taint-FP provider votes (benign-labelled corpus the
+    /// taint rules false-positived on).
+    #[arg(long, default_value = "taint-fp-triage.jsonl")]
+    pub taint_fp: PathBuf,
+    /// Recorded taint-FN provider votes (true-malicious the downgrade
+    /// would soften).
+    #[arg(long, default_value = "taint-fn-triage.jsonl")]
+    pub taint_fn: PathBuf,
+    /// Recorded residual-FN consensus rollup (soft-FN bucket held at
+    /// Suspicious).
+    #[arg(long, default_value = "residual-fn-consensus.jsonl")]
+    pub residual_fn: PathBuf,
+    #[arg(short, long, value_enum, default_value = "text")]
+    pub format: OutputFormat,
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Args, Clone)]
