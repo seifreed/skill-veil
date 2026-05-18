@@ -1,6 +1,6 @@
 use super::cache::llm_cache_root_for;
 use super::ERROR_MESSAGE_DISPLAY_CHARS;
-use crate::config::{LlmProviderKind, UnifiedConfig};
+use crate::config::{LlmConfigSection, LlmProviderKind, UnifiedConfig};
 use crate::llm::enrich::{
     enrich_scan_result as llm_enrich_scan_result, LlmEnrichOptions, LlmEnrichment,
     LlmPackageResult, LlmStatus, PreparedBundle,
@@ -46,13 +46,61 @@ const LLM_RAW_EXCERPT_DISPLAY_CHARS: usize = 160;
 /// stay readable on a single screen.
 const LLM_PROVIDER_ERROR_DISPLAY_CHARS: usize = 120;
 
-pub(super) fn try_enrich_with_llm(
+/// Owned, borrow-free LLM enrichment inputs. Computed once
+/// (`prepare_llm_inputs`) and reused across multiple
+/// `enrich_scan_result` passes — the standard single-provider
+/// enrichment AND, when `--llm-adjudicate-taint` is set, the
+/// per-provider taint adjudication (ADR 0029). Owning the contents
+/// (rather than the borrow-coupled `PreparedBundle`) is what lets the
+/// adjudicator call the enrichment once per consensus provider
+/// without re-reading the filesystem each time.
+///
+/// `primary_contents` and `supporting` are index-aligned with
+/// `scan_result.results`.
+pub(crate) struct LlmInputs {
+    pub(crate) section: LlmConfigSection,
+    pub(crate) primary_contents: Vec<String>,
+    pub(crate) supporting: Vec<Vec<(PathBuf, String)>>,
+    pub(crate) cache_root: PathBuf,
+}
+
+impl LlmInputs {
+    /// Build a fresh `PreparedBundle` view borrowing the owned
+    /// contents. `enrich_scan_result` consumes the `Vec` by value, so
+    /// each provider pass needs its own view; `supporting` is cloned
+    /// (already in memory — only the eligible subset reaches here
+    /// under the opt-in flag).
+    pub(crate) fn bundles(&self) -> Vec<PreparedBundle<'_>> {
+        self.primary_contents
+            .iter()
+            .zip(self.supporting.iter())
+            .map(|(p, s)| PreparedBundle {
+                primary_content: p.as_str(),
+                supporting: s.clone(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn opts(&self, provider_override: Option<LlmProviderKind>) -> LlmEnrichOptions {
+        LlmEnrichOptions {
+            cache_root: self.cache_root.clone(),
+            max_prompt_chars: self.section.effective_max_prompt_chars(),
+            provider_override,
+        }
+    }
+}
+
+/// Load config + read primary and supporting artifact contents into
+/// owned, borrow-free [`LlmInputs`]. `Ok(None)` (with a one-line
+/// operator note unless `quiet`) when LLM enrichment is not
+/// configured or a primary cannot be read — identical skip semantics
+/// to the pre-refactor inline path.
+pub(crate) fn prepare_llm_inputs(
     scan_result: &PackageScanResult,
     scan_path: &Path,
-    provider_override: Option<LlmProviderKind>,
     cache_dir_override: Option<&Path>,
     quiet: bool,
-) -> Result<Option<String>> {
+) -> Result<Option<LlmInputs>> {
     let config = match UnifiedConfig::load() {
         Ok(cfg) => cfg,
         Err(err) => {
@@ -69,7 +117,7 @@ pub(super) fn try_enrich_with_llm(
     // Build supporting-artifact contents once per ScanResult. We re-read
     // from disk here (scanner already did; but keeping this in CLI avoids a
     // core-crate API change to expose cached contents).
-    let mut bundles: Vec<PreparedBundle<'_>> = Vec::new();
+    let mut supporting_per_result: Vec<Vec<(PathBuf, String)>> = Vec::new();
     // The primary SKILL.md content is the LLM's core evidence (see the
     // invariant doc-comment in `llm/prompt.rs`). A silent
     // `unwrap_or_default()` here would hand the LLM an empty string and
@@ -90,7 +138,7 @@ pub(super) fn try_enrich_with_llm(
             return Ok(None);
         }
     };
-    for (res, primary) in scan_result.results.iter().zip(primary_contents.iter()) {
+    for res in scan_result.results.iter() {
         let mut supporting: Vec<(PathBuf, String)> = Vec::new();
         if let Some(parent) = res.metadata.path.parent() {
             // Pre-compute the canonical primary path so we can detect the
@@ -160,28 +208,43 @@ pub(super) fn try_enrich_with_llm(
                 }
             }
         }
-        let _ = res; // res is paired via zip in enrich; kept here for clarity
-        bundles.push(PreparedBundle {
-            primary_content: primary.as_str(),
-            supporting,
-        });
+        supporting_per_result.push(supporting);
     }
 
-    let opts = LlmEnrichOptions {
+    Ok(Some(LlmInputs {
+        section: llm_section,
+        primary_contents,
+        supporting: supporting_per_result,
         cache_root: llm_cache_root_for(scan_path, cache_dir_override),
-        max_prompt_chars: llm_section.effective_max_prompt_chars(),
-        provider_override,
-    };
+    }))
+}
 
-    let enrichment = match llm_enrich_scan_result(&llm_section, &opts, scan_result, bundles) {
-        Ok(e) => e,
-        Err(e) => {
-            if !quiet {
-                eprintln!("LLM enrichment error: {e:#}");
-            }
-            return Ok(None);
-        }
+/// Standard single-provider LLM enrichment: render the operator-
+/// facing text block. Behaviour-preserving wrapper over
+/// [`prepare_llm_inputs`] + [`enrich_scan_result`] +
+/// [`format_llm_enrichment`].
+pub(super) fn try_enrich_with_llm(
+    scan_result: &PackageScanResult,
+    scan_path: &Path,
+    provider_override: Option<LlmProviderKind>,
+    cache_dir_override: Option<&Path>,
+    quiet: bool,
+) -> Result<Option<String>> {
+    let Some(inputs) = prepare_llm_inputs(scan_result, scan_path, cache_dir_override, quiet)?
+    else {
+        return Ok(None);
     };
+    let opts = inputs.opts(provider_override);
+    let enrichment =
+        match llm_enrich_scan_result(&inputs.section, &opts, scan_result, inputs.bundles()) {
+            Ok(e) => e,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("LLM enrichment error: {e:#}");
+                }
+                return Ok(None);
+            }
+        };
 
     if enrichment.packages.is_empty() {
         return Ok(None);
