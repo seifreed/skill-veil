@@ -65,6 +65,12 @@ pub(crate) struct LlmLimits {
     /// over the auto-detected value.
     pub max_prompt_chars: Option<usize>,
     pub request_timeout_secs: u64,
+    /// Operator override for the LLM-adjudication consensus provider
+    /// set. `None` ⇒ the validated trio (openai+grok+ollama-cloud).
+    /// Broadening this trades the validated 15.75:1 ADR-0029
+    /// calibration — gate any change through
+    /// `skill-veil adjudication-eval` first.
+    pub consensus_providers: Option<Vec<LlmProviderKind>>,
 }
 
 impl Default for LlmLimits {
@@ -72,6 +78,7 @@ impl Default for LlmLimits {
         Self {
             max_prompt_chars: None,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+            consensus_providers: None,
         }
     }
 }
@@ -180,6 +187,7 @@ mod tests {
             limits: LlmLimits {
                 max_prompt_chars: override_chars,
                 request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
+                consensus_providers: None,
             },
         }
     }

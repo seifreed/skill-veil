@@ -123,6 +123,12 @@ fn resolve_llm_limits(limits: Option<&FileLlmLimits>) -> LlmLimits {
             request_timeout_secs: l
                 .request_timeout_secs
                 .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS),
+            consensus_providers: l.consensus_providers.as_ref().map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| LlmProviderKind::from_str_ci(n))
+                    .collect()
+            }),
         })
         .unwrap_or_default()
 }

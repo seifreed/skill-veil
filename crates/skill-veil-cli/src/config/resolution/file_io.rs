@@ -107,6 +107,11 @@ pub(super) struct FileLlmLimits {
     pub(super) max_prompt_chars: Option<usize>,
     #[serde(default)]
     pub(super) request_timeout_secs: Option<u64>,
+    /// Operator override for the consensus provider set, by wire name
+    /// (e.g. `["openai", "grok", "ollama-cloud"]`). Omitted ⇒ the
+    /// validated trio.
+    #[serde(default)]
+    pub(super) consensus_providers: Option<Vec<String>>,
 }
 
 #[cfg(test)]

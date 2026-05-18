@@ -49,7 +49,7 @@ use skill_veil_core::{
 };
 
 use crate::commands::scan::llm::{prepare_llm_inputs, LlmInputs};
-use crate::config::LlmProviderKind;
+use crate::config::{LlmConfigSection, LlmProviderKind};
 use crate::llm::enrich::enrich_scan_result;
 use crate::util::terminal_safe::sanitise_for_terminal;
 
@@ -100,6 +100,20 @@ const CONSENSUS_PROVIDERS: &[LlmProviderKind] = &[
     LlmProviderKind::Grok,
     LlmProviderKind::OllamaCloud,
 ];
+
+/// The consensus provider set for this run. The validated trio
+/// ([`CONSENSUS_PROVIDERS`]) unless the operator set a non-empty
+/// `[llm.limits] consensus_providers` override (gate any such change
+/// through `skill-veil adjudication-eval` — broadening it trades the
+/// validated 15.75:1 calibration). The single resolution point so the
+/// default stays byte-identical.
+#[must_use]
+pub(crate) fn resolve_consensus_providers(section: &LlmConfigSection) -> Vec<LlmProviderKind> {
+    match section.limits.consensus_providers.as_deref() {
+        Some(p) if !p.is_empty() => p.to_vec(),
+        _ => CONSENSUS_PROVIDERS.to_vec(),
+    }
+}
 
 /// Maximum chars of a filesystem path rendered in the adjudication
 /// block. Long enough to identify the package, short enough to keep
@@ -406,9 +420,8 @@ pub(crate) fn run_adjudication(
     };
 
     // 4. Consensus providers actually configured.
-    let providers: Vec<LlmProviderKind> = CONSENSUS_PROVIDERS
-        .iter()
-        .copied()
+    let providers: Vec<LlmProviderKind> = resolve_consensus_providers(&inputs.section)
+        .into_iter()
         .filter(|k| inputs.section.provider_configs.contains_key(k))
         .collect();
     if providers.len() < 2 {
@@ -1103,5 +1116,52 @@ mod tests {
             ("ollama-cloud", None),
         ]);
         assert!(!d.is_single_provider_benign_flip());
+    }
+
+    fn section_with(consensus: Option<Vec<LlmProviderKind>>) -> LlmConfigSection {
+        LlmConfigSection {
+            provider: LlmProviderKind::OpenAi,
+            provider_configs: BTreeMap::new(),
+            limits: crate::config::LlmLimits {
+                max_prompt_chars: None,
+                request_timeout_secs: 0,
+                consensus_providers: consensus,
+            },
+        }
+    }
+
+    /// Contract: with no override the resolver returns the validated
+    /// trio — the default path is byte-identical.
+    #[test]
+    fn resolve_consensus_providers_defaults_to_validated_trio() {
+        assert_eq!(
+            resolve_consensus_providers(&section_with(None)),
+            vec![
+                LlmProviderKind::OpenAi,
+                LlmProviderKind::Grok,
+                LlmProviderKind::OllamaCloud,
+            ],
+        );
+    }
+
+    /// Contract: a non-empty operator override is honoured verbatim
+    /// (the ≥2-configured guard still applies downstream).
+    #[test]
+    fn resolve_consensus_providers_honours_nonempty_override() {
+        let over = vec![LlmProviderKind::Anthropic, LlmProviderKind::OpenAi];
+        assert_eq!(
+            resolve_consensus_providers(&section_with(Some(over.clone()))),
+            over,
+        );
+    }
+
+    /// Contract (negative): an empty override falls back to the
+    /// validated trio rather than disabling adjudication silently.
+    #[test]
+    fn resolve_consensus_providers_empty_override_falls_back_to_trio() {
+        assert_eq!(
+            resolve_consensus_providers(&section_with(Some(vec![]))).len(),
+            3
+        );
     }
 }
