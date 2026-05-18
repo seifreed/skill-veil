@@ -77,6 +77,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: RulesAction,
     },
+    /// Curated gold-corpus (ground truth) build / review / stats.
+    Gold {
+        #[command(subcommand)]
+        action: GoldAction,
+    },
     /// VirusTotal corpus management and detection cross-check tooling.
     Vt {
         #[command(subcommand)]
@@ -344,6 +349,53 @@ fn parse_fail_below(raw: &str) -> Result<f64, String> {
 pub enum PromptIntelCrossCheckFormat {
     Text,
     Json,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum GoldLabelArg {
+    Benign,
+    Suspicious,
+    Malicious,
+}
+
+#[derive(Subcommand)]
+pub enum GoldAction {
+    /// Seed a gold manifest from a recorded LLM-consensus rollup
+    /// (e.g. residual-fn-consensus.jsonl). No live provider calls.
+    Build(GoldBuildArgs),
+    /// Print admitted / disputed / per-label counts for a manifest.
+    Stats(GoldStatsArgs),
+    /// Resolve a disputed sample with a human adjudication.
+    Review(GoldReviewArgs),
+}
+
+#[derive(Args, Clone)]
+pub struct GoldBuildArgs {
+    /// Recorded per-sha LLM consensus rollup (concatenated JSON).
+    #[arg(long, default_value = "residual-fn-consensus.jsonl")]
+    pub consensus: PathBuf,
+    /// Dataset root holding `<sha>/SKILL.md` for each sample.
+    #[arg(long)]
+    pub dataset_root: PathBuf,
+    /// Destination gold manifest (YAML).
+    #[arg(short, long)]
+    pub out: PathBuf,
+}
+
+#[derive(Args, Clone)]
+pub struct GoldStatsArgs {
+    pub manifest: PathBuf,
+}
+
+#[derive(Args, Clone)]
+pub struct GoldReviewArgs {
+    pub manifest: PathBuf,
+    /// Sample id (sha) to adjudicate.
+    #[arg(long)]
+    pub id: String,
+    /// The human ground-truth label for this sample.
+    #[arg(long, value_enum)]
+    pub label: GoldLabelArg,
 }
 
 #[derive(Subcommand, Clone)]

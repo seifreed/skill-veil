@@ -126,6 +126,7 @@ fn dispatch(cli: Cli) -> Result<bool> {
             PolicyAction::Validate(args) => commands::run_policy_validate(args).map(|()| false),
         },
         Commands::Rules { action } => commands::run_rules(action).map(|()| false),
+        Commands::Gold { action } => commands::run_gold(action).map(|()| false),
         Commands::Vt { action } => commands::run_vt(action).map(|()| false),
         Commands::PromptIntel { action } => commands::run_promptintel(action),
         Commands::Init(args) => commands::run_init(args).map(|()| false),

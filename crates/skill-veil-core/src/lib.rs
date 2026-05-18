@@ -90,10 +90,10 @@ pub use analyzer::{
     CodeBlock, Section, SkillDocument, StructuralSignals, StructuralValidity,
 };
 pub use benchmark::{
-    AttackFamilyMetrics, BenchmarkError, BenchmarkHistory, BenchmarkHistoryEntry,
-    CalibrationBucket, CalibrationSummary, CorpusCoverage, CorpusEvaluation, CorpusManifest,
-    CoverageBucket, DeduplicationMetrics, LabeledSample, RegressionMetrics, SampleEvaluation,
-    SampleLabel, ThresholdRecommendation,
+    evaluate_gold_corpus, AttackFamilyMetrics, BenchmarkError, BenchmarkHistory,
+    BenchmarkHistoryEntry, CalibrationBucket, CalibrationSummary, CorpusCoverage, CorpusEvaluation,
+    CorpusManifest, CoverageBucket, DeduplicationMetrics, GoldCorpusManifest, GoldSample,
+    LabeledSample, RegressionMetrics, SampleEvaluation, SampleLabel, ThresholdRecommendation,
 };
 pub use findings::{
     artifact_scope_for_kind, signal_class_for, ActionTrigger, ArtifactKind, ArtifactScope,

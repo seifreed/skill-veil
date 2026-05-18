@@ -9,8 +9,9 @@ use super::calibration::calibrate_confidence;
 use super::loader::load_manifest;
 use super::thresholds::recommend_thresholds;
 use super::types::{
-    AttackFamilyMetrics, BenchmarkError, CorpusCoverage, CorpusEvaluation, CoverageBucket,
-    DeduplicationMetrics, LabeledSample, RegressionMetrics, SampleEvaluation, SampleLabel,
+    AttackFamilyMetrics, BenchmarkError, CorpusCoverage, CorpusEvaluation, CorpusManifest,
+    CoverageBucket, DeduplicationMetrics, LabeledSample, RegressionMetrics, SampleEvaluation,
+    SampleLabel,
 };
 use crate::ports::FileSystemProvider;
 use crate::scanner::PackageScanResult;
@@ -60,7 +61,20 @@ pub fn evaluate_corpus<F: FileSystemProvider>(
 ) -> Result<CorpusEvaluation, BenchmarkError> {
     let manifest = load_manifest(fs, manifest_path)?;
     let root = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    evaluate_manifest(fs, scanner, manifest, root)
+}
 
+/// Evaluate an already-loaded [`CorpusManifest`] whose sample paths
+/// are relative to `root`. The path-based [`evaluate_corpus`] is a
+/// thin wrapper; this is the reusable core so a curated manifest
+/// (e.g. the gold corpus) is scored by the identical pipeline and
+/// metric definition.
+pub fn evaluate_manifest<F: FileSystemProvider>(
+    fs: &F,
+    scanner: &Scanner,
+    manifest: CorpusManifest,
+    root: &Path,
+) -> Result<CorpusEvaluation, BenchmarkError> {
     let mut expected = Vec::new();
     let mut actual = Vec::new();
     let mut samples = Vec::new();
