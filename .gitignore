@@ -48,3 +48,10 @@ presentation/
 
 # Local benchmark caches (multi-LLM scorer caches per-author API state).
 benchmarks/.multi-llm-cache*
+
+# Local analysis / triage artifacts — large, regenerated, never tracked.
+/residual-fn-*.tsv
+/residual-fn-*.jsonl
+/taint-fn-triage.jsonl
+/taint-fp-triage.jsonl
+/results-mal-*.json
