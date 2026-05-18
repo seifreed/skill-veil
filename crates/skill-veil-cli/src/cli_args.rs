@@ -462,6 +462,10 @@ pub struct ScanArgs {
     /// rejects `--finding-limit 0` at parse time.
     #[arg(long)]
     pub finding_limit: Option<NonZeroUsize>,
+    /// Apply a bundle of defaults. local (no-op), ci/strict/enterprise
+    /// (deterministic, LLM adjudication stays OFF), or triage (local +
+    /// both --llm-adjudicate-taint and --llm-adjudicate-upgrade on for
+    /// analyst review). Explicit flags still override the preset.
     #[arg(long, value_enum)]
     pub preset: Option<ScanPresetArg>,
     #[arg(long, value_enum, default_value = "full")]
@@ -646,6 +650,13 @@ pub enum ScanPresetArg {
     Ci,
     Strict,
     Enterprise,
+    /// Triage/analysis preset. Local behaviour PLUS both LLM
+    /// adjudication levers on (--llm-adjudicate-taint and
+    /// --llm-adjudicate-upgrade). Deliberately NOT a CI preset: the
+    /// deterministic Local/Ci/Strict/Enterprise presets stay
+    /// adjudication-OFF so CI verdicts never depend on an external
+    /// (prompt-injectable) LLM.
+    Triage,
 }
 
 #[derive(Subcommand)]

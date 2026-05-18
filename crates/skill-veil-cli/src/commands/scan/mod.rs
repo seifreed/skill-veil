@@ -190,6 +190,15 @@ pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
             args.profile.get_or_insert(PolicyProfileArg::Enterprise);
             args.min_severity.get_or_insert(SeverityArg::Medium);
         }
+        Some(ScanPresetArg::Triage) => {
+            // Local + both LLM adjudication levers. A preset is a pure
+            // CLI-args transform that never reaches core, so the
+            // LLM-trust decision stays out of the immutable verdict
+            // engine. The deterministic presets above are left
+            // adjudication-OFF on purpose.
+            args.llm_adjudicate_taint = true;
+            args.llm_adjudicate_upgrade = true;
+        }
     }
     args
 }
@@ -497,4 +506,60 @@ pub(crate) fn run_scan(
         None => scan_result.results.iter().any(|r| r.should_fail),
     };
     Ok(should_fail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli_args::{Cli, Commands};
+    use clap::Parser;
+
+    fn preset_args(preset: Option<&str>) -> crate::cli_args::ScanArgs {
+        let mut argv = vec!["skill-veil", "scan"];
+        if let Some(p) = preset {
+            argv.push("--preset");
+            argv.push(p);
+        }
+        argv.push("somepath");
+        match Cli::try_parse_from(argv).expect("cli parse").command {
+            Commands::Scan(a) => apply_scan_preset(a),
+            _ => panic!("expected scan subcommand"),
+        }
+    }
+
+    /// Contract: the `triage` preset turns ON both LLM adjudication
+    /// levers — the single explicit opt-in surface for default-on
+    /// adjudication.
+    #[test]
+    fn triage_preset_enables_taint_adjudication() {
+        let a = preset_args(Some("triage"));
+        assert!(a.llm_adjudicate_taint, "triage must enable downgrade");
+        assert!(a.llm_adjudicate_upgrade, "triage must enable upgrade");
+    }
+
+    /// Contract (negative): every deterministic preset — and the
+    /// no-preset default — leaves BOTH adjudication levers OFF, so CI
+    /// verdicts never depend on an external LLM.
+    #[test]
+    fn local_ci_strict_enterprise_presets_leave_taint_adjudication_off() {
+        for preset in [None, Some("local"), Some("ci"), Some("strict"), Some("enterprise")] {
+            let a = preset_args(preset);
+            assert!(
+                !a.llm_adjudicate_taint && !a.llm_adjudicate_upgrade,
+                "preset {preset:?} must leave adjudication OFF",
+            );
+        }
+    }
+
+    /// Contract: `triage` is Local + the two flags ONLY — it must not
+    /// silently pull in the Strict/CI bundle (quiet_summary, profile,
+    /// fail_on, finding_limit).
+    #[test]
+    fn triage_preset_does_not_alter_unrelated_preset_fields() {
+        let a = preset_args(Some("triage"));
+        assert!(!a.quiet_summary, "triage must not set quiet_summary");
+        assert!(a.profile.is_none(), "triage must not pin a policy profile");
+        assert!(a.fail_on.is_none(), "triage must not set fail_on");
+        assert!(a.finding_limit.is_none(), "triage must not cap findings");
+    }
 }
