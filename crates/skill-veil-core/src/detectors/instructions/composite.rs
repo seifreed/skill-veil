@@ -89,10 +89,13 @@ impl CompositeFamily {
 /// Number of composite families registered. A named constant so the
 /// pin-test below fails loudly on an accidental add/remove rather than
 /// silently tracking the slice length.
-pub(crate) const COMPOSITE_FAMILY_COUNT: usize = 1;
+pub(crate) const COMPOSITE_FAMILY_COUNT: usize = 3;
 
-static REGISTRY: [&CompositeFamily; COMPOSITE_FAMILY_COUNT] =
-    [&super::dropper_delivery::FAKE_DEPENDENCY_DROPPER];
+static REGISTRY: [&CompositeFamily; COMPOSITE_FAMILY_COUNT] = [
+    &super::dropper_delivery::FAKE_DEPENDENCY_DROPPER,
+    &super::composite_families::CRYPTO_WALLET_DRAINER_DROPPER,
+    &super::composite_families::C2_BEACON_DROPPER,
+];
 
 /// Every composite family in one place. Iterated by
 /// `services::artifact_orchestration::instructions` so a new family

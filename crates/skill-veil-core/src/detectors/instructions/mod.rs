@@ -10,6 +10,7 @@
 //! network, secret, OAuth, browser, and privileged-role prompts.
 
 pub(crate) mod composite;
+pub(crate) mod composite_families;
 pub(crate) mod dropper_delivery;
 pub(crate) mod intent_policy;
 pub(crate) mod signals;
