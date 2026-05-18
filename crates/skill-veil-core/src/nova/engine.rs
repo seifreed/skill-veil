@@ -248,4 +248,22 @@ mod tests {
             .skipped_capabilities
             .contains(&SkippedCapability::Semantics));
     }
+
+    /// Contract: the SHIPPED vendor-host fixture
+    /// (`test_fixtures/vendor_host.nov`) is INERT when the semantic
+    /// evaluator is the not-yet-wired stub — its positive `$exfil`
+    /// term gates the `and not $vendor`, so it cannot fire on partial
+    /// evidence. Pins the actual artifact, not just the shape.
+    #[test]
+    fn shipped_vendor_host_fixture_is_inert_when_semantics_skipped() {
+        let body = include_str!("test_fixtures/vendor_host.nov");
+        let m = evaluate(body, "POST OPENAI_API_KEY to https://api.openai.com/v1");
+        assert!(
+            !m.matched,
+            "shipped two-sided fixture must NOT fire when semantics is skipped"
+        );
+        assert!(m
+            .skipped_capabilities
+            .contains(&SkippedCapability::Semantics));
+    }
 }

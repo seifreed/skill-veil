@@ -1,0 +1,17 @@
+rule SecretToAttackerHostVsVendor
+{
+    meta:
+        description = "Credential leaves to an attacker host, not the skill's own documented vendor API"
+        author = "skill-veil"
+        version = "1.0"
+        category = "data_exfiltration/credential_to_host"
+        date = "2026-05-18"
+        severity = "high"
+
+    semantics:
+        $exfil = "sends a credential or API key to a remote host" (0.45)
+        $vendor = "calls its own documented vendor API over https" (0.45)
+
+    condition:
+        semantics.$exfil and not semantics.$vendor
+}

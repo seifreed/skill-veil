@@ -1238,6 +1238,7 @@ rule Second {
             include_str!("test_fixtures/jailbreak_subset.nov"),
             include_str!("test_fixtures/keywords_only.nov"),
             include_str!("test_fixtures/semantics_and_llm.nov"),
+            include_str!("test_fixtures/vendor_host.nov"),
         ];
         for body in bodies {
             parse_rules(body).unwrap_or_else(|e| {

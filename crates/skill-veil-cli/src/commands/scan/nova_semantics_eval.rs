@@ -524,4 +524,56 @@ mod tests {
             "Semantics capability must NOT appear in skipped list when evaluator serviced the call",
         );
     }
+
+    /// Contract: a WIRED CosineSemanticEvaluator drives the two-sided
+    /// vendor-host shape (`semantics.$exfil and not semantics.$vendor`)
+    /// correctly — it FIRES on a credential-to-host body and does NOT
+    /// fire on a vendor-API body. This is the discrimination NOVA
+    /// semantics is wired for; the engineered q/w-dominant strings
+    /// give the byte-frequency stub clean separation (the production
+    /// patterns/threshold are tuned upstream against the real model).
+    #[test]
+    fn wired_evaluator_does_two_sided_vendor_host_discrimination() {
+        use skill_veil_core::nova::{
+            evaluate_rule, parse_rules, NativeKeywordEvaluator, NotYetWiredLlm,
+        };
+        let rule_body = r#"
+            rule VendorHost {
+                semantics:
+                    $exfil = "qqqqqqqq" (0.45)
+                    $vendor = "wwwwwwww" (0.45)
+                condition:
+                    semantics.$exfil and not semantics.$vendor
+            }
+        "#;
+        let rule = parse_rules(rule_body).unwrap().pop().unwrap();
+        let kw = NativeKeywordEvaluator::new();
+
+        // Credential-to-host body: $exfil matches, $vendor does not.
+        let sem = CosineSemanticEvaluator::new(DeterministicEmbedder::new());
+        let exfil = evaluate_rule(
+            &rule,
+            "qqqqqqqq qqqqqqqq leak the secret key",
+            &kw,
+            &sem,
+            &NotYetWiredLlm,
+        )
+        .unwrap();
+        assert!(exfil.matched, "must fire on the credential-to-host body");
+
+        // Vendor-API body: $exfil does not match → AND is false.
+        let sem = CosineSemanticEvaluator::new(DeterministicEmbedder::new());
+        let vendor = evaluate_rule(
+            &rule,
+            "wwwwwwww wwwwwwww calls documented api",
+            &kw,
+            &sem,
+            &NotYetWiredLlm,
+        )
+        .unwrap();
+        assert!(
+            !vendor.matched,
+            "must NOT fire on the legitimate vendor-API body"
+        );
+    }
 }
