@@ -129,8 +129,6 @@ fn dispatch(cli: Cli) -> Result<bool> {
         Commands::Vt { action } => commands::run_vt(action).map(|()| false),
         Commands::PromptIntel { action } => commands::run_promptintel(action),
         Commands::Init(args) => commands::run_init(args).map(|()| false),
-        Commands::AdjudicationEval(args) => {
-            commands::run_adjudication_eval(args).map(|()| false)
-        }
+        Commands::AdjudicationEval(args) => commands::run_adjudication_eval(args).map(|()| false),
     }
 }

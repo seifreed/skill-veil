@@ -185,15 +185,14 @@ fn build_samples(
 /// `effective_verdict` is a no-op for any non-`Malicious` baseline, so
 /// residual-FN samples pass through unchanged.
 fn downgraded_verdict(s: &EvalSample) -> Verdict {
-    effective_verdict(
-        s.baseline,
-        true,
-        true,
-        provider_consensus_benign(&s.votes),
-    )
+    effective_verdict(s.baseline, true, true, provider_consensus_benign(&s.votes))
 }
 
-fn scenario(name: &str, samples: &[EvalSample], effective: impl Fn(&EvalSample) -> Verdict) -> ScenarioMetrics {
+fn scenario(
+    name: &str,
+    samples: &[EvalSample],
+    effective: impl Fn(&EvalSample) -> Verdict,
+) -> ScenarioMetrics {
     let expected: Vec<SampleLabel> = samples.iter().map(|s| s.expected).collect();
     let actual: Vec<SampleLabel> = samples
         .iter()
@@ -307,7 +306,8 @@ pub(crate) fn run_adjudication_eval(args: AdjudicationEvalArgs) -> Result<()> {
     };
 
     if let Some(path) = &args.output {
-        fs::write(path, &rendered).with_context(|| format!("failed to write {}", path.display()))?;
+        fs::write(path, &rendered)
+            .with_context(|| format!("failed to write {}", path.display()))?;
     } else {
         println!("{rendered}");
     }
@@ -428,7 +428,10 @@ mod tests {
         let content = "{\n  \"sha\": \"a\",\n  \"providers\": [\n    {\"provider\":\"openai\",\"verdict\":\"malicious\"}\n  ]\n}\n{\n  \"sha\": \"b\",\n  \"providers\": []\n}";
         let recs: Vec<ConsensusRecord> = parse_json_stream(content).unwrap();
         assert_eq!(recs.len(), 2);
-        assert_eq!(consensus_votes(&recs[0]), vec![("openai".into(), Verdict::Malicious)]);
+        assert_eq!(
+            consensus_votes(&recs[0]),
+            vec![("openai".into(), Verdict::Malicious)]
+        );
         assert!(consensus_votes(&recs[1]).is_empty());
     }
 }

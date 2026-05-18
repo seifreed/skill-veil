@@ -440,10 +440,7 @@ pub(crate) fn run_adjudication(
             Ok(e) => e,
             Err(e) => {
                 if !quiet {
-                    eprintln!(
-                        "LLM adjudication: provider {} failed: {e:#}",
-                        kind.as_str()
-                    );
+                    eprintln!("LLM adjudication: provider {} failed: {e:#}", kind.as_str());
                 }
                 continue;
             }
@@ -589,9 +586,7 @@ fn render_block(
     providers: &[LlmProviderKind],
 ) -> String {
     let mut out = String::new();
-    out.push_str(
-        "\n=== LLM adjudication (consensus; AFFECTS effective verdict + exit code) ===\n",
-    );
+    out.push_str("\n=== LLM adjudication (consensus; AFFECTS effective verdict + exit code) ===\n");
     let trio: Vec<&str> = providers.iter().map(|p| p.as_str()).collect();
     let _ = writeln!(out, "consensus providers: {}", trio.join("+"));
 
@@ -896,7 +891,11 @@ mod tests {
                 SignalClass::MaliciousBehavior,
                 RecommendedAction::RequireApproval,
             ),
-            finding("SOME_HYGIENE_RULE", SignalClass::Hygiene, RecommendedAction::Log),
+            finding(
+                "SOME_HYGIENE_RULE",
+                SignalClass::Hygiene,
+                RecommendedAction::Log,
+            ),
         ];
         assert!(fn_upgrade_eligible(Verdict::Suspicious, &f, false));
     }
