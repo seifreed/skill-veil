@@ -195,6 +195,62 @@ then picks up the verified packs automatically. See
 
 ---
 
+## Rule packs
+
+There is **no single bundle**. Rules reach the scanner through two
+*independent* releases plus a runtime-fetched signed pack:
+
+| Release | What it is | Where |
+|---|---|---|
+| **`skill-veil` binary** | The program, with an **embedded rule snapshot** compiled in (`include_str!`) | `cargo install` / GitHub Release of this repo |
+| **`skill-veil-rules`** | The Ed25519-**signed** rule tarball (`manifest.json` + `manifest.json.sig` + `skill-veil-rules-vX.Y.Z.tar.gz`) | GitHub Releases of the separate [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) repo |
+
+The binary release does **not** package the rules-repo tarball inside
+its archive. The "bundle" is the snapshot compiled into the executable;
+the signed pack is downloaded **separately, at runtime**.
+
+### How it resolves at scan time
+
+1. **No setup (offline, zero-config).** A freshly installed binary
+   scans immediately using the **embedded snapshot**
+   (`resources/official/{core,behavioral}.yaml`, `builtin_rules.yaml`,
+   `taint_rules.yaml`) — no network, no `init`. This is why the
+   embedded mirror exists and cannot be removed.
+2. **`skill-veil init`.** Downloads the latest signed
+   `skill-veil-rules` release, verifies its signature against the
+   public keys embedded in the binary, and unpacks it into
+   `~/.cache/skill-veil/rules/<version>/`. It also pulls the pinned
+   NOVA pack (third channel, separate upstream, pinned by commit SHA).
+3. **Precedence.** A verified pack in `~/.cache/skill-veil/rules/…`
+   wins if present; otherwise the scanner falls back to the embedded
+   snapshot. (Dev builds also fall back to a sibling
+   `./rules/official/` working tree.)
+
+So: download the binary → it scans now (embedded snapshot from the
+binary's build). Run `skill-veil init` → it fetches the fresher
+**signed** pack without re-releasing the binary. `skill-veil rules
+status` shows the installed version and trusted key.
+
+### Source of truth & the `taint` nuance
+
+[`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) is
+the **single source of truth**. The embedded snapshot is a *verified
+mirror*, resynced on each binary release and locked by a drift check
+(`embedded_baseline_mirrors_canonical_rules_repo`) so it can never
+silently diverge.
+
+One exception in mechanics: the `ARTIFACT_TAINT_*` pack
+(`skill-veil-rules/taint/taint.yaml`) uses a distinct schema consumed
+by a bespoke loader, so the binary **always** reads its *embedded*
+copy (it is not loaded from the `init` cache). For taint, the rules
+repo is the edit/source-of-truth and the drift check guarantees the
+embedded copy stays identical.
+
+Editing rules → always in `skill-veil-rules`; see
+[Rule pack development](#rule-pack-development).
+
+---
+
 ## Usage
 
 ### Command Line Interface
