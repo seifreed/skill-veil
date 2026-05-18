@@ -82,6 +82,11 @@ pub enum Commands {
         #[command(subcommand)]
         action: GoldAction,
     },
+    /// Analyst-feedback overlay: record dispositions, list, stats.
+    Disposition {
+        #[command(subcommand)]
+        action: DispositionAction,
+    },
     /// VirusTotal corpus management and detection cross-check tooling.
     Vt {
         #[command(subcommand)]
@@ -356,6 +361,56 @@ pub enum GoldLabelArg {
     Benign,
     Suspicious,
     Malicious,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum DispositionVerdictArg {
+    TruePositive,
+    FalsePositive,
+    Benign,
+}
+
+#[derive(Subcommand)]
+pub enum DispositionAction {
+    /// Append an analyst disposition for a finding to the overlay.
+    Record(DispositionRecordArgs),
+    /// List recorded dispositions (optionally filtered by rule).
+    List(DispositionListArgs),
+    /// Per-rule TP/FP counts + derived confidence delta / allowlist.
+    Stats(DispositionStatsArgs),
+}
+
+/// Default project-local overlay path. NEVER the signed rule pack.
+const DEFAULT_DISPOSITION_FILE: &str = ".skill-veil/disposition-overlay.json";
+
+#[derive(Args, Clone)]
+pub struct DispositionRecordArgs {
+    #[arg(long, default_value = DEFAULT_DISPOSITION_FILE)]
+    pub file: PathBuf,
+    #[arg(long)]
+    pub rule_id: String,
+    #[arg(long)]
+    pub finding: String,
+    #[arg(long)]
+    pub sha256: Option<String>,
+    #[arg(long, value_enum)]
+    pub verdict: DispositionVerdictArg,
+    #[arg(long)]
+    pub note: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct DispositionListArgs {
+    #[arg(long, default_value = DEFAULT_DISPOSITION_FILE)]
+    pub file: PathBuf,
+    #[arg(long)]
+    pub rule_id: Option<String>,
+}
+
+#[derive(Args, Clone)]
+pub struct DispositionStatsArgs {
+    #[arg(long, default_value = DEFAULT_DISPOSITION_FILE)]
+    pub file: PathBuf,
 }
 
 #[derive(Subcommand)]

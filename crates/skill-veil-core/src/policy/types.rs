@@ -119,6 +119,13 @@ pub struct SuppressionSummary {
     pub waiver_suppressed: usize,
     #[serde(default)]
     pub inline_suppressed: usize,
+    /// Findings whose confidence was adjusted by the analyst-feedback
+    /// overlay. Additive: old on-disk reports omit it.
+    #[serde(default)]
+    pub disposition_adjusted: usize,
+    /// Findings demoted to `Log` by a learned allowlist promotion.
+    #[serde(default)]
+    pub disposition_allowlisted: usize,
     /// Count of findings with actionable recommendations (Block or RequireApproval).
     /// Excludes Log-level findings which are informational only.
     pub active_findings: usize,

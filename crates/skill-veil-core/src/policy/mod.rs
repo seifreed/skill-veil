@@ -1,6 +1,7 @@
 //! Policy generation and stable public policy contract.
 
 pub(crate) mod baseline;
+pub(crate) mod disposition;
 mod eval;
 pub(crate) mod fingerprint;
 pub(crate) mod reports;
@@ -12,6 +13,10 @@ pub(crate) mod types;
 use crate::findings::{OperationalContext, RecommendedAction, Severity};
 
 pub use self::baseline::{BaselineEntry, BaselineFile, WaiverEntry, WaiverFile};
+pub use self::disposition::{
+    adjust_confidence, learned_allowlist, learned_confidence_adjustments, Disposition,
+    DispositionOverlay, DispositionRecord,
+};
 pub use self::fingerprint::finding_fingerprint;
 pub use self::reports::{JsonReport, PolicyGenerator};
 pub(crate) use self::sarif::{

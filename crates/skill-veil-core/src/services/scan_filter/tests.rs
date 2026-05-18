@@ -239,6 +239,7 @@ fn test_filter_with_summary_counts_waivers_and_baseline() {
         Some(baseline),
         Some(waivers),
         None,
+        None,
     );
 
     let outcome = filter.filter_with_summary(vec![finding]);
@@ -279,6 +280,7 @@ fn test_waiver_wins_over_baseline_for_same_finding() {
         Some(baseline),
         Some(waivers),
         None,
+        None,
     );
 
     let outcome = filter.filter_with_summary(vec![finding]);
@@ -317,8 +319,13 @@ fn test_fingerprint_distinguishes_different_match_values() {
             reason: finding_a.reason.clone(),
         }],
     };
-    let filter =
-        ScanFilterService::with_policy_state(ScanOptions::default(), Some(baseline), None, None);
+    let filter = ScanFilterService::with_policy_state(
+        ScanOptions::default(),
+        Some(baseline),
+        None,
+        None,
+        None,
+    );
 
     let outcome = filter.filter_with_summary(vec![finding_a, finding_b]);
     assert_eq!(
@@ -355,4 +362,106 @@ fn test_fingerprint_is_stable_when_only_reason_changes() {
         fp_a, fp_b,
         "Fingerprint must ignore reason — otherwise rule wording changes break baselines",
     );
+}
+
+fn disp_record(rule: &str, d: crate::policy::Disposition) -> crate::policy::DispositionRecord {
+    crate::policy::DispositionRecord {
+        finding_fingerprint: format!("fp-{rule}"),
+        rule_id: rule.to_string(),
+        sha256: None,
+        analyst_disposition: d,
+        recorded_at: chrono::Utc::now(),
+        note: None,
+    }
+}
+
+fn actioned_finding(rule: &str, action: RecommendedAction) -> Finding {
+    Finding::builder(rule, ThreatCategory::Generic)
+        .severity(Severity::High)
+        .confidence(0.9)
+        .action(action)
+        .matched_on(MatchTarget::Document)
+        .match_value("test")
+        .reason("Test finding")
+        .build()
+}
+
+/// Contract: a rule the analyst population judged noisy (≥ min FP
+/// samples, low TP rate) has its findings demoted to `Log` and the
+/// demotion is counted (surfaced, never silently dropped).
+#[test]
+fn disposition_allowlist_demotes_to_log_and_is_counted() {
+    let overlay = crate::policy::DispositionOverlay {
+        schema_version: "1".into(),
+        records: (0..10)
+            .map(|_| disp_record("NOISY", crate::policy::Disposition::FalsePositive))
+            .collect(),
+    };
+    let filter = ScanFilterService::with_policy_state(
+        ScanOptions::default(),
+        None,
+        None,
+        None,
+        Some(overlay),
+    );
+    let outcome =
+        filter.filter_with_summary(vec![actioned_finding("NOISY", RecommendedAction::Block)]);
+    assert_eq!(outcome.suppression_summary.disposition_allowlisted, 1);
+    assert_eq!(
+        outcome.findings[0].recommended_action,
+        RecommendedAction::Log,
+        "an allowlisted rule's finding must be demoted to Log"
+    );
+}
+
+/// Contract (negative): no overlay configured ⇒ the FilterOutcome is
+/// byte-identical to `new()` — the default path is unchanged.
+#[test]
+fn no_disposition_overlay_is_byte_identical() {
+    let findings = vec![
+        actioned_finding("R1", RecommendedAction::Block),
+        actioned_finding("R2", RecommendedAction::RequireApproval),
+    ];
+    let base = ScanFilterService::new(ScanOptions::default()).filter_with_summary(findings.clone());
+    let with_none =
+        ScanFilterService::with_policy_state(ScanOptions::default(), None, None, None, None)
+            .filter_with_summary(findings);
+    assert_eq!(base.findings.len(), with_none.findings.len());
+    assert_eq!(base.suppression_summary.disposition_adjusted, 0);
+    assert_eq!(with_none.suppression_summary.disposition_allowlisted, 0);
+    assert_eq!(
+        base.findings[0].recommended_action,
+        with_none.findings[0].recommended_action
+    );
+}
+
+/// Contract (security): even a TruePositive-saturated overlay NEVER
+/// raises a finding's action. Feedback can only reduce aggressiveness
+/// — a poisoned overlay cannot manufacture a Block.
+#[test]
+fn disposition_never_escalates_action() {
+    let overlay = crate::policy::DispositionOverlay {
+        schema_version: "1".into(),
+        records: (0..5_000)
+            .map(|_| disp_record("R1", crate::policy::Disposition::TruePositive))
+            .collect(),
+    };
+    let filter = ScanFilterService::with_policy_state(
+        ScanOptions::default(),
+        None,
+        None,
+        None,
+        Some(overlay),
+    );
+    let outcome = filter.filter_with_summary(vec![
+        actioned_finding("R1", RecommendedAction::Log),
+        actioned_finding("R1", RecommendedAction::RequireApproval),
+    ]);
+    for f in &outcome.findings {
+        assert!(
+            f.recommended_action <= RecommendedAction::RequireApproval,
+            "feedback must never escalate an action (got {:?})",
+            f.recommended_action
+        );
+    }
 }

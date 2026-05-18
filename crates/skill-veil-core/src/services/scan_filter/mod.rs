@@ -3,8 +3,9 @@
 
 use crate::findings::{Finding, RecommendedAction, Severity};
 use crate::policy::{
-    apply_baseline, apply_policy_overrides_with_audit, apply_waivers, count_baseline_matches,
-    finding_fingerprint, AppliedPolicyOverride, BaselineFile, PolicyFile, PolicyProfile,
+    adjust_confidence, apply_baseline, apply_policy_overrides_with_audit, apply_waivers,
+    count_baseline_matches, finding_fingerprint, learned_allowlist, learned_confidence_adjustments,
+    AppliedPolicyOverride, BaselineFile, DispositionOverlay, PolicyFile, PolicyProfile,
     SuppressionSummary, WaiverFile,
 };
 use crate::scanner_types::{ScanOptions, ScanTargetMode};
@@ -28,11 +29,12 @@ pub struct ScanFilterService {
     baseline: Option<BaselineFile>,
     waivers: Option<WaiverFile>,
     policy: Option<PolicyFile>,
+    disposition: Option<DispositionOverlay>,
 }
 
 impl ScanFilterService {
     pub fn new(options: ScanOptions) -> Self {
-        Self::with_policy_state(options, None, None, None)
+        Self::with_policy_state(options, None, None, None, None)
     }
 
     pub fn with_policy_state(
@@ -40,6 +42,7 @@ impl ScanFilterService {
         baseline: Option<BaselineFile>,
         waivers: Option<WaiverFile>,
         policy: Option<PolicyFile>,
+        disposition: Option<DispositionOverlay>,
     ) -> Self {
         Self {
             min_severity: options.min_severity,
@@ -51,6 +54,7 @@ impl ScanFilterService {
             baseline,
             waivers,
             policy,
+            disposition,
         }
     }
 
@@ -78,6 +82,13 @@ impl ScanFilterService {
         // overrides had a chance to promote their action to Block — defeating
         // the operator intent encoded in `should_fail`'s Block-action bypass.
         let (findings, applied_overrides) = self.apply_overrides_stage(findings);
+        // Analyst-feedback overlay composes AFTER overrides and BEFORE
+        // the severity filter: a learned allowlist demotion behaves
+        // like a policy override, and the bounded confidence
+        // adjustment lands before downstream risk scoring. It can only
+        // ever reduce aggressiveness (demote to Log) — never escalate.
+        let (findings, disposition_adjusted, disposition_allowlisted) =
+            self.apply_disposition_stage(findings);
         // Collect fingerprints of findings whose action was escalated TO Block
         // by a policy override. These findings must survive the severity filter
         // regardless of their native severity — the operator explicitly chose
@@ -97,6 +108,8 @@ impl ScanFilterService {
                 baseline_suppressed,
                 waiver_suppressed,
                 inline_suppressed: 0,
+                disposition_adjusted,
+                disposition_allowlisted,
                 active_findings: findings
                     .iter()
                     .filter(|f| f.recommended_action != RecommendedAction::Log)
@@ -105,6 +118,47 @@ impl ScanFilterService {
             applied_overrides,
             findings,
         }
+    }
+
+    /// Apply the analyst-feedback overlay. Returns the findings plus
+    /// `(adjusted, allowlisted)` counts. Two effects, both
+    /// aggressiveness-reducing only:
+    ///
+    /// 1. A rule on the learned allowlist has every finding demoted to
+    ///    `Log` (counted, never silently dropped — surfaced like a
+    ///    waiver). NEVER raises an action.
+    /// 2. A bounded, monotone confidence delta is applied to the
+    ///    remaining findings, hard-clamped into the safe band.
+    ///
+    /// With no overlay configured this is the identity — the default
+    /// path is byte-identical.
+    fn apply_disposition_stage(&self, findings: Vec<Finding>) -> (Vec<Finding>, usize, usize) {
+        let Some(overlay) = self.disposition.as_ref() else {
+            return (findings, 0, 0);
+        };
+        let allowlist = learned_allowlist(overlay);
+        let deltas = learned_confidence_adjustments(overlay);
+        let mut adjusted = 0;
+        let mut allowlisted = 0;
+        let findings = findings
+            .into_iter()
+            .map(|mut f| {
+                if let Some(&delta) = deltas.get(&f.rule_id) {
+                    let new_conf = adjust_confidence(f.confidence, delta);
+                    if (new_conf - f.confidence).abs() > f32::EPSILON {
+                        f.confidence = new_conf;
+                        adjusted += 1;
+                    }
+                }
+                if allowlist.contains(&f.rule_id) && f.recommended_action != RecommendedAction::Log
+                {
+                    f.recommended_action = RecommendedAction::Log;
+                    allowlisted += 1;
+                }
+                f
+            })
+            .collect();
+        (findings, adjusted, allowlisted)
     }
 
     fn apply_severity_filter_with_overrides(
