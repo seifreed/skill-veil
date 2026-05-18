@@ -432,6 +432,12 @@ pub struct GoldBuildArgs {
     /// Dataset root holding `<sha>/SKILL.md` for each sample.
     #[arg(long)]
     pub dataset_root: PathBuf,
+    /// Optional directory of VT reports (`<sha>.json`, the
+    /// `.vt-reports` dir written by `vt download`). When given, each
+    /// sample's `vt_label` is populated and `disputed` is recomputed
+    /// from VT-vs-LLM provenance.
+    #[arg(long)]
+    pub vt_reports: Option<PathBuf>,
     /// Destination gold manifest (YAML).
     #[arg(short, long)]
     pub out: PathBuf,

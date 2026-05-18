@@ -9,13 +9,14 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use skill_veil_core::{GoldCorpusManifest, GoldSample, SampleLabel};
 
 use crate::cli_args::{GoldAction, GoldBuildArgs, GoldLabelArg, GoldReviewArgs, GoldStatsArgs};
+use crate::vt::types::CachedReport;
 
 #[derive(Debug, Clone, Deserialize)]
 struct ProviderVoteRecord {
@@ -36,6 +37,46 @@ fn label_of(arg: GoldLabelArg) -> SampleLabel {
         GoldLabelArg::Suspicious => SampleLabel::Suspicious,
         GoldLabelArg::Malicious => SampleLabel::Malicious,
     }
+}
+
+/// Derive a coarse VT label from a cached report. Prefers the Code
+/// Insight / crowdsourced-AI verdict string (the signal the dataset is
+/// built around); falls back to `last_analysis_stats` (any malicious
+/// engine → Malicious, else any suspicious → Suspicious, else
+/// Benign). `None` when the report carries no usable signal.
+fn sample_label_from_vt(report: &CachedReport) -> Option<SampleLabel> {
+    if let Some(ai) = report.attributes.primary_ai_verdict() {
+        let v = ai.verdict.to_ascii_lowercase();
+        if v.contains("malicious") {
+            return Some(SampleLabel::Malicious);
+        }
+        if v.contains("suspicious") {
+            return Some(SampleLabel::Suspicious);
+        }
+        if v.contains("benign") {
+            return Some(SampleLabel::Benign);
+        }
+    }
+    let stats = report.attributes.last_analysis_stats.as_ref()?;
+    if stats.malicious > 0 {
+        Some(SampleLabel::Malicious)
+    } else if stats.suspicious > 0 {
+        Some(SampleLabel::Suspicious)
+    } else if stats.harmless > 0 || stats.undetected > 0 {
+        Some(SampleLabel::Benign)
+    } else {
+        None
+    }
+}
+
+/// Read `<dir>/<sha>.json` (the `.vt-reports` layout written by
+/// `vt download`) and derive its label. Missing / unparseable reports
+/// yield `None` (best-effort enrichment, never fatal).
+fn vt_label_for(dir: &Path, sha: &str) -> Option<SampleLabel> {
+    let path = dir.join(format!("{sha}.json"));
+    let text = fs::read_to_string(&path).ok()?;
+    let report: CachedReport = serde_json::from_str(&text).ok()?;
+    sample_label_from_vt(&report)
 }
 
 /// ≥2 DISTINCT providers agreeing on the same label is the consensus;
@@ -72,23 +113,30 @@ fn build(args: GoldBuildArgs) -> Result<()> {
         .iter()
         .map(|r| {
             let consensus = llm_consensus(&r.providers);
-            GoldSample {
+            let vt_label = args
+                .vt_reports
+                .as_deref()
+                .and_then(|dir| vt_label_for(dir, &r.sha));
+            let mut s = GoldSample {
                 id: r.sha.clone(),
                 path: args.dataset_root.join(&r.sha).join("SKILL.md"),
                 // Provisional curated label = the consensus when it
                 // formed; otherwise a conservative Suspicious that the
                 // dispute gate excludes from scoring until reviewed.
                 final_label: consensus.unwrap_or(SampleLabel::Suspicious),
-                vt_label: None,
+                vt_label,
                 llm_consensus: consensus,
                 human_review: None,
-                // No VT label at build time, so the only dispute
-                // signal is "no LLM consensus" — those MUST be
-                // human-reviewed before they count.
-                disputed: consensus.is_none(),
+                disputed: false,
                 focus_category: None,
                 attack_family: None,
-            }
+            };
+            // Dispute is DERIVED from provenance (VT vs LLM, or no
+            // consensus). When no VT label is available the
+            // derive_disputed (VT=None, LLM=None) path returns false,
+            // so a no-consensus sample must still be flagged.
+            s.disputed = s.derive_disputed() || consensus.is_none();
+            s
         })
         .collect();
 
@@ -218,5 +266,56 @@ mod tests {
             attack_family: None,
         };
         assert!(s.disputed && !s.is_admitted());
+    }
+
+    /// Contract: the Code Insight / crowdsourced-AI verdict string
+    /// drives the VT label (both directions).
+    #[test]
+    fn vt_label_from_code_insight_verdict() {
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"crowdsourced_ai_results":[{"source":"Code Insight","verdict":"malicious"}]}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), Some(SampleLabel::Malicious));
+
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"crowdsourced_ai_results":[{"source":"Code Insight","verdict":"benign"}]}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), Some(SampleLabel::Benign));
+    }
+
+    /// Contract: with no AI verdict, `last_analysis_stats` is the
+    /// fallback; an all-zero / empty report yields `None` (no signal
+    /// — never a fabricated label).
+    #[test]
+    fn vt_label_falls_back_to_analysis_stats_then_none() {
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"last_analysis_stats":{"malicious":3}}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), Some(SampleLabel::Malicious));
+
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), None);
+    }
+
+    /// Contract: a VT label that disagrees with the LLM consensus
+    /// marks the sample disputed (must be human-reviewed before it
+    /// scores); agreement does not.
+    #[test]
+    fn vt_vs_llm_disagreement_marks_disputed() {
+        let mut s = GoldSample {
+            id: "a".into(),
+            path: "a/SKILL.md".into(),
+            final_label: SampleLabel::Malicious,
+            vt_label: Some(SampleLabel::Benign),
+            llm_consensus: Some(SampleLabel::Malicious),
+            human_review: None,
+            disputed: false,
+            focus_category: None,
+            attack_family: None,
+        };
+        s.disputed = s.derive_disputed();
+        assert!(s.disputed, "VT≠LLM must be disputed");
+
+        s.vt_label = Some(SampleLabel::Malicious);
+        s.disputed = s.derive_disputed();
+        assert!(!s.disputed, "VT==LLM agreement is not disputed");
     }
 }
