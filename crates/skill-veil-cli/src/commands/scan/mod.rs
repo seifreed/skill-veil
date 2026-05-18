@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 mod cache;
-mod llm;
+pub(crate) mod llm;
 mod nova_llm_eval;
 mod nova_run;
 mod nova_semantics_eval;
@@ -234,6 +234,12 @@ pub(crate) fn run_scan(
         ..Default::default()
     };
 
+    // Cloned before `options` is moved into the scanner so the taint
+    // adjudication (ADR 0029) can rebuild a `ScanFilterService` with
+    // the operator's exact `--fail-on` to recompute exit-code
+    // contribution for downgraded packages. Cheap; only used when
+    // `--llm-adjudicate-taint` is set.
+    let filter_options = options.clone();
     let scanner = Scanner::with_std_adapters(options).context("Failed to initialize scanner")?;
     let mut scan_result = scanner.scan(&args.path).context("Failed to scan path")?;
 
@@ -408,6 +414,35 @@ pub(crate) fn run_scan(
         }
     }
 
+    // ADR 0029: gated LLM-adjudicated taint downgrade. Opt-in
+    // (default OFF) and contradictory with --no-llm-enrich (it needs
+    // LLM access). Works on clones only — `scan_result` is never
+    // mutated, so the `verdict_snapshot` debug-assert below stays
+    // valid. Affects ONLY this appended block + the exit code.
+    let adjudicated = if args.llm_adjudicate_taint && !args.no_llm_enrich {
+        match crate::llm::taint_adjudication::run_taint_adjudication(
+            &scan_result,
+            &args.path,
+            args.cache_dir.as_deref(),
+            &filter_options,
+            quiet,
+        )? {
+            Some(outcome) => {
+                print!("{}", outcome.report_block);
+                Some(outcome)
+            }
+            None => None,
+        }
+    } else {
+        if args.llm_adjudicate_taint && args.no_llm_enrich && !quiet {
+            eprintln!(
+                "taint adjudication skipped: --llm-adjudicate-taint needs LLM access \
+                 but --no-llm-enrich was set"
+            );
+        }
+        None
+    };
+
     if !args.no_promptintel_enrich {
         if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
             &scan_result,
@@ -448,6 +483,14 @@ pub(crate) fn run_scan(
     // `--fail-on` (resolved per-result by the filter service); a single
     // unreadable file must not unconditionally fail a scan when the user
     // asked for `--fail-on High` and no qualifying findings fired.
-    let should_fail = scan_result.results.iter().any(|r| r.should_fail);
+    // When the ADR-0029 adjudication ran, its `effective_should_fail`
+    // already ORs every non-downgraded `r.should_fail` with the
+    // downgraded packages' recomputed (taint-Block→RequireApproval)
+    // contribution under the operator's `--fail-on`. Otherwise the
+    // legacy expression is byte-identical.
+    let should_fail = match &adjudicated {
+        Some(o) => o.effective_should_fail,
+        None => scan_result.results.iter().any(|r| r.should_fail),
+    };
     Ok(should_fail)
 }

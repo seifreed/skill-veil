@@ -497,6 +497,16 @@ pub struct ScanArgs {
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]
     pub llm_provider: Option<String>,
+    /// Opt-in (default OFF). When set, a Malicious verdict whose ONLY
+    /// Block-strength driver is an ARTIFACT_TAINT_SECRET/IDENTITY rule
+    /// is re-checked by the LLM consensus trio (openai+grok+ollama-
+    /// cloud); if >=2 independently judge it benign it is shown as
+    /// Suspicious and no longer fails the exit code. Never downgrades
+    /// to Benign; never mutates the core verdict (JSON/SARIF still
+    /// show Malicious). Trades a prompt-injection-exploitable
+    /// softening for FP reduction — see docs/adr/0029.
+    #[arg(long, default_value_t = false)]
+    pub llm_adjudicate_taint: bool,
     /// Fail the scan when any external rule pack declares a rule id that
     /// collides with an already-loaded rule. Default is to warn and keep
     /// the first-loaded version (preserves backwards-compat).

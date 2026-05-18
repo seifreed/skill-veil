@@ -4,7 +4,7 @@ mod init;
 mod policy;
 mod promptintel;
 mod rules;
-mod scan;
+pub(crate) mod scan;
 mod vt;
 
 pub(crate) use baseline::{run_baseline_create, run_baseline_update};

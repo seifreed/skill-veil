@@ -16,4 +16,5 @@ pub(crate) mod client;
 pub(crate) mod enrich;
 pub(crate) mod prompt;
 pub(crate) mod providers;
+pub(crate) mod taint_adjudication;
 pub(crate) mod types;

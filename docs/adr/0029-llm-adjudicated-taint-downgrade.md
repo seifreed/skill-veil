@@ -4,7 +4,24 @@ Date: 2026-05-18
 
 ## Status
 
-Proposed — empirically validated, implementation deferred to a reviewed change.
+Accepted — empirically validated and implemented behind the opt-in
+(default-OFF) `--llm-adjudicate-taint` flag.
+
+### Implementation scope notes
+
+- Applies to the `run_scan` path (`scan` / `scan-file` / `scan-package`).
+  `scan-dataset` uses `run_scan_dataset` (no enrichment) so the flag is
+  a no-op there — consistent with the validated experiment, which used
+  `scan-package`.
+- JSON/SARIF structured output reflects the immutable core verdict; the
+  effective downgrade surfaces only in the appended text adjudication
+  block and the process exit code — consistent with how existing
+  VT/LLM enrichment blocks behave. The core `verdict_snapshot`
+  anti-tamper assertion remains valid (adjudication operates on clones
+  only).
+- `--llm-adjudicate-taint` combined with `--no-llm-enrich` is skipped
+  with a one-line operator note (the flags conflict; adjudication
+  needs LLM access).
 
 ## Context
 
