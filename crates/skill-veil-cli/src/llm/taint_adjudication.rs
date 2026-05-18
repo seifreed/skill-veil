@@ -44,8 +44,8 @@ use std::path::Path;
 use anyhow::Result;
 use skill_veil_core::services::ScanFilterService;
 use skill_veil_core::{
-    Finding, PackageScanResult, RecommendedAction, ScanOptions, ScanResult, SignalClass, Verdict,
-    VerdictReason,
+    is_conclusive_single_rule_id, Finding, PackageScanResult, RecommendedAction, ScanOptions,
+    ScanResult, SignalClass, Verdict, VerdictReason,
 };
 
 use crate::commands::scan::llm::{prepare_llm_inputs, LlmInputs};
@@ -61,6 +61,31 @@ use crate::util::terminal_safe::sanitise_for_terminal;
 pub(crate) const TAINT_DOWNGRADE_RULE_IDS: &[&str] = &[
     "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK",
     "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK",
+];
+
+/// The exfil/credential rule families whose single-rule fire is held
+/// at `Suspicious` by the corroboration gate but is a confirmed
+/// soft-FN when ≥2-of-3 providers independently judge it malicious.
+///
+/// Mirror of [`TAINT_DOWNGRADE_RULE_IDS`] in the false-NEGATIVE
+/// direction. Chosen conservatively from `residual-fn-by-rule.tsv`:
+/// only families with a non-zero recovered-FN count AND zero recorded
+/// benign FP in the triage snapshot. The LLM consensus is precisely
+/// the FP guard these static single-regex rules individually lack —
+/// the upgrade fires ONLY when 2+ independent providers confirm
+/// malicious, never on the static signal alone.
+///
+/// `ARTIFACT_TAINT_*` is deliberately EXCLUDED: it is the *downgrade*
+/// target, so upgrading it would directly contradict ADR 0029.
+/// Broad/hygiene families are excluded (unacceptable benign FP cost,
+/// zero recoverable signal). The list is expandable ONLY with fresh
+/// `adjudication-eval` corpus evidence — the snapshot it was derived
+/// from is stale by construction.
+pub(crate) const FN_UPGRADE_RULE_IDS: &[&str] = &[
+    "SKILL_CREDENTIAL_FORWARDING_POST",
+    "SCRIPT_NODE_SECRET_OR_FS_ACCESS",
+    "SCRIPT_PYTHON_SECRET_OR_SYSTEM_ACCESS",
+    "SKILL_CRED_HARDCODED_KEY",
 ];
 
 /// Compound-chain verdict reasons carry this rationale prefix
@@ -178,6 +203,87 @@ pub(crate) fn effective_verdict(
     }
 }
 
+/// `true` when the package is the FN soft-negative shape the symmetric
+/// upgrade targets: core verdict `Suspicious`, at least one
+/// [`FN_UPGRADE_RULE_IDS`] `MaliciousBehavior` finding that materially
+/// drove the verdict (action ≥ `RequireApproval`), no conclusive
+/// single-rule finding (else the core would already be `Malicious`),
+/// and no Block-strength `MaliciousBehavior` driver from a rule
+/// OUTSIDE the FN set (mirror of the downgrade gate's second-driver
+/// disqualifier — a package borderline for unrelated reasons is not
+/// this shape).
+#[must_use]
+pub(crate) fn fn_upgrade_eligible(
+    verdict: Verdict,
+    findings: &[Finding],
+    has_conclusive_single_rule: bool,
+) -> bool {
+    if verdict != Verdict::Suspicious || has_conclusive_single_rule {
+        return false;
+    }
+
+    let mut saw_fn_driver = false;
+    for f in findings {
+        if f.signal_class != SignalClass::MaliciousBehavior {
+            continue;
+        }
+        let is_fn_rule = FN_UPGRADE_RULE_IDS.contains(&f.rule_id.as_str());
+        if f.recommended_action == RecommendedAction::Block && !is_fn_rule {
+            return false;
+        }
+        if is_fn_rule && f.recommended_action >= RecommendedAction::RequireApproval {
+            saw_fn_driver = true;
+        }
+    }
+    saw_fn_driver
+}
+
+/// Thin [`ScanResult`] wrapper over [`fn_upgrade_eligible`]. Derives
+/// the conclusive-rule precondition from the curated core set via the
+/// public accessor so the gate cannot drift from it.
+#[must_use]
+pub(crate) fn result_upgrade_eligible(r: &ScanResult) -> bool {
+    let has_conclusive = r
+        .findings
+        .iter()
+        .any(|f| is_conclusive_single_rule_id(&f.rule_id));
+    fn_upgrade_eligible(r.verdict, &r.findings, has_conclusive)
+}
+
+/// `true` when ≥2 DISTINCT providers returned `Malicious`. Distinctness
+/// is enforced via a set keyed on provider name. The symmetric
+/// fail-closed direction to [`provider_consensus_benign`]: an
+/// ambiguous / unparseable provider response is NOT a malicious vote,
+/// so it can never drive an upgrade.
+#[must_use]
+pub(crate) fn provider_consensus_malicious(provider_verdicts: &[(String, Verdict)]) -> bool {
+    let malicious: BTreeSet<&str> = provider_verdicts
+        .iter()
+        .filter(|(_, v)| *v == Verdict::Malicious)
+        .map(|(p, _)| p.as_str())
+        .collect();
+    malicious.len() >= 2
+}
+
+/// Pure reconciliation for the FN upgrade. Returns `Malicious` iff ALL
+/// hold: `opt_in`, core == `Suspicious`, `eligible`,
+/// `consensus_malicious`; otherwise `core` unchanged. NEVER upgrades
+/// `Benign` (a two-step jump) and NEVER touches an existing
+/// `Malicious`.
+#[must_use]
+pub(crate) fn effective_verdict_upgrade(
+    core: Verdict,
+    opt_in: bool,
+    eligible: bool,
+    consensus_malicious: bool,
+) -> Verdict {
+    if opt_in && eligible && consensus_malicious && core == Verdict::Suspicious {
+        Verdict::Malicious
+    } else {
+        core
+    }
+}
+
 /// Outcome of an adjudication pass. Never carries a mutated
 /// `ScanResult`; the caller prints `report_block` and uses
 /// `effective_should_fail` for the exit code only.
@@ -214,25 +320,70 @@ fn downgraded_should_fail(filter: &ScanFilterService, result: &ScanResult) -> bo
     filter.should_fail(&adjusted)
 }
 
-/// Run the gated, multi-provider taint adjudication. Returns
-/// `Ok(None)` (nothing to do) when no package is eligible, LLM
-/// enrichment is unconfigured, or fewer than two consensus providers
-/// are configured. Reuses `enrich_scan_result` per provider so the
-/// validated prompt-injection hardening is inherited verbatim.
-pub(crate) fn run_taint_adjudication(
+/// Raise this package's eligible FN-upgrade findings to `Block` in a
+/// CLONE, then ask the filter whether it now fails under the
+/// operator's `--fail-on`. The symmetric mirror of
+/// [`downgraded_should_fail`]. Never mutates the scan result.
+fn upgraded_should_fail(filter: &ScanFilterService, result: &ScanResult) -> bool {
+    let adjusted: Vec<Finding> = result
+        .findings
+        .iter()
+        .map(|f| {
+            let mut c = f.clone();
+            if FN_UPGRADE_RULE_IDS.contains(&c.rule_id.as_str())
+                && c.signal_class == SignalClass::MaliciousBehavior
+                && c.recommended_action < RecommendedAction::Block
+            {
+                c.recommended_action = RecommendedAction::Block;
+            }
+            c
+        })
+        .collect();
+    filter.should_fail(&adjusted)
+}
+
+/// Run the gated, multi-provider LLM adjudication. Composes the
+/// ADR-0029 downgrade (`Malicious → Suspicious`) and its symmetric FN
+/// upgrade (`Suspicious → Malicious`); each is independently opt-in.
+/// Returns `Ok(None)` when neither lever is enabled, nothing is
+/// eligible, LLM enrichment is unconfigured, or fewer than two
+/// consensus providers are configured. Reuses `enrich_scan_result`
+/// per provider so the validated prompt-injection hardening is
+/// inherited verbatim. Works on clones only — the core scan result
+/// (and the `verdict_snapshot` anti-tamper assertion) is never
+/// touched. The two gates are partitioned by core verdict
+/// (`Malicious` vs `Suspicious`) so no package is ever both.
+pub(crate) fn run_adjudication(
     scan_result: &PackageScanResult,
     scan_path: &Path,
     cache_dir_override: Option<&Path>,
     scan_options: &ScanOptions,
     quiet: bool,
+    downgrade_opt_in: bool,
+    upgrade_opt_in: bool,
 ) -> Result<Option<AdjudicationOutcome>> {
-    // 1. Eligible original indices.
-    let eligible_idx: Vec<usize> = scan_result
-        .results
+    if !downgrade_opt_in && !upgrade_opt_in {
+        return Ok(None);
+    }
+
+    // 1. Eligible original indices, partitioned by direction. The
+    //    gates are mutually exclusive (Malicious vs Suspicious core),
+    //    so a package lands in at most one set.
+    let mut is_downgrade: BTreeSet<usize> = BTreeSet::new();
+    let mut is_upgrade: BTreeSet<usize> = BTreeSet::new();
+    for (i, r) in scan_result.results.iter().enumerate() {
+        if downgrade_opt_in && result_eligible(r) {
+            is_downgrade.insert(i);
+        } else if upgrade_opt_in && result_upgrade_eligible(r) {
+            is_upgrade.insert(i);
+        }
+    }
+    let eligible_idx: Vec<usize> = is_downgrade
         .iter()
-        .enumerate()
-        .filter(|(_, r)| result_eligible(r))
-        .map(|(i, _)| i)
+        .chain(is_upgrade.iter())
+        .copied()
+        .collect::<BTreeSet<usize>>()
+        .into_iter()
         .collect();
     if eligible_idx.is_empty() {
         return Ok(None);
@@ -263,17 +414,22 @@ pub(crate) fn run_taint_adjudication(
     if providers.len() < 2 {
         if !quiet {
             eprintln!(
-                "taint adjudication skipped: needs ≥2 of openai/grok/ollama-cloud configured \
-                 (found {}); no downgrade applied",
+                "LLM adjudication skipped: needs ≥2 of openai/grok/ollama-cloud configured \
+                 (found {}); no adjudication applied",
                 providers.len()
             );
         }
         return Ok(None);
     }
 
-    // 5. Per-provider enrichment → votes keyed by filtered index.
+    // 5. Per-provider enrichment → votes keyed by filtered index. A
+    //    missing / unparseable verdict is recorded as `None` and
+    //    dropped from BOTH consensus computations, so the fail-closed
+    //    guarantee holds in BOTH directions: an ambiguous provider can
+    //    neither force a downgrade (not a benign vote) nor an upgrade
+    //    (not a malicious vote).
     let n = filtered.results.len();
-    let mut votes: Vec<Vec<(String, Verdict)>> = vec![Vec::new(); n];
+    let mut votes: Vec<Vec<(String, Option<Verdict>)>> = vec![Vec::new(); n];
     for kind in &providers {
         let enrichment = match enrich_scan_result(
             &inputs.section,
@@ -285,7 +441,7 @@ pub(crate) fn run_taint_adjudication(
             Err(e) => {
                 if !quiet {
                     eprintln!(
-                        "taint adjudication: provider {} failed: {e:#}",
+                        "LLM adjudication: provider {} failed: {e:#}",
                         kind.as_str()
                     );
                 }
@@ -299,21 +455,39 @@ pub(crate) fn run_taint_adjudication(
             let v = pkg
                 .verdict
                 .as_ref()
-                .and_then(|lv| parse_provider_verdict(&lv.verdict))
-                // Fail-closed: a missing / unparseable verdict is a
-                // non-benign vote and cannot help reach consensus.
-                .unwrap_or(Verdict::Malicious);
+                .and_then(|lv| parse_provider_verdict(&lv.verdict));
             votes[i].push((kind.as_str().to_string(), v));
         }
     }
 
-    // 6. Consensus → downgraded original indices.
-    let mut downgraded: BTreeMap<usize, Vec<(String, Verdict)>> = BTreeMap::new();
+    // 6. Consensus → per-direction changed maps.
+    let mut downgraded: BTreeMap<usize, Vec<(String, Option<Verdict>)>> = BTreeMap::new();
+    let mut upgraded: BTreeMap<usize, Vec<(String, Option<Verdict>)>> = BTreeMap::new();
     for (fi, &orig_i) in eligible_idx.iter().enumerate() {
-        let consensus = provider_consensus_benign(&votes[fi]);
-        let eff = effective_verdict(Verdict::Malicious, true, true, consensus);
-        if eff == Verdict::Suspicious {
-            downgraded.insert(orig_i, votes[fi].clone());
+        let parsed: Vec<(String, Verdict)> = votes[fi]
+            .iter()
+            .filter_map(|(p, ov)| ov.map(|v| (p.clone(), v)))
+            .collect();
+        if is_downgrade.contains(&orig_i) {
+            let eff = effective_verdict(
+                Verdict::Malicious,
+                true,
+                true,
+                provider_consensus_benign(&parsed),
+            );
+            if eff == Verdict::Suspicious {
+                downgraded.insert(orig_i, votes[fi].clone());
+            }
+        } else if is_upgrade.contains(&orig_i) {
+            let eff = effective_verdict_upgrade(
+                Verdict::Suspicious,
+                true,
+                true,
+                provider_consensus_malicious(&parsed),
+            );
+            if eff == Verdict::Malicious {
+                upgraded.insert(orig_i, votes[fi].clone());
+            }
         }
     }
 
@@ -323,6 +497,8 @@ pub(crate) fn run_taint_adjudication(
     for (i, r) in scan_result.results.iter().enumerate() {
         let fails = if downgraded.contains_key(&i) {
             downgraded_should_fail(&filter, r)
+        } else if upgraded.contains_key(&i) {
+            upgraded_should_fail(&filter, r)
         } else {
             r.should_fail
         };
@@ -330,7 +506,14 @@ pub(crate) fn run_taint_adjudication(
     }
 
     // 8. Sanitised operator-facing block.
-    let report_block = render_block(scan_result, &downgraded, &providers);
+    let report_block = render_block(
+        scan_result,
+        downgrade_opt_in,
+        upgrade_opt_in,
+        &downgraded,
+        &upgraded,
+        &providers,
+    );
 
     Ok(Some(AdjudicationOutcome {
         effective_should_fail,
@@ -338,35 +521,31 @@ pub(crate) fn run_taint_adjudication(
     }))
 }
 
-fn render_block(
+fn render_votes(votes: &[(String, Option<Verdict>)]) -> String {
+    votes
+        .iter()
+        .map(|(p, ov)| match ov {
+            Some(v) => format!("{p}={v:?}"),
+            None => format!("{p}=error"),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn render_changed_section(
+    out: &mut String,
+    transition: &str,
+    rule_ids: &[&str],
     scan_result: &PackageScanResult,
-    downgraded: &BTreeMap<usize, Vec<(String, Verdict)>>,
-    providers: &[LlmProviderKind],
-) -> String {
-    let mut out = String::new();
-    out.push_str(
-        "\n=== Taint adjudication (LLM consensus; AFFECTS effective verdict + exit code) ===\n",
-    );
-    let trio: Vec<&str> = providers.iter().map(|p| p.as_str()).collect();
+    changed: &BTreeMap<usize, Vec<(String, Option<Verdict>)>>,
+) {
     let _ = writeln!(
         out,
-        "consensus providers: {} | gate: taint-only Block driver, no conclusive/compound \
-         | downgrade: Malicious → Suspicious (never Benign)",
-        trio.join("+")
+        "{} package(s) {} — core verdict unchanged (JSON/SARIF unaffected):",
+        changed.len(),
+        transition
     );
-    if downgraded.is_empty() {
-        out.push_str(
-            "no Malicious package met the gate + ≥2-of-3 benign consensus; \
-                      no downgrade applied\n",
-        );
-        return out;
-    }
-    let _ = writeln!(
-        out,
-        "{} package(s) softened Malicious → Suspicious (still surfaced for review):",
-        downgraded.len()
-    );
-    for (&i, votes) in downgraded {
+    for (&i, votes) in changed {
         let r = &scan_result.results[i];
         let id = r
             .metadata
@@ -383,22 +562,72 @@ fn render_block(
                 .take(PATH_DISPLAY_CHARS)
                 .collect::<String>(),
         );
-        let taint_rules: BTreeSet<&str> = r
+        let rules: BTreeSet<&str> = r
             .findings
             .iter()
             .filter(|f| {
-                TAINT_DOWNGRADE_RULE_IDS.contains(&f.rule_id.as_str())
+                rule_ids.contains(&f.rule_id.as_str())
                     && f.signal_class == SignalClass::MaliciousBehavior
             })
             .map(|f| f.rule_id.as_str())
             .collect();
-        let votes_str: Vec<String> = votes.iter().map(|(p, v)| format!("{p}={v:?}")).collect();
         let _ = writeln!(
             out,
             "  {id}… {path}\n    rule(s): {} | votes: {}",
-            taint_rules.into_iter().collect::<Vec<_>>().join(","),
-            votes_str.join(" ")
+            rules.into_iter().collect::<Vec<_>>().join(","),
+            render_votes(votes)
         );
+    }
+}
+
+fn render_block(
+    scan_result: &PackageScanResult,
+    downgrade_opt_in: bool,
+    upgrade_opt_in: bool,
+    downgraded: &BTreeMap<usize, Vec<(String, Option<Verdict>)>>,
+    upgraded: &BTreeMap<usize, Vec<(String, Option<Verdict>)>>,
+    providers: &[LlmProviderKind],
+) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "\n=== LLM adjudication (consensus; AFFECTS effective verdict + exit code) ===\n",
+    );
+    let trio: Vec<&str> = providers.iter().map(|p| p.as_str()).collect();
+    let _ = writeln!(out, "consensus providers: {}", trio.join("+"));
+
+    if downgrade_opt_in {
+        out.push_str(
+            "downgrade gate: taint-only Block driver, no conclusive/compound \
+             | Malicious → Suspicious (never Benign)\n",
+        );
+        if downgraded.is_empty() {
+            out.push_str("  no Malicious package met the gate + ≥2-of-3 benign consensus\n");
+        } else {
+            render_changed_section(
+                &mut out,
+                "softened Malicious → Suspicious",
+                TAINT_DOWNGRADE_RULE_IDS,
+                scan_result,
+                downgraded,
+            );
+        }
+    }
+    if upgrade_opt_in {
+        out.push_str(
+            "upgrade gate: FN-rule single driver, no conclusive, core Suspicious \
+             | Suspicious → Malicious (never from Benign)\n",
+        );
+        if upgraded.is_empty() {
+            out.push_str("  no Suspicious package met the gate + ≥2-of-3 malicious consensus\n");
+        } else {
+            render_changed_section(
+                &mut out,
+                "escalated Suspicious → Malicious",
+                FN_UPGRADE_RULE_IDS,
+                scan_result,
+                upgraded,
+            );
+        }
     }
     out
 }
@@ -588,5 +817,161 @@ mod tests {
             RecommendedAction::Block,
         )];
         assert!(!taint_downgrade_eligible(Verdict::Malicious, &other, &[]));
+    }
+
+    /// Contract: with the upgrade lever OFF the effective verdict is
+    /// ALWAYS the core verdict — the byte-identical default-path
+    /// guarantee, mirror of `opt_in_off_is_always_identity`.
+    #[test]
+    fn upgrade_off_is_always_identity() {
+        for core in [Verdict::Benign, Verdict::Suspicious, Verdict::Malicious] {
+            for e in [false, true] {
+                for c in [false, true] {
+                    assert_eq!(effective_verdict_upgrade(core, false, e, c), core);
+                }
+            }
+        }
+    }
+
+    /// Contract: the upgrade fires only for
+    /// Suspicious+eligible+consensus and only to Malicious — never
+    /// from Benign (a two-step jump) and never onto an existing
+    /// Malicious.
+    #[test]
+    fn upgrade_only_suspicious_and_only_to_malicious() {
+        assert_eq!(
+            effective_verdict_upgrade(Verdict::Suspicious, true, true, true),
+            Verdict::Malicious
+        );
+        assert_eq!(
+            effective_verdict_upgrade(Verdict::Suspicious, true, false, true),
+            Verdict::Suspicious
+        );
+        assert_eq!(
+            effective_verdict_upgrade(Verdict::Suspicious, true, true, false),
+            Verdict::Suspicious
+        );
+        assert_eq!(
+            effective_verdict_upgrade(Verdict::Benign, true, true, true),
+            Verdict::Benign
+        );
+        assert_eq!(
+            effective_verdict_upgrade(Verdict::Malicious, true, true, true),
+            Verdict::Malicious
+        );
+    }
+
+    /// Contract: ≥2 DISTINCT providers must vote malicious; duplicate
+    /// votes from one provider and mixed/benign votes do not reach
+    /// consensus (symmetric to `consensus_requires_two_distinct_providers`).
+    #[test]
+    fn upgrade_consensus_requires_two_distinct_malicious() {
+        assert!(!provider_consensus_malicious(&[(
+            "openai".into(),
+            Verdict::Malicious
+        )]));
+        assert!(!provider_consensus_malicious(&[
+            ("grok".into(), Verdict::Malicious),
+            ("grok".into(), Verdict::Malicious),
+        ]));
+        assert!(provider_consensus_malicious(&[
+            ("openai".into(), Verdict::Malicious),
+            ("grok".into(), Verdict::Malicious),
+        ]));
+        assert!(!provider_consensus_malicious(&[
+            ("openai".into(), Verdict::Malicious),
+            ("grok".into(), Verdict::Benign),
+            ("ollama-cloud".into(), Verdict::Suspicious),
+        ]));
+    }
+
+    /// Contract: a Suspicious package whose driver is a single
+    /// FN-upgrade rule (MaliciousBehavior, action ≥ RequireApproval),
+    /// with no conclusive rule present, is upgrade-eligible.
+    #[test]
+    fn fn_upgrade_gate_single_fn_rule_no_conclusive_is_eligible() {
+        let f = vec![
+            finding(
+                "SKILL_CREDENTIAL_FORWARDING_POST",
+                SignalClass::MaliciousBehavior,
+                RecommendedAction::RequireApproval,
+            ),
+            finding("SOME_HYGIENE_RULE", SignalClass::Hygiene, RecommendedAction::Log),
+        ];
+        assert!(fn_upgrade_eligible(Verdict::Suspicious, &f, false));
+    }
+
+    /// Contract (negative): a conclusive single-rule finding means the
+    /// core would already be Malicious — never upgrade-eligible.
+    #[test]
+    fn fn_upgrade_gate_conclusive_rule_present_not_eligible() {
+        let f = vec![finding(
+            "SKILL_CREDENTIAL_FORWARDING_POST",
+            SignalClass::MaliciousBehavior,
+            RecommendedAction::RequireApproval,
+        )];
+        assert!(!fn_upgrade_eligible(Verdict::Suspicious, &f, true));
+    }
+
+    /// Contract (negative): a Block-strength MaliciousBehavior driver
+    /// from a rule OUTSIDE the FN set defeats eligibility (mirror of
+    /// the downgrade gate's second-driver disqualifier).
+    #[test]
+    fn fn_upgrade_gate_non_fn_block_rule_not_eligible() {
+        let f = vec![
+            finding(
+                "SKILL_CREDENTIAL_FORWARDING_POST",
+                SignalClass::MaliciousBehavior,
+                RecommendedAction::RequireApproval,
+            ),
+            finding(
+                "SKILL_SOME_OTHER_RULE",
+                SignalClass::MaliciousBehavior,
+                RecommendedAction::Block,
+            ),
+        ];
+        assert!(!fn_upgrade_eligible(Verdict::Suspicious, &f, false));
+    }
+
+    /// Contract (negative): a non-Suspicious core (Benign or
+    /// Malicious) is never upgrade-eligible.
+    #[test]
+    fn fn_upgrade_gate_non_suspicious_core_not_eligible() {
+        let f = vec![finding(
+            "SCRIPT_PYTHON_SECRET_OR_SYSTEM_ACCESS",
+            SignalClass::MaliciousBehavior,
+            RecommendedAction::RequireApproval,
+        )];
+        assert!(!fn_upgrade_eligible(Verdict::Benign, &f, false));
+        assert!(!fn_upgrade_eligible(Verdict::Malicious, &f, false));
+    }
+
+    /// Contract: the two gates are mutually exclusive — for ANY
+    /// finding set and ANY core verdict, a package is never
+    /// simultaneously downgrade- and upgrade-eligible (the gates are
+    /// partitioned by `Malicious` vs `Suspicious` core). Proves the
+    /// composition in `run_adjudication` is conflict-free.
+    #[test]
+    fn downgrade_and_upgrade_gates_are_mutually_exclusive() {
+        let mixed = vec![
+            finding(
+                "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK",
+                SignalClass::MaliciousBehavior,
+                RecommendedAction::Block,
+            ),
+            finding(
+                "SKILL_CREDENTIAL_FORWARDING_POST",
+                SignalClass::MaliciousBehavior,
+                RecommendedAction::RequireApproval,
+            ),
+        ];
+        for v in [Verdict::Benign, Verdict::Suspicious, Verdict::Malicious] {
+            let down = taint_downgrade_eligible(v, &mixed, &[]);
+            let up = fn_upgrade_eligible(v, &mixed, false);
+            assert!(
+                !(down && up),
+                "verdict {v:?}: a package must never be both downgrade- and upgrade-eligible",
+            );
+        }
     }
 }

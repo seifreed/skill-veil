@@ -414,18 +414,22 @@ pub(crate) fn run_scan(
         }
     }
 
-    // ADR 0029: gated LLM-adjudicated taint downgrade. Opt-in
-    // (default OFF) and contradictory with --no-llm-enrich (it needs
-    // LLM access). Works on clones only — `scan_result` is never
-    // mutated, so the `verdict_snapshot` debug-assert below stays
-    // valid. Affects ONLY this appended block + the exit code.
-    let adjudicated = if args.llm_adjudicate_taint && !args.no_llm_enrich {
-        match crate::llm::taint_adjudication::run_taint_adjudication(
+    // ADR 0029 + its symmetric FN upgrade: gated LLM adjudication.
+    // Each direction is independently opt-in (default OFF) and
+    // contradictory with --no-llm-enrich (it needs LLM access). Works
+    // on clones only — `scan_result` is never mutated, so the
+    // `verdict_snapshot` debug-assert below stays valid. Affects ONLY
+    // this appended block + the exit code.
+    let adjudicate_any = args.llm_adjudicate_taint || args.llm_adjudicate_upgrade;
+    let adjudicated = if adjudicate_any && !args.no_llm_enrich {
+        match crate::llm::taint_adjudication::run_adjudication(
             &scan_result,
             &args.path,
             args.cache_dir.as_deref(),
             &filter_options,
             quiet,
+            args.llm_adjudicate_taint,
+            args.llm_adjudicate_upgrade,
         )? {
             Some(outcome) => {
                 print!("{}", outcome.report_block);
@@ -434,10 +438,10 @@ pub(crate) fn run_scan(
             None => None,
         }
     } else {
-        if args.llm_adjudicate_taint && args.no_llm_enrich && !quiet {
+        if adjudicate_any && args.no_llm_enrich && !quiet {
             eprintln!(
-                "taint adjudication skipped: --llm-adjudicate-taint needs LLM access \
-                 but --no-llm-enrich was set"
+                "LLM adjudication skipped: --llm-adjudicate-taint / \
+                 --llm-adjudicate-upgrade need LLM access but --no-llm-enrich was set"
             );
         }
         None

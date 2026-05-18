@@ -533,6 +533,16 @@ pub struct ScanArgs {
     /// softening for FP reduction — see docs/adr/0029.
     #[arg(long, default_value_t = false)]
     pub llm_adjudicate_taint: bool,
+    /// Opt-in (default OFF). EXACT MIRROR of --llm-adjudicate-taint in
+    /// the false-NEGATIVE direction. A Suspicious verdict whose driver
+    /// is a single FN_UPGRADE rule (credential/exfil families) with no
+    /// corroboration is re-checked by the LLM consensus trio; if >=2
+    /// independently judge it malicious it is shown as Malicious and
+    /// fails the exit code. Never upgrades from Benign; never mutates
+    /// the core verdict (JSON/SARIF still show Suspicious). Trades the
+    /// symmetric prompt-injection risk for recall — see docs/adr/0029.
+    #[arg(long, default_value_t = false)]
+    pub llm_adjudicate_upgrade: bool,
     /// Fail the scan when any external rule pack declares a rule id that
     /// collides with an already-loaded rule. Default is to warn and keep
     /// the first-loaded version (preserves backwards-compat).
