@@ -57,6 +57,10 @@ malware engine.
 | **VirusTotal Integration** | Bulk download, report caching, and cross-check between skill-veil verdicts and VT Code Insight |
 | **PromptIntel Integration** | Curated jailbreak corpus + agent-feed IOC enrichment + threat-intel report submission with persistent rate-limit tracker |
 | **LLM Enrichment** | Optional third scoring engine across Ollama, LM Studio, OpenAI, Anthropic, and Ollama Cloud |
+| **LLM Adjudication** | Gated, ≥2-of-3 consensus reconciliation: taint-FP `Malicious→Suspicious` downgrade and the symmetric FN `Suspicious→Malicious` upgrade; immutable core verdict; single-provider-flip prompt-injection signal; offline replay tooling (`adjudication-eval`) |
+| **Analyst Feedback** | Append-only disposition overlay that turns production triage into a bounded, allowlist-only learned signal (never escalates an action) |
+| **Ground-Truth Corpus** | Curated gold corpus (3-LLM consensus + human review of disputes) scored by the same pipeline as the regression baseline |
+| **Native NOVA Semantics** | `semantics:` patterns run on-device by default via a local sentence-embedding model; opt out with `--no-nova-semantics` |
 | **Inline Suppressions** | `# skill-veil:ignore`, `nosem`, and `nosemgrep` markers with optional rule-id and reason |
 | **Unified Config** | Single `~/.skill-veil.toml` for VT, LLM, and PromptIntel providers; per-flag overrides on the CLI |
 
@@ -64,7 +68,12 @@ malware engine.
 
 ```
 Behavior        Remote execution, install hooks, deferred execution, persistence
+Composite       Fake-dependency dropper, crypto wallet-drainer staging,
+                C2 beacon staging (k-of-n; each signal benign alone)
 Supply Chain    Unpinned dependencies, missing lockfiles, remote MCP endpoints
+Taint           Secret/identity access reaching an external network (source→sink)
+LLM Integrity   Single-provider benign flip vs ≥2 dissenters (prompt injection
+                against the adjudication path)
 Prompt Risk     Persistent instruction tampering, cognitive rootkits, prompt packs
 Tooling Risk    Tool abuse, autonomy escalation, approval bypass patterns
 Runtime Risk    Privileged containers, host mounts, process execution, secret access
@@ -301,13 +310,20 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `promptintel report submit` | Submit a threat-intel report (5/h, 20/d) with client-side validation and `--dry-run` |
 | `promptintel report list` | List reports the authenticated agent has previously submitted |
 | `promptintel coverage` | Audit which threats in the official taxonomy are covered by at least one rule (offline; renders gaps per bucket) |
+| `adjudication-eval` | Offline replay of recorded LLM-provider verdicts; reports ΔFP/ΔFN, precision/recall and exact-label transitions with and without each adjudication lever (zero live calls) |
+| `gold build` | Seed a curated gold corpus from a recorded LLM-consensus rollup (no live calls); `--vt-reports <dir>` populates `vt_label` and derives disputes |
+| `gold review` | Resolve a disputed gold sample with a human adjudication |
+| `gold stats` | Admitted / disputed / per-label counts for a gold manifest |
+| `disposition record` | Append an analyst disposition (true-positive / false-positive / benign) for a finding to the overlay |
+| `disposition list` | List recorded dispositions (optionally filtered by rule) |
+| `disposition stats` | Per-rule TP/FP counts plus the derived, bounded confidence delta / allowlist |
 
 ### Useful Options
 
 | Option | Description |
 |--------|-------------|
 | `--format text/json/sarif/shield` | Output format |
-| `--preset local/ci/strict/enterprise` | Apply output and policy presets |
+| `--preset local/ci/strict/enterprise/triage` | Apply output and policy presets; `triage` = local plus both LLM-adjudication levers on (CI/strict/enterprise stay adjudication-OFF so deterministic verdicts never depend on an LLM) |
 | `--quiet-summary` | Compact text output |
 | `--explain-policy` | Focus on policy reasoning instead of finding details |
 | `--baseline` | Accepted findings baseline |
@@ -320,6 +336,10 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
 | `--no-promptintel-enrich` | Skip the offline PromptIntel feed-cache lookup |
 | `--no-nova` | Skip running NOVA rules even if a NOVA pack is installed (benchmark isolation) |
+| `--no-nova-semantics` | Opt out of the on-device NOVA `semantics:` model (default-on); falls back to the skipped-capability stub |
+| `--llm-adjudicate-taint` | Re-check a taint-only `Malicious` via ≥2-of-3 LLM consensus; `Malicious→Suspicious` if benign consensus. Never mutates the core verdict (JSON/SARIF unchanged); affects the appended block + exit code only |
+| `--llm-adjudicate-upgrade` | Symmetric mirror: re-check a single-FN-rule `Suspicious` via consensus; `Suspicious→Malicious` if ≥2 judge malicious. Single-provider benign flip blocks the downgrade and fails |
+| `--disposition <path>` | Apply an analyst-feedback overlay (bounded confidence + allowlist, never escalates an action) |
 | `--no-update-check` | Skip the once-per-day GitHub query that notifies you when newer rule sources are available (also via `SKILL_VEIL_NO_UPDATE_CHECK=1`) |
 | `--llm-provider <name>` | Override the active LLM provider for one scan (`ollama`, `lmstudio`, `openai`, `anthropic`, `ollama-cloud`) |
 | `--cache-dir` | Override the base directory for VT, LLM, and PromptIntel enrichment caches |
