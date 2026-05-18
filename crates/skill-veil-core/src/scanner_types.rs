@@ -51,6 +51,10 @@ pub struct ScanOptions {
     pub baseline_path: Option<PathBuf>,
     pub waivers_path: Option<PathBuf>,
     pub policy_path: Option<PathBuf>,
+    /// Project-local analyst-feedback overlay. `#[serde(default)]`:
+    /// additive — old serialised `ScanOptions` still deserialise.
+    #[serde(default)]
+    pub disposition_path: Option<PathBuf>,
     pub include_rules: Vec<String>,
     pub exclude_rules: Vec<String>,
     pub recursive: bool,
@@ -72,6 +76,7 @@ impl Default for ScanOptions {
             baseline_path: None,
             waivers_path: None,
             policy_path: None,
+            disposition_path: None,
             include_rules: Vec::new(),
             exclude_rules: Vec::new(),
             recursive: true,

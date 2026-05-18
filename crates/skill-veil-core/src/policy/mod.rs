@@ -27,7 +27,8 @@ pub use self::serializers::empty_sarif_report;
 pub use self::state::{
     apply_baseline, apply_policy_overrides, apply_policy_overrides_with_audit, apply_waivers,
     baseline_from_reports, count_baseline_matches, diff_reports, diff_reports_with_policy_state,
-    load_baseline, load_policy, load_waivers, validate_policy, validate_waivers, PolicyLoadError,
+    load_baseline, load_disposition_overlay, load_policy, load_waivers, validate_policy,
+    validate_waivers, PolicyLoadError,
 };
 pub(crate) use self::types::{default_policy_schema_version, empty_finding_summary};
 pub use self::types::{

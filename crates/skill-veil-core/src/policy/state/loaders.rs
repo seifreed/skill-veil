@@ -12,11 +12,14 @@
 //! return type.
 
 use crate::policy::baseline::{BaselineFile, WaiverFile};
+use crate::policy::disposition::DispositionOverlay;
 use crate::policy::types::PolicyFile;
 use crate::ports::{FileSystemError, FileSystemProvider};
 use std::path::Path;
 
-use super::validators::{validate_baseline, validate_policy, validate_waivers};
+use super::validators::{
+    validate_baseline, validate_disposition_overlay, validate_policy, validate_waivers,
+};
 
 /// Errors surfaced by the policy/baseline/waiver loaders.
 ///
@@ -178,6 +181,22 @@ pub fn load_policy<F: FileSystemProvider>(
     path: &Path,
 ) -> Result<PolicyFile, PolicyLoadError> {
     load_validated(fs, path, validate_policy)
+}
+
+/// Load an analyst-feedback disposition overlay from disk.
+///
+/// # Errors
+///
+/// - [`PolicyLoadError::Io`] if `path` is unreadable through `fs`.
+/// - [`PolicyLoadError::InvalidUtf8`] if the bytes are not valid UTF-8.
+/// - [`PolicyLoadError::Parse`] if the contents are not valid JSON or
+///   YAML (or carry unknown fields — the overlay is
+///   `deny_unknown_fields`).
+pub fn load_disposition_overlay<F: FileSystemProvider>(
+    fs: &F,
+    path: &Path,
+) -> Result<DispositionOverlay, PolicyLoadError> {
+    load_validated(fs, path, validate_disposition_overlay)
 }
 
 #[cfg(test)]
@@ -478,5 +497,43 @@ mod parser_error_selection_tests {
             !msg.contains("mapping values are not allowed"),
             "leading-whitespace JSON must NOT surface YAML's mapping error; got: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod load_disposition_tests {
+    use super::*;
+    use crate::adapters::StdFileSystemProvider;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    /// Contract: a JSON disposition overlay round-trips through the
+    /// `FileSystemProvider` port loader — this is the wiring that lets
+    /// `--disposition` actually affect a scan.
+    #[test]
+    fn load_disposition_overlay_reads_json_through_port() {
+        let mut file = NamedTempFile::new().expect("tempfile");
+        file.write_all(
+            br#"{"records":[{"finding_fingerprint":"fp1","rule_id":"R1","analyst_disposition":"false_positive","recorded_at":"2026-01-01T00:00:00Z"}]}"#,
+        )
+        .expect("write");
+        file.flush().expect("flush");
+        let fs = StdFileSystemProvider::new();
+        let overlay = load_disposition_overlay(&fs, file.path()).expect("load");
+        assert_eq!(overlay.records.len(), 1);
+        assert_eq!(overlay.records[0].rule_id, "R1");
+    }
+
+    /// Contract (negative): unknown fields are rejected at the
+    /// boundary (`deny_unknown_fields`), so a malformed overlay cannot
+    /// silently reach the filter stage.
+    #[test]
+    fn load_disposition_overlay_rejects_unknown_fields() {
+        let mut file = NamedTempFile::new().expect("tempfile");
+        file.write_all(br#"{"records":[],"bogus":true}"#)
+            .expect("write");
+        file.flush().expect("flush");
+        let fs = StdFileSystemProvider::new();
+        assert!(load_disposition_overlay(&fs, file.path()).is_err());
     }
 }

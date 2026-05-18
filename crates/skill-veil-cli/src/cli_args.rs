@@ -557,6 +557,11 @@ pub struct ScanArgs {
     pub waivers: Option<PathBuf>,
     #[arg(long)]
     pub policy: Option<PathBuf>,
+    /// Apply an analyst-feedback disposition overlay (see the
+    /// `disposition` subcommand). Bounded, allowlist-only — never
+    /// escalates a finding's action.
+    #[arg(long)]
+    pub disposition: Option<PathBuf>,
     #[arg(short, long)]
     pub output: Option<PathBuf>,
     #[arg(long)]

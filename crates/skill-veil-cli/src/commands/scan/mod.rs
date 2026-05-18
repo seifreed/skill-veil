@@ -234,6 +234,7 @@ pub(crate) fn run_scan(
         baseline_path: args.baseline,
         waivers_path: args.waivers,
         policy_path: args.policy,
+        disposition_path: args.disposition,
         recursive: !args.no_recursive,
         target_mode,
         strict_rules: args.strict_rules,

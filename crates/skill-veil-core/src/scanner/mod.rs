@@ -14,10 +14,12 @@
 use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
-use crate::policy::{BaselineFile, PolicyFile, WaiverFile};
+use crate::policy::{BaselineFile, DispositionOverlay, PolicyFile, WaiverFile};
 use crate::ports::{FileSystemProvider, MarkdownParser};
 use crate::rules::{default_external_rule_dirs, RuleEngine};
-use crate::scanner_support::{load_optional_baseline, load_optional_policy, load_optional_waivers};
+use crate::scanner_support::{
+    load_optional_baseline, load_optional_disposition, load_optional_policy, load_optional_waivers,
+};
 pub use crate::scanner_types::{
     ArtifactMetadata, PackageScanResult, ScanError, ScanErrorEntry, ScanOptions, ScanResult,
     ScanTargetMode,
@@ -32,6 +34,7 @@ type EngineAndPolicy = (
     Option<BaselineFile>,
     Option<WaiverFile>,
     Option<PolicyFile>,
+    Option<DispositionOverlay>,
 );
 
 /// Build the rule engine and load optional policy files from scan options.
@@ -60,7 +63,8 @@ fn build_engine_and_policy<F: FileSystemProvider>(
     let baseline = load_optional_baseline(fs, options.baseline_path.as_deref())?;
     let waivers = load_optional_waivers(fs, options.waivers_path.as_deref())?;
     let policy = load_optional_policy(fs, options.policy_path.as_deref())?;
-    Ok((engine, baseline, waivers, policy))
+    let disposition = load_optional_disposition(fs, options.disposition_path.as_deref())?;
+    Ok((engine, baseline, waivers, policy, disposition))
 }
 
 /// Scanner for analyzing skills and related agent-extension packages.
@@ -95,13 +99,18 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
         // wired in side-by-side. `with_custom_adapters` already shares a
         // single instance — keep the std path symmetric.
         let fs = StdFileSystemProvider::new();
-        let (engine, baseline, waivers, policy) = build_engine_and_policy(&fs, &options)?;
+        let (engine, baseline, waivers, policy, disposition) =
+            build_engine_and_policy(&fs, &options)?;
         Ok(Self {
             engine,
             artifact_orchestration: ArtifactOrchestratorService::new(),
             file_discovery: FileDiscoveryService::with_fs_provider(options.recursive, fs),
             filter_service: ScanFilterService::with_policy_state(
-                options, baseline, waivers, policy, None,
+                options,
+                baseline,
+                waivers,
+                policy,
+                disposition,
             ),
             parser: PulldownMarkdownParser::new(),
         })
@@ -115,13 +124,18 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         fs_provider: F,
         parser: P,
     ) -> Result<Self, ScanError> {
-        let (engine, baseline, waivers, policy) = build_engine_and_policy(&fs_provider, &options)?;
+        let (engine, baseline, waivers, policy, disposition) =
+            build_engine_and_policy(&fs_provider, &options)?;
         Ok(Self {
             engine,
             artifact_orchestration: ArtifactOrchestratorService::new(),
             file_discovery: FileDiscoveryService::with_fs_provider(options.recursive, fs_provider),
             filter_service: ScanFilterService::with_policy_state(
-                options, baseline, waivers, policy, None,
+                options,
+                baseline,
+                waivers,
+                policy,
+                disposition,
             ),
             parser,
         })

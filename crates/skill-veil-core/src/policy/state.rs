@@ -27,5 +27,7 @@ pub use apply::{
     baseline_from_reports, count_baseline_matches,
 };
 pub use diff::{diff_reports, diff_reports_with_policy_state};
-pub use loaders::{load_baseline, load_policy, load_waivers, PolicyLoadError};
+pub use loaders::{
+    load_baseline, load_disposition_overlay, load_policy, load_waivers, PolicyLoadError,
+};
 pub use validators::{validate_policy, validate_waivers};

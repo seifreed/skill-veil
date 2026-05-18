@@ -5,6 +5,7 @@
 //! filtering stage.
 
 use crate::policy::baseline::{BaselineFile, WaiverFile};
+use crate::policy::disposition::DispositionOverlay;
 use crate::policy::types::PolicyFile;
 use crate::policy::POLICY_SCHEMA_VERSION;
 
@@ -109,6 +110,14 @@ pub fn validate_baseline(baseline: &BaselineFile) -> Result<(), String> {
         }
     }
 
+    Ok(())
+}
+
+/// The disposition overlay is an append-only analyst artifact, not a
+/// signed policy: structural validity is already enforced by serde's
+/// `deny_unknown_fields`, and `schema_version` is informational with a
+/// serde default. No additional load-time invariant is required.
+pub fn validate_disposition_overlay(_overlay: &DispositionOverlay) -> Result<(), String> {
     Ok(())
 }
 

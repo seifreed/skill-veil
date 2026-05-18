@@ -2,7 +2,8 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::policy::{
-    load_baseline, load_policy, load_waivers, BaselineFile, PolicyFile, WaiverFile,
+    load_baseline, load_disposition_overlay, load_policy, load_waivers, BaselineFile,
+    DispositionOverlay, PolicyFile, WaiverFile,
 };
 use crate::ports::{FileSystemError, FileSystemProvider};
 use crate::scanner::ScanError;
@@ -174,6 +175,15 @@ pub(crate) fn load_optional_policy<F: FileSystemProvider>(
     path: Option<&Path>,
 ) -> Result<Option<PolicyFile>, ScanError> {
     path.map(|p| load_policy(fs, p))
+        .transpose()
+        .map_err(ScanError::Policy)
+}
+
+pub(crate) fn load_optional_disposition<F: FileSystemProvider>(
+    fs: &F,
+    path: Option<&Path>,
+) -> Result<Option<DispositionOverlay>, ScanError> {
+    path.map(|p| load_disposition_overlay(fs, p))
         .transpose()
         .map_err(ScanError::Policy)
 }
