@@ -1,20 +1,22 @@
 use super::summarization::{sink_summary, source_summary};
 use super::utils::{
-    all_external_sinks_trusted, artifact_kind_for_node, artifact_paths, build_sibling_clusters,
-    node_has_sink, node_has_source,
+    all_external_sinks_first_party_or_trusted, artifact_kind_for_node, artifact_paths,
+    build_sibling_clusters, node_has_sink, node_has_source,
 };
 use super::{ArtifactTaintRule, ArtifactTaintRuleGroup, TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{EvidenceKind, Finding, MatchTarget, RecommendedAction, SignalClass};
 use std::collections::BTreeSet;
 
-/// Rule IDs whose finding emission opts in to the trusted-API-host
-/// downgrade. When EVERY external sink for the tainted node is on
-/// `trusted_hosts::TRUSTED_API_HOSTS`, the finding is emitted with
-/// `RecommendedAction::RequireApproval` instead of `Block` and
-/// `SignalClass::ReviewSignal` instead of the rule's natural
-/// `MaliciousBehavior`. The signal stays visible for analyst triage
-/// but no longer auto-blocks at the verdict layer.
+/// Rule IDs whose finding emission opts in to the external-sink
+/// downgrade. When EVERY real external sink for the tainted node is
+/// either on `trusted_hosts::TRUSTED_API_HOSTS` or first-party to a
+/// credential the same node reads (see
+/// `all_external_sinks_first_party_or_trusted`), the finding is
+/// emitted with `RecommendedAction::RequireApproval` instead of
+/// `Block` and `SignalClass::ReviewSignal` instead of the rule's
+/// natural `MaliciousBehavior`. The signal stays visible for analyst
+/// triage but no longer auto-blocks at the verdict layer.
 ///
 /// Limited to the SECRET- and IDENTITY-flavoured external-network
 /// rules because cross-LLM triage on a 4000-skill VT-clean corpus
@@ -46,7 +48,7 @@ fn build_taint_finding(
     src: &str,
     snk: &str,
     kind: crate::findings::ArtifactKind,
-    sinks_trusted: bool,
+    apply_downgrade: bool,
     confidence_multiplier: f32,
 ) -> Finding {
     let mut action = rule.action;
@@ -54,7 +56,7 @@ fn build_taint_finding(
     let mut reason = rule.reason.clone();
     let mut sink_note = String::new();
 
-    if sinks_trusted && rule_opts_into_trusted_host_downgrade(rule) {
+    if apply_downgrade && rule_opts_into_trusted_host_downgrade(rule) {
         // Downgrade: keep the signal visible but stop auto-blocking
         // verdicts driven by the API-client benign pattern.
         action = match action {
@@ -63,7 +65,7 @@ fn build_taint_finding(
         };
         signal_class_override = Some(SignalClass::ReviewSignal);
         reason.push_str(
-            " (downgraded: every external sink resolves to a trusted-API host on the allowlist)",
+            " (downgraded: every external sink is a trusted-API host or first-party to a credential the artifact reads)",
         );
         sink_note = " sinks_trusted=true".to_string();
     }
@@ -91,6 +93,7 @@ fn build_taint_finding(
 pub(super) fn derive_per_node_taint_findings(
     graph: &ArtifactGraph,
     groups: &[ArtifactTaintRuleGroup],
+    suppress_downgrade: bool,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     for node_path in &artifact_paths(graph) {
@@ -106,14 +109,19 @@ pub(super) fn derive_per_node_taint_findings(
             // Cache the trusted-sink predicate per (node, group) since
             // the inner rule loop re-emits findings under the same
             // sink. The check is also a no-op for non-external sinks
-            // because `all_external_sinks_trusted` returns false when
+            // because `all_external_sinks_first_party_or_trusted` returns false when
             // the node has no external sink at all.
-            let sinks_trusted = matches!(group.sink, TaintSinkKind::ExternalNetwork)
+            // Downgrade applies only when the sinks are
+            // trusted/first-party AND the package shows no independent
+            // malice — `suppress_downgrade` falsifies the
+            // benign-integration premise (see `has_independent_malice`).
+            let apply_downgrade = !suppress_downgrade
+                && matches!(group.sink, TaintSinkKind::ExternalNetwork)
                 && matches!(
                     group.source,
                     TaintSourceKind::SecretAccess | TaintSourceKind::IdentityAccess,
                 )
-                && all_external_sinks_trusted(graph, node_path);
+                && all_external_sinks_first_party_or_trusted(graph, node_path);
             for rule in &group.rules {
                 findings.push(build_taint_finding(
                     rule,
@@ -121,7 +129,7 @@ pub(super) fn derive_per_node_taint_findings(
                     &src,
                     &snk,
                     kind,
-                    sinks_trusted,
+                    apply_downgrade,
                     /*confidence_multiplier=*/ 1.0,
                 ));
             }
@@ -133,6 +141,7 @@ pub(super) fn derive_per_node_taint_findings(
 pub(super) fn derive_cross_node_taint_findings(
     graph: &ArtifactGraph,
     groups: &[ArtifactTaintRuleGroup],
+    suppress_downgrade: bool,
 ) -> Vec<Finding> {
     // Cap per-cluster findings to avoid quadratic explosion when a parent
     // references many children that each expose sources and sinks.
@@ -187,12 +196,13 @@ pub(super) fn derive_cross_node_taint_findings(
                     // per-node pass so a single rule cannot fire at
                     // full strength via the cross-node path while
                     // being downgraded via the per-node path.
-                    let sinks_trusted = matches!(group.sink, TaintSinkKind::ExternalNetwork)
+                    let apply_downgrade = !suppress_downgrade
+                        && matches!(group.sink, TaintSinkKind::ExternalNetwork)
                         && matches!(
                             group.source,
                             TaintSourceKind::SecretAccess | TaintSourceKind::IdentityAccess,
                         )
-                        && all_external_sinks_trusted(graph, sink_node);
+                        && all_external_sinks_first_party_or_trusted(graph, sink_node);
                     for rule in &group.rules {
                         // Check budgets *before* pushing each finding.
                         // Per-group budget prevents a single group from
@@ -219,7 +229,7 @@ pub(super) fn derive_cross_node_taint_findings(
                             &src,
                             &snk,
                             kind,
-                            sinks_trusted,
+                            apply_downgrade,
                             /*confidence_multiplier=*/ 0.9,
                         ));
                         group_finding_count += 1;

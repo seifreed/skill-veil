@@ -417,7 +417,7 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
         Some(doc),
     ));
     let artifact_graph = scanner.build_artifact_graph(doc);
-    let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph);
+    let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph, &findings);
     // Preserve findings that already have artifact context (e.g., from supporting artifact
     // analysis). Only tag uncontextualized findings with the primary artifact.
     findings = contextualize_findings(findings, artifact_kind, artifact_path);

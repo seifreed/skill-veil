@@ -125,10 +125,78 @@ pub(super) fn looks_like_external_sink(edge: &ArtifactEdge) -> bool {
         return true;
     }
 
-    // Generic HTTP/HTTPS URLs that aren't known-safe registries or local endpoints
+    // Generic HTTP/HTTPS URLs that aren't known-safe registries,
+    // software-distribution downloads, or local endpoints.
     (lower.starts_with("http://") || lower.starts_with("https://"))
         && !looks_like_registry_url(&edge.to)
+        && !looks_like_software_distribution_url(&lower)
         && !looks_like_local_endpoint(&lower)
+}
+
+/// `true` when `lower` (an already-lowercased URL) points at a
+/// downloadable software/package artifact rather than an outbound
+/// exfiltration endpoint.
+///
+/// # Why this is not an exfil sink
+///
+/// `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK` and its identity
+/// sibling fire on any node that reads a secret AND connects to an
+/// external URL. Ops/devops skills routinely document
+/// `yum install https://repo.vendor.com/pkg.rpm`,
+/// `curl -LO https://github.com/org/repo/releases/download/v1/tool.tar.gz`,
+/// or `pip install https://host/pkg.whl` next to example config that
+/// mentions a password. That is an INBOUND artifact fetch — you do
+/// not exfiltrate a credential *to* a `.rpm`. Cross-LLM triage on the
+/// VT-clean corpus showed install-documentation is the single
+/// largest benign class flagged by the secret→network rule.
+///
+/// Anchored on the URL **path** ending in a package/installer/archive
+/// extension (after stripping query/fragment) or the GitHub
+/// `releases/download/` path. Exfil endpoints (`/collect`,
+/// `/api/log`, webhook receivers) do not end in these extensions, so
+/// recall on real secret-to-network exfil is preserved. The
+/// known-exfil short-circuit (`pastebin`, `discord webhook`,
+/// `telegram bot`, `ngrok`, `raw.githubusercontent`, …) runs BEFORE
+/// this check, so a `.rpm` hosted on a known drop host still fires.
+pub(super) fn looks_like_software_distribution_url(lower: &str) -> bool {
+    let after_scheme = lower
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(lower);
+    let path = after_scheme
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(after_scheme)
+        .trim_end_matches('/');
+    if path.contains("/releases/download/") || path.contains("/dist/") {
+        return true;
+    }
+    const ARTIFACT_EXTENSIONS: &[&str] = &[
+        ".tar.gz",
+        ".tar.bz2",
+        ".tar.xz",
+        ".tar.zst",
+        ".tgz",
+        ".tbz2",
+        ".txz",
+        ".rpm",
+        ".deb",
+        ".pkg",
+        ".dmg",
+        ".msi",
+        ".apk",
+        ".appimage",
+        ".whl",
+        ".gem",
+        ".jar",
+        ".nupkg",
+        ".crate",
+        ".snap",
+        ".flatpak",
+        ".7z",
+        ".zst",
+    ];
+    ARTIFACT_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
 pub(super) fn looks_like_local_endpoint(lower: &str) -> bool {
@@ -296,6 +364,78 @@ mod tests {
         assert!(
             !looks_like_external_sink(&doc_path),
             "local URL with '/webhook-setup-guide' must NOT match the webhook pattern"
+        );
+    }
+
+    /// # Contract
+    /// A URL whose path ends in a package/installer/archive extension
+    /// (or sits under a `releases/download/` path) is an inbound
+    /// software fetch, NOT a secret-exfiltration sink. Pre-fix every
+    /// `yum install https://repo.vendor.com/pkg.rpm` in ops docs
+    /// flipped a benign skill to malicious via
+    /// `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK`.
+    #[test]
+    fn software_distribution_urls_are_not_exfil_sinks() {
+        use crate::artifact_graph::ArtifactRelation;
+        for url in [
+            "https://repo.percona.com/yum/percona-release-latest.noarch.rpm",
+            "https://github.com/org/tool/releases/download/v1.2.3/tool-linux.tar.gz",
+            "https://host.example/pkg/app.whl",
+            "https://downloads.vendor.io/cli/cli_amd64.deb",
+            "https://get.example.org/installer.pkg?os=mac",
+            "https://cdn.vendor.net/dist/bundle.zst",
+        ] {
+            assert!(
+                looks_like_software_distribution_url(&url.to_ascii_lowercase()),
+                "{url} must be classified as a software-distribution download"
+            );
+            let edge = ArtifactEdge {
+                from: "a".to_string(),
+                to: url.to_string(),
+                relation: ArtifactRelation::ConnectsTo,
+                endpoint_kind: None,
+            };
+            assert!(
+                !looks_like_external_sink(&edge),
+                "{url} must NOT be an external exfil sink"
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    /// Real exfil endpoints do not end in artifact extensions, so the
+    /// distribution carve-out must NOT swallow them. Also pins that a
+    /// `.rpm` hosted on a known drop host still fires via the
+    /// known-exfil short-circuit that runs before the carve-out.
+    #[test]
+    fn distribution_carveout_preserves_exfil_recall() {
+        use crate::artifact_graph::ArtifactRelation;
+        for url in [
+            "https://attacker.example/collect",
+            "https://api.evil.net/v1/log?d=secret",
+            "https://exfil.example/upload.php",
+            "https://hooks.example.com/webhook/abc",
+        ] {
+            let edge = ArtifactEdge {
+                from: "a".to_string(),
+                to: url.to_string(),
+                relation: ArtifactRelation::ConnectsTo,
+                endpoint_kind: None,
+            };
+            assert!(
+                looks_like_external_sink(&edge),
+                "{url} must remain an external exfil sink"
+            );
+        }
+        let rpm_on_pastebin = ArtifactEdge {
+            from: "a".to_string(),
+            to: "https://pastebin.com/raw/payload.rpm".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            looks_like_external_sink(&rpm_on_pastebin),
+            "a package extension on a known drop host must still fire"
         );
     }
 }

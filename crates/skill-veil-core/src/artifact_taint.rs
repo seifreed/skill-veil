@@ -6,7 +6,49 @@ mod trusted_hosts;
 mod utils;
 
 use crate::artifact_graph::ArtifactGraph;
-use crate::findings::{deduplicate_findings, Finding, RecommendedAction, Severity, ThreatCategory};
+use crate::findings::{
+    deduplicate_findings, Finding, RecommendedAction, Severity, SignalClass, ThreatCategory,
+};
+
+/// Threat categories that count as *independent* corroboration of
+/// malice for the trusted/first-party taint downgrade. Deliberately
+/// excludes `CredentialExposure` and `DataExfiltration`: those fire on
+/// the SAME benign API-client gestalt as the secret/identity→network
+/// taint rules (read `<SVC>_API_KEY`, POST to the vendor API trips
+/// `SKILL_OAUTH_TOKEN_THEFT`, `SKILL_CRED_HARDCODED_KEY`, …), so
+/// counting them would defeat the downgrade on the exact FP class it
+/// exists for. Also excludes the weak/advisory categories
+/// (`PersuasiveLanguage`, `ScopeCreep`, `Generic`).
+const INDEPENDENT_MALICE_CATEGORIES: &[ThreatCategory] = &[
+    ThreatCategory::RemoteExec,
+    ThreatCategory::PersistentPromptTampering,
+    ThreatCategory::PrivilegeEscalation,
+    ThreatCategory::AutonomyEscalation,
+    ThreatCategory::SocialManipulation,
+    ThreatCategory::Obfuscation,
+    ThreatCategory::UnsafeBinary,
+    ThreatCategory::ToolAbuse,
+    ThreatCategory::SupplyChain,
+];
+
+/// `true` when `existing` (the rule-engine findings collected *before*
+/// taint runs) already contains an independent malicious-behavior
+/// block finding from a non-exfil/non-credential family. The
+/// trusted/first-party taint downgrade's premise — "this is a benign
+/// upstream-API integration" — is falsified when the same package
+/// independently looks malicious for an unrelated reason (prompt
+/// injection, remote exec, rootkit, …). Suppressing the downgrade
+/// there keeps the secret→network signal at full strength so the
+/// verdict layer still sees the exfil leg of real malware, while
+/// benign API clients (which carry only credential/exfil-family
+/// findings, mostly prose-downgraded) remain downgraded.
+fn has_independent_malice(existing: &[Finding]) -> bool {
+    existing.iter().any(|f| {
+        f.signal_class == SignalClass::MaliciousBehavior
+            && f.recommended_action == RecommendedAction::Block
+            && INDEPENDENT_MALICE_CATEGORIES.contains(&f.category)
+    })
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,10 +87,25 @@ pub(crate) struct ArtifactTaintRuleGroup {
     pub rules: Vec<ArtifactTaintRule>,
 }
 
-pub fn derive_taint_findings(graph: &ArtifactGraph) -> Vec<Finding> {
+/// Derive artifact-graph taint findings.
+///
+/// `existing_findings` are the rule-engine/orchestration findings
+/// collected for the same package *before* this stage runs (taint is
+/// appended last in `collect_raw_findings`). They gate the
+/// trusted/first-party downgrade: when the package already shows
+/// independent malice (`has_independent_malice`), the
+/// secret/identity→network finding keeps full `Block` /
+/// `MaliciousBehavior` strength instead of softening to
+/// `RequireApproval` / `ReviewSignal`.
+pub fn derive_taint_findings(graph: &ArtifactGraph, existing_findings: &[Finding]) -> Vec<Finding> {
     let groups = taint_rules::group_rules(taint_rules::default_rules());
-    let mut findings = analysis::derive_per_node_taint_findings(graph, &groups);
-    findings.extend(analysis::derive_cross_node_taint_findings(graph, &groups));
+    let suppress_downgrade = has_independent_malice(existing_findings);
+    let mut findings = analysis::derive_per_node_taint_findings(graph, &groups, suppress_downgrade);
+    findings.extend(analysis::derive_cross_node_taint_findings(
+        graph,
+        &groups,
+        suppress_downgrade,
+    ));
     // Local deduplication to reduce overhead before returning to caller.
     // Cross-node taint analysis can generate duplicate findings when multiple
     // sink nodes match the same source-rule combination.
@@ -77,7 +134,7 @@ mod tests {
             ArtifactRelation::Executes,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         assert!(findings
             .iter()
             .all(|finding| finding.rule_id != "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"));
@@ -94,7 +151,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         assert!(findings
             .iter()
             .any(|finding| finding.rule_id == "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK"));
@@ -116,7 +173,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         assert!(
             findings
                 .iter()
@@ -149,7 +206,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         let cross = findings
             .iter()
             .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
@@ -197,7 +254,7 @@ mod tests {
             ],
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         assert!(findings.iter().all(|finding| {
             finding.rule_id != "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"
                 && finding.rule_id != "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK"
@@ -222,7 +279,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         let f = findings
             .iter()
             .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
@@ -273,7 +330,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         let f = findings
             .iter()
             .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
@@ -320,7 +377,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         let f = findings
             .iter()
             .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
@@ -351,7 +408,7 @@ mod tests {
             ArtifactRelation::ConnectsTo,
         );
 
-        let findings = derive_taint_findings(&graph);
+        let findings = derive_taint_findings(&graph, &[]);
         let f = findings
             .iter()
             .find(|f| f.rule_id == "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK")
@@ -361,5 +418,72 @@ mod tests {
             crate::findings::RecommendedAction::RequireApproval,
         );
         assert_eq!(f.signal_class, crate::findings::SignalClass::ReviewSignal);
+    }
+
+    fn secret_to_trusted_host_graph() -> ArtifactGraph {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://api.notion.com/v1/pages",
+            ArtifactRelation::ConnectsTo,
+        );
+        graph
+    }
+
+    fn malice_finding(rule: &str, category: ThreatCategory) -> Finding {
+        Finding::builder(rule, category)
+            .severity(Severity::Critical)
+            .action(RecommendedAction::Block)
+            .signal_class(SignalClass::MaliciousBehavior)
+            .matched_on(crate::findings::MatchTarget::Document)
+            .match_value("x")
+            .reason("y")
+            .build()
+    }
+
+    /// # Contract
+    /// When the package independently shows malice from a non-exfil
+    /// family (here `RemoteExec`), the secret→trusted-host taint
+    /// finding MUST keep full `Block`/`MaliciousBehavior` strength —
+    /// the "benign upstream-API integration" premise is falsified, so
+    /// the verdict layer still sees the exfil leg of real malware.
+    #[test]
+    fn corroborated_malice_suppresses_taint_downgrade() {
+        let graph = secret_to_trusted_host_graph();
+        let existing = vec![malice_finding(
+            "SKILL_REMOTE_EXEC_CURL_BASH",
+            ThreatCategory::RemoteExec,
+        )];
+        let findings = derive_taint_findings(&graph, &existing);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("secret→network rule must still emit");
+        assert_eq!(f.recommended_action, RecommendedAction::Block);
+        assert_eq!(f.signal_class, SignalClass::MaliciousBehavior);
+    }
+
+    /// # Contract (negative — protects the FP win)
+    /// A credential/exfil-family malice finding fires on the SAME
+    /// benign API-client gestalt as the taint rule, so it MUST NOT
+    /// count as independent corroboration: the trusted-host downgrade
+    /// still applies. Without this exclusion the downgrade would be
+    /// defeated on the exact false-positive class it exists for.
+    #[test]
+    fn credential_family_does_not_corroborate_taint() {
+        let graph = secret_to_trusted_host_graph();
+        let existing = vec![malice_finding(
+            "SKILL_OAUTH_TOKEN_THEFT",
+            ThreatCategory::CredentialExposure,
+        )];
+        let findings = derive_taint_findings(&graph, &existing);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("secret→network rule must still emit");
+        assert_eq!(f.recommended_action, RecommendedAction::RequireApproval);
+        assert_eq!(f.signal_class, SignalClass::ReviewSignal);
     }
 }

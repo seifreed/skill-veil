@@ -1,7 +1,9 @@
 use super::patterns::{
     looks_like_external_sink, looks_like_identity_target, looks_like_secret_target,
 };
-use super::trusted_hosts::{is_documentation_or_reserved_host, is_trusted_api_host};
+use super::trusted_hosts::{
+    host_matches_secret_owner, is_documentation_or_reserved_host, is_trusted_api_host,
+};
 use super::{TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
@@ -76,8 +78,31 @@ pub(super) fn node_has_source(
     }
 }
 
-/// `true` if `node_path` has at least one external-network sink AND
-/// every such sink resolves to a host on the trusted-API allowlist.
+/// Collect the secret/identity source names observed on `node_path` —
+/// the env-var / file / URL strings the secret-source detection
+/// matched on. Used to decide first-party credential affinity:
+/// `WAHOO_ACCESS_TOKEN` here vs `api.wahooligan.com` as a sink means
+/// the credential belongs to the destination (authentication, not
+/// exfiltration).
+fn node_secret_source_names(graph: &ArtifactGraph, node_path: &str) -> BTreeSet<String> {
+    graph
+        .edges
+        .iter()
+        .filter(|edge| edge.from == node_path)
+        .filter(|edge| {
+            matches!(edge.relation, ArtifactRelation::AccessesSecrets)
+                || (matches!(edge.relation, ArtifactRelation::Reads)
+                    && (looks_like_secret_target(&edge.to) || looks_like_identity_target(&edge.to)))
+        })
+        .map(|edge| edge.to.clone())
+        .collect()
+}
+
+/// `true` if `node_path` has at least one real external-network sink
+/// AND every such sink is either (a) a host on the trusted-API
+/// allowlist or (b) first-party to a credential the same node reads
+/// (the destination *owns* the secret being sent — authentication,
+/// not exfiltration).
 ///
 /// # Why
 ///
@@ -86,17 +111,25 @@ pub(super) fn node_has_source(
 /// every benign skill that integrates with an upstream API: the
 /// skill reads `<API>_KEY` from env (source) and posts to that
 /// upstream API (sink). The cross-LLM triage on a 4000-skill
-/// VT-clean corpus showed this pair contributes ~272 of ~449
-/// consensus FPs. When EVERY external sink for the node is a
-/// well-known API host, the calling code downgrades the rule's
-/// emitted finding from `block` / `MaliciousBehavior` to
-/// `require_approval` / `ReviewSignal` rather than suppressing it
-/// outright.
+/// VT-clean corpus showed this pair is the dominant FP contributor
+/// among taint rules. A static allowlist cannot enumerate every
+/// legitimate API, so the first-party-affinity path generalises it:
+/// when the credential's name identifies the destination
+/// (`ATOLL_API_KEY` → `atollhq.com`), the flow is authentication.
+/// When EVERY external sink for the node clears one of the two
+/// gates, the calling code downgrades the rule's emitted finding
+/// from `block` / `MaliciousBehavior` to `require_approval` /
+/// `ReviewSignal` rather than suppressing it outright.
 ///
 /// Returns `false` when no external-network sink is present (so
 /// callers get a clean "downgrade does not apply" signal) AND when
-/// at least one sink is untrusted (the operator-relevant case).
-pub(super) fn all_external_sinks_trusted(graph: &ArtifactGraph, node_path: &str) -> bool {
+/// at least one sink is neither trusted nor first-party (the
+/// operator-relevant exfil case).
+pub(super) fn all_external_sinks_first_party_or_trusted(
+    graph: &ArtifactGraph,
+    node_path: &str,
+) -> bool {
+    let secret_names = node_secret_source_names(graph, node_path);
     let mut saw_real_external = false;
     for edge in &graph.edges {
         if edge.from != node_path {
@@ -118,7 +151,7 @@ pub(super) fn all_external_sinks_trusted(graph: &ArtifactGraph, node_path: &str)
             continue;
         }
         saw_real_external = true;
-        if !is_trusted_api_host(&edge.to) {
+        if !is_trusted_api_host(&edge.to) && !host_matches_secret_owner(&edge.to, &secret_names) {
             return false;
         }
     }

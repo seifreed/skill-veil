@@ -13,7 +13,9 @@
 //! consensus false positives.
 //!
 //! When EVERY external sink for a tainted node resolves to a host on
-//! this list, downstream callers downgrade the finding from
+//! this list — OR is first-party to a credential the same node reads
+//! (`host_matches_secret_owner`, the dynamic generalisation of this
+//! static list) — downstream callers downgrade the finding from
 //! `MaliciousBehavior` / `block` to `ReviewSignal` /
 //! `require_approval`. The signal is preserved (operators still see
 //! the elevated risk) but the verdict no longer auto-blocks.
@@ -35,6 +37,8 @@
 //! leading `*.` wildcard for subdomain coverage. Anything else
 //! (regex, multiple wildcards, port specs) is rejected at parse time
 //! by [`is_trusted_api_host`] returning `false`.
+
+use std::collections::BTreeSet;
 
 /// Static allowlist of trusted API host patterns. Each entry is
 /// either a literal host (`api.openai.com`) or a single-wildcard
@@ -170,8 +174,8 @@ pub(super) const DOCUMENTATION_OR_RESERVED_HOSTS: &[&str] = &[
 ///
 /// Pre-fix a single `https://example.com/...` reference in skill
 /// prose (or the bare `127.0.0.1` loopback target) defeated the
-/// `all_external_sinks_trusted` check even when every other sink was
-/// on the trusted-API allowlist.
+/// `all_external_sinks_first_party_or_trusted` check even when every
+/// other sink was on the trusted-API allowlist.
 #[must_use]
 pub(super) fn is_documentation_or_reserved_host(endpoint: &str) -> bool {
     let host = match extract_host(endpoint) {
@@ -236,6 +240,168 @@ pub(super) fn is_trusted_api_host(endpoint: &str) -> bool {
     for pattern in TRUSTED_API_HOSTS {
         if matches_host_pattern(&host, pattern) {
             return true;
+        }
+    }
+    false
+}
+
+/// Generic credential/URL vocabulary that carries no service
+/// identity. Stripped before comparing a secret-source name against a
+/// destination host so `STRIPE_API_KEY` reduces to the identifying
+/// token `stripe`, not the noise tokens `api`/`key`.
+const SECRET_NAME_STOPWORDS: &[&str] = &[
+    "api",
+    "key",
+    "keys",
+    "token",
+    "tokens",
+    "secret",
+    "secrets",
+    "auth",
+    "oauth",
+    "client",
+    "bearer",
+    "access",
+    "refresh",
+    "env",
+    "environ",
+    "config",
+    "url",
+    "uri",
+    "host",
+    "hostname",
+    "endpoint",
+    "bot",
+    "pat",
+    "cred",
+    "creds",
+    "credential",
+    "credentials",
+    "password",
+    "passwd",
+    "pwd",
+    "user",
+    "username",
+    "login",
+    "session",
+    "cookie",
+    "prod",
+    "production",
+    "dev",
+    "development",
+    "stage",
+    "staging",
+    "test",
+    "sandbox",
+    "live",
+    "http",
+    "https",
+    "www",
+    "com",
+    "net",
+    "org",
+    "default",
+    "value",
+    "string",
+    "data",
+    "file",
+    "path",
+    "name",
+];
+
+/// Multi-label public suffixes we must look past to find the
+/// registrable label. Not exhaustive — only the forms that recur in
+/// skill manifests. Anything not listed falls back to the
+/// single-label-TLD assumption.
+const COMPOUND_TLD_PENULTIMATES: &[&str] = &["com", "net", "org", "co", "gov", "edu", "ac"];
+
+/// Extract the registrable label of `endpoint` — the single label
+/// immediately left of the public suffix, which identifies the owning
+/// organisation. `api.wahooligan.com` → `wahooligan`, `atollhq.com` →
+/// `atollhq`, `mcp.speakai.co` → `speakai`, `foo.example.co.uk` →
+/// `example`. Returns `None` for IP literals, single-label hosts, and
+/// unparseable input (the conservative default: no label means no
+/// affinity, so the taint finding keeps full strength).
+///
+/// Only the label at the registrable position is returned — never a
+/// subdomain. This closes the `openai-telemetry.attacker.com` hole
+/// where an attacker prefixes the victim secret's name as a
+/// subdomain label to spoof first-party affinity.
+fn registrable_label(endpoint: &str) -> Option<String> {
+    let host = extract_host(endpoint)?.to_ascii_lowercase();
+    if host.is_empty() || is_ipv4_literal(&host) {
+        return None;
+    }
+    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    if labels.len() < 2 {
+        return None;
+    }
+    // Drop the public suffix: 2 labels when the penultimate is a
+    // compound-TLD second level (`co.uk`, `com.au`), else 1.
+    let suffix_len = if labels.len() >= 3
+        && COMPOUND_TLD_PENULTIMATES.contains(&labels[labels.len() - 2])
+        && labels[labels.len() - 1].len() <= 3
+    {
+        2
+    } else {
+        1
+    };
+    if labels.len() <= suffix_len {
+        return None;
+    }
+    let label = labels[labels.len() - suffix_len - 1];
+    if label.len() < 4 {
+        return None;
+    }
+    Some(label.to_string())
+}
+
+/// Tokenise a secret-source name (env var, file path, or URL the
+/// secret was read from) into identifying tokens: lowercase, split on
+/// non-alphanumeric boundaries, stopwords and sub-4-char fragments
+/// removed.
+fn secret_identity_tokens(name: &str) -> BTreeSet<String> {
+    name.to_ascii_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| t.len() >= 4)
+        .filter(|t| !SECRET_NAME_STOPWORDS.contains(t))
+        .filter(|t| !t.chars().all(|c| c.is_ascii_digit()))
+        .map(str::to_string)
+        .collect()
+}
+
+/// `true` when `endpoint`'s registrable label is the *owner* of at
+/// least one secret/identity name in `secret_targets` — i.e. the
+/// credential being read belongs to the host it is sent to, which is
+/// authentication, not exfiltration.
+///
+/// # Why this is recall-safe
+///
+/// Exfil malware reads a *victim* secret (`AWS_*`, `~/.ssh/id_rsa`,
+/// browser cookies, the project `.env`) and ships it to an
+/// *unrelated* attacker host; those names share no identifying token
+/// with the attacker domain, so affinity is `false` and the taint
+/// finding keeps full `Block`/`MaliciousBehavior` strength. Affinity
+/// only fires for the modal benign pattern: `WAHOO_ACCESS_TOKEN` read
+/// and sent to `api.wahooligan.com`. The match requires a shared
+/// token of length ≥4 on BOTH sides, so short or generic fragments
+/// cannot manufacture a coincidental match.
+pub(super) fn host_matches_secret_owner(endpoint: &str, secret_targets: &BTreeSet<String>) -> bool {
+    let Some(label) = registrable_label(endpoint) else {
+        return false;
+    };
+    for target in secret_targets {
+        for token in secret_identity_tokens(target) {
+            // Containment either way: `wahoo` ⊂ `wahooligan`,
+            // `agentcall` == `agentcall`, `speakai` ⊃ `speak`.
+            let (shorter, longer) = if token.len() <= label.len() {
+                (token.as_str(), label.as_str())
+            } else {
+                (label.as_str(), token.as_str())
+            };
+            if shorter.len() >= 4 && longer.contains(shorter) {
+                return true;
+            }
         }
     }
     false
@@ -462,5 +628,101 @@ mod tests {
                 "expected {host} to be on allowlist",
             );
         }
+    }
+
+    fn names(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// # Contract
+    /// A destination whose registrable label owns the credential the
+    /// node reads is authentication, not exfiltration. Pins the modal
+    /// benign API-client pattern that dominated the taint FP set:
+    /// `<SERVICE>_API_KEY` read, `api.<service>.<tld>` connected.
+    #[test]
+    fn host_matches_secret_owner_accepts_first_party_credential() {
+        for (target, sink) in [
+            ("WAHOO_ACCESS_TOKEN", "https://api.wahooligan.com/v1/user"),
+            ("ATOLL_API_KEY", "https://atollhq.com/api/feedback"),
+            ("AGENTCALL_API_KEY", "https://api.agentcall.co/llms.txt"),
+            ("SPEAK_API_KEY", "https://mcp.speakai.co"),
+            ("NOTION_TOKEN", "https://notion.so/v1/pages"),
+        ] {
+            assert!(
+                host_matches_secret_owner(sink, &names(&[target])),
+                "{target} must be recognised as first-party to {sink}"
+            );
+        }
+    }
+
+    /// # Contract (negative — recall guard)
+    /// Exfil reads a victim secret and ships it to an unrelated host;
+    /// the names share no identifying token, so affinity MUST be
+    /// false and the taint finding keeps full Block strength. Also
+    /// pins that generic secret files (`.env`, `~/.ssh/id_rsa`) and
+    /// short/generic labels never manufacture affinity.
+    #[test]
+    fn host_matches_secret_owner_rejects_cross_party_exfil() {
+        let cases: &[(&str, &str)] = &[
+            ("AWS_SECRET_ACCESS_KEY", "https://collector.evil.com/up"),
+            ("OPENAI_API_KEY", "https://exfil.example/post"),
+            (".env", "https://attacker.net/log"),
+            ("~/.ssh/id_rsa", "https://drop.host.io/x"),
+            ("GITHUB_TOKEN", "https://pastebin.com/raw/abc"),
+            ("STRIPE_API_KEY", "https://api.evil.co"),
+        ];
+        for (target, sink) in cases {
+            assert!(
+                !host_matches_secret_owner(sink, &names(&[target])),
+                "{target} → {sink} must NOT be treated as first-party"
+            );
+        }
+        // Empty source set never matches.
+        assert!(!host_matches_secret_owner(
+            "https://api.wahooligan.com",
+            &BTreeSet::new()
+        ));
+    }
+
+    /// # Contract (recall guard)
+    /// An attacker MUST NOT spoof first-party affinity by prefixing
+    /// the victim secret's name as a subdomain label. Only the
+    /// registrable label (left of the public suffix) is compared, so
+    /// `openai-telemetry.attacker.com` reduces to `attacker`, never
+    /// `openai-telemetry`.
+    #[test]
+    fn host_matches_secret_owner_ignores_spoofed_subdomain_label() {
+        assert!(!host_matches_secret_owner(
+            "https://openai-telemetry.attacker.com/collect",
+            &names(&["OPENAI_API_KEY"])
+        ));
+        assert!(!host_matches_secret_owner(
+            "https://stripe.evilcorp.com/x",
+            &names(&["STRIPE_API_KEY"])
+        ));
+    }
+
+    /// # Contract
+    /// `registrable_label` strips API-gateway subdomains and the
+    /// public suffix down to the owning label, and refuses IPs /
+    /// single-label / sub-4-char labels (conservative: no label means
+    /// no affinity downgrade).
+    #[test]
+    fn registrable_label_extracts_owning_label() {
+        assert_eq!(
+            registrable_label("https://cloud-api.wahooligan.com/x").as_deref(),
+            Some("wahooligan")
+        );
+        assert_eq!(
+            registrable_label("https://api.speakai.co").as_deref(),
+            Some("speakai")
+        );
+        assert_eq!(
+            registrable_label("https://atollhq.com/api").as_deref(),
+            Some("atollhq")
+        );
+        assert_eq!(registrable_label("https://192.168.1.1/x"), None);
+        assert_eq!(registrable_label("https://localhost:8080"), None);
+        assert_eq!(registrable_label("https://api.x.io"), None);
     }
 }
