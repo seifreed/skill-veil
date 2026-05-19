@@ -1,0 +1,15 @@
+# Build context hygiene for ci-local/Dockerfile.
+# The git-tracked tree is ~7 MB; these untracked dirs are ~13 GB combined.
+target/
+data/
+data-clean/
+venv/
+.git/
+**/*.tar.gz
+**/*.zip
+benchmarks/promptintel-corpus/
+benchmarks/history/
+dist/
+.skill-veil/
+*.sarif
+*-report.json
