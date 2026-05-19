@@ -266,6 +266,80 @@ fn render_missed_section(
 mod tests {
     use super::*;
 
+    fn pcc(sha: &str, our: &str, vt: &str) -> super::super::types::PackageCrossCheck {
+        super::super::types::PackageCrossCheck {
+            sha256: sha.to_string(),
+            our_verdict: our.to_string(),
+            our_risk_score: 10,
+            our_findings: vec!["RULE_X".to_string()],
+            vt_category: None,
+            vt_verdict: Some(vt.to_string()),
+            vt_analysis: None,
+            meaningful_name: None,
+            classification: Classification::Unknown,
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `render_baseline` rolls `summary.packages` (per-artifact) up to
+    /// one sample per SHA taking the STRONGEST skill-veil verdict
+    /// (`malicious` > `suspicious` > `benign`), and computes raw
+    /// pre-override metrics with the SAME definition as
+    /// `scripts/regenerate_baseline.py`: `suspicious` is a POSITIVE
+    /// (caught), so a VT-malicious sample we rate `suspicious` is a
+    /// TP, NOT a false negative. Both directions are pinned:
+    /// strongest-wins rollup AND suspicious-counts-as-caught.
+    #[test]
+    fn render_baseline_rolls_up_per_sha_and_counts_suspicious_as_caught() {
+        let summary = CrossCheckSummary {
+            packages: vec![
+                // SHA "aaaa…": two artifacts — benign + malicious.
+                // Rollup MUST pick `malicious` (strongest). VT=malicious → TP.
+                pcc("aaaaaaaaaaaa0000", "benign", "malicious"),
+                pcc("aaaaaaaaaaaa0000", "malicious", "malicious"),
+                // VT=malicious, we say benign → the ONLY false-negative case.
+                pcc("bbbbbbbbbbbb0000", "benign", "malicious"),
+                // VT=benign, we say suspicious → false positive (positive).
+                pcc("cccccccccccc0000", "suspicious", "benign"),
+                // VT=benign, we say benign → true negative.
+                pcc("dddddddddddd0000", "benign", "benign"),
+                // VT=malicious, we say suspicious → TP (caught), NOT FN.
+                pcc("eeeeeeeeeeee0000", "suspicious", "malicious"),
+            ],
+            ..Default::default()
+        };
+
+        let json: serde_json::Value =
+            serde_json::from_str(&render_baseline(&summary)).expect("valid JSON");
+
+        assert_eq!(json["schema_version"], "1.0");
+        let samples = json["samples"].as_array().expect("samples array");
+        assert_eq!(samples.len(), 5, "5 distinct SHAs → 5 rolled-up samples");
+
+        let a = samples
+            .iter()
+            .find(|s| s["sha256"] == "aaaaaaaaaaaa0000")
+            .expect("sha aaaa present");
+        assert_eq!(
+            a["actual"], "malicious",
+            "per-SHA rollup must take the strongest verdict (benign+malicious → malicious)"
+        );
+        assert_eq!(a["id"], "aaaaaaaaaaaa", "id is the 12-char SHA prefix");
+
+        let m = &json["metrics"];
+        assert_eq!(m["true_positive"], 2, "aaaa (mal) + eeee (susp) are TP");
+        assert_eq!(
+            m["false_negative"], 1,
+            "only bbbb (VT-mal, we-benign) is FN; suspicious is NOT a miss"
+        );
+        assert_eq!(
+            m["false_positive"], 1,
+            "cccc (VT-benign, we-suspicious) is FP"
+        );
+        assert_eq!(m["true_negative"], 1, "dddd (VT-benign, we-benign) is TN");
+    }
+
     /// Contract: the markdown table label for each bucket accurately
     /// reflects the data. The pre-fix markdown said "VT: malicious"
     /// even when the bucket included VT-suspicious entries.
