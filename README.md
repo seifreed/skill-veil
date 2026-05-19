@@ -22,9 +22,9 @@
 </p>
 
 <p align="center">
-  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/recall-92.86%25-brightgreen?style=flat-square&label=VT%20corpus%20recall" alt="Recall"></a>
-  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/precision-100%25-brightgreen?style=flat-square" alt="Precision"></a>
-  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/FPR-0%25-brightgreen?style=flat-square" alt="False Positive Rate"></a>
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/recall-95.31%25-brightgreen?style=flat-square&label=VT%20corpus%20recall" alt="Recall"></a>
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/precision-99.86%25-brightgreen?style=flat-square" alt="Precision"></a>
+  <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/FPR-11.11%25%20(4%2F36)-yellow?style=flat-square" alt="False Positive Rate"></a>
   <a href="benchmarks/vt-baseline.json"><img src="https://img.shields.io/badge/corpus-2976%20samples-blue?style=flat-square" alt="Corpus Size"></a>
 </p>
 
