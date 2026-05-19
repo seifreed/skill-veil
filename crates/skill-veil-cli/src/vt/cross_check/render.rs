@@ -4,7 +4,140 @@
 //! each package; this module formats those labels for human review.
 
 use super::types::{Classification, CrossCheckSummary};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
+
+/// Emit the per-sample `vt-baseline.json` schema consumed by
+/// `scripts/regenerate_baseline.py`.
+///
+/// `summary.packages` is per-artifact (one row per scanned file);
+/// the canonical baseline is per-package, so rows are rolled up by
+/// SHA-256 taking the strongest skill-veil verdict
+/// (`malicious` > `suspicious` > `benign`) and the max risk score /
+/// finding count. `expected` is VT's verdict (the corpus label);
+/// `actual` / `verdict` is skill-veil's. Metrics are RAW
+/// (pre-override): `regenerate_baseline.py` re-applies the 36
+/// mislabel overrides and recomputes, so this only needs to be a
+/// valid standalone baseline.
+pub(crate) fn render_baseline(summary: &CrossCheckSummary) -> String {
+    fn rank(v: &str) -> u8 {
+        match v {
+            "malicious" => 2,
+            "suspicious" => 1,
+            _ => 0,
+        }
+    }
+    fn is_positive(v: &str) -> bool {
+        v == "malicious" || v == "suspicious"
+    }
+
+    struct Roll {
+        expected: String,
+        actual: String,
+        risk: u32,
+        findings: usize,
+    }
+    let mut by_sha: BTreeMap<String, Roll> = BTreeMap::new();
+    for pkg in &summary.packages {
+        // The corpus is uniformly VT-`malicious`; a report whose
+        // primary AI verdict is absent is treated as `malicious`
+        // (the query that seeded the corpus guarantees the label).
+        let expected = pkg
+            .vt_verdict
+            .clone()
+            .unwrap_or_else(|| "malicious".to_string());
+        let entry = by_sha.entry(pkg.sha256.clone()).or_insert_with(|| Roll {
+            expected: expected.clone(),
+            actual: pkg.our_verdict.clone(),
+            risk: pkg.our_risk_score,
+            findings: pkg.our_findings.len(),
+        });
+        if rank(&pkg.our_verdict) > rank(&entry.actual) {
+            entry.actual = pkg.our_verdict.clone();
+        }
+        entry.risk = entry.risk.max(pkg.our_risk_score);
+        entry.findings = entry.findings.max(pkg.our_findings.len());
+        // A benign override is keyed per-SHA; never let an absent-AI
+        // artifact downgrade a sibling's real VT verdict.
+        if rank_label(&expected) > rank_label(&entry.expected) {
+            entry.expected = expected;
+        }
+    }
+
+    let (mut tp, mut fp, mut fn_, mut tn) = (0u32, 0u32, 0u32, 0u32);
+    let samples: Vec<serde_json::Value> = by_sha
+        .iter()
+        .map(|(sha, r)| {
+            match (
+                r.expected.as_str(),
+                is_positive(&r.actual),
+                r.actual.as_str(),
+            ) {
+                ("malicious", true, _) => tp += 1,
+                ("malicious", false, "benign") => fn_ += 1,
+                ("benign", true, _) => fp += 1,
+                ("benign", false, "benign") => tn += 1,
+                _ => {}
+            }
+            serde_json::json!({
+                "id": &sha[..sha.len().min(12)],
+                "sha256": sha,
+                "expected": r.expected,
+                "actual": r.actual,
+                "verdict": r.actual,
+                "risk_score": r.risk,
+                "finding_count": r.findings,
+                "path": format!("benchmarks/../data/.skill-veil-cache/extracted/{sha}"),
+            })
+        })
+        .collect();
+
+    let total = tp + fp + fn_ + tn;
+    let f = |n: u32, d: u32| {
+        if d == 0 {
+            1.0
+        } else {
+            f64::from(n) / f64::from(d)
+        }
+    };
+    let metrics = serde_json::json!({
+        "precision": if tp + fp == 0 { 1.0 } else { f(tp, tp + fp) },
+        "recall": if tp + fn_ == 0 { 1.0 } else { f(tp, tp + fn_) },
+        "false_positive_rate": if fp + tn == 0 { 0.0 } else { f(fp, fp + tn) },
+        "accuracy": if total == 0 { 1.0 } else { f(tp + tn, total) },
+        "true_positive": tp,
+        "false_positive": fp,
+        "true_negative": tn,
+        "false_negative": fn_,
+    });
+    let mut by_label: BTreeMap<&str, usize> = BTreeMap::new();
+    for s in &samples {
+        if let Some(e) = s.get("expected").and_then(|v| v.as_str()) {
+            *by_label.entry(e).or_insert(0) += 1;
+        }
+    }
+    let out = serde_json::json!({
+        "schema_version": "1.0",
+        "overrides_file": "vt-baseline-overrides.yaml",
+        "overrides_applied": 0,
+        "regenerated_at": "pending-regenerate-baseline",
+        "metrics": metrics,
+        "coverage": { "total_samples": samples.len(), "by_label": by_label },
+        "samples": samples,
+    });
+    serde_json::to_string_pretty(&out).unwrap_or_else(|_| "{}".to_string())
+}
+
+fn rank_label(v: &str) -> u8 {
+    // `benign` (an override-eligible VT mislabel) outranks `malicious`
+    // for the per-SHA expected rollup so a single LLM-validated-benign
+    // artifact is not masked by a sibling's raw VT label.
+    match v {
+        "benign" => 2,
+        "suspicious" => 1,
+        _ => 0,
+    }
+}
 
 pub(crate) fn render_markdown(summary: &CrossCheckSummary) -> String {
     let mut out = String::new();

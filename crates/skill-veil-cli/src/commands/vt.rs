@@ -115,6 +115,7 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
         VtCrossCheckFormat::Text => cross_check::render_text(&summary),
         VtCrossCheckFormat::Markdown => cross_check::render_markdown(&summary),
         VtCrossCheckFormat::Json => serde_json::to_string_pretty(&summary)?,
+        VtCrossCheckFormat::Baseline => cross_check::render_baseline(&summary),
     };
     match args.output {
         Some(path) => {

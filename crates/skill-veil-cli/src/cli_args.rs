@@ -534,6 +534,11 @@ pub enum VtCrossCheckFormat {
     Text,
     Json,
     Markdown,
+    /// Per-sample `vt-baseline.json` schema (rolled up per SHA, raw
+    /// pre-override metrics). Pipe through
+    /// `scripts/regenerate_baseline.py` to apply mislabel overrides
+    /// and refresh the canonical baseline.
+    Baseline,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]

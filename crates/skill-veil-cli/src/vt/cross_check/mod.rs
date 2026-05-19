@@ -27,7 +27,7 @@ mod types;
 use anyhow::Result;
 use skill_veil_core::PackageScanResult;
 
-pub(crate) use render::{render_markdown, render_text};
+pub(crate) use render::{render_baseline, render_markdown, render_text};
 pub(crate) use types::{Classification, CrossCheckOptions, CrossCheckSummary, PackageCrossCheck};
 
 const REPORTS_DIRNAME: &str = super::download::REPORTS_DIRNAME;
