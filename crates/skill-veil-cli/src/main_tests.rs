@@ -895,3 +895,135 @@ fn format_text_output_finding_limit_none_renders_every_finding() {
         "no findings should be omitted when limit is None; output:\n{output}"
     );
 }
+
+/// # Contract
+/// Every `skill-veil` invocation embedded in a shipped `examples/ci/*`
+/// template MUST parse against the current CLI. Templates are a public
+/// integration surface — a flag that no longer parses silently breaks
+/// every downstream consumer's PR gate the next time they `cargo run`.
+/// At least one of those invocations MUST exercise `diff --fail-on`
+/// (that was the original regression site: the shipped form
+/// `--fail-on-new-active` exited 2 with "unexpected argument").
+#[test]
+fn shipped_ci_template_invocations_parse_under_current_cli() {
+    use crate::cli_args::{Cli, Commands, DiffFailPolicyArg};
+    use clap::Parser;
+
+    const MARKER: &str = "cargo run -p skill-veil -- ";
+    let ci_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/ci");
+
+    let mut invocations_checked: usize = 0;
+    let mut diff_fail_on_seen: bool = false;
+
+    for entry in std::fs::read_dir(&ci_dir).expect("examples/ci directory") {
+        let path = entry.expect("dir entry").path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let extension_ok = matches!(
+            path.extension().and_then(|e| e.to_str()),
+            Some("yml") | Some("yaml") | Some("Jenkinsfile")
+        ) || name.ends_with(".Jenkinsfile");
+        if !extension_ok {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path).expect("template readable");
+
+        for raw_line in body.lines() {
+            let Some(idx) = raw_line.find(MARKER) else {
+                continue;
+            };
+            let tail = &raw_line[idx + MARKER.len()..];
+            let argv_tail = tail.trim_end_matches(|c: char| {
+                c == '\'' || c == '"' || c == '\\' || c.is_whitespace()
+            });
+            let mut argv: Vec<String> = vec!["skill-veil".to_string()];
+            argv.extend(argv_tail.split_whitespace().map(str::to_string));
+
+            let parsed = Cli::try_parse_from(&argv).unwrap_or_else(|err| {
+                panic!(
+                    "shipped CI template {name} line `{}` failed to parse \
+                     under the current CLI: {err}",
+                    raw_line.trim()
+                )
+            });
+            invocations_checked += 1;
+
+            if let Commands::Diff(diff) = &parsed.command {
+                if diff.fail_on.is_some() {
+                    assert!(
+                        matches!(diff.fail_on, Some(DiffFailPolicyArg::NewActive)),
+                        "{name}: diff --fail-on must use the supported \
+                         NewActive form (was: {:?})",
+                        diff.fail_on.map(|_| "non-NewActive variant")
+                    );
+                    diff_fail_on_seen = true;
+                }
+            }
+        }
+    }
+
+    assert!(
+        invocations_checked > 0,
+        "expected at least one `{MARKER}…` invocation in {ci_dir:?}"
+    );
+    assert!(
+        diff_fail_on_seen,
+        "expected at least one shipped template to exercise \
+         `skill-veil diff --fail-on` — that was the regression site"
+    );
+}
+
+/// # Contract
+/// `skill-veil diff --fail-on` accepts the flag-with-value form
+/// (`--fail-on new-active`). The flag-suffix form (`--fail-on-new-active`)
+/// is NOT a synonym; clap rejects it as "unexpected argument". This
+/// asymmetry is load-bearing for the shipped CI templates and for the
+/// regression demonstrated in `ci-local/`; an alias would silently mask
+/// the bug class instead of failing loudly.
+#[test]
+fn diff_fail_on_accepts_value_form_and_rejects_flag_suffix_form() {
+    use crate::cli_args::{Cli, Commands, DiffFailPolicyArg};
+    use clap::Parser;
+
+    let supported = Cli::try_parse_from([
+        "skill-veil",
+        "diff",
+        "prev.json",
+        "cur.json",
+        "--baseline",
+        "base.json",
+        "--ci-summary",
+        "--fail-on",
+        "new-active",
+    ])
+    .expect("`--fail-on new-active` must parse");
+    match supported.command {
+        Commands::Diff(diff) => assert!(
+            matches!(diff.fail_on, Some(DiffFailPolicyArg::NewActive)),
+            "expected fail_on=NewActive"
+        ),
+        _ => panic!("expected Commands::Diff"),
+    }
+
+    let err = match Cli::try_parse_from([
+        "skill-veil",
+        "diff",
+        "prev.json",
+        "cur.json",
+        "--baseline",
+        "base.json",
+        "--ci-summary",
+        "--fail-on-new-active",
+    ]) {
+        Ok(_) => panic!("`--fail-on-new-active` (flag-suffix form) must be rejected"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unexpected argument") && msg.contains("--fail-on-new-active"),
+        "expected clap rejection mentioning `--fail-on-new-active`, got: {msg}"
+    );
+}

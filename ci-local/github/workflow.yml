@@ -1,0 +1,54 @@
+# GitHub Actions workflow exercised by `act` (the real GitHub-runner
+# emulator). `ci-local/github/run.sh` maps ubuntu-latest to the prebuilt
+# skill-veil-ci:local image, so the binary + example corpus are already
+# present: act runs the genuine Actions execution model without a 20-min
+# qemu cargo build. The cargo-based composite action is covered by the
+# base harness; here we prove the Actions runner gates correctly.
+#
+# Steps use the image-baked /work paths so no actions/checkout (JS action)
+# is needed and the host working tree is never scanned.
+name: skill-veil local (act)
+
+on: [push, workflow_dispatch]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Version
+        run: skill-veil --version
+
+      - name: Scan benign tree — JSON + SARIF (must stay clean)
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/art
+          skill-veil scan-package /work/examples/safe-skill \
+            --preset ci --no-update-check --format json --output /tmp/art/current.json
+          skill-veil scan-package /work/examples/safe-skill \
+            --no-update-check --format sarif --output /tmp/art/current.sarif
+          test "$(jq -r '.[0].verdict' /tmp/art/current.json)" = "benign"
+          test "$(jq -r '.version' /tmp/art/current.sarif)" = "2.1.0"
+
+      - name: Gate a known-malicious fixture (must exit 1, verdict malicious)
+        shell: bash
+        run: |
+          # act runs steps under `bash -e`; capture the intentional
+          # non-zero with `|| rc=$?` so errexit does not abort the step.
+          rc=0
+          skill-veil scan-package /work/benchmarks/fixtures/malicious/token-exfiltration \
+            --no-update-check --fail-on medium --format json \
+            --output /tmp/art/mal.json || rc=$?
+          test "$rc" -eq 1 || { echo "expected exit 1, got $rc"; exit 1; }
+          test "$(jq -r '.[0].verdict' /tmp/art/mal.json)" = "malicious"
+          echo "gate fired correctly: exit 1 on malicious"
+
+      - name: Legacy diff flag-suffix form is rejected (negative contract)
+        # Runtime mirror of the Rust test
+        # diff_fail_on_accepts_value_form_and_rejects_flag_suffix_form.
+        # `continue-on-error` because this step intentionally exits 2.
+        continue-on-error: true
+        run: |
+          skill-veil baseline create /tmp/art/current.json --output /tmp/art/base.json
+          echo 'Running the legacy flag-suffix form (must still be rejected)...'
+          skill-veil diff /tmp/art/current.json /tmp/art/current.json \
+            --baseline /tmp/art/base.json --ci-summary --fail-on-new-active

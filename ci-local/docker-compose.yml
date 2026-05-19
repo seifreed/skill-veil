@@ -1,0 +1,26 @@
+# Base harness orchestration. The build context is the repo root so the
+# Cargo workspace + .dockerignore apply.
+#
+#   docker compose -f ci-local/docker-compose.yml build
+#   docker compose -f ci-local/docker-compose.yml run --rm harness
+#   docker compose -f ci-local/docker-compose.yml run --rm harness-online
+
+x-build: &build
+  build:
+    context: ..
+    dockerfile: ci-local/Dockerfile
+  image: skill-veil-ci:local
+
+services:
+  # Offline gate: no network at all — proves the embedded baseline ruleset
+  # detects without `init` / enrichment / update checks.
+  harness:
+    <<: *build
+    network_mode: none
+
+  # Same image, network enabled, exercises the signed-pack download path.
+  # Allowed to skip if upstream is unreachable.
+  harness-online:
+    <<: *build
+    environment:
+      SKILL_VEIL_ONLINE_INIT: "1"

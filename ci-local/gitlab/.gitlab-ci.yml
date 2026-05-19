@@ -1,0 +1,52 @@
+# Local-runnable mirror of examples/ci/gitlab-ci.yml. The shipped template
+# is a merge_request gate (needs an MR base worktree); this version is
+# self-contained so `gitlab-ci-local` / a plain runner can execute it with
+# no MR context while exercising the SAME steps: scan -> SARIF -> baseline
+# -> diff gate. It uses the CORRECT flag `--fail-on new-active` (the
+# shipped template's `--fail-on-new-active` is stale — demonstrated below).
+
+stages:
+  - verify
+
+variables:
+  CARGO_TERM_COLOR: "always"
+  SV_IMAGE: "skill-veil-ci:local"
+
+.sv: &sv
+  image:
+    name: "$SV_IMAGE"
+    pull_policy: if-not-present
+  before_script:
+    - mkdir -p artifacts
+    - 'if command -v skill-veil >/dev/null 2>&1; then SV="skill-veil"; else SV="cargo run -p skill-veil --"; fi'
+    - eval "$SV --version" | head -1
+
+skill_veil_gate:
+  <<: *sv
+  stage: verify
+  script:
+    - eval "$SV scan-package examples/safe-skill --preset ci --no-update-check --format json --output artifacts/current.json"
+    - eval "$SV scan-package examples/safe-skill --no-update-check --format sarif --output artifacts/current.sarif"
+    - eval "$SV baseline create artifacts/current.json --output artifacts/baseline.json"
+    - eval "$SV diff artifacts/current.json artifacts/current.json --baseline artifacts/baseline.json --ci-summary --fail-on new-active"
+  artifacts:
+    when: always
+    paths:
+      - artifacts/current.json
+      - artifacts/current.sarif
+      - artifacts/baseline.json
+
+# Runtime cross-check of the negative contract pinned by the Rust test
+# `diff_fail_on_accepts_value_form_and_rejects_flag_suffix_form`: the
+# legacy flag-suffix form (`--fail-on-new-active`) MUST stay rejected so
+# the bug class can never sneak back via an alias. Expected to fail
+# (exit 2); allow_failure keeps the pipeline green.
+legacy_diff_flag_rejected:
+  <<: *sv
+  stage: verify
+  allow_failure: true
+  script:
+    - eval "$SV scan-package examples/safe-skill --preset ci --no-update-check --format json --output artifacts/current.json"
+    - eval "$SV baseline create artifacts/current.json --output artifacts/baseline.json"
+    - echo 'Running the legacy flag-suffix form (must still be rejected)...'
+    - eval "$SV diff artifacts/current.json artifacts/current.json --baseline artifacts/baseline.json --ci-summary --fail-on-new-active"
