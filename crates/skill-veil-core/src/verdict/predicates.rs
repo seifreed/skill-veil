@@ -47,6 +47,57 @@ pub(super) struct VerdictInputs<'a> {
 ///   content; 0/4000 benign, 4/2976 malicious. Legitimate skills
 ///   read the token from an env var and never embed the
 ///   `<id>:<token>` secret literally — an exfil-credential IOC.
+/// - `SKILL_ECHO_WRAPPED_BASE64_EXEC` — `echo <b64> | base64 -d |
+///   sh`-style staged execution; 0/4000 benign, 520/2976 malicious
+///   (`critical`/`block`/`obfuscation`). Wrapping an executable
+///   payload in echo+base64+pipe-to-shell has no benign use; the
+///   corroboration gate was the only thing holding lone-signal hits
+///   at Suspicious.
+/// - `SKILL_HARDCODED_MESSAGING_EXFIL` — a hardcoded messaging
+///   webhook/bot endpoint used as an exfil channel; 0/4000 benign,
+///   37/2976 malicious (`critical`/`block`/`data_exfiltration`).
+/// - `SKILL_BASE64_PIPE_EXEC` — `base64 -d | sh` pipe execution;
+///   0/4000 benign, 3/2976 malicious (`critical`/`block`/
+///   `obfuscation`). Low malicious count but malicious by
+///   construction, same precedent as `SKILL_TELEGRAM_BOT_TOKEN_HARDCODED`
+///   (4/2976).
+/// - `SKILL_SSH_KEY_INJECTION` — appends an attacker key to
+///   `authorized_keys`; 0/4000 benign, 2/2976 malicious
+///   (`critical`/`block`/`privilege_escalation`). An SSH-key
+///   injection is a backdoor by definition.
+///
+/// The four additions above were measured together on 2026-05-19:
+/// each is **0/4000 at any finding strength** on the `data-clean`
+/// corpus (stricter than CRIT/HIGH-only) and `critical`/`block`, so
+/// they emit `MaliciousBehavior + Block` and qualify for the
+/// single-rule escalation. The methodology was self-validated:
+/// the two pre-existing `0/4000` entries above
+/// (`SKILL_FAKE_DEPENDENCY_DROPPER`, `SKILL_TELEGRAM_BOT_TOKEN_HARDCODED`)
+/// reproduced 0/4000 in the same run.
+///
+/// Systematic sweep (same 2026-05-19 run, combined 4000-benign +
+/// 2976-malicious scan): of every `critical`/`block` rule with zero
+/// benign hits, the rules below additionally fired on ≥1 malicious
+/// package — all malicious by construction (remote shells, backdoor
+/// instruction host, IOC domain, etc.). Each is **0/4000 benign at
+/// any strength**; malicious counts (of 2976) noted inline. Rules
+/// that were 0/4000 benign but ALSO 0/2976 malicious were
+/// deliberately NOT added — a never-firing rule recovers nothing and
+/// its benign-safety is unexercised.
+/// - `SKILL_MALICIOUS_DOMAIN` — known-bad domain IOC; 507 mal
+///   (analogous to `SKILL_MALICIOUS_PUBLISHER`).
+/// - `SKILL_REVERSE_SHELL_BASH` — 15 mal; a reverse shell has no
+///   benign use.
+/// - `OFFICIAL_BACKDOOR_REMOTE_INSTRUCTION_HOST` — 11 mal.
+/// - `SKILL_EXEC_CRON_INJECTION` — 7 mal.
+/// - `OFFICIAL_APPROVAL_BYPASS_WITH_EXECUTION` — 6 mal.
+/// - `SKILL_SUPPLY_CHAIN_TYPOSQUATTING` — 4 mal.
+/// - `OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT` — 3 mal.
+/// - `SKILL_CREDENTIAL_HARVESTING_ACTIVE` — 3 mal.
+/// - `SKILL_REMOTE_EXEC_POWERSHELL` — 2 mal.
+/// - `SKILL_REMOTE_EXEC_POWERSHELL_IEX` — 2 mal.
+/// - `SKILL_PUMP_DUMP` — 1 mal.
+/// - `SKILL_SMS_DATABASE_MULTI` — 1 mal.
 ///
 /// Adding a rule here is a precision↔recall trade made deliberately
 /// at the verdict layer. A rule that later starts producing benign
@@ -56,6 +107,22 @@ pub(super) const CONCLUSIVE_SINGLE_RULE_IDS: &[&str] = &[
     "SKILL_MACOS_BASE64_RCE",
     "SKILL_FAKE_DEPENDENCY_DROPPER",
     "SKILL_TELEGRAM_BOT_TOKEN_HARDCODED",
+    "SKILL_ECHO_WRAPPED_BASE64_EXEC",
+    "SKILL_HARDCODED_MESSAGING_EXFIL",
+    "SKILL_BASE64_PIPE_EXEC",
+    "SKILL_SSH_KEY_INJECTION",
+    "SKILL_MALICIOUS_DOMAIN",
+    "SKILL_REVERSE_SHELL_BASH",
+    "OFFICIAL_BACKDOOR_REMOTE_INSTRUCTION_HOST",
+    "SKILL_EXEC_CRON_INJECTION",
+    "OFFICIAL_APPROVAL_BYPASS_WITH_EXECUTION",
+    "SKILL_SUPPLY_CHAIN_TYPOSQUATTING",
+    "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT",
+    "SKILL_CREDENTIAL_HARVESTING_ACTIVE",
+    "SKILL_REMOTE_EXEC_POWERSHELL",
+    "SKILL_REMOTE_EXEC_POWERSHELL_IEX",
+    "SKILL_PUMP_DUMP",
+    "SKILL_SMS_DATABASE_MULTI",
 ];
 
 pub(super) struct VerdictPredicates {
