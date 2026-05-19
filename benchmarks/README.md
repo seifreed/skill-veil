@@ -9,7 +9,8 @@ precision and recall.
 |---|---|
 | `vt-baseline.json` | Canonical VirusTotal corpus (2976 samples) with current verdicts and recomputed metrics. The single file the project measures itself against. |
 | `vt-baseline-overrides.yaml` | Manual / LLM-validated mislabel overrides applied to the baseline. Each entry carries `sha256`, `new_label`, `confidence`, `source`, `reason` for audit. |
-| `vt-corpus.yaml` | The VirusTotal sample list (queries + SHAs). Used by `skill-veil vt download` to reproduce the cached extracts under `data/.skill-veil-cache/`. |
+| `vt-corpus.yaml` | The VirusTotal **malicious** sample list (query `codeinsight_verdict:malicious`, 2976 SHAs). Used by `skill-veil vt download` to reproduce the cached extracts under `data/.skill-veil-cache/`. |
+| `vt-clean-corpus.yaml` | The VirusTotal **benign** sample list (query `codeinsight_verdict:benign`, 4000 SHAs). Used by `skill-veil vt download --clean` to reproduce `data-clean/.skill-veil-cache/`. This is the false-positive corpus: every FP measurement (`scripts/fp_triage.sh`, the `0/4000-benign` membership criterion for `verdict::predicates::CONCLUSIVE_SINGLE_RULE_IDS`) is verified against exactly this manifest. |
 | `corpus.yaml` | Smaller fixture-based benchmark (41 labelled samples) used for per-family precision/recall tuning. Run with `cargo run -p skill-veil -- benchmark benchmarks/corpus.yaml`. |
 | `fixtures/` | Curated benign / malicious / suspicious markdown samples used by rule-pack fixtures and by `corpus.yaml`. |
 | `history/` | Per-release benchmark snapshots (consumed by `crates/skill-veil-cli/src/commands/benchmark.rs`). See `history/README.md`. |

@@ -113,21 +113,29 @@ precision** (zero false positives on this corpus —
 2730 TP / 246 FN / 0 FP).
 
 For the residual false-negative bucket we ran a strict multi-provider
-LLM cross-check (Grok + OpenAI, default models `grok-4-fast` and
-`gpt-4o-mini`). A sample is treated as a VT mislabel only when **all**
+LLM cross-check. A sample is treated as a VT mislabel only when **all**
 of the following hold:
 
-1. Both providers return `verdict == benign`.
-2. Both providers' confidence is ≥ 0.85.
+1. Every provider in the panel returns `verdict == benign`.
+2. Every provider's confidence is ≥ 0.85.
 3. At least one provider's confidence is ≥ 0.90.
 
-Of 246 samples submitted, **36 passed consensus** (e.g., `chart-image`,
-`mineru-pdf`-style helpers); 210 were rejected (203 had at least one
-provider disagree, 6 were below the confidence floor, 1 was a
-binary-disguised file the LLMs could not analyse). Treating the 36
-passing samples as VT mislabels lifts recall to **92.86%** at the same
-100% precision. Each override carries its per-provider verdicts,
-confidences, and timestamps in
+The committed overrides + audit (`benchmarks/vt-baseline-overrides.yaml`,
+`benchmarks/multi-llm-audit.yaml`) are the **2026-04-28 run with a
+two-provider panel (Grok + OpenAI**, `grok-4-fast` / `gpt-4o-mini`).
+The current default panel in `scripts/llm_filter_fns.py` is
+**three providers (Grok + OpenAI + Anthropic)** — re-running the
+override pipeline will use that panel; the figures below are from the
+recorded two-provider April run and are refreshed on each
+`regenerate_baseline.py`.
+
+Of 246 samples submitted in that run, **36 passed consensus** (e.g.,
+`chart-image`, `mineru-pdf`-style helpers); 210 were rejected (203 had
+at least one provider disagree, 6 were below the confidence floor, 1
+was a binary-disguised file the LLMs could not analyse). Treating the
+36 passing samples as VT mislabels lifts recall to **92.86%** at 100%
+precision *as recorded on 2026-04-28*. Each override carries its
+per-provider verdicts, confidences, and timestamps in
 `benchmarks/vt-baseline-overrides.yaml`; the full audit including
 rejected samples is in `benchmarks/multi-llm-audit.yaml`.
 
