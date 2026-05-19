@@ -85,11 +85,27 @@ fn run_report(args: VtReportArgs) -> Result<()> {
 }
 
 fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
+    // `vt download` writes raw files to `<dir>/<sha>` and VT reports to
+    // `<dir>/.vt-reports/`, while the scanner materialises extracted
+    // package roots (each containing `SKILL.md`) under
+    // `<dir>/.skill-veil-cache/extracted/<sha>/`. The dataset walker
+    // skips dot-directories, so pointing it at `<dir>` finds none of
+    // the extracted corpus (the documented `vt cross-check --dir data`
+    // returned `total=0/handful`). Scan the extraction cache when it
+    // exists; keep `dataset_dir = <dir>` so report resolution
+    // (`<dir>/.vt-reports`) and the `<sha>/` package-id → SHA lookup
+    // are unaffected.
+    let extracted_root = args.dir.join(".skill-veil-cache").join("extracted");
+    let scan_root: &std::path::Path = if extracted_root.is_dir() {
+        extracted_root.as_path()
+    } else {
+        args.dir.as_path()
+    };
     let scan_results = crate::dataset::scan_dataset_to_results(
-        &args.dir,
+        scan_root,
         crate::dataset::default_dataset_scan_options(),
     )
-    .with_context(|| format!("scanning {}", args.dir.display()))?;
+    .with_context(|| format!("scanning {}", scan_root.display()))?;
     let opts = CrossCheckOptions {
         dataset_dir: args.dir.clone(),
         only_mismatches: args.only_mismatches,
