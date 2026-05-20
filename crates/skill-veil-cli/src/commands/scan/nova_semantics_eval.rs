@@ -200,22 +200,12 @@ pub(crate) mod fastembed_impl {
     }
 
     impl FastembedSentenceEmbedder {
-        /// Loads `all-MiniLM-L6-v2`. The first call downloads the
-        /// model (~90 MiB) into [`nova_model_cache_dir`]; subsequent
-        /// calls (any working directory) reuse the cache. On failure
-        /// (no network + no cache, disk full, hub error) returns
-        /// `Err` so the CLI can fall back to the
-        /// `NotYetWiredSemantic` stub WITHOUT failing the scan.
+        /// Loads `all-MiniLM-L6-v2`, caching model files under
+        /// [`nova_model_cache_dir`].
         pub(crate) fn try_new() -> Result<Self, EmbedError> {
-            let cache_dir = nova_model_cache_dir();
-            // fastembed delegates dir creation to hf-hub but only for
-            // `<cache_dir>/blobs/`/`refs/`/`snapshots/` — the parent
-            // `cache_dir` itself MUST already exist or the very first
-            // download errors on `No such file or directory`. Pre-fix
-            // (default cwd-relative `.fastembed_cache`) the parent was
-            // always cwd which is implicitly present, so the bug only
-            // surfaces with our explicit path. `create_dir_all` is
-            // idempotent so this is safe across repeat invocations.
+            let cache_dir = nova_model_cache_dir()?;
+            // hf-hub creates children under the cache root, but the
+            // cache root itself must already exist before first use.
             std::fs::create_dir_all(&cache_dir).map_err(|e| {
                 EmbedError::Failed(format!(
                     "create nova model cache dir {}: {e}",
@@ -235,15 +225,18 @@ pub(crate) mod fastembed_impl {
 
     /// Canonical cache directory for the NOVA semantics model.
     /// Mirrors the placement convention used by VT and LLM caches:
-    /// `dirs::cache_dir().join("skill-veil/nova-models/")` on macOS /
-    /// Linux, with `std::env::temp_dir()` as a degraded fallback so
-    /// the scanner still runs (re-downloading per session) on hosts
-    /// where the user cache directory cannot be resolved.
-    pub(crate) fn nova_model_cache_dir() -> PathBuf {
-        match dirs::cache_dir() {
-            Some(base) => base.join("skill-veil").join("nova-models"),
-            None => std::env::temp_dir().join("skill-veil-nova-models"),
-        }
+    /// `dirs::cache_dir().join("skill-veil/nova-models/")`.
+    pub(crate) fn nova_model_cache_dir() -> Result<PathBuf, EmbedError> {
+        nova_model_cache_dir_from(dirs::cache_dir())
+    }
+
+    pub(crate) fn nova_model_cache_dir_from(base: Option<PathBuf>) -> Result<PathBuf, EmbedError> {
+        base.map(|base| base.join("skill-veil").join("nova-models"))
+            .ok_or_else(|| {
+                EmbedError::Failed(
+                    "could not determine user cache directory for NOVA model cache".into(),
+                )
+            })
     }
 
     impl SentenceEmbedder for FastembedSentenceEmbedder {
@@ -265,14 +258,10 @@ pub(crate) mod fastembed_impl {
         use super::*;
 
         /// Contract: the cache dir is namespaced under `skill-veil/`
-        /// inside the user's cache directory. The previous default
-        /// (cwd-relative `.fastembed_cache`) polluted the project
-        /// root and forced a re-download on every `cd`. Pinning the
-        /// canonical path stops a future refactor from silently
-        /// reverting to fastembed's default.
+        /// inside the user's cache directory.
         #[test]
         fn nova_model_cache_dir_is_namespaced_under_skill_veil() {
-            let p = nova_model_cache_dir();
+            let p = nova_model_cache_dir().unwrap();
             let s = p.to_string_lossy();
             assert!(
                 s.contains("skill-veil"),
@@ -284,6 +273,14 @@ pub(crate) mod fastembed_impl {
                     || s.ends_with("nova-models\\"),
                 "cache dir must end with nova-models, got {s}",
             );
+        }
+
+        /// Contract: model files are cached only under a user cache
+        /// directory. A fixed shared temp fallback would allow another
+        /// local user to pre-populate model cache state.
+        #[test]
+        fn nova_model_cache_dir_rejects_missing_user_cache_dir() {
+            assert!(nova_model_cache_dir_from(None).is_err());
         }
     }
 }
