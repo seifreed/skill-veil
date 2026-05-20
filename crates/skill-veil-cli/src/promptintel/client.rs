@@ -63,6 +63,7 @@ impl PromptIntelClient {
     pub(crate) fn new(config: PromptIntelConfig) -> Self {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(DEFAULT_HTTP_TIMEOUT_SECS))
+            .redirects(0)
             .build();
         Self { config, agent }
     }
@@ -142,6 +143,11 @@ impl PromptIntelClient {
                 .call();
             match response {
                 Ok(resp) => {
+                    let status = resp.status();
+                    if !(200..300).contains(&status) {
+                        let body = drain_error_body(status, resp);
+                        return Err(PromptIntelError::HttpStatus { status, body });
+                    }
                     let meta = ResponseMeta::from_headers(&resp);
                     return bounded_read_response(resp).map(|body| (body, meta));
                 }
@@ -192,6 +198,11 @@ impl PromptIntelClient {
                 .send_string(body_json);
             match response {
                 Ok(resp) => {
+                    let status = resp.status();
+                    if !(200..300).contains(&status) {
+                        let body = drain_error_body(status, resp);
+                        return Err(PromptIntelError::HttpStatus { status, body });
+                    }
                     let meta = ResponseMeta::from_headers(&resp);
                     return bounded_read_response(resp).map(|body| (body, meta));
                 }
@@ -304,6 +315,11 @@ fn drain_error_body(status: u16, resp: ureq::Response) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     /// Contract: the truncator MUST NOT split a multi-byte UTF-8 char.
     /// Pre-design check: we use `is_char_boundary` to walk back to a
@@ -333,5 +349,95 @@ mod tests {
     fn truncate_error_body_passes_short_bodies_through() {
         let short = "short error".to_string();
         assert_eq!(truncate_error_body(short.clone()), short);
+    }
+
+    fn drain_request_headers(stream: &mut std::net::TcpStream) -> String {
+        let cloned = stream.try_clone().expect("clone stream");
+        let mut reader = BufReader::new(cloned);
+        let mut headers = String::new();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            if line == "\r\n" {
+                break;
+            }
+            headers.push_str(&line);
+        }
+        headers
+    }
+
+    /// Contract: PromptIntel requests must not follow redirects because
+    /// every request carries `Authorization: Bearer <apikey>`. A redirect
+    /// is surfaced as HTTP 302 and the `Location` target is never contacted.
+    #[test]
+    fn agent_surfaces_302_as_error_instead_of_following_redirect() {
+        let redirect_target = TcpListener::bind("127.0.0.1:0").expect("bind target");
+        redirect_target
+            .set_nonblocking(true)
+            .expect("nonblocking target");
+        let target_addr = redirect_target.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let target = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(300);
+            while Instant::now() < deadline {
+                match redirect_target.accept() {
+                    Ok((mut stream, _)) => {
+                        let headers = drain_request_headers(&mut stream);
+                        let body = "{}";
+                        let resp = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(resp.as_bytes());
+                        let _ = tx.send(Some(headers));
+                        return;
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(None);
+        });
+
+        let redirector = TcpListener::bind("127.0.0.1:0").expect("bind redirector");
+        let redirector_addr = redirector.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = redirector.accept().expect("accept redirector");
+            let _headers = drain_request_headers(&mut stream);
+            let body = "redirect";
+            let resp = format!(
+                "HTTP/1.1 302 Found\r\n\
+                 Location: http://{target_addr}/leak\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        });
+
+        let client = PromptIntelClient::new(PromptIntelConfig {
+            apikey: "promptintel-secret".to_string(),
+        });
+        let result = client.get_json_with_meta(&format!("http://{redirector_addr}/start"));
+
+        server.join().expect("redirector thread");
+        target.join().expect("target thread");
+        match result {
+            Err(PromptIntelError::HttpStatus { status: 302, .. }) => {}
+            other => panic!("expected HTTP 302 error without following redirect, got {other:?}"),
+        }
+        let target_headers = rx.recv().expect("target thread must report");
+        assert!(
+            target_headers.is_none(),
+            "redirect target must not be contacted; got headers {target_headers:?}"
+        );
     }
 }
