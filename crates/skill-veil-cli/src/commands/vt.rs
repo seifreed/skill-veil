@@ -1,5 +1,9 @@
 //! Wiring for the `skill-veil vt …` subcommand family.
 
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+
 use crate::cli_args::{
     VtAction, VtCrossCheckArgs, VtCrossCheckFormat, VtDownloadArgs, VtReportArgs,
 };
@@ -9,8 +13,6 @@ use crate::vt::config::VtConfig;
 use crate::vt::cross_check::{self, CrossCheckOptions};
 use crate::vt::download::{self, DownloadOptions};
 use crate::vt::types::CachedReport;
-use anyhow::{Context, Result};
-use std::path::Path;
 
 pub(crate) fn run_vt(action: VtAction) -> Result<()> {
     match action {
@@ -97,14 +99,9 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
     // exists; keep `dataset_dir = <dir>` so report resolution
     // (`<dir>/.vt-reports`) and the `<sha>/` package-id → SHA lookup
     // are unaffected.
-    let extracted_root = args.dir.join(".skill-veil-cache").join("extracted");
-    let scan_root: &std::path::Path = if extracted_root.is_dir() {
-        extracted_root.as_path()
-    } else {
-        args.dir.as_path()
-    };
+    let scan_root = cross_check_scan_root(&args.dir);
     let scan_results = crate::dataset::scan_dataset_to_results(
-        scan_root,
+        &scan_root,
         crate::dataset::default_dataset_scan_options(),
     )
     .with_context(|| format!("scanning {}", scan_root.display()))?;
@@ -138,6 +135,21 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
     Ok(())
 }
 
+fn cross_check_scan_root(dataset_dir: &Path) -> PathBuf {
+    let extracted_root = dataset_dir.join(".skill-veil-cache").join("extracted");
+    if is_real_dir(&extracted_root) {
+        extracted_root
+    } else {
+        dataset_dir.to_path_buf()
+    }
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.is_symlink())
+        .unwrap_or(false)
+}
+
 fn build_client() -> Result<VtClient> {
     let config = VtConfig::load()?;
     Ok(VtClient::new(config))
@@ -153,7 +165,7 @@ fn terminal_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{terminal_path, terminal_text};
+    use super::{cross_check_scan_root, terminal_path, terminal_text};
     use std::path::PathBuf;
 
     #[test]
@@ -171,5 +183,41 @@ mod tests {
 
         assert!(!cleaned.contains('\x1b'));
         assert!(cleaned.contains("out?[2J.json"));
+    }
+
+    /// # Contract
+    ///
+    /// `vt cross-check` should scan the extracted corpus cache when it
+    /// is a real directory, preserving the documented `vt download` flow.
+    #[test]
+    fn cross_check_scan_root_uses_real_extracted_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let extracted = tmp.path().join(".skill-veil-cache").join("extracted");
+        std::fs::create_dir_all(&extracted).unwrap();
+
+        let root = cross_check_scan_root(tmp.path());
+
+        assert_eq!(root, extracted);
+    }
+
+    /// # Contract
+    ///
+    /// A symlinked extracted-cache path MUST be ignored. Otherwise an
+    /// untrusted dataset can redirect `vt cross-check` to scan an
+    /// attacker-chosen directory outside the dataset root.
+    #[cfg(unix)]
+    #[test]
+    fn cross_check_scan_root_rejects_symlinked_extracted_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_parent = tmp.path().join(".skill-veil-cache");
+        let outside = tmp.path().join("outside");
+        let extracted = cache_parent.join("extracted");
+        std::fs::create_dir_all(&cache_parent).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &extracted).unwrap();
+
+        let root = cross_check_scan_root(tmp.path());
+
+        assert_eq!(root, tmp.path());
     }
 }
