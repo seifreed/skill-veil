@@ -8,6 +8,7 @@
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
+use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use tar::{Archive, EntryType};
@@ -32,8 +33,18 @@ pub(crate) fn extract_into(tarball: &Path, dest_dir: &Path) -> Result<()> {
         .canonicalize()
         .with_context(|| format!("canonicalizing {}", dest_dir.display()))?;
 
-    let file = std::fs::File::open(tarball)
-        .with_context(|| format!("opening tarball {}", tarball.display()))?;
+    let tarball_meta = regular_tarball_metadata(tarball)?;
+    let file =
+        File::open(tarball).with_context(|| format!("opening tarball {}", tarball.display()))?;
+    let opened_meta = file
+        .metadata()
+        .with_context(|| format!("stat opened tarball {}", tarball.display()))?;
+    if !opened_file_matches_path(&opened_meta, &tarball_meta) {
+        bail!(
+            "refusing to extract {}: path changed while opening",
+            tarball.display()
+        );
+    }
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
 
@@ -124,6 +135,19 @@ pub(crate) fn extract_into(tarball: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn regular_tarball_metadata(tarball: &Path) -> Result<Metadata> {
+    let meta = std::fs::symlink_metadata(tarball)
+        .with_context(|| format!("stat tarball {}", tarball.display()))?;
+    if meta.is_file() && !meta.file_type().is_symlink() {
+        Ok(meta)
+    } else {
+        bail!(
+            "tarball {} is not a regular file — refusing to extract",
+            tarball.display()
+        )
+    }
+}
+
 fn ensure_empty_extraction_dir(dest_dir: &Path) -> Result<()> {
     let meta = std::fs::symlink_metadata(dest_dir)
         .with_context(|| format!("stat extraction dir {}", dest_dir.display()))?;
@@ -198,6 +222,17 @@ fn path_is_inside(child: &Path, parent: &Path) -> bool {
         current = p.parent();
     }
     false
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -278,6 +313,25 @@ mod tests {
 
         assert!(format!("{err:#}").contains("symlink"));
         assert!(!target.join("official/core.yaml").exists());
+    }
+
+    /// # Contract
+    ///
+    /// The tarball input itself must be a regular file. A symlinked
+    /// tarball path is rejected before decompression.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_tarball_input() {
+        let parent = TempDir::new().unwrap();
+        let real = tarball_with(&[("official/core.yaml", b"a: 1\n")]);
+        let link = parent.path().join("rules.tar.gz");
+        std::os::unix::fs::symlink(real.path(), &link).unwrap();
+        let dest = TempDir::new().unwrap();
+
+        let err = extract_into(&link, dest.path()).expect_err("symlink tarball must fail");
+
+        assert!(format!("{err:#}").contains("not a regular file"));
+        assert!(!dest.path().join("official/core.yaml").exists());
     }
 
     /// Build a tarball with a single entry whose name we set by
