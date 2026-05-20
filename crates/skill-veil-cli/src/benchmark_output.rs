@@ -1,3 +1,4 @@
+use crate::util::terminal_safe::sanitise_for_terminal;
 use skill_veil_core::{BenchmarkHistory, CorpusEvaluation, Verdict};
 
 /// Top-N families with the weakest exact-label accuracy shown under
@@ -69,7 +70,11 @@ pub fn render_benchmark_dashboard(
         if !buckets.is_empty() {
             output.push_str(&format!("### {title}\n\n"));
             for bucket in buckets {
-                output.push_str(&format!("- `{}`: {}\n", bucket.key, bucket.samples));
+                output.push_str(&format!(
+                    "- `{}`: {}\n",
+                    terminal_text(&bucket.key),
+                    bucket.samples
+                ));
             }
             output.push('\n');
         }
@@ -83,7 +88,7 @@ pub fn render_benchmark_dashboard(
         for family in &evaluation.family_metrics {
             output.push_str(&format!(
                 "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |\n",
-                family.family,
+                terminal_text(&family.family),
                 family.sample_count,
                 family.metrics.precision,
                 family.metrics.recall,
@@ -124,7 +129,7 @@ pub fn render_benchmark_dashboard(
         for family in weakest_families.iter().take(MAX_DISPLAY_WEAKEST_FAMILIES) {
             output.push_str(&format!(
                 "- `{}`: exact_label={:.2} fpr={:.2} thresholds={}→{}\n",
-                family.family,
+                terminal_text(&family.family),
                 family.metrics.exact_label_accuracy,
                 family.metrics.false_positive_rate,
                 family
@@ -148,7 +153,7 @@ pub fn render_benchmark_dashboard(
         evaluation
             .threshold_recommendation
             .recommended_block_threshold,
-        evaluation.threshold_recommendation.rationale
+        terminal_text(&evaluation.threshold_recommendation.rationale)
     ));
     if !evaluation.confidence_calibration.by_signal_pair.is_empty() {
         output.push_str("### Strongest Signal Pairs\n\n");
@@ -160,7 +165,7 @@ pub fn render_benchmark_dashboard(
         {
             output.push_str(&format!(
                 "- `{}`: findings={} observed_precision={:.2} recommended_confidence={:.2}\n",
-                bucket.key,
+                terminal_text(&bucket.key),
                 bucket.findings,
                 bucket.observed_precision,
                 bucket.recommended_confidence
@@ -178,7 +183,7 @@ pub fn render_benchmark_dashboard(
     for entry in &history.releases {
         output.push_str(&format!(
             "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {} |\n",
-            entry.release_id,
+            terminal_text(&entry.release_id),
             entry.generated_at.format("%Y-%m-%d"),
             entry.metrics.precision,
             entry.metrics.recall,
@@ -218,7 +223,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
         evaluation
             .threshold_recommendation
             .recommended_block_threshold,
-        evaluation.threshold_recommendation.rationale
+        terminal_text(&evaluation.threshold_recommendation.rationale)
     ));
     if !evaluation.family_metrics.is_empty() {
         output.push_str("## Family Recommendations\n\n");
@@ -229,7 +234,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
         for family in &evaluation.family_metrics {
             output.push_str(&format!(
                 "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |\n",
-                family.family,
+                terminal_text(&family.family),
                 family.sample_count,
                 family.metrics.precision,
                 family.metrics.recall,
@@ -243,7 +248,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
         }
         output.push('\n');
         for family in &evaluation.family_metrics {
-            output.push_str(&format!("### {}\n\n", family.family));
+            output.push_str(&format!("### {}\n\n", terminal_text(&family.family)));
             output.push_str(&format!(
                 "- Samples: {}\n- Precision: {:.2}\n- Recall: {:.2}\n- False positive rate: {:.2}\n- Exact label accuracy: {:.2}\n- Recommended thresholds: approval {} block {}\n- Rationale: {}\n\n",
                 family.sample_count,
@@ -253,7 +258,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
                 family.metrics.exact_label_accuracy,
                 family.threshold_recommendation.recommended_approval_threshold,
                 family.threshold_recommendation.recommended_block_threshold,
-                family.threshold_recommendation.rationale
+                terminal_text(&family.threshold_recommendation.rationale)
             ));
         }
     }
@@ -329,7 +334,11 @@ fn append_coverage_buckets(output: &mut String, evaluation: &CorpusEvaluation) {
         }
         output.push_str(&format!("{title}:\n"));
         for bucket in buckets {
-            output.push_str(&format!("  - {}={}\n", bucket.key, bucket.samples));
+            output.push_str(&format!(
+                "  - {}={}\n",
+                terminal_text(&bucket.key),
+                bucket.samples
+            ));
         }
     }
 }
@@ -355,7 +364,7 @@ fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
     for family in &populated_families {
         output.push_str(&format!(
             "  - {}: samples={} precision={:.2} recall={:.2} fpr={:.2} exact_label={:.2} thresholds={}→{}\n",
-            family.family,
+            terminal_text(&family.family),
             family.sample_count,
             family.metrics.precision,
             family.metrics.recall,
@@ -383,7 +392,9 @@ fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
     for family in weakest_families.iter().take(MAX_DISPLAY_WEAKEST_FAMILIES) {
         output.push_str(&format!(
             "  - {}: exact_label={:.2} fpr={:.2}\n",
-            family.family, family.metrics.exact_label_accuracy, family.metrics.false_positive_rate
+            terminal_text(&family.family),
+            family.metrics.exact_label_accuracy,
+            family.metrics.false_positive_rate
         ));
     }
 }
@@ -397,12 +408,17 @@ fn append_dedup_line(output: &mut String, evaluation: &CorpusEvaluation) {
     ));
 }
 
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use skill_veil_core::{
-        AttackFamilyMetrics, CalibrationSummary, CorpusCoverage, DeduplicationMetrics,
-        RegressionMetrics, ThresholdRecommendation,
+        AttackFamilyMetrics, BenchmarkHistoryEntry, CalibrationBucket, CalibrationSummary,
+        CorpusCoverage, CoverageBucket, DeduplicationMetrics, RegressionMetrics,
+        ThresholdRecommendation,
     };
 
     fn empty_metrics() -> RegressionMetrics {
@@ -518,5 +534,47 @@ mod tests {
         append_family_metrics(&mut output, &corpus);
 
         assert!(output.is_empty(), "no rows means no header; got:\n{output}",);
+    }
+
+    #[test]
+    fn benchmark_renderers_sanitise_control_sequences() {
+        let mut corpus = corpus_with_families(vec![family("fam\x1b[2J", 5, finite_metrics())]);
+        corpus.coverage.by_label = vec![CoverageBucket {
+            key: "malicious\x1b[2J".to_string(),
+            samples: 1,
+        }];
+        corpus.confidence_calibration.by_signal_pair = vec![CalibrationBucket {
+            key: "pair\x1b[2J".to_string(),
+            findings: 1,
+            true_positive: 1,
+            false_positive: 0,
+            observed_precision: 1.0,
+            recommended_confidence: 0.9,
+        }];
+        corpus.threshold_recommendation.rationale =
+            "global\x1b]8;;https://evil.invalid\x07click".to_string();
+        corpus.family_metrics[0].threshold_recommendation.rationale = "family\x1b[2J".to_string();
+        let history = BenchmarkHistory {
+            schema_version: "1".to_string(),
+            releases: vec![BenchmarkHistoryEntry {
+                release_id: "release\x1b[2J".to_string(),
+                generated_at: chrono::Utc::now(),
+                metrics: finite_metrics(),
+                coverage: corpus.coverage.clone(),
+                deduplication: corpus.deduplication,
+                confidence_calibration: corpus.confidence_calibration.clone(),
+                threshold_recommendation: corpus.threshold_recommendation.clone(),
+                family_metrics: corpus.family_metrics.clone(),
+            }],
+        };
+
+        for rendered in [
+            format_benchmark_text(&corpus),
+            render_benchmark_dashboard(&history, &corpus),
+            render_benchmark_tuning_report(&corpus),
+        ] {
+            assert!(!rendered.contains('\x1b'));
+            assert!(!rendered.contains('\x07'));
+        }
     }
 }
