@@ -14,8 +14,10 @@
 //! drift the two outputs apart, so the caller should evaluate once
 //! and reuse the report for both.
 
-use crate::init::{current_install, NovaInstallSnapshot};
-use crate::util::terminal_safe::sanitise_for_terminal;
+use std::fs::{File, Metadata};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use skill_veil_core::nova::{
     evaluate_rule, mapping::nova_match_to_findings, parse_rules, LlmEvaluator,
@@ -23,8 +25,9 @@ use skill_veil_core::nova::{
     SemanticEvaluator, SkippedCapability,
 };
 use skill_veil_core::{ArtifactKind, ArtifactScope, Finding};
-use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+
+use crate::init::{current_install, NovaInstallSnapshot};
+use crate::util::terminal_safe::sanitise_for_terminal;
 
 const MAX_NOVA_RULE_BYTES: u64 = 1024 * 1024;
 const MAX_NOVA_SCAN_BODY_BYTES: u64 = 4 * 1024 * 1024;
@@ -245,7 +248,7 @@ fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
 
 fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
-    if target.is_file() {
+    if regular_file_metadata(target).is_ok() {
         if let Ok(body) = read_to_string_with_cap(target, MAX_NOVA_SCAN_BODY_BYTES) {
             out.push((target.to_path_buf(), body));
         }
@@ -256,7 +259,8 @@ fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
         .filter_map(Result::ok)
     {
         let path = entry.path();
-        if !path.is_file() {
+        let file_type = entry.file_type();
+        if !file_type.is_file() || file_type.is_symlink() {
             continue;
         }
         let ext = path.extension().and_then(|s| s.to_str());
@@ -274,8 +278,10 @@ fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
 }
 
 fn read_to_string_with_cap(path: &Path, max_bytes: u64) -> io::Result<String> {
-    let file = std::fs::File::open(path)?;
+    let path_meta = regular_file_metadata(path)?;
+    let file = File::open(path)?;
     let meta = file.metadata()?;
+    validate_opened_regular_file(path, &path_meta, &meta)?;
     if meta.len() > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -299,6 +305,54 @@ fn read_to_string_with_cap(path: &Path, max_bytes: u64) -> io::Result<String> {
         ));
     }
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
+fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file() || meta.is_symlink() {
+        return Err(non_regular_file_error(path));
+    }
+    Ok(meta)
+}
+
+fn validate_opened_regular_file(
+    path: &Path,
+    path_meta: &Metadata,
+    opened_meta: &Metadata,
+) -> io::Result<()> {
+    let latest_meta = regular_file_metadata(path)?;
+    if !same_file_identity(path_meta, opened_meta) || !same_file_identity(&latest_meta, opened_meta)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read {}: path changed while opening",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn non_regular_file_error(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "refusing to read {}: path is not a regular file",
+            path.display()
+        ),
+    )
+}
+
+#[cfg(unix)]
+fn same_file_identity(a: &Metadata, b: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_a: &Metadata, _b: &Metadata) -> bool {
+    true
 }
 
 fn short(sha: &str) -> &str {
@@ -342,6 +396,50 @@ mod tests {
         let bodies = collect_scan_bodies(&file);
 
         assert!(bodies.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// NOVA scan body collection MUST reject a direct symlink target.
+    /// The main scanner rejects symlink entrypoints; the post-scan NOVA
+    /// pass must not re-read an outside file through its own reader.
+    #[cfg(unix)]
+    #[test]
+    fn collect_scan_bodies_rejects_symlink_target_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside.md");
+        let link = tmp.path().join("SKILL.md");
+        std::fs::write(&outside, "# Outside\nkeyword").unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let bodies = collect_scan_bodies(&link);
+
+        assert!(bodies.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// Directory scans MUST skip symlinked markdown entries even when
+    /// their targets are regular files. `walkdir` exposes the link's
+    /// own file type; using `Path::is_file()` would follow the link.
+    #[cfg(unix)]
+    #[test]
+    fn collect_scan_bodies_skips_symlink_entries_in_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scan_dir = tmp.path().join("pkg");
+        std::fs::create_dir(&scan_dir).unwrap();
+        let real = scan_dir.join("real.md");
+        let outside = tmp.path().join("outside.md");
+        let link = scan_dir.join("link.md");
+        std::fs::write(&real, "# Real\n").unwrap();
+        std::fs::write(&outside, "# Outside\nkeyword").unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let bodies = collect_scan_bodies(&scan_dir);
+
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies.iter().any(|(path, _)| path == &real));
+        assert!(!bodies.iter().any(|(path, _)| path == &link));
     }
 
     /// # Contract
