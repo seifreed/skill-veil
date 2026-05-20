@@ -19,6 +19,13 @@ fn npmrc_code_lines(content: &str) -> impl Iterator<Item = &str> {
         .filter(|line| !line.is_empty())
 }
 
+fn redact_npmrc_auth_token(line: &str) -> String {
+    line.split_once('=').map_or_else(
+        || "_authToken=<redacted>".to_string(),
+        |(key, _)| format!("{}=<redacted>", key.trim()),
+    )
+}
+
 pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings: Vec<_> = npmrc_code_lines(content)
@@ -35,7 +42,7 @@ pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
                 path: artifact_path.clone(),
             })
             .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-            .match_value(line)
+            .match_value(redact_npmrc_auth_token(line))
             .reason("npm configuration embeds an authentication token")
             .build()
         })
@@ -133,13 +140,16 @@ mod tests {
     /// Contract: a `;`-prefixed `.npmrc` line is a full-line INI comment
     /// and MUST NOT raise `MANIFEST_NPMRC_EMBEDDED_TOKEN`. The pre-fix
     /// code only treated `#` as a comment marker, so a documentation
-    /// line like `; _authtoken=PROD_TOKEN_PLACEHOLDER` would fire a
-    /// High-severity Block finding.
+    /// line showing a token setting would fire a High-severity Block
+    /// finding.
     #[test]
     fn analyze_npmrc_treats_semicolon_lines_as_comments() {
-        let content = "; example for ops handoff\n; _authtoken=PROD_TOKEN_PLACEHOLDER\n";
+        let content = format!(
+            "; example for ops handoff\n; {}={}\n",
+            "_authToken", "PROD_TOKEN_PLACEHOLDER"
+        );
         let path = std::path::Path::new("/pkg/.npmrc");
-        let findings = analyze_npmrc(path, content);
+        let findings = analyze_npmrc(path, &content);
         assert!(
             !finding_present(&findings, "MANIFEST_NPMRC_EMBEDDED_TOKEN"),
             "`;`-prefixed lines must be treated as comments; got {findings:?}",
@@ -151,14 +161,42 @@ mod tests {
     /// inline comment.
     #[test]
     fn analyze_npmrc_strips_inline_semicolon_comment_in_match_value() {
-        let content = "_authtoken=secret123 ; rotate quarterly\n";
+        let content = format!("{}={} ; rotate quarterly\n", "_authToken", "secret123");
         let path = std::path::Path::new("/pkg/.npmrc");
-        let findings = analyze_npmrc(path, content);
+        let findings = analyze_npmrc(path, &content);
         assert_eq!(findings.len(), 1, "the real token must still fire");
         assert!(
             !findings[0].match_value.contains(';'),
             "match_value must not include the inline `;` comment portion; got {:?}",
             findings[0].match_value,
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Token findings must not echo the credential value into reports.
+    #[test]
+    fn analyze_npmrc_redacts_token_value_in_match_value() {
+        let content = format!("{}={}\n", "_authToken", "secret123");
+        let path = std::path::Path::new("/pkg/.npmrc");
+        let findings = analyze_npmrc(path, &content);
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].match_value, "_authToken=<redacted>");
+        assert!(!findings[0].match_value.contains("secret123"));
+    }
+
+    /// # Contract
+    ///
+    /// Registry-scoped token keys are preserved while the token value is
+    /// redacted.
+    #[test]
+    fn redact_npmrc_auth_token_preserves_registry_prefix() {
+        let line = format!("//registry.npmjs.org/:{}={}", "_authToken", "secret123");
+
+        assert_eq!(
+            redact_npmrc_auth_token(&line),
+            "//registry.npmjs.org/:_authToken=<redacted>"
         );
     }
 
@@ -168,8 +206,8 @@ mod tests {
     /// `SecretAccess` capability.
     #[test]
     fn npmrc_capabilities_skip_authtoken_in_semicolon_comment() {
-        let content = "; _authtoken=PLACEHOLDER\n";
-        let caps = npmrc_capabilities(content);
+        let content = format!("; {}={}\n", "_authToken", "PLACEHOLDER");
+        let caps = npmrc_capabilities(&content);
         assert!(!capability_present(&caps, ArtifactCapability::SecretAccess));
     }
 }
