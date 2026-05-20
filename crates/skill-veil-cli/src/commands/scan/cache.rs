@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::{anyhow, Result};
+
 /// Directory name under `dirs::cache_dir()` that holds all skill-veil
 /// caches, isolating us from other tools that share the user cache root.
 const CACHE_NAMESPACE: &str = "skill-veil";
@@ -36,7 +38,15 @@ pub(super) fn cache_key_for(scan_path: &Path) -> String {
 /// `.llm-cache/<sha>.json` with `fetched_at: now+1d` and a benign
 /// verdict to suppress real lookups for the entire cache TTL window
 /// (30 days for VT, 90 days for LLM).
-pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> PathBuf {
+pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> Result<PathBuf> {
+    cache_base_dir_from_user_cache(override_dir, scan_path, dirs::cache_dir())
+}
+
+fn cache_base_dir_from_user_cache(
+    override_dir: Option<&Path>,
+    scan_path: &Path,
+    user_cache: Option<PathBuf>,
+) -> Result<PathBuf> {
     if let Some(dir) = override_dir {
         // Validate the override does not place the cache inside the
         // scanned package (see the invariant doc-comment above).
@@ -51,7 +61,7 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> P
                 );
                 // Fall through to default
             } else {
-                return dir.to_path_buf();
+                return Ok(dir.to_path_buf());
             }
         } else {
             // If we can't canonicalize, we cannot verify the override is
@@ -67,17 +77,12 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> P
             );
         }
     }
-    if let Some(user_cache) = dirs::cache_dir() {
-        return user_cache.join(CACHE_NAMESPACE);
+    if let Some(user_cache) = user_cache {
+        return Ok(user_cache.join(CACHE_NAMESPACE));
     }
-    // Last-resort fallback when HOME is missing (CI sandboxes, minimal
-    // containers). Tracing-logged so the operator knows the cache will
-    // not survive a reboot; never silently co-locate with scan_path.
-    tracing::warn!(
-        "dirs::cache_dir() returned None; using temp directory for skill-veil cache. \
-         Cache hits will not survive a reboot. Pass --cache-dir to override."
-    );
-    std::env::temp_dir().join(CACHE_NAMESPACE)
+    Err(anyhow!(
+        "could not determine user cache directory; pass --cache-dir outside the scan path"
+    ))
 }
 
 fn scan_containment_root(scan_canon: &Path) -> &Path {
@@ -88,16 +93,16 @@ fn scan_containment_root(scan_canon: &Path) -> &Path {
     }
 }
 
-pub(super) fn cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> PathBuf {
-    cache_base_dir(override_dir, scan_path)
+pub(super) fn cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> Result<PathBuf> {
+    Ok(cache_base_dir(override_dir, scan_path)?
         .join("vt-enrichment")
-        .join(cache_key_for(scan_path))
+        .join(cache_key_for(scan_path)))
 }
 
-pub(super) fn llm_cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> PathBuf {
-    cache_base_dir(override_dir, scan_path)
+pub(super) fn llm_cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> Result<PathBuf> {
+    Ok(cache_base_dir(override_dir, scan_path)?
         .join("llm")
-        .join(cache_key_for(scan_path))
+        .join(cache_key_for(scan_path)))
 }
 
 #[cfg(test)]
@@ -105,32 +110,35 @@ mod tests {
     use super::*;
 
     fn assert_uncanonicalizable_override_is_rejected(override_dir: &Path, scan_path: &Path) {
-        let result = cache_base_dir(Some(override_dir), scan_path);
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let user_cache = tmp.path().join("user-cache");
+        let result =
+            cache_base_dir_from_user_cache(Some(override_dir), scan_path, Some(user_cache.clone()))
+                .expect("fall back to user cache");
 
         assert!(
             !result.starts_with(override_dir),
             "uncanonicalizable cache override MUST be rejected; got {result:?}",
+        );
+        assert!(
+            result.starts_with(&user_cache),
+            "uncanonicalizable cache override MUST fall back to user cache; got {result:?}",
         );
     }
 
     /// # Contract
     ///
     /// `cache_root_for` and `llm_cache_root_for` MUST NEVER place the
-    /// per-scan cache inside the scanned package. Pre-fix the cache
-    /// roots were `<scan_path>/.vt-enrichment/` and `<scan_path>/.llm-cache/`,
-    /// so a malicious skill could ship a forged JSON entry with a
-    /// future `fetched_at` to suppress real VT or LLM lookups for the
-    /// entire cache TTL window. Post-fix the cache root is rooted at
-    /// `dirs::cache_dir()/skill-veil/<kind>/<key>` (or the
-    /// `--cache-dir` override), keyed by SHA-256 of the canonical scan
-    /// path.
+    /// per-scan cache inside the scanned package. Cache roots are
+    /// rooted at `dirs::cache_dir()/skill-veil/<kind>/<key>` or an
+    /// accepted `--cache-dir` override.
     #[test]
     fn cache_root_for_never_lives_inside_scan_path() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let scan_path = tmp.path().to_path_buf();
 
-        let vt_root = cache_root_for(&scan_path, None);
-        let llm_root = llm_cache_root_for(&scan_path, None);
+        let vt_root = cache_root_for(&scan_path, None).expect("vt cache root");
+        let llm_root = llm_cache_root_for(&scan_path, None).expect("llm cache root");
 
         // Canonicalise both sides — `dirs::cache_dir()` may live under
         // `/private/var/...` on macOS while the user's tempdir resolves
@@ -167,8 +175,8 @@ mod tests {
         // cannot verify containment.
         std::fs::create_dir_all(&override_dir).expect("seed override dir");
 
-        let vt_root = cache_root_for(&scan_path, Some(&override_dir));
-        let llm_root = llm_cache_root_for(&scan_path, Some(&override_dir));
+        let vt_root = cache_root_for(&scan_path, Some(&override_dir)).expect("vt cache root");
+        let llm_root = llm_cache_root_for(&scan_path, Some(&override_dir)).expect("llm cache root");
 
         assert!(
             vt_root.starts_with(&override_dir),
@@ -196,7 +204,10 @@ mod tests {
         let override_dir = package.join(".skill-veil-cache");
         std::fs::create_dir_all(&override_dir).expect("seed override dir");
 
-        let result = cache_base_dir(Some(&override_dir), &scan_file);
+        let user_cache = tmp.path().join("user-cache");
+        let result =
+            cache_base_dir_from_user_cache(Some(&override_dir), &scan_file, Some(user_cache))
+                .expect("fall back to user cache");
 
         assert!(
             !result.starts_with(&override_dir),
@@ -219,7 +230,7 @@ mod tests {
         let override_dir = tmp.path().join("cache");
         std::fs::create_dir_all(&override_dir).expect("seed override dir");
 
-        let result = cache_base_dir(Some(&override_dir), &scan_file);
+        let result = cache_base_dir(Some(&override_dir), &scan_file).expect("cache base dir");
 
         assert!(
             result.starts_with(&override_dir),
@@ -231,8 +242,7 @@ mod tests {
     ///
     /// When `--cache-dir` points to a path that cannot be canonicalized,
     /// the override MUST be rejected and the default cache location used
-    /// instead. Pre-fix the code trusted the override with a warning,
-    /// which allowed a malicious skill to bypass the containment check.
+    /// instead.
     #[test]
     fn cache_base_dir_rejects_missing_override_when_canonicalize_fails() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -250,10 +260,7 @@ mod tests {
     /// # Contract
     ///
     /// When `--cache-dir` points to a broken symlink, the override MUST
-    /// be rejected and the default cache location used instead. Pre-fix
-    /// the code trusted the override with a warning, which allowed a
-    /// malicious skill to bypass the containment check by placing a
-    /// symlink that breaks canonicalize.
+    /// be rejected and the default cache location used instead.
     #[cfg(unix)]
     #[test]
     fn cache_base_dir_rejects_broken_symlink_override_when_canonicalize_fails() {
@@ -265,6 +272,24 @@ mod tests {
             .expect("create broken symlink");
 
         assert_uncanonicalizable_override_is_rejected(&broken, &scan_path);
+    }
+
+    /// # Contract
+    ///
+    /// Without an accepted override or user cache directory, scan caches
+    /// must fail closed instead of falling back to shared temp storage.
+    #[test]
+    fn cache_base_dir_rejects_missing_user_cache_without_override() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        std::fs::create_dir_all(&scan_path).expect("seed scan dir");
+
+        let err = cache_base_dir_from_user_cache(None, &scan_path, None).unwrap_err();
+
+        assert!(
+            err.to_string().contains("could not determine user cache"),
+            "unexpected cache error: {err:#}",
+        );
     }
 
     /// # Contract

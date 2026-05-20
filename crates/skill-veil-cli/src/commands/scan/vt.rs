@@ -34,8 +34,16 @@ pub(super) fn try_enrich_with_vt(
             return Ok(None);
         }
     };
+    let cache_root = match cache_root_for(scan_path, cache_dir_override) {
+        Ok(root) => root,
+        Err(err) => {
+            if !quiet {
+                eprintln!("VT enrichment skipped: {err:#}");
+            }
+            return Ok(None);
+        }
+    };
     let client = VtClient::new(config);
-    let cache_root = cache_root_for(scan_path, cache_dir_override);
     let opts = EnrichOptions {
         cache_root,
         submit_unknown,

@@ -191,12 +191,21 @@ pub(crate) fn prepare_llm_inputs(
         }
         supporting_per_result.push(supporting);
     }
+    let cache_root = match llm_cache_root_for(scan_path, cache_dir_override) {
+        Ok(root) => root,
+        Err(err) => {
+            if !quiet {
+                eprintln!("LLM enrichment skipped: {err:#}");
+            }
+            return Ok(None);
+        }
+    };
 
     Ok(Some(LlmInputs {
         section: llm_section,
         primary_contents,
         supporting: supporting_per_result,
-        cache_root: llm_cache_root_for(scan_path, cache_dir_override),
+        cache_root,
     }))
 }
 
