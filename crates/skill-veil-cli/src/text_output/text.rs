@@ -7,6 +7,15 @@ use super::limits::{
 use super::TextOutputOptions;
 use crate::color::ColorMode;
 use crate::util::terminal_safe::sanitise_for_terminal;
+use std::path::Path;
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+fn terminal_path(path: &Path) -> String {
+    terminal_text(&path.display().to_string())
+}
 
 pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOptions) -> String {
     let mut output = String::new();
@@ -15,11 +24,11 @@ pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOpti
         output.push_str(&format!(
             "\n{} {} {}\n",
             options.color.heading("==="),
-            result.metadata.path.display(),
+            terminal_path(&result.metadata.path),
             options.color.heading("===")
         ));
         if let Some(package_id) = &result.metadata.package_id {
-            output.push_str(&format!("Package ID: {}\n", package_id));
+            output.push_str(&format!("Package ID: {}\n", terminal_text(package_id)));
         }
         output.push_str(&format!(
             "Verdict: {}\n",
@@ -97,7 +106,10 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
     {
         output.push_str(&format!(
             "    - {} / {} / {}: {}\n",
-            reason.scope, reason.category, reason.signal_class, reason.rationale
+            reason.scope,
+            reason.category,
+            reason.signal_class,
+            terminal_text(&reason.rationale)
         ));
     }
 
@@ -132,7 +144,14 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
             if result.verdict_report.hygiene_summary.top_rules.is_empty() {
                 "none".to_string()
             } else {
-                result.verdict_report.hygiene_summary.top_rules.join(",")
+                result
+                    .verdict_report
+                    .hygiene_summary
+                    .top_rules
+                    .iter()
+                    .map(|rule| terminal_text(rule))
+                    .collect::<Vec<_>>()
+                    .join(",")
             }
         ));
     }
@@ -160,7 +179,14 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
         {
             output.push_str(&format!(
                 "  Blast factors: {}\n",
-                result.verdict_report.blast_radius_summary.factors.join(",")
+                result
+                    .verdict_report
+                    .blast_radius_summary
+                    .factors
+                    .iter()
+                    .map(|factor| terminal_text(factor))
+                    .collect::<Vec<_>>()
+                    .join(",")
             ));
         }
         if !result
@@ -177,7 +203,7 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
                     .network_targets
                     .iter()
                     .take(MAX_DISPLAY_NETWORK_TARGETS)
-                    .cloned()
+                    .map(|target| terminal_text(target))
                     .collect::<Vec<_>>()
                     .join(",")
             ));
@@ -249,26 +275,23 @@ fn append_findings(
         output.push_str(&format!(
             "  {} {} ({})\n",
             color.severity_label(finding.severity),
-            color.rule(&finding.rule_id),
+            color.rule(terminal_text(&finding.rule_id)),
             finding.category
         ));
-        // `reason` and `remediation` are author-controlled strings on the
-        // rule definition (built-in YAML or signed external pack), so
-        // they live on our trusted-input boundary and don't need
-        // sanitising. `match_value` and `artifact_path` come from the
-        // scanned package — attacker-controlled — and MUST be filtered
-        // before reaching the TTY.
-        output.push_str(&format!("      {}\n", finding.reason));
-        output.push_str(&format!("      Remediation: {}\n", finding.remediation));
+        output.push_str(&format!("      {}\n", terminal_text(&finding.reason)));
+        output.push_str(&format!(
+            "      Remediation: {}\n",
+            terminal_text(&finding.remediation)
+        ));
         output.push_str(&format!(
             "      Match: \"{}\"\n",
-            sanitise_for_terminal(&finding.match_value),
+            terminal_text(&finding.match_value),
         ));
         output.push_str(&format!("      Evidence: {}\n", finding.evidence_kind));
         output.push_str(&format!("      Action: {}\n", finding.recommended_action));
         output.push_str(&format!("      Artifact: {}", finding.artifact_kind));
         if let Some(path) = &finding.artifact_path {
-            output.push_str(&format!(" ({})", sanitise_for_terminal(path)));
+            output.push_str(&format!(" ({})", terminal_text(path)));
         }
         output.push('\n');
         if let Some(line) = finding.line_number {
@@ -289,7 +312,7 @@ fn append_findings(
 fn append_policy_reasons(output: &mut String, result: &ScanResult) {
     output.push_str("  Policy precedence:\n");
     for stage in &result.policy_audit.precedence_order {
-        output.push_str(&format!("    - {}\n", stage));
+        output.push_str(&format!("    - {}\n", terminal_text(stage)));
     }
 
     if result.summary.action_triggers.is_empty() {
@@ -299,7 +322,9 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for trigger in &result.summary.action_triggers {
             output.push_str(&format!(
                 "    - {} via {}: {}\n",
-                trigger.action, trigger.factor, trigger.rationale
+                trigger.action,
+                terminal_text(&trigger.factor),
+                terminal_text(&trigger.rationale)
             ));
         }
     }
@@ -310,9 +335,11 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for policy in &context_policies {
             output.push_str(&format!(
                 "    - {} => {}\n",
-                serde_json::to_string(&policy.context)
-                    .unwrap_or_else(|_| "\"unknown\"".to_string())
-                    .trim_matches('"'),
+                terminal_text(
+                    serde_json::to_string(&policy.context)
+                        .unwrap_or_else(|_| "\"unknown\"".to_string())
+                        .trim_matches('"')
+                ),
                 policy.action
             ));
         }
@@ -323,7 +350,10 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for applied in &result.policy_audit.applied_overrides {
             output.push_str(&format!(
                 "    - {}: {} -> {} ({})\n",
-                applied.rule_id, applied.original_action, applied.effective_action, applied.reason
+                terminal_text(&applied.rule_id),
+                applied.original_action,
+                applied.effective_action,
+                terminal_text(&applied.reason)
             ));
         }
     }
@@ -349,7 +379,9 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for note in &result.verdict_report.calibration_notes {
             output.push_str(&format!(
                 "    - {} [{}]: {}\n",
-                note.rule_id, note.effect, note.rationale
+                terminal_text(&note.rule_id),
+                note.effect,
+                terminal_text(&note.rationale)
             ));
         }
     }
@@ -463,7 +495,11 @@ fn append_top_factors(output: &mut String, results: &[ScanResult]) {
     let mut ranked_factors: Vec<_> = factor_totals.into_iter().collect();
     ranked_factors.sort_by_key(|right| std::cmp::Reverse(right.1));
     for (factor, contribution) in ranked_factors.into_iter().take(MAX_DISPLAY_TOP_FACTORS) {
-        output.push_str(&format!("  - {} ({})\n", factor, contribution));
+        output.push_str(&format!(
+            "  - {} ({})\n",
+            terminal_text(&factor),
+            contribution
+        ));
     }
 }
 
@@ -486,7 +522,11 @@ fn append_top_triggers(output: &mut String, results: &[ScanResult]) {
         .into_iter()
         .take(MAX_DISPLAY_POLICY_TRIGGERS)
     {
-        output.push_str(&format!("  - {} ({} file(s))\n", factor, count));
+        output.push_str(&format!(
+            "  - {} ({} file(s))\n",
+            terminal_text(&factor),
+            count
+        ));
     }
 }
 
@@ -515,7 +555,11 @@ fn append_context_coverage(output: &mut String, results: &[ScanResult]) {
     let mut ranked_contexts: Vec<_> = context_counts.into_iter().collect();
     ranked_contexts.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     for (context, count) in ranked_contexts {
-        output.push_str(&format!("  - {} ({} file(s))\n", context, count));
+        output.push_str(&format!(
+            "  - {} ({} file(s))\n",
+            terminal_text(&context),
+            count
+        ));
     }
 }
 

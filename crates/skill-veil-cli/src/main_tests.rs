@@ -111,6 +111,107 @@ fn format_text_output_includes_policy_escalation_reasons() {
 }
 
 /// # Contract
+///
+/// Text scan output MUST strip terminal control bytes from fields that
+/// can originate in scanned packages or external rule/policy data.
+#[test]
+fn format_text_output_sanitises_terminal_controlled_scan_fields() {
+    let finding = skill_veil_core::Finding::builder("RULE\x1b[2J", ThreatCategory::RemoteExec)
+        .matched_on(MatchTarget::Document)
+        .match_value("curl\x1b]8;;https://evil.invalid\x07click")
+        .reason("reason\x1b[2J")
+        .remediation("fix\x1b[2J")
+        .artifact(
+            ArtifactKind::SkillDocument,
+            Some("artifact\x1b[2J.md".to_string()),
+        )
+        .action(RecommendedAction::Block)
+        .build();
+    let findings = vec![finding];
+    let summary = skill_veil_core::FindingSummary::from_findings(&findings);
+    let mut verdict_report = skill_veil_core::PackageVerdictReport {
+        verdict: skill_veil_core::Verdict::Malicious,
+        package_health: skill_veil_core::PackageHealth::Healthy,
+        hygiene_summary: skill_veil_core::HygieneSummary {
+            top_rules: vec!["TOP\x1b[2J".to_string()],
+            ..Default::default()
+        },
+        declared_permissions: Vec::new(),
+        effective_capabilities: Vec::new(),
+        blast_radius_summary: skill_veil_core::BlastRadiusSummary {
+            network_targets: vec!["https://evil.invalid/\x1b[2J".to_string()],
+            factors: vec!["factor\x1b[2J".to_string()],
+            ..Default::default()
+        },
+        verdict_reasons: Vec::new(),
+        root_cause_groups: Vec::new(),
+        top_risk_drivers: Vec::new(),
+        calibration_notes: Vec::new(),
+        calibration_risk_adjustment: 0,
+    };
+    verdict_report
+        .verdict_reasons
+        .push(skill_veil_core::VerdictReason {
+            scope: skill_veil_core::ArtifactScope::AgentEntrypoint,
+            category: ThreatCategory::RemoteExec,
+            signal_class: skill_veil_core::SignalClass::MaliciousBehavior,
+            rationale: "rationale\x1b[2J".to_string(),
+        });
+
+    let result = ScanResult {
+        metadata: ArtifactMetadata {
+            path: PathBuf::from("SKILL\x1b[2J.md"),
+            name: "skill".to_string(),
+            extension_kind: skill_veil_core::AgentExtensionKind::Skill,
+            classification: skill_veil_core::ArtifactClassification::ConfirmedSkill,
+            package_id: Some("pkg\x1b[2J".to_string()),
+            identity_source: skill_veil_core::ArtifactIdentitySource::ExplicitName,
+            structural_validity: skill_veil_core::StructuralValidity::Confirmed,
+            heuristic_score: 0,
+            primary_artifact_kind: ArtifactKind::SkillDocument,
+        },
+        findings: findings.clone(),
+        suppressed_findings: vec![],
+        primary_findings: findings,
+        supporting_findings: Vec::new(),
+        primary_summary: summary.clone(),
+        supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
+        summary,
+        verdict: skill_veil_core::Verdict::Malicious,
+        verdict_report,
+        deduplication_summary: Default::default(),
+        artifact_graph: ArtifactGraph::new(),
+        profile: None,
+        policy: None,
+        suppression_summary: Default::default(),
+        policy_audit: Default::default(),
+        should_fail: false,
+        extracted_iocs: Default::default(),
+    };
+
+    let output = format_text_output(
+        &[result],
+        TextOutputOptions {
+            quiet_summary: false,
+            explain_policy: false,
+            finding_limit: None,
+            color: ColorMode::from_choice(ColorChoiceArg::Never, false),
+        },
+    );
+
+    assert!(
+        !output.contains('\x1b'),
+        "ESC reached text output:\n{output}"
+    );
+    assert!(
+        !output.contains('\x07'),
+        "BEL reached text output:\n{output}"
+    );
+    assert!(output.contains("RULE?[2J"));
+    assert!(output.contains("SKILL?[2J.md"));
+}
+
+/// # Contract
 /// `--quiet-summary` MUST emit the per-scope counts but suppress
 /// per-finding match/evidence/action lines. Operators rely on this
 /// for CI logs to stay readable when running across hundreds of
