@@ -24,6 +24,7 @@ use anyhow::Result;
 use clap::Parser;
 use dataset::run_scan_dataset;
 use skill_veil_core::{PolicyProfile, RecommendedAction, ScanTargetMode, Severity};
+use std::io::{self, Write};
 use std::process::ExitCode;
 use util::terminal_safe::sanitise_for_terminal;
 #[cfg(test)]
@@ -97,9 +98,55 @@ fn init_tracing(quiet: bool, verbose: bool) {
         "info"
     };
     tracing_subscriber::registry()
-        .with(fmt::layer().with_target(false).without_time())
+        .with(
+            fmt::layer()
+                .with_target(false)
+                .without_time()
+                .with_ansi(false)
+                .with_writer(|| TerminalSafeStderr),
+        )
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)))
         .init();
+}
+
+struct TerminalSafeStderr;
+
+impl Write for TerminalSafeStderr {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let rendered = sanitise_log_chunk_for_terminal(buf);
+        let last_index = rendered.chars().count().saturating_sub(1);
+        debug_assert!(
+            rendered
+                .chars()
+                .enumerate()
+                .all(|(idx, c)| !c.is_control() || (c == '\n' && idx == last_index)),
+            "sanitised tracing output must not contain terminal controls"
+        );
+        io::stderr().write_all(rendered.as_bytes())?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        io::stderr().flush()
+    }
+}
+
+fn sanitise_log_chunk_for_terminal(buf: &[u8]) -> String {
+    let text = String::from_utf8_lossy(buf);
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\n' && chars.peek().is_none() {
+            out.push('\n');
+        } else if c == '\t' {
+            out.push(' ');
+        } else if c.is_control() {
+            out.push('?');
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Dispatch a parsed CLI invocation to the right command handler. The

@@ -44,6 +44,33 @@ fn terminal_error_sanitises_control_sequences() {
 }
 
 /// # Contract
+///
+/// Tracing output is written directly to stderr, so event fields must
+/// be filtered at the writer boundary before reaching the terminal.
+#[test]
+fn tracing_writer_sanitises_control_sequences() {
+    let rendered =
+        sanitise_log_chunk_for_terminal(b"WARN bad\x1b]8;;https://evil.invalid\x07path\nfake\n");
+
+    assert!(!rendered.contains('\x1b'));
+    assert!(!rendered.contains('\x07'));
+    assert_eq!(rendered.matches('\n').count(), 1);
+    assert!(rendered.ends_with('\n'));
+    assert!(rendered.contains("bad?]8;;https://evil.invalid?path?fake"));
+}
+
+/// # Contract
+///
+/// Printable Unicode remains intact and tabs collapse to a single
+/// printable space.
+#[test]
+fn tracing_writer_preserves_tabs_and_printable_unicode() {
+    let rendered = sanitise_log_chunk_for_terminal("info\tümlaut\n".as_bytes());
+
+    assert_eq!(rendered, "info ümlaut\n");
+}
+
+/// # Contract
 /// `format_text_output` MUST surface every entry from
 /// `summary.action_triggers` under the "Policy escalation reasons"
 /// header so analysts see why an action was upgraded. Hiding triggers
