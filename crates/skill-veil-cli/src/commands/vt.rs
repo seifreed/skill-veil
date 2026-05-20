@@ -3,12 +3,14 @@
 use crate::cli_args::{
     VtAction, VtCrossCheckArgs, VtCrossCheckFormat, VtDownloadArgs, VtReportArgs,
 };
+use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::vt::client::VtClient;
 use crate::vt::config::VtConfig;
 use crate::vt::cross_check::{self, CrossCheckOptions};
 use crate::vt::download::{self, DownloadOptions};
 use crate::vt::types::CachedReport;
 use anyhow::{Context, Result};
+use std::path::Path;
 
 pub(crate) fn run_vt(action: VtAction) -> Result<()> {
     match action {
@@ -62,7 +64,7 @@ fn run_report(args: VtReportArgs) -> Result<()> {
         None => {
             eprintln!(
                 "VT has no report for {} (404 — file unknown to VirusTotal)",
-                args.sha256
+                terminal_text(&args.sha256)
             );
             return Ok(());
         }
@@ -77,7 +79,7 @@ fn run_report(args: VtReportArgs) -> Result<()> {
         Some(path) => {
             std::fs::write(&path, &json).with_context(|| format!("writing {}", path.display()))?;
             // Status to stderr so stdout stays clean for piped consumers.
-            eprintln!("wrote VT report to {}", path.display());
+            eprintln!("wrote VT report to {}", terminal_path(&path));
         }
         None => println!("{json}"),
     }
@@ -128,7 +130,7 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
             //   `skill-veil vt cross-check --format json --output out.json`
             // and reading STDOUT (expecting JSON) instead received the
             // text summary, breaking any JSON-parser-based consumer.
-            eprintln!("wrote cross-check to {}", path.display());
+            eprintln!("wrote cross-check to {}", terminal_path(&path));
             eprintln!("{}", cross_check::render_text(&summary));
         }
         None => println!("{rendered}"),
@@ -139,4 +141,35 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
 fn build_client() -> Result<VtClient> {
     let config = VtConfig::load()?;
     Ok(VtClient::new(config))
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+fn terminal_path(path: &Path) -> String {
+    terminal_text(&path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{terminal_path, terminal_text};
+    use std::path::PathBuf;
+
+    #[test]
+    fn terminal_text_removes_vt_status_control_sequences() {
+        let cleaned = terminal_text("hash\x1b]8;;https://evil.invalid\x07click");
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+    }
+
+    #[test]
+    fn terminal_path_removes_vt_status_control_sequences() {
+        let path = PathBuf::from("out\x1b[2J.json");
+        let cleaned = terminal_path(&path);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("out?[2J.json"));
+    }
 }

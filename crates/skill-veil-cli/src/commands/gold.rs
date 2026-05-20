@@ -17,6 +17,7 @@ use skill_veil_core::{GoldCorpusManifest, GoldSample, SampleLabel};
 
 use crate::cli_args::{GoldAction, GoldBuildArgs, GoldLabelArg, GoldReviewArgs, GoldStatsArgs};
 use crate::util::bounded_read::read_operator_text_file;
+use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::vt::types::CachedReport;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -164,10 +165,10 @@ fn build(args: GoldBuildArgs) -> Result<()> {
     let disputed = manifest.samples.iter().filter(|s| s.disputed).count();
     println!(
         "wrote {} ({} samples, {} need human review) → {}",
-        args.out.display(),
+        terminal_path(&args.out),
         manifest.samples.len(),
         disputed,
-        args.out.display(),
+        terminal_path(&args.out),
     );
     Ok(())
 }
@@ -189,7 +190,7 @@ fn stats(args: GoldStatsArgs) -> Result<()> {
             .filter(|s| s.is_admitted() && s.final_label == l)
             .count()
     };
-    println!("gold corpus: {}", args.manifest.display());
+    println!("gold corpus: {}", terminal_path(&args.manifest));
     println!("  total samples:        {total}");
     println!("  admitted (scored):    {admitted}");
     println!("  disputed, unreviewed: {disputed_unreviewed}");
@@ -213,7 +214,7 @@ fn review(args: GoldReviewArgs) -> Result<()> {
     let yaml = serde_yaml::to_string(&m).context("failed to serialise gold manifest")?;
     fs::write(&args.manifest, yaml)
         .with_context(|| format!("failed to write {}", args.manifest.display()))?;
-    println!("adjudicated {} → {:?}", args.id, label);
+    println!("adjudicated {} → {:?}", terminal_text(&args.id), label);
     Ok(())
 }
 
@@ -223,6 +224,14 @@ pub(crate) fn run_gold(action: GoldAction) -> Result<()> {
         GoldAction::Stats(a) => stats(a),
         GoldAction::Review(a) => review(a),
     }
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+fn terminal_path(path: &Path) -> String {
+    terminal_text(&path.display().to_string())
 }
 
 #[cfg(test)]
@@ -267,6 +276,23 @@ mod tests {
                 "{bad:?} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn terminal_text_removes_gold_status_control_sequences() {
+        let cleaned = terminal_text("sample\x1b]8;;https://evil.invalid\x07click");
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+    }
+
+    #[test]
+    fn terminal_path_removes_gold_status_control_sequences() {
+        let path = Path::new("gold\x1b[2J.yaml");
+        let cleaned = terminal_path(path);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("gold?[2J.yaml"));
     }
 
     /// # Contract

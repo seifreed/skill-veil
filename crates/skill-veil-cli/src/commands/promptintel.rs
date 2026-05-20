@@ -89,7 +89,7 @@ fn run_feed_sync(args: PromptIntelFeedSyncArgs) -> Result<()> {
         pulled = summary.pulled,
         merged = summary.new_total,
         prev = summary.previous_total,
-        cache = cache_root.join("promptintel-feed").display(),
+        cache = terminal_path(&cache_root.join("promptintel-feed")),
     );
     Ok(())
 }
@@ -223,7 +223,7 @@ fn run_feed_list(args: PromptIntelFeedListArgs) -> Result<()> {
     if store.entries.is_empty() {
         println!(
             "PromptIntel feed cache is empty at {}. Run `skill-veil promptintel feed sync` first.",
-            cache_root.join("promptintel-feed").display()
+            terminal_path(&cache_root.join("promptintel-feed"))
         );
         return Ok(());
     }
@@ -305,7 +305,7 @@ fn run_cross_check(args: PromptIntelCrossCheckArgs) -> Result<bool> {
             // Status to stderr so stdout stays empty when `--output` is
             // set — mirrors `vt cross-check` so pipelines that consume
             // JSON via stdout don't get a stray text summary.
-            eprintln!("wrote PromptIntel cross-check to {}", path.display());
+            eprintln!("wrote PromptIntel cross-check to {}", terminal_path(&path));
             eprintln!("{}", cross_check::render_text(&summary));
         }
         None => println!("{rendered}"),
@@ -393,6 +393,10 @@ fn terminal_field(value: &str) -> String {
     sanitise_for_terminal(value)
 }
 
+fn terminal_path(path: &Path) -> String {
+    terminal_field(&path.display().to_string())
+}
+
 fn terminal_snippet(value: &str, max_chars: usize) -> String {
     let truncated = value.chars().take(max_chars).collect::<String>();
     sanitise_for_terminal(&truncated)
@@ -402,7 +406,7 @@ fn terminal_snippet(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::{
         detection_below_gate, read_report_draft_with_cap, resolve_cache_root_from, terminal_field,
-        terminal_snippet,
+        terminal_path, terminal_snippet,
     };
     use crate::promptintel::cross_check::CrossCheckSummary;
     use std::path::PathBuf;
@@ -482,6 +486,15 @@ mod tests {
 
         assert!(!cleaned.contains('\x1b'));
         assert!(!cleaned.contains('\x07'));
+    }
+
+    #[test]
+    fn terminal_path_removes_promptintel_status_control_sequences() {
+        let path = PathBuf::from("cache\x1b[2J");
+        let cleaned = terminal_path(&path);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("cache?[2J"));
     }
 
     #[test]
