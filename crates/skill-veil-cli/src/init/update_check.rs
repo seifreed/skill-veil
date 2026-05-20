@@ -145,6 +145,7 @@ fn latest_skill_veil_release_tag() -> Result<String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("could not parse tag from redirect"))?
         .to_string();
+    validate_release_tag(&tag)?;
     Ok(tag)
 }
 
@@ -167,15 +168,34 @@ fn latest_nova_sha() -> Result<String> {
         .get("sha")
         .and_then(|s| s.as_str())
         .ok_or_else(|| anyhow::anyhow!("no sha field in commit response"))?;
+    validate_nova_sha(sha)?;
     Ok(sha.to_string())
 }
 
-fn short_sha(sha: &str) -> &str {
-    if sha.len() >= 7 {
-        &sha[..7]
+fn validate_release_tag(tag: &str) -> Result<()> {
+    let bytes = tag.as_bytes();
+    if !bytes.is_empty()
+        && bytes[0] == b'v'
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        Ok(())
     } else {
-        sha
+        anyhow::bail!("unexpected skill-veil-rules release tag shape")
     }
+}
+
+fn validate_nova_sha(sha: &str) -> Result<()> {
+    if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        anyhow::bail!("unexpected NOVA commit SHA shape")
+    }
+}
+
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }
 
 #[cfg(test)]
@@ -241,5 +261,41 @@ mod tests {
         touch_marker(&marker).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         assert!(!recently_checked(&marker, Duration::from_millis(10)));
+    }
+
+    /// Contract: update-check release tags are display-safe release
+    /// identifiers, not arbitrary redirect suffixes.
+    #[test]
+    fn validate_release_tag_rejects_display_unsafe_shapes() {
+        assert!(validate_release_tag("v1.2.3").is_ok());
+        for bad in ["", "1.2.3", "v1.2.3/../../x", "v1.2.3\nx", "v1.2.3?x=1"] {
+            assert!(
+                validate_release_tag(bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    /// Contract: update-check NOVA values are commit SHA strings before
+    /// they are compared or rendered.
+    #[test]
+    fn validate_nova_sha_rejects_display_unsafe_shapes() {
+        assert!(validate_nova_sha("9249cf49dce2b30550bc23d00a36ec64d42932d0").is_ok());
+        for bad in [
+            "",
+            "deadbeef",
+            "9249cf49dce2b30550bc23d00a36ec64d42932d0/../../x",
+            "9249cf49dce2b30550bc23d00a36ec64d42932dg",
+            "9249cf49dce2b30550bc23d00a36ec64d42932d0\nx",
+        ] {
+            assert!(validate_nova_sha(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    /// Contract: SHA shortening is character-boundary safe.
+    #[test]
+    fn short_sha_is_utf8_boundary_safe() {
+        assert_eq!(short_sha("abcdefghi"), "abcdefg");
+        assert_eq!(short_sha("åååååååå"), "ååååååå");
     }
 }
