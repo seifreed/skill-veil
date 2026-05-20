@@ -26,6 +26,7 @@ const HTTP_TIMEOUT_SECS: u64 = 60;
 /// MiB leaves room for years of growth while blocking a hostile mirror
 /// from streaming an exhausting body.
 const MAX_TARBALL_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_COMMIT_JSON_BYTES: u64 = 1024 * 1024;
 
 /// Public alias for the GitHub commit-SHA pin we use as the trust
 /// anchor. Stored in `nova-current.json` and surfaced in the
@@ -63,8 +64,7 @@ pub(crate) fn resolve_latest_sha() -> Result<NovaSha> {
     if !(200..300).contains(&status) {
         bail!("GitHub API returned HTTP {status} resolving NOVA latest SHA");
     }
-    let body = resp
-        .into_string()
+    let body = read_string_bounded(resp.into_reader(), MAX_COMMIT_JSON_BYTES)
         .context("reading GitHub API response body")?;
     let v: serde_json::Value = serde_json::from_str(&body).context("parsing GitHub commit JSON")?;
     let sha = v
@@ -221,6 +221,17 @@ fn validate_sha256_hex(value: &str) -> Result<()> {
     }
 }
 
+fn read_string_bounded(reader: impl Read, cap: u64) -> Result<String> {
+    let mut body = String::new();
+    reader
+        .take(cap.saturating_add(1))
+        .read_to_string(&mut body)?;
+    if body.len() as u64 > cap {
+        bail!("GitHub response exceeded {cap} bytes")
+    }
+    Ok(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +312,17 @@ mod tests {
         let err = load_pointer(dir.path()).expect_err("bad tarball digest must be rejected");
 
         assert!(format!("{err:#}").contains("not a 64-char hex digest"));
+    }
+
+    /// Contract: GitHub commit JSON bodies are bounded before parsing.
+    #[test]
+    fn read_string_bounded_rejects_oversized_commit_json() {
+        let ok = read_string_bounded(std::io::Cursor::new(b"abc".to_vec()), 3).unwrap();
+        assert_eq!(ok, "abc");
+
+        let err = read_string_bounded(std::io::Cursor::new(b"abcd".to_vec()), 3)
+            .expect_err("over-cap commit JSON body must be rejected");
+
+        assert!(format!("{err:#}").contains("exceeded 3 bytes"));
     }
 }

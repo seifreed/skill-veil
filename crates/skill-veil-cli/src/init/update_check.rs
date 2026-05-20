@@ -13,6 +13,7 @@
 //!   (env-only, no flag — this is power-user territory).
 
 use anyhow::Result;
+use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -21,6 +22,7 @@ const ENV_DISABLE: &str = "SKILL_VEIL_NO_UPDATE_CHECK";
 const ENV_TTL: &str = "SKILL_VEIL_UPDATE_CHECK_TTL_SECS";
 const HTTP_TIMEOUT_SECS: u64 = 8;
 const MARKER_FILENAME: &str = "last-update-check";
+const MAX_UPDATE_JSON_BYTES: u64 = 1024 * 1024;
 
 /// What the operator chose for this scan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +155,7 @@ fn latest_nova_sha() -> Result<String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build();
-    let body = agent
+    let resp = agent
         .get("https://api.github.com/repos/Nova-Hunting/nova-rules/commits/HEAD")
         .set(
             "User-Agent",
@@ -161,8 +163,8 @@ fn latest_nova_sha() -> Result<String> {
         )
         .set("Accept", "application/vnd.github+json")
         .call()
-        .map_err(|e| anyhow::anyhow!("HTTP error: {e}"))?
-        .into_string()?;
+        .map_err(|e| anyhow::anyhow!("HTTP error: {e}"))?;
+    let body = read_string_bounded(resp.into_reader(), MAX_UPDATE_JSON_BYTES)?;
     let v: serde_json::Value = serde_json::from_str(&body)?;
     let sha = v
         .get("sha")
@@ -192,6 +194,17 @@ fn validate_nova_sha(sha: &str) -> Result<()> {
     } else {
         anyhow::bail!("unexpected NOVA commit SHA shape")
     }
+}
+
+fn read_string_bounded(reader: impl Read, cap: u64) -> Result<String> {
+    let mut body = String::new();
+    reader
+        .take(cap.saturating_add(1))
+        .read_to_string(&mut body)?;
+    if body.len() as u64 > cap {
+        anyhow::bail!("GitHub update response exceeded {cap} bytes")
+    }
+    Ok(body)
 }
 
 fn short_sha(sha: &str) -> String {
@@ -297,5 +310,18 @@ mod tests {
     fn short_sha_is_utf8_boundary_safe() {
         assert_eq!(short_sha("abcdefghi"), "abcdefg");
         assert_eq!(short_sha("åååååååå"), "ååååååå");
+    }
+
+    /// Contract: GitHub update-check JSON bodies are bounded before
+    /// parsing.
+    #[test]
+    fn read_string_bounded_rejects_oversized_body() {
+        let ok = read_string_bounded(std::io::Cursor::new(b"abc".to_vec()), 3).unwrap();
+        assert_eq!(ok, "abc");
+
+        let err = read_string_bounded(std::io::Cursor::new(b"abcd".to_vec()), 3)
+            .expect_err("over-cap update body must be rejected");
+
+        assert!(format!("{err:#}").contains("exceeded 3 bytes"));
     }
 }
