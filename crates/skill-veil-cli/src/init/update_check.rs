@@ -99,9 +99,12 @@ fn ttl_from_env() -> Duration {
 }
 
 fn recently_checked(marker: &Path, ttl: Duration) -> bool {
-    let Ok(meta) = std::fs::metadata(marker) else {
+    let Ok(meta) = std::fs::symlink_metadata(marker) else {
         return false;
     };
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return false;
+    }
     let Ok(modified) = meta.modified() else {
         return false;
     };
@@ -112,14 +115,11 @@ fn recently_checked(marker: &Path, ttl: Duration) -> bool {
 }
 
 fn touch_marker(marker: &Path) -> Result<()> {
-    if let Some(parent) = marker.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    std::fs::write(marker, now.to_string())?;
+    crate::util::cache_io::write_cache_file_atomic(marker, now.to_string().as_bytes())?;
     Ok(())
 }
 
@@ -274,6 +274,46 @@ mod tests {
         touch_marker(&marker).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         assert!(!recently_checked(&marker, Duration::from_millis(10)));
+    }
+
+    /// # Contract
+    ///
+    /// A symlinked update-check marker is not authoritative state. It
+    /// must not suppress the update check by borrowing the target's
+    /// timestamp.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_marker_is_not_recent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target-marker");
+        let marker = dir.path().join(MARKER_FILENAME);
+        std::fs::write(&target, b"recent").unwrap();
+        std::os::unix::fs::symlink(&target, &marker).unwrap();
+
+        assert!(!recently_checked(&marker, Duration::from_secs(60 * 60)));
+    }
+
+    /// # Contract
+    ///
+    /// Touching the update-check marker replaces a symlinked entry
+    /// without overwriting the target.
+    #[cfg(unix)]
+    #[test]
+    fn touch_marker_replaces_symlink_without_touching_target() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target-marker");
+        let marker = dir.path().join(MARKER_FILENAME);
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &marker).unwrap();
+
+        touch_marker(&marker).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&marker)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(recently_checked(&marker, Duration::from_secs(60 * 60)));
     }
 
     /// Contract: update-check release tags are display-safe release
