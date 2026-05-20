@@ -78,7 +78,11 @@ fn build_provider_configs(
             continue;
         };
         if let Some(raw_url) = params.base_url.as_deref() {
-            validate_provider_base_url(kind, raw_url)?;
+            let sends_api_key = params
+                .api_key
+                .as_deref()
+                .is_some_and(|key| !key.trim().is_empty());
+            validate_provider_base_url(kind, raw_url, sends_api_key)?;
         }
         let mut p = ProviderParams {
             model: params.model.clone().unwrap_or_default(),
@@ -417,11 +421,20 @@ model = "gpt-4o-mini"
     }
 
     fn config_with_provider_url(provider: &str, base_url: Option<&str>) -> FileFormat {
+        config_with_provider_url_and_api_key(provider, base_url, None)
+    }
+
+    fn config_with_provider_url_and_api_key(
+        provider: &str,
+        base_url: Option<&str>,
+        api_key: Option<&str>,
+    ) -> FileFormat {
         let mut providers = BTreeMap::new();
         providers.insert(
             provider.to_string(),
             FileProviderParams {
                 base_url: base_url.map(ToOwned::to_owned),
+                api_key: api_key.map(ToOwned::to_owned),
                 ..Default::default()
             },
         );
@@ -493,6 +506,55 @@ model = "gpt-4o-mini"
             Some("http://localhost:11434"),
             "base_url must be preserved verbatim after validation"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Local providers may use plain HTTP to a non-loopback host only when
+    /// no API key is sent. This keeps LAN-hosted Ollama/LMStudio workflows
+    /// working while preventing Bearer-token leakage over cleartext.
+    #[test]
+    fn resolve_llm_accepts_local_provider_http_without_api_key() {
+        let unified = config_with_provider_url("lmstudio", Some("http://llm.lan:1234/v1"));
+        resolve_llm(Some(&unified))
+            .expect("local provider http without api_key MUST remain allowed");
+    }
+
+    /// # Contract
+    ///
+    /// If a local provider has `api_key` configured, a non-loopback
+    /// `http://` base URL is rejected before the token can be sent in an
+    /// Authorization header.
+    #[test]
+    fn resolve_llm_rejects_local_provider_http_when_api_key_configured() {
+        let unified = config_with_provider_url_and_api_key(
+            "lmstudio",
+            Some("http://attacker.example:1234/v1"),
+            Some("local-proxy-token"),
+        );
+        let err = resolve_llm(Some(&unified))
+            .expect_err("local provider http with api_key MUST be rejected off loopback");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("api_key") && msg.contains("https"),
+            "error must explain credential transport requirement; got: {msg}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// The credential-over-HTTP exception is limited to loopback hosts, so
+    /// local reverse-proxy setups remain usable without exposing tokens on
+    /// the network.
+    #[test]
+    fn resolve_llm_accepts_local_provider_loopback_http_with_api_key() {
+        let unified = config_with_provider_url_and_api_key(
+            "lmstudio",
+            Some("http://127.0.0.1:1234/v1"),
+            Some("local-proxy-token"),
+        );
+        resolve_llm(Some(&unified))
+            .expect("loopback http with api_key MUST remain allowed for local providers");
     }
 
     /// # Contract (positive)

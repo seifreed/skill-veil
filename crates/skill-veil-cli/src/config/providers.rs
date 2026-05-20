@@ -117,15 +117,22 @@ pub(crate) fn resolve_llm_provider_override(raw: Option<&str>) -> Result<Option<
 /// Rules:
 /// - Scheme MUST be `http` or `https`. Other schemes (`file://`,
 ///   `ftp://`, `gopher://`, custom) are rejected outright.
-/// - Local providers (Ollama, LMStudio) may use `http://` to any host —
+/// - Local providers (Ollama, LMStudio) may use `http://` to any host when
+///   they do not send an API key —
 ///   their typical defaults are `http://localhost:11434` /
 ///   `http://localhost:1234/v1` and users frequently point them at
 ///   private LAN hosts.
+/// - If any provider sends an API key, plain `http://` is only allowed for
+///   loopback hosts.
 /// - Remote providers (OpenAI, Anthropic, Ollama-Cloud, Grok, Perplexity)
 ///   MUST use `https://` UNLESS the host is a loopback address — that
 ///   exception preserves the legitimate "I'm running a local mitm proxy
 ///   for debugging" workflow without re-opening the SSRF vector.
-pub(super) fn validate_provider_base_url(kind: LlmProviderKind, raw: &str) -> Result<()> {
+pub(super) fn validate_provider_base_url(
+    kind: LlmProviderKind,
+    raw: &str,
+    sends_api_key: bool,
+) -> Result<()> {
     let parsed = url::Url::parse(raw).map_err(|err| {
         anyhow!(
             "[llm.providers.{}].base_url is not a valid URL ({raw:?}): {err}",
@@ -142,6 +149,14 @@ pub(super) fn validate_provider_base_url(kind: LlmProviderKind, raw: &str) -> Re
     }
 
     let is_local_provider = matches!(kind, LlmProviderKind::Ollama | LlmProviderKind::LmStudio);
+    if sends_api_key && scheme == "http" && !host_is_loopback(&parsed) {
+        return Err(anyhow!(
+            "[llm.providers.{}].base_url must use https when an api_key is configured; \
+             plain http with credentials is only allowed to loopback hosts \
+             (localhost / 127.0.0.1 / ::1). Got: {raw}",
+            kind.as_str(),
+        ));
+    }
     if !is_local_provider && scheme == "http" && !host_is_loopback(&parsed) {
         return Err(anyhow!(
             "[llm.providers.{}].base_url must use https for remote providers; \
