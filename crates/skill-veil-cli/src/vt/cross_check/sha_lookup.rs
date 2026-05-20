@@ -11,6 +11,7 @@
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use std::fs::{File, Metadata};
 use std::path::Path;
 
 /// SHA-256 digests in this codebase are always **lowercase** hex; uppercase
@@ -118,8 +119,25 @@ fn compute_file_sha256(path: &Path) -> Result<String> {
 
 fn compute_file_sha256_with_cap(path: &Path, cap: u64) -> Result<String> {
     use std::io::Read;
-    let file = std::fs::File::open(path)
-        .with_context(|| format!("opening {} for hashing", path.display()))?;
+    let path_meta = regular_hash_file_metadata(path)?;
+    let file =
+        File::open(path).with_context(|| format!("opening {} for hashing", path.display()))?;
+    let opened_meta = file
+        .metadata()
+        .with_context(|| format!("stat opened hash file {}", path.display()))?;
+    if !opened_file_matches_path(&opened_meta, &path_meta) {
+        anyhow::bail!(
+            "refusing to hash {}: path changed while opening",
+            path.display()
+        );
+    }
+    if opened_meta.len() > cap {
+        anyhow::bail!(
+            "refusing to hash {}: file exceeds cap ({} bytes)",
+            path.display(),
+            cap
+        );
+    }
     let mut reader = std::io::BufReader::new(file).take(cap.saturating_add(1));
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
@@ -141,7 +159,32 @@ fn compute_file_sha256_with_cap(path: &Path, cap: u64) -> Result<String> {
         }
         hasher.update(&buf[..read]);
     }
+    debug_assert!(
+        total_read <= cap,
+        "hash reader must reject streams over the cap"
+    );
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn regular_hash_file_metadata(path: &Path) -> Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)
+        .with_context(|| format!("stat hash file {}", path.display()))?;
+    if meta.is_file() && !meta.file_type().is_symlink() {
+        Ok(meta)
+    } else {
+        anyhow::bail!("refusing to hash {}: not a regular file", path.display())
+    }
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -231,6 +274,24 @@ mod tests {
         let err = compute_file_sha256_with_cap(&path, 3).expect_err("over-cap file must fail");
 
         assert!(format!("{err:#}").contains("exceeds cap"));
+    }
+
+    /// # Contract
+    ///
+    /// File-hash fallback accepts only regular files. A symlinked
+    /// artifact is rejected instead of hashing its target.
+    #[cfg(unix)]
+    #[test]
+    fn compute_file_sha256_rejects_symlinked_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target.bin");
+        let link = dir.path().join("artifact.bin");
+        std::fs::write(&target, b"hello").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = compute_file_sha256(&link).expect_err("symlink must be rejected");
+
+        assert!(format!("{err:#}").contains("not a regular file"));
     }
 
     /// # Contract
