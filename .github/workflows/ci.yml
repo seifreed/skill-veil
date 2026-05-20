@@ -18,16 +18,27 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux-x64
+            cargo_features: "--all-features"
           - os: ubuntu-24.04-arm
             label: linux-arm64
+            cargo_features: "--all-features"
           - os: windows-latest
             label: windows-x64
+            cargo_features: "--all-features"
           - os: windows-11-arm
             label: windows-arm64
+            cargo_features: "--all-features"
+          # macos-x64 (Intel) deliberately skips `--all-features`: the
+          # `nova-semantics` feature pulls `fastembed` → `ort-sys` which
+          # ships no prebuilt ONNX Runtime for `x86_64-apple-darwin`
+          # (compile-from-source would add ~30 min to every PR). Coverage
+          # for `nova-semantics` is preserved on the other 5 runners.
           - os: macos-15-intel
             label: macos-x64
+            cargo_features: ""
           - os: macos-14
             label: macos-arm64
+            cargo_features: "--all-features"
 
     runs-on: ${{ matrix.os }}
 
@@ -44,7 +55,7 @@ jobs:
       - name: Run test suite
         env:
           RUSTFLAGS: -Dwarnings
-        run: cargo test --all-targets --all-features
+        run: cargo test --all-targets ${{ matrix.cargo_features }}
 
   lint-and-scan:
     runs-on: ubuntu-latest
