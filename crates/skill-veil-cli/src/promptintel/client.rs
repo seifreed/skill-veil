@@ -267,10 +267,24 @@ impl ResponseMeta {
 /// [`MAX_JSON_RESPONSE_BYTES`] so a hostile or misconfigured endpoint
 /// cannot cause unbounded memory allocation.
 fn bounded_read_response(resp: ureq::Response) -> Result<String> {
+    read_response_with_cap(resp, MAX_JSON_RESPONSE_BYTES)
+}
+
+fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String> {
     let mut buf = Vec::with_capacity(8 * 1024);
     resp.into_reader()
-        .take(MAX_JSON_RESPONSE_BYTES)
+        .take(cap.saturating_add(1))
         .read_to_end(&mut buf)?;
+    if buf.len() as u64 > cap {
+        return Err(PromptIntelError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("response body exceeds {cap} byte limit"),
+        )));
+    }
+    debug_assert!(
+        buf.len() as u64 <= cap,
+        "bounded response reader must reject bodies over the cap"
+    );
     String::from_utf8(buf).map_err(|e| {
         PromptIntelError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -321,6 +335,16 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    fn response_with_body(body: &str) -> ureq::Response {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .parse()
+        .expect("synthetic response must parse")
+    }
+
     /// Contract: the truncator MUST NOT split a multi-byte UTF-8 char.
     /// Pre-design check: we use `is_char_boundary` to walk back to a
     /// valid boundary; an off-by-one would corrupt the diagnostic
@@ -349,6 +373,29 @@ mod tests {
     fn truncate_error_body_passes_short_bodies_through() {
         let short = "short error".to_string();
         assert_eq!(truncate_error_body(short.clone()), short);
+    }
+
+    /// Contract: a PromptIntel JSON response exactly at the byte cap is
+    /// accepted.
+    #[test]
+    fn bounded_read_response_accepts_body_at_cap() {
+        let body = read_response_with_cap(response_with_body("abcd"), 4).unwrap();
+
+        assert_eq!(body, "abcd");
+    }
+
+    /// Contract: a PromptIntel JSON response beyond the cap fails
+    /// instead of returning a truncated prefix that could be parsed as
+    /// complete JSON by a downstream caller.
+    #[test]
+    fn bounded_read_response_rejects_body_over_cap() {
+        let err = read_response_with_cap(response_with_body("abcde"), 4)
+            .expect_err("oversized response must fail");
+
+        assert!(matches!(
+            err,
+            PromptIntelError::Io(ref io_err) if io_err.kind() == io::ErrorKind::InvalidData
+        ));
     }
 
     fn drain_request_headers(stream: &mut std::net::TcpStream) -> String {
