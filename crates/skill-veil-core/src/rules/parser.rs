@@ -1,6 +1,7 @@
 use super::ioc::ioc_feed_to_rules;
 use super::schema::{IocFeedFile, Rule, RulePackFile};
 use super::{RuleError, RULE_PACK_SCHEMA_VERSION};
+use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -168,8 +169,16 @@ fn current_install_overlay() -> Option<PathBuf> {
 }
 
 fn read_current_pointer_file(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
+    let path_meta = regular_pointer_metadata(path)?;
+    let file = File::open(path).ok()?;
     let meta = file.metadata().ok()?;
+    if !opened_file_matches_path(&meta, &path_meta) {
+        tracing::warn!(
+            "ignoring installed rules pointer {} (path changed while opening)",
+            path.display(),
+        );
+        return None;
+    }
     if meta.len() > MAX_CURRENT_POINTER_BYTES {
         tracing::warn!(
             "ignoring installed rules pointer {} ({} bytes > cap {})",
@@ -194,14 +203,33 @@ fn read_current_pointer_file(path: &Path) -> Option<String> {
     Some(body)
 }
 
+fn regular_pointer_metadata(path: &Path) -> Option<Metadata> {
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        tracing::warn!(
+            "ignoring installed rules pointer {} (not a regular file)",
+            path.display(),
+        );
+        return None;
+    }
+    Some(meta)
+}
+
 fn current_install_overlay_from_pointer(install_root: &Path, body: &str) -> Option<PathBuf> {
     let pointer: serde_json::Value = serde_json::from_str(body).ok()?;
     let version = pointer.get("version")?.as_str()?;
     if !is_safe_release_version(version) {
         return None;
     }
-    let candidate = install_root.join(version).join("official");
-    if candidate.is_dir() {
+    if !is_real_dir(install_root) {
+        return None;
+    }
+    let version_dir = install_root.join(version);
+    if !is_real_dir(&version_dir) {
+        return None;
+    }
+    let candidate = version_dir.join("official");
+    if is_real_dir(&candidate) {
         Some(candidate)
     } else {
         None
@@ -215,6 +243,23 @@ fn is_safe_release_version(version: &str) -> bool {
         && bytes
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -323,5 +368,54 @@ mod tests {
         let body = read_current_pointer_file(&pointer_path);
 
         assert!(body.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// Runtime rule discovery ignores symlinked installed pointers,
+    /// even when the symlink target contains valid JSON.
+    #[cfg(unix)]
+    #[test]
+    fn current_pointer_read_rejects_symlinked_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("target.json");
+        let pointer_path = tmp.path().join(CURRENT_POINTER_FILENAME);
+        std::fs::write(&target, r#"{"version":"v0.1.0"}"#).unwrap();
+        std::os::unix::fs::symlink(&target, &pointer_path).unwrap();
+
+        let body = read_current_pointer_file(&pointer_path);
+
+        assert!(body.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// Runtime rule discovery loads only real install directories. A
+    /// symlinked version directory or `official` directory is ignored.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_overlay_rejects_symlinked_install_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let outside = tmp.path().join("outside");
+        let version_dir = install_root.join("v0.1.0");
+        let official = version_dir.join("official");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::os::unix::fs::symlink(&outside, &official).unwrap();
+
+        assert!(
+            current_install_overlay_from_pointer(&install_root, r#"{"version":"v0.1.0"}"#)
+                .is_none()
+        );
+
+        std::fs::remove_file(&official).unwrap();
+        std::fs::remove_dir(&version_dir).unwrap();
+        std::os::unix::fs::symlink(&outside, &version_dir).unwrap();
+
+        assert!(
+            current_install_overlay_from_pointer(&install_root, r#"{"version":"v0.1.0"}"#)
+                .is_none()
+        );
     }
 }
