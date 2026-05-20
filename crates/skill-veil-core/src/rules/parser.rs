@@ -162,17 +162,30 @@ fn current_install_overlay() -> Option<PathBuf> {
     let install_root = dirs::cache_dir()?.join("skill-veil").join("rules");
     let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
     let body = std::fs::read_to_string(&pointer_path).ok()?;
-    let pointer: serde_json::Value = serde_json::from_str(&body).ok()?;
-    let version = pointer.get("version")?.as_str()?.to_string();
-    if version.is_empty() {
+    current_install_overlay_from_pointer(&install_root, &body)
+}
+
+fn current_install_overlay_from_pointer(install_root: &Path, body: &str) -> Option<PathBuf> {
+    let pointer: serde_json::Value = serde_json::from_str(body).ok()?;
+    let version = pointer.get("version")?.as_str()?;
+    if !is_safe_release_version(version) {
         return None;
     }
-    let candidate = install_root.join(&version).join("official");
+    let candidate = install_root.join(version).join("official");
     if candidate.is_dir() {
         Some(candidate)
     } else {
         None
     }
+}
+
+fn is_safe_release_version(version: &str) -> bool {
+    let bytes = version.as_bytes();
+    !bytes.is_empty()
+        && bytes[0] == b'v'
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
 #[cfg(test)]
@@ -220,5 +233,33 @@ mod tests {
         assert_eq!(dirs[0], PathBuf::from("/from/env"));
         assert_eq!(dirs[1], PathBuf::from("/cache/v0.1.0/official"));
         assert_eq!(dirs[2], PathBuf::from("/cwd/rules/official"));
+    }
+
+    /// Contract: a corrupted `current.json` cannot point runtime rule
+    /// discovery outside the cache install root.
+    #[test]
+    fn current_install_overlay_rejects_path_like_version() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let official = install_root.join("v0.1.0").join("official");
+        std::fs::create_dir_all(&official).unwrap();
+
+        let good = r#"{"version":"v0.1.0"}"#;
+        assert_eq!(
+            current_install_overlay_from_pointer(&install_root, good),
+            Some(official)
+        );
+
+        for bad in [
+            r#"{"version":"/tmp/evil"}"#,
+            r#"{"version":"v0.1.0/../../evil"}"#,
+            r#"{"version":"v0.1.0\\..\\evil"}"#,
+            r#"{"version":"0.1.0"}"#,
+        ] {
+            assert!(
+                current_install_overlay_from_pointer(&install_root, bad).is_none(),
+                "{bad} must not produce an overlay path"
+            );
+        }
     }
 }

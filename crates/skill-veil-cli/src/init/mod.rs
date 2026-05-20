@@ -209,6 +209,8 @@ fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>
         .with_context(|| format!("reading {}", pointer_path.display()))?;
     let pointer: CurrentPointer = serde_json::from_str(&body)
         .with_context(|| format!("parsing {}", pointer_path.display()))?;
+    validate_version_string(&pointer.version)
+        .with_context(|| format!("validating {}", pointer_path.display()))?;
     let install_dir = install_root.join(&pointer.version);
     Ok(Some(CurrentInstall {
         version: pointer.version,
@@ -401,7 +403,7 @@ mod tests {
         std::fs::create_dir_all(&install_root).unwrap();
         let pointer = NovaInstallPointer {
             commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
-            tarball_sha256: "abc123".into(),
+            tarball_sha256: "0".repeat(64),
             file_count: 16,
         };
         write_pointer(&install_root, &pointer).unwrap();
@@ -410,5 +412,25 @@ mod tests {
         let nova = install.nova.expect("NOVA pointer must round-trip");
         assert_eq!(nova.commit_sha, pointer.commit_sha);
         assert_eq!(nova.file_count, 16);
+    }
+
+    /// Contract: the skill-veil pointer version must be a release tag,
+    /// not a filesystem path.
+    #[test]
+    fn current_install_rejects_path_like_skill_veil_pointer_version() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        std::fs::create_dir_all(&install_root).unwrap();
+        let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
+        std::fs::write(
+            &pointer_path,
+            br#"{"version":"v0.1.0/../../evil","trusted_key_id":"test"}"#,
+        )
+        .unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("path-like pointer version must be rejected");
+
+        assert!(format!("{err:#}").contains("must contain only"));
     }
 }

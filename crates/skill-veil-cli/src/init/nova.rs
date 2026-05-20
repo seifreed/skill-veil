@@ -196,14 +196,29 @@ pub(crate) fn load_pointer(install_root: &Path) -> Result<Option<NovaInstallPoin
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let pointer: NovaInstallPointer =
         serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?;
+    validate_sha_shape(&pointer.commit_sha)
+        .with_context(|| format!("validating commit_sha in {}", path.display()))?;
+    validate_sha256_hex(&pointer.tarball_sha256)
+        .with_context(|| format!("validating tarball_sha256 in {}", path.display()))?;
     Ok(Some(pointer))
 }
 
 pub(crate) fn write_pointer(install_root: &Path, pointer: &NovaInstallPointer) -> Result<()> {
+    validate_sha_shape(&pointer.commit_sha).context("validating NOVA pointer commit_sha")?;
+    validate_sha256_hex(&pointer.tarball_sha256)
+        .context("validating NOVA pointer tarball_sha256")?;
     let body = serde_json::to_vec_pretty(pointer).context("serialising NOVA pointer")?;
     let path = install_root.join(NOVA_POINTER_FILENAME);
     std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+fn validate_sha256_hex(value: &str) -> Result<()> {
+    if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        bail!("NOVA tarball SHA-256 `{value}` is not a 64-char hex digest")
+    }
 }
 
 #[cfg(test)]
@@ -236,7 +251,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let p = NovaInstallPointer {
             commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
-            tarball_sha256: "abc123".into(),
+            tarball_sha256: "0".repeat(64),
             file_count: 42,
         };
         write_pointer(dir.path(), &p).unwrap();
@@ -253,5 +268,38 @@ mod tests {
     fn missing_pointer_is_ok_none() {
         let dir = tempfile::TempDir::new().unwrap();
         assert!(load_pointer(dir.path()).unwrap().is_none());
+    }
+
+    /// Contract: a persisted pointer cannot turn `commit_sha` into a
+    /// filesystem path segment.
+    #[test]
+    fn load_pointer_rejects_path_like_commit_sha() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(NOVA_POINTER_FILENAME);
+        let body = format!(
+            r#"{{"commit_sha":"9249cf49dce2b30550bc23d00a36ec64d42932d0/../../evil","tarball_sha256":"{}","file_count":1}}"#,
+            "0".repeat(64)
+        );
+        std::fs::write(&path, body).unwrap();
+
+        let err = load_pointer(dir.path()).expect_err("path-like commit_sha must be rejected");
+
+        assert!(format!("{err:#}").contains("not a 40-char hex SHA"));
+    }
+
+    /// Contract: persisted tarball digests keep their SHA-256 shape.
+    #[test]
+    fn load_pointer_rejects_malformed_tarball_sha256() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(NOVA_POINTER_FILENAME);
+        std::fs::write(
+            &path,
+            br#"{"commit_sha":"9249cf49dce2b30550bc23d00a36ec64d42932d0","tarball_sha256":"abc123","file_count":1}"#,
+        )
+        .unwrap();
+
+        let err = load_pointer(dir.path()).expect_err("bad tarball digest must be rejected");
+
+        assert!(format!("{err:#}").contains("not a 64-char hex digest"));
     }
 }
