@@ -9,7 +9,6 @@
 
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
-use crate::util::cache_io::finalize_atomic_write;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -42,8 +41,9 @@ const ERROR_BODY_MAX_BYTES: usize = 512;
 /// 650 MiB (per the public quota table); 768 MiB leaves headroom for that
 /// edge while preventing a hostile/misconfigured CDN or MITM from streaming
 /// an unbounded body into the operator's disk. The cap is enforced during
-/// streaming (`stream_response_to`) so the `.tmp` file never exceeds the
-/// limit and an attacker cannot fill the disk before the producer notices.
+/// streaming (`stream_response_to`) so the temporary file never exceeds
+/// the limit and an attacker cannot fill the disk before the producer
+/// notices.
 const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
 
 /// Cap on VT JSON API response bodies to prevent unbounded memory allocation
@@ -347,10 +347,9 @@ impl VtClient {
     }
 
     /// Download the raw file bytes to `dest`. `dest`'s parent must already
-    /// exist. Writes to a `.tmp` sibling and renames on success to avoid
-    /// leaving half-written files when the connection drops. The atomic-
-    /// rename helper (`util::cache_io::finalize_atomic_write`) preserves
-    /// `tmp` cleanup semantics on rename failure.
+    /// exist. Writes through a same-directory tempfile and renames on
+    /// success to avoid leaving half-written files when the connection
+    /// drops.
     ///
     /// VT's `/files/{sha}/download` endpoint replies with HTTP 302 to a
     /// time-bounded, query-signed Google Storage URL. The storage host
@@ -433,10 +432,10 @@ impl VtClient {
     ///    download endpoint is keyed by SHA-256, so a mismatch means the
     ///    storage layer, the redirect target, or the network path delivered
     ///    a different sample than the one requested. For a malware analysis
-    ///    pipeline this is an unrecoverable trust violation: the `.tmp` file
-    ///    is removed and `VtError::IntegrityMismatch` propagates so the
-    ///    caller never observes a `dest` whose contents disagree with the
-    ///    name that indexed it.
+    ///    pipeline this is an unrecoverable trust violation: the tempfile is
+    ///    removed and `VtError::IntegrityMismatch` propagates so the caller
+    ///    never observes a `dest` whose contents disagree with the name that
+    ///    indexed it.
     ///
     /// 2. **Size cap**: writes abort once the cumulative body exceeds
     ///    `max_bytes`. VT's allowlisted storage hosts are trusted, but a
@@ -451,9 +450,14 @@ impl VtClient {
         expected_sha256: &str,
         max_bytes: u64,
     ) -> Result<(), VtError> {
-        let tmp = dest.with_extension("tmp");
-        let result = (|| -> Result<String, VtError> {
-            let mut out = std::fs::File::create(&tmp)?;
+        let parent = dest.parent().ok_or_else(|| {
+            VtError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} has no parent directory", dest.display()),
+            ))
+        })?;
+        let result = (|| -> Result<(String, tempfile::NamedTempFile), VtError> {
+            let mut out = tempfile::NamedTempFile::new_in(parent)?;
             let mut reader = response.into_reader();
             let mut hasher = Sha256::new();
             let mut buf = [0u8; 64 * 1024];
@@ -473,25 +477,20 @@ impl VtClient {
                 out.write_all(&buf[..read])?;
             }
             out.flush()?;
-            Ok(format!("{:x}", hasher.finalize()))
+            out.as_file_mut().sync_all()?;
+            Ok((format!("{:x}", hasher.finalize()), out))
         })();
 
         match result {
-            Ok(actual) if actual.eq_ignore_ascii_case(expected_sha256) => {
-                finalize_atomic_write(&tmp, dest)?;
+            Ok((actual, tmp)) if actual.eq_ignore_ascii_case(expected_sha256) => {
+                tmp.persist(dest).map_err(|err| VtError::Io(err.error))?;
                 Ok(())
             }
-            Ok(actual) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(VtError::IntegrityMismatch {
-                    expected: expected_sha256.to_string(),
-                    actual,
-                })
-            }
-            Err(err) => {
-                let _ = std::fs::remove_file(&tmp);
-                Err(err)
-            }
+            Ok((actual, _tmp)) => Err(VtError::IntegrityMismatch {
+                expected: expected_sha256.to_string(),
+                actual,
+            }),
+            Err(err) => Err(err),
         }
     }
 
@@ -901,8 +900,8 @@ mod download_integrity_tests {
     /// malware analysis pipeline the SHA-256 is the trust anchor — accepting
     /// mismatched bytes silently poisons every downstream consumer
     /// (taint analysis, manual review, dataset corpora). On rejection,
-    /// the `.tmp` sibling MUST also be removed so the operator's disk
-    /// never holds a partial, unverified blob.
+    /// the temporary file must be removed so the operator's disk never
+    /// holds a partial, unverified blob.
     #[test]
     fn stream_response_to_rejects_sha_mismatch() {
         let body = b"actual file bytes that hash differently".to_vec();
@@ -957,6 +956,38 @@ mod download_integrity_tests {
         assert!(dest.exists(), "dest must be present after atomic finalize");
         let written = std::fs::read(&dest).expect("read dest");
         assert_eq!(written, body, "dest contents must match streamed body");
+        let _ = server.join();
+    }
+
+    /// # Contract
+    ///
+    /// A pre-existing symlink at `dest` must be replaced as a directory
+    /// entry after integrity verification, not followed and overwritten.
+    #[cfg(unix)]
+    #[test]
+    fn stream_response_to_replaces_symlink_without_touching_target() {
+        let body = b"verified bytes".to_vec();
+        let expected = sha256_hex(&body);
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let outside = tmpdir.path().join("outside.bin");
+        let dest = tmpdir.path().join("sample");
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &dest).unwrap();
+
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        let server = serve_once(port_tx, body.clone());
+        let port = port_rx.recv().unwrap();
+        let response = fetch_response(port);
+
+        VtClient::stream_response_to(&dest, response, &expected, MAX_DOWNLOAD_BYTES)
+            .expect("matching SHA must succeed");
+
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        assert!(!std::fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&dest).unwrap(), body);
         let _ = server.join();
     }
 

@@ -9,6 +9,7 @@
 use super::client::{VtClient, VtError};
 use super::types::CachedReport;
 use anyhow::{Context, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
@@ -75,9 +76,12 @@ pub(crate) fn run_download(client: &VtClient, opts: DownloadOptions) -> Result<D
     // had been the last `create_dir_all` site for malware-sample storage.
     crate::util::secure_fs::create_dir_secure(&opts.dest)
         .with_context(|| format!("creating {}", opts.dest.display()))?;
+    ensure_real_dir(&opts.dest)?;
     let reports_dir = opts.dest.join(REPORTS_DIRNAME);
+    ensure_existing_child_stays_in_base(&opts.dest, &reports_dir)?;
     crate::util::secure_fs::create_dir_secure(&reports_dir)
         .with_context(|| format!("creating {}", reports_dir.display()))?;
+    ensure_child_dir(&opts.dest, &reports_dir)?;
 
     let mut summary = DownloadSummary {
         total_discovered: 0,
@@ -148,7 +152,7 @@ fn process_one(
     // Fetch the report first — it is smaller, and we always want it even if
     // the file is already on disk or download is suppressed.
     let report_path = reports_dir.join(format!("{sha}.json"));
-    if !report_path.exists() {
+    if !cache_file_exists(&report_path)? {
         let envelope = client
             .get_file_report(&sha)
             .with_context(|| format!("fetching report for {sha}"))?;
@@ -167,10 +171,10 @@ fn process_one(
 
     let file_path = opts.dest.join(&sha);
     // Concurrent invocations may both pass this check and call
-    // `download_file`. The rename inside `download_file` is atomic
-    // (`util::cache_io::finalize_atomic_write`), so the on-disk cache
-    // stays consistent — only API quota is wasted in that edge case.
-    if file_path.exists() {
+    // `download_file`. The final persist inside `download_file` is
+    // atomic, so the on-disk cache stays consistent — only API quota is
+    // wasted in that edge case.
+    if cache_file_exists(&file_path)? {
         summary.files_skipped += 1;
         return Ok(());
     }
@@ -195,20 +199,86 @@ fn canonical_download_sha(raw: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("VT file id is not a 64-character SHA-256"))
 }
 
-/// Persist a VT report atomically: serialise to a `.tmp` sibling and then
-/// `rename(2)` it into place. Pre-fix this routine called `std::fs::write`
-/// directly, which truncates the destination before writing the bytes — a
-/// SIGINT, OOM kill, or host reboot between truncate and write left an empty
-/// `<sha>.json` at `report_path`. The next run saw `report_path.exists() ==
-/// true` (the caller's short-circuit) and skipped the fetch, poisoning the
-/// cache silently until the user removed the file by hand.
+/// Persist a VT report through a same-directory tempfile and `rename(2)`.
+/// Pre-fix this routine called `std::fs::write` directly, which truncates
+/// the destination before writing the bytes — a SIGINT, OOM kill, or host
+/// reboot between truncate and write left an empty `<sha>.json`.
 fn persist_report(report_path: &Path, cached: &CachedReport) -> Result<()> {
     let json = serde_json::to_string_pretty(cached).context("serialising report")?;
-    let tmp = report_path.with_extension("tmp");
-    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
-    crate::util::cache_io::finalize_atomic_write(&tmp, report_path)
-        .with_context(|| format!("renaming {} to {}", tmp.display(), report_path.display()))?;
+    write_cache_file(report_path, json.as_bytes())
+        .with_context(|| format!("writing {}", report_path.display()))?;
     Ok(())
+}
+
+fn write_cache_file(path: &Path, body: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", path.display()))?;
+    ensure_real_dir(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temp file under {}", parent.display()))?;
+    tmp.write_all(body)
+        .with_context(|| format!("writing temp file under {}", parent.display()))?;
+    tmp.as_file_mut()
+        .sync_all()
+        .with_context(|| format!("syncing temp file under {}", parent.display()))?;
+    tmp.persist(path)
+        .map_err(|err| err.error)
+        .with_context(|| format!("renaming temp file to {}", path.display()))?;
+    Ok(())
+}
+
+fn cache_file_exists(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("refusing to use symlinked VT cache path {}", path.display())
+        }
+        Ok(meta) if meta.is_file() => Ok(true),
+        Ok(_) => anyhow::bail!("refusing to use non-file VT cache path {}", path.display()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+fn ensure_existing_child_stays_in_base(base: &Path, child: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(child).is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
+    ensure_child_path_stays_in_base(base, child)
+}
+
+fn ensure_child_dir(base: &Path, child: &Path) -> Result<()> {
+    ensure_real_dir(child)?;
+    ensure_child_path_stays_in_base(base, child)
+}
+
+fn ensure_child_path_stays_in_base(base: &Path, child: &Path) -> Result<()> {
+    let base = base
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", base.display()))?;
+    let child = child
+        .canonicalize()
+        .with_context(|| format!("canonicalizing {}", child.display()))?;
+    if !child.starts_with(&base) {
+        anyhow::bail!(
+            "{} resolves outside VT download directory {}",
+            child.display(),
+            base.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_real_dir(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real directory", path.display())
+    }
 }
 
 #[cfg(test)]
@@ -257,8 +327,8 @@ mod tests {
 
     /// # Contract
     ///
-    /// `persist_report` MUST land the report at `report_path` via the
-    /// atomic rename helper and leave no `.tmp` residue on success.
+    /// `persist_report` MUST land the report at `report_path` through
+    /// a same-directory tempfile and leave no `.tmp` residue on success.
     /// Pre-fix the report was written through `std::fs::write`, which
     /// truncated the destination before writing the bytes; an interrupt
     /// between truncate and write left an empty `<sha>.json` that the
@@ -281,11 +351,9 @@ mod tests {
 
     /// # Contract (negative)
     ///
-    /// `persist_report` MUST surface the underlying I/O error AND best-
-    /// effort remove the `.tmp` file when the rename target is invalid
-    /// (e.g. parent directory missing). Without the `.tmp` cleanup,
-    /// repeated failures would leak siblings into the reports directory
-    /// and confuse operators inspecting the cache.
+    /// `persist_report` MUST surface the underlying I/O error and not
+    /// leave the old predictable `.tmp` sibling when the target parent is
+    /// missing.
     #[test]
     fn persist_report_cleans_up_tmp_on_rename_failure() {
         let dir = TempDir::new().expect("tempdir");
@@ -303,9 +371,7 @@ mod tests {
     ///
     /// `persist_report` MUST overwrite an already-present report
     /// atomically: readers either see the previous bytes or the new
-    /// bytes, never an empty/half-written file. The pre-fix
-    /// `std::fs::write` path violated this; `finalize_atomic_write`
-    /// preserves it via POSIX `rename(2)`.
+    /// bytes, never an empty/half-written file.
     #[test]
     fn persist_report_overwrites_existing_report_atomically() {
         let dir = TempDir::new().expect("tempdir");
@@ -318,6 +384,66 @@ mod tests {
         let bytes = std::fs::read(&report_path).expect("read report");
         let parsed: CachedReport = serde_json::from_slice(&bytes).expect("re-parse");
         assert_eq!(parsed.sha256, cached.sha256);
+    }
+
+    /// # Contract
+    ///
+    /// A pre-existing symlink at the report cache path must be replaced
+    /// as a directory entry, not followed and overwritten.
+    #[cfg(unix)]
+    #[test]
+    fn persist_report_replaces_symlink_without_touching_target() {
+        let dir = TempDir::new().expect("tempdir");
+        let outside = dir.path().join("outside.json");
+        let report_path = dir.path().join("aa.json");
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &report_path).unwrap();
+
+        persist_report(&report_path, &fixture_report()).expect("persist must succeed");
+
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&report_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    /// # Contract
+    ///
+    /// Cache-hit probes reject symlinked report/sample paths instead of
+    /// treating them as valid cached files.
+    #[cfg(unix)]
+    #[test]
+    fn cache_file_exists_rejects_symlinked_cache_path() {
+        let dir = TempDir::new().expect("tempdir");
+        let outside = dir.path().join("outside.bin");
+        let link = dir.path().join("aa");
+        std::fs::write(&outside, b"sample").unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = cache_file_exists(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlinked VT cache path"));
+    }
+
+    /// # Contract
+    ///
+    /// `.vt-reports` must resolve under the download destination.
+    /// Existing symlinks to outside directories are rejected.
+    #[cfg(unix)]
+    #[test]
+    fn reports_dir_rejects_symlink_outside_download_dir() {
+        let dir = TempDir::new().expect("tempdir");
+        let dest = dir.path().join("dest");
+        let outside = dir.path().join("outside");
+        let reports = dest.join(REPORTS_DIRNAME);
+        std::fs::create_dir(&dest).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &reports).unwrap();
+
+        let err = ensure_existing_child_stays_in_base(&dest, &reports).unwrap_err();
+
+        assert!(format!("{err:#}").contains("outside VT download directory"));
     }
 
     /// # Contract
