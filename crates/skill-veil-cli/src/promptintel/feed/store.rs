@@ -212,10 +212,8 @@ fn feed_dir(cache_root: &Path) -> PathBuf {
 }
 
 fn write_atomic(target: &Path, bytes: Vec<u8>) -> Result<()> {
-    let tmp = target.with_extension("tmp");
-    std::fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, target)
-        .with_context(|| format!("renaming {} -> {}", tmp.display(), target.display()))?;
+    crate::util::cache_io::write_cache_file_atomic(target, &bytes)
+        .with_context(|| format!("writing {}", target.display()))?;
     Ok(())
 }
 
@@ -415,5 +413,32 @@ mod tests {
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("tmp"))
             .collect();
         assert!(leftovers.is_empty(), "leftover .tmp files: {leftovers:?}",);
+    }
+
+    /// # Contract
+    ///
+    /// Saving the feed replaces a symlinked cache entry without
+    /// following it and overwriting the target.
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_symlinked_feed_without_touching_target() {
+        let tmp = tempdir().unwrap();
+        let dir = feed_dir(tmp.path());
+        let feed_path = dir.join(FEED_FILENAME);
+        let outside = tmp.path().join("outside.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &feed_path).unwrap();
+
+        FeedStore::save(tmp.path(), &[entry_with("a", vec![])]).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&feed_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let loaded = FeedStore::load(tmp.path()).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].id, "a");
     }
 }

@@ -117,8 +117,8 @@ pub(crate) fn compute_cache_key_with_followup(
 ///
 /// # Atomicity contract
 ///
-/// The serialised JSON is staged at `path.with_extension("tmp")` and then
-/// renamed onto `path` via `cache_io::finalize_atomic_write`. A bare
+/// The serialised JSON is staged in a same-directory temporary file and
+/// renamed onto `path` via `cache_io::write_cache_file_atomic`. A bare
 /// `std::fs::write` truncates the destination before writing, so any
 /// failure (SIGKILL, ENOSPC, power loss) leaves a zero-byte or partial
 /// JSON at `path`; `load_fresh` then masks that corruption as a cache miss
@@ -128,15 +128,9 @@ pub(crate) fn compute_cache_key_with_followup(
 /// `vt::enrich::persist_indicator` contract pinned by
 /// `persist_indicator_writes_to_dest_path_atomically`.
 pub(crate) fn persist(path: &Path, result: &LlmPackageResult) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        crate::util::secure_fs::create_dir_secure(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    let json = serde_json::to_string_pretty(result).context("serialising LLM result")?;
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
-    crate::util::cache_io::finalize_atomic_write(&tmp, path)
-        .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
+    let json = serde_json::to_vec_pretty(result).context("serialising LLM result")?;
+    crate::util::cache_io::write_cache_file_atomic(path, &json)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
@@ -523,6 +517,33 @@ mod tests {
             ".tmp sibling must not survive an overwrite"
         );
         assert!(cache_path.exists(), "dest file must remain present");
+    }
+
+    /// # Contract
+    ///
+    /// `persist` replaces a symlinked cache entry without following it.
+    /// The symlink target is not part of the cache and must remain
+    /// untouched.
+    #[cfg(unix)]
+    #[test]
+    fn persist_replaces_symlink_without_touching_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_path = tmp.path().join("ok.json");
+        let outside = tmp.path().join("outside.json");
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &cache_path).unwrap();
+
+        let result = package_result_with_status(LlmStatus::Ok, Duration::seconds(0));
+        persist(&cache_path, &result).expect("persist must succeed");
+
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&cache_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let parsed: LlmPackageResult =
+            serde_json::from_slice(&std::fs::read(&cache_path).unwrap()).unwrap();
+        assert!(matches!(parsed.status, LlmStatus::Ok));
     }
 
     /// Contract: `persist` MUST create any missing parent directory with

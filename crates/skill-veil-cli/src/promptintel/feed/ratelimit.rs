@@ -121,11 +121,9 @@ impl RateLimitState {
         let dir = cache_root.join("promptintel-feed");
         create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = state_path(cache_root);
-        let tmp = path.with_extension("tmp");
         let bytes = serde_json::to_vec_pretty(self).context("serialising rate-limit state")?;
-        std::fs::write(&tmp, &bytes).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &path)
-            .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
+        crate::util::cache_io::write_cache_file_atomic(&path, &bytes)
+            .with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 
@@ -403,6 +401,34 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    /// # Contract
+    ///
+    /// Saving rate-limit state replaces a symlinked state file without
+    /// following it and overwriting the target.
+    #[cfg(unix)]
+    #[test]
+    fn save_replaces_symlinked_state_without_touching_target() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("promptintel-feed");
+        let state_file = dir.join(RATELIMIT_FILENAME);
+        let outside = tmp.path().join("outside.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &state_file).unwrap();
+
+        let mut state = RateLimitState::default();
+        state.record_call_at(endpoint::AGENT_FEED, Some(199), at(1_000_000));
+        state.save(tmp.path()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&state_file)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let loaded = RateLimitState::load(tmp.path()).unwrap();
+        assert_eq!(loaded.endpoints.len(), 1);
     }
 
     /// A missing state file MUST yield a default-empty state, not an

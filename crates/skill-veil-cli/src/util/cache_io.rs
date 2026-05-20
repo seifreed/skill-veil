@@ -17,9 +17,9 @@
 //! enrichment — it just costs one extra round-trip while the corrupt
 //! file gets overwritten on success.
 
-use anyhow::{Context, Result};
-use std::io;
-use std::io::Read;
+use anyhow::{anyhow, Context, Result};
+use std::fs::{File, Metadata};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 /// Promote a fully-written `tmp` sibling to `dest` via `rename(2)`.
@@ -55,6 +55,26 @@ pub(crate) fn finalize_atomic_write(tmp: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn write_cache_file_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
+    crate::util::secure_fs::create_dir_secure(parent)
+        .with_context(|| format!("creating {}", parent.display()))?;
+    ensure_real_cache_dir(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temp file under {}", parent.display()))?;
+    tmp.write_all(bytes)
+        .with_context(|| format!("writing temp file under {}", parent.display()))?;
+    tmp.as_file_mut()
+        .sync_all()
+        .with_context(|| format!("syncing temp file under {}", parent.display()))?;
+    let temp_path = tmp.into_temp_path();
+    finalize_atomic_write(temp_path.as_ref(), path)
+        .with_context(|| format!("renaming temp file to {}", path.display()))?;
+    Ok(())
+}
+
 /// Hard ceiling for a single cache file. 16 MiB leaves three orders of
 /// magnitude of headroom over realistic envelopes (LLM analysis ~few
 /// KB, VT report ~few hundred KB) while ensuring `from_slice`
@@ -74,17 +94,27 @@ pub(crate) fn read_cache_file_bounded(path: &Path) -> Result<Option<Vec<u8>>> {
 
 /// Cap-injected variant for tests.
 pub(crate) fn read_cache_file_with_cap(path: &Path, cap: u64) -> Result<Option<Vec<u8>>> {
-    let file = match std::fs::File::open(path) {
+    let Some(path_meta) = regular_cache_file_metadata(path)? else {
+        return Ok(None);
+    };
+    let file = match File::open(path) {
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(err).with_context(|| format!("opening cache file {}", path.display()));
         }
     };
-    let len = file
+    let meta = file
         .metadata()
-        .with_context(|| format!("stat cache file {}", path.display()))?
-        .len();
+        .with_context(|| format!("stat cache file {}", path.display()))?;
+    let len = meta.len();
+    if !opened_file_matches_path(&meta, &path_meta) {
+        tracing::warn!(
+            "ignoring cache file {} (path changed while opening); will refetch",
+            path.display(),
+        );
+        return Ok(None);
+    }
     if len > cap {
         tracing::warn!(
             "ignoring cache file {} ({} bytes > cap {}); will refetch",
@@ -95,6 +125,31 @@ pub(crate) fn read_cache_file_with_cap(path: &Path, cap: u64) -> Result<Option<V
         return Ok(None);
     }
     read_cache_reader_with_cap(file, path, len, cap)
+}
+
+fn regular_cache_file_metadata(path: &Path) -> Result<Option<Metadata>> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if !meta.is_file() || meta.file_type().is_symlink() => {
+            tracing::warn!(
+                "ignoring cache file {} (not a regular file); will refetch",
+                path.display(),
+            );
+            Ok(None)
+        }
+        Ok(meta) => Ok(Some(meta)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("stat cache file {}", path.display())),
+    }
+}
+
+fn ensure_real_cache_dir(path: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)
+        .with_context(|| format!("stat cache directory {}", path.display()))?;
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real cache directory", path.display())
+    }
 }
 
 fn read_cache_reader_with_cap(
@@ -123,6 +178,17 @@ fn read_cache_reader_with_cap(
         "cache reader must reject streams over the cap"
     );
     Ok(Some(buf))
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -160,6 +226,24 @@ mod tests {
 
         let bytes = read_cache_file_bounded(&path).unwrap().unwrap();
         assert_eq!(bytes, payload);
+    }
+
+    /// # Contract
+    ///
+    /// Cache reads treat symlink entries as cache misses. A cache entry
+    /// must never cause callers to ingest the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn read_cache_file_with_cap_returns_none_for_symlinked_file() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.json");
+        let link = dir.path().join("cache.json");
+        std::fs::write(&target, br#"{"cached":true}"#).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = read_cache_file_with_cap(&link, MAX_CACHE_FILE_BYTES).unwrap();
+
+        assert!(result.is_none());
     }
 
     /// # Contract
@@ -281,6 +365,44 @@ mod tests {
 
         assert!(!tmp.exists(), "tmp must be gone after overwrite");
         assert_eq!(std::fs::read(&dest).unwrap(), b"NEW-and-longer");
+    }
+
+    /// # Contract
+    ///
+    /// `write_cache_file_atomic` writes complete bytes at the
+    /// destination and creates missing cache parents with the secure
+    /// directory policy used by cache callers.
+    #[test]
+    fn write_cache_file_atomic_writes_bytes_to_dest() {
+        let dir = TempDir::new().expect("tempdir");
+        let dest = dir.path().join("nested").join("payload.json");
+
+        write_cache_file_atomic(&dest, b"{\"ok\":true}").unwrap();
+
+        assert_eq!(std::fs::read(&dest).unwrap(), br#"{"ok":true}"#);
+    }
+
+    /// # Contract
+    ///
+    /// `write_cache_file_atomic` replaces a symlinked cache entry
+    /// without following it and overwriting the target.
+    #[cfg(unix)]
+    #[test]
+    fn write_cache_file_atomic_replaces_symlink_without_touching_target() {
+        let dir = TempDir::new().expect("tempdir");
+        let target = dir.path().join("target.json");
+        let dest = dir.path().join("payload.json");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &dest).unwrap();
+
+        write_cache_file_atomic(&dest, b"fresh").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "fresh");
     }
 
     /// # Contract
