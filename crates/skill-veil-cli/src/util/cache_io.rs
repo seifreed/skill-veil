@@ -74,7 +74,7 @@ pub(crate) fn read_cache_file_bounded(path: &Path) -> Result<Option<Vec<u8>>> {
 
 /// Cap-injected variant for tests.
 pub(crate) fn read_cache_file_with_cap(path: &Path, cap: u64) -> Result<Option<Vec<u8>>> {
-    let mut file = match std::fs::File::open(path) {
+    let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
@@ -94,18 +94,34 @@ pub(crate) fn read_cache_file_with_cap(path: &Path, cap: u64) -> Result<Option<V
         );
         return Ok(None);
     }
-    // `metadata().len()` is racy with concurrent writers, so cap both
-    // the pre-allocation AND the read. Without the `min(cap, len)`,
-    // a file that grew between the stat and the read could cause a
-    // pre-allocation far exceeding the intended cap, even though
-    // `take(cap)` later limits how many bytes are actually read into
-    // the buffer.
+    read_cache_reader_with_cap(file, path, len, cap)
+}
+
+fn read_cache_reader_with_cap(
+    mut reader: impl Read,
+    path: &Path,
+    len: u64,
+    cap: u64,
+) -> Result<Option<Vec<u8>>> {
     let alloc_cap = usize::try_from(len.min(cap)).unwrap_or(0);
     let mut buf = Vec::with_capacity(alloc_cap);
-    file.by_ref()
-        .take(cap)
+    reader
+        .by_ref()
+        .take(cap.saturating_add(1))
         .read_to_end(&mut buf)
         .with_context(|| format!("reading cache file {}", path.display()))?;
+    if buf.len() as u64 > cap {
+        tracing::warn!(
+            "ignoring cache file {} (stream exceeded cap {}); will refetch",
+            path.display(),
+            cap,
+        );
+        return Ok(None);
+    }
+    debug_assert!(
+        buf.len() as u64 <= cap,
+        "cache reader must reject streams over the cap"
+    );
     Ok(Some(buf))
 }
 
@@ -166,6 +182,38 @@ mod tests {
             "over-cap cache file must be a cache miss, got {} bytes",
             result.map_or(0, |v| v.len()),
         );
+    }
+
+    /// # Contract
+    ///
+    /// If a cache stream exceeds the cap after the metadata check, the
+    /// reader MUST return a cache miss instead of a truncated prefix.
+    #[test]
+    fn read_cache_reader_with_cap_returns_none_when_stream_exceeds_cap() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("racy.json");
+        let reader = std::io::Cursor::new(b"abcde".to_vec());
+
+        let result = read_cache_reader_with_cap(reader, &path, 4, 4).unwrap();
+
+        assert!(result.is_none(), "over-cap stream must be a cache miss");
+    }
+
+    /// # Contract
+    ///
+    /// A cache stream exactly at the cap is complete and must be
+    /// returned unchanged.
+    #[test]
+    fn read_cache_reader_with_cap_accepts_stream_at_cap() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("boundary.json");
+        let reader = std::io::Cursor::new(b"abcd".to_vec());
+
+        let result = read_cache_reader_with_cap(reader, &path, 4, 4)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(result, b"abcd");
     }
 
     /// # Contract (positive)
@@ -241,9 +289,8 @@ mod tests {
     /// capped at `min(len, cap)` rather than `len` alone. Without this
     /// cap, a file that grew between the `metadata().len()` check and
     /// the actual read could cause a pre-allocation far exceeding the
-    /// intended bound, even though `take(cap)` limits the bytes read.
-    /// The `take(cap)` still prevents reading beyond the cap, but the
-    /// memory would already have been allocated.
+    /// intended bound, even though the post-stat stream cap rejects the
+    /// oversized content.
     #[test]
     fn read_cache_file_with_cap_pre_allocation_is_capped() {
         let dir = TempDir::new().unwrap();
