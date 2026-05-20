@@ -9,6 +9,7 @@ use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use skill_veil_core::PackageScanResult;
 use std::fmt::Write as _;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 /// Truncate by char-count and strip terminal control bytes from an
@@ -45,6 +46,7 @@ const LLM_RAW_EXCERPT_DISPLAY_CHARS: usize = 160;
 /// Provider errors can include long backend traces; we cap them so they
 /// stay readable on a single screen.
 const LLM_PROVIDER_ERROR_DISPLAY_CHARS: usize = 120;
+const MAX_LLM_ENRICH_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Owned, borrow-free LLM enrichment inputs. Computed once
 /// (`prepare_llm_inputs`) and reused across multiple
@@ -174,7 +176,7 @@ pub(crate) fn prepare_llm_inputs(
                         continue;
                     }
                 };
-                match std::fs::read_to_string(&support_path) {
+                match read_to_string_with_cap(&support_path) {
                     Ok(c) => supporting.push((support_path, c)),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -347,7 +349,7 @@ where
         .into_iter()
         .map(|p| {
             let path = p.as_ref();
-            std::fs::read_to_string(path).with_context(|| {
+            read_to_string_with_cap(path).with_context(|| {
                 format!(
                     "Failed to read primary SKILL.md for LLM enrichment: {}",
                     path.display()
@@ -355,6 +357,36 @@ where
             })
         })
         .collect()
+}
+
+fn read_to_string_with_cap(path: &Path) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > MAX_LLM_ENRICH_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size {} exceeds limit {}",
+                path.display(),
+                meta.len(),
+                MAX_LLM_ENRICH_FILE_BYTES
+            ),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(meta.len().try_into().unwrap_or(0));
+    let mut limited = file.take(MAX_LLM_ENRICH_FILE_BYTES + 1);
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_LLM_ENRICH_FILE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size exceeds limit {}",
+                path.display(),
+                MAX_LLM_ENRICH_FILE_BYTES
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 fn format_llm_enrichment(e: &LlmEnrichment) -> String {
@@ -624,6 +656,25 @@ mod tests {
             super::read_primary_contents_for_paths([a.as_path(), b.as_path()].iter().copied())
                 .expect("both files exist");
         assert_eq!(contents, vec!["first".to_string(), "second".to_string()]);
+    }
+
+    /// # Contract
+    ///
+    /// LLM enrichment refuses oversized package files before loading
+    /// them into memory.
+    #[test]
+    fn read_primary_contents_for_paths_rejects_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("huge.md");
+        let handle = std::fs::File::create(&file).unwrap();
+        handle
+            .set_len(super::MAX_LLM_ENRICH_FILE_BYTES + 1)
+            .unwrap();
+
+        let err = super::read_primary_contents_for_paths(std::iter::once(file.as_path()))
+            .expect_err("oversized file must fail");
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
     }
 
     use crate::llm::types::LlmVerdict;
