@@ -22,7 +22,11 @@ use skill_veil_core::nova::{
     SemanticEvaluator, SkippedCapability,
 };
 use skill_veil_core::{ArtifactKind, ArtifactScope, Finding};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+
+const MAX_NOVA_RULE_BYTES: u64 = 1024 * 1024;
+const MAX_NOVA_SCAN_BODY_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Debug)]
 pub(crate) struct NovaScanReport {
@@ -209,7 +213,7 @@ fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
         if path.extension().and_then(|s| s.to_str()) != Some("nov") {
             continue;
         }
-        let body = match std::fs::read_to_string(path) {
+        let body = match read_to_string_with_cap(path, MAX_NOVA_RULE_BYTES) {
             Ok(b) => b,
             Err(err) => {
                 tracing::warn!(
@@ -235,7 +239,7 @@ fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
 fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     if target.is_file() {
-        if let Ok(body) = std::fs::read_to_string(target) {
+        if let Ok(body) = read_to_string_with_cap(target, MAX_NOVA_SCAN_BODY_BYTES) {
             out.push((target.to_path_buf(), body));
         }
         return out;
@@ -255,11 +259,39 @@ fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
         ) {
             continue;
         }
-        if let Ok(body) = std::fs::read_to_string(path) {
+        if let Ok(body) = read_to_string_with_cap(path, MAX_NOVA_SCAN_BODY_BYTES) {
             out.push((path.to_path_buf(), body));
         }
     }
     out
+}
+
+fn read_to_string_with_cap(path: &Path, max_bytes: u64) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size {} exceeds limit {max_bytes}",
+                path.display(),
+                meta.len()
+            ),
+        ));
+    }
+    let mut bytes = Vec::with_capacity(meta.len().try_into().unwrap_or(0));
+    let mut limited = file.take(max_bytes + 1);
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size exceeds limit {max_bytes}",
+                path.display()
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 fn short(sha: &str) -> &str {
@@ -267,5 +299,34 @@ fn short(sha: &str) -> &str {
         &sha[..7]
     } else {
         sha
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_scan_bodies_accepts_small_target_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("SKILL.md");
+        std::fs::write(&file, "# Skill\nkeyword").unwrap();
+
+        let bodies = collect_scan_bodies(&file);
+
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(bodies[0].1, "# Skill\nkeyword");
+    }
+
+    #[test]
+    fn collect_scan_bodies_rejects_oversized_target_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("oversized.md");
+        let handle = std::fs::File::create(&file).unwrap();
+        handle.set_len(MAX_NOVA_SCAN_BODY_BYTES + 1).unwrap();
+
+        let bodies = collect_scan_bodies(&file);
+
+        assert!(bodies.is_empty());
     }
 }
