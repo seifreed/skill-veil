@@ -4,6 +4,7 @@ use crate::{
         build_rule_pack_info, format_rule_pack_info_text, format_rules_validation_text,
         validate_fixture_case, validate_rules_directory, RuleFixtureCase, RuleFixtureFile,
     },
+    util::terminal_safe::sanitise_for_terminal,
 };
 use anyhow::{Context, Result};
 use skill_veil_core::{PulldownMarkdownParser, Scanner, Severity};
@@ -83,7 +84,10 @@ fn rules_list(
             for rule in &rules {
                 println!(
                     "  {} [{}/{}] - {}",
-                    rule.id, rule.severity, rule.category, rule.reason
+                    terminal_text(&rule.id),
+                    rule.severity,
+                    rule.category,
+                    terminal_text(&rule.reason)
                 );
             }
         }
@@ -143,15 +147,22 @@ fn rules_test(
     validate_fixture_case(&case, &findings)?;
 
     if findings.is_empty() {
-        println!("Rule '{rule_id}' did not match the content");
+        println!(
+            "Rule '{}' did not match the content",
+            terminal_text(&rule_id)
+        );
     } else {
-        println!("Rule '{rule_id}' matched {} time(s):\n", findings.len());
+        println!(
+            "Rule '{}' matched {} time(s):\n",
+            terminal_text(&rule_id),
+            findings.len()
+        );
         for finding in findings {
-            println!("  Match: \"{}\"", finding.match_value);
+            println!("  Match: \"{}\"", terminal_text(&finding.match_value));
             println!("  Severity: {}", finding.severity);
             println!("  Category: {}", finding.category);
             println!("  Action: {}", finding.recommended_action);
-            println!("  Reason: {}", finding.reason);
+            println!("  Reason: {}", terminal_text(&finding.reason));
             if let Some(line) = finding.line_number {
                 println!("  Line: {line}");
             }
@@ -177,7 +188,7 @@ fn rules_test_pack(rules_dir: PathBuf, fixtures: PathBuf) -> Result<()> {
         if let Err(err) = validate_fixture_case(&case, &findings) {
             failures.push(format!(
                 "{} ({err})",
-                case.name.as_deref().unwrap_or(&case.rule_id),
+                terminal_text(case.name.as_deref().unwrap_or(&case.rule_id)),
             ));
         }
     }
@@ -231,4 +242,21 @@ fn rules_pack_info(rules_dir: PathBuf, format: OutputFormat) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal_text;
+
+    #[test]
+    fn terminal_text_removes_rule_control_sequences() {
+        let cleaned = terminal_text("RULE\x1b]8;;https://evil.invalid\x07click");
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+    }
 }

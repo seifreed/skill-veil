@@ -1,3 +1,4 @@
+use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use skill_veil_core::{
@@ -341,36 +342,39 @@ pub fn format_rules_validation_text(report: &RulesValidationReport) -> String {
     output.push_str("--- Rules Validation ---\n");
     output.push_str(&format!(
         "Directory: {}\nPack files: {}\nTotal rules: {}\nValid: {}\n",
-        report.rules_dir, report.pack_files, report.total_rules, report.valid
+        terminal_text(&report.rules_dir),
+        report.pack_files,
+        report.total_rules,
+        report.valid
     ));
     if !report.schema_versions.is_empty() {
         output.push_str("Schema versions:\n");
         for version in &report.schema_versions {
-            output.push_str(&format!("  - {}\n", version));
+            output.push_str(&format!("  - {}\n", terminal_text(version)));
         }
     }
     if !report.pack_names.is_empty() {
         output.push_str("Pack names:\n");
         for name in &report.pack_names {
-            output.push_str(&format!("  - {}\n", name));
+            output.push_str(&format!("  - {}\n", terminal_text(name)));
         }
     }
     if !report.pack_kinds.is_empty() {
         output.push_str("Pack kinds:\n");
         for kind in &report.pack_kinds {
-            output.push_str(&format!("  - {}\n", kind));
+            output.push_str(&format!("  - {}\n", terminal_text(kind)));
         }
     }
     if !report.duplicate_rule_ids.is_empty() {
         output.push_str("Duplicate rule IDs:\n");
         for rule_id in &report.duplicate_rule_ids {
-            output.push_str(&format!("  - {}\n", rule_id));
+            output.push_str(&format!("  - {}\n", terminal_text(rule_id)));
         }
     }
     if !report.issues.is_empty() {
         output.push_str("Issues:\n");
         for issue in &report.issues {
-            output.push_str(&format!("  - {}\n", issue));
+            output.push_str(&format!("  - {}\n", terminal_text(issue)));
         }
     }
     output
@@ -381,45 +385,53 @@ pub fn format_rule_pack_info_text(info: &RulePackInfo) -> String {
     output.push_str("--- Rule Pack Info ---\n");
     output.push_str(&format!(
         "Directory: {}\nPack files: {}\nTotal rules: {}\nEnabled: {}\nDisabled: {}\n",
-        info.rules_dir, info.pack_files, info.total_rules, info.enabled_rules, info.disabled_rules
+        terminal_text(&info.rules_dir),
+        info.pack_files,
+        info.total_rules,
+        info.enabled_rules,
+        info.disabled_rules
     ));
     if !info.schema_versions.is_empty() {
         output.push_str("Schema versions:\n");
         for version in &info.schema_versions {
-            output.push_str(&format!("  - {}\n", version));
+            output.push_str(&format!("  - {}\n", terminal_text(version)));
         }
     }
     if !info.pack_names.is_empty() {
         output.push_str("Pack names:\n");
         for name in &info.pack_names {
-            output.push_str(&format!("  - {}\n", name));
+            output.push_str(&format!("  - {}\n", terminal_text(name)));
         }
     }
     if !info.pack_kinds.is_empty() {
         output.push_str("Pack kinds:\n");
         for kind in &info.pack_kinds {
-            output.push_str(&format!("  - {}\n", kind));
+            output.push_str(&format!("  - {}\n", terminal_text(kind)));
         }
     }
     if !info.by_severity.is_empty() {
         output.push_str("By severity:\n");
         for (severity, count) in &info.by_severity {
-            output.push_str(&format!("  - {}: {}\n", severity, count));
+            output.push_str(&format!("  - {}: {}\n", terminal_text(severity), count));
         }
     }
     if !info.by_category.is_empty() {
         output.push_str("By category:\n");
         for (category, count) in &info.by_category {
-            output.push_str(&format!("  - {}: {}\n", category, count));
+            output.push_str(&format!("  - {}: {}\n", terminal_text(category), count));
         }
     }
     if !info.tags.is_empty() {
         output.push_str("Tags:\n");
         for tag in &info.tags {
-            output.push_str(&format!("  - {}\n", tag));
+            output.push_str(&format!("  - {}\n", terminal_text(tag)));
         }
     }
     output
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
 }
 
 fn collect_pack_metadata(
@@ -444,5 +456,54 @@ fn collect_pack_metadata(
         pack_kinds.insert(label.to_string());
     } else {
         issues.push(format!("Pack {} is missing metadata.kind", path.display()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_rules_validation_text_sanitises_control_sequences() {
+        let report = RulesValidationReport {
+            rules_dir: "rules\x1b[2J".to_string(),
+            total_rules: 1,
+            pack_files: 1,
+            duplicate_rule_ids: BTreeSet::from(["RULE\x1b[2J".to_string()])
+                .into_iter()
+                .collect(),
+            schema_versions: BTreeSet::from(["v1\x1b[2J".to_string()]),
+            pack_names: BTreeSet::from(["pack\x1b[2J".to_string()]),
+            pack_kinds: BTreeSet::from(["official\x1b[2J".to_string()]),
+            issues: vec!["issue\x1b]8;;https://evil.invalid\x07click".to_string()],
+            valid: false,
+        };
+
+        let rendered = format_rules_validation_text(&report);
+
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
+    }
+
+    #[test]
+    fn format_rule_pack_info_text_sanitises_control_sequences() {
+        let info = RulePackInfo {
+            rules_dir: "rules\x1b[2J".to_string(),
+            total_rules: 1,
+            pack_files: 1,
+            enabled_rules: 1,
+            disabled_rules: 0,
+            schema_versions: BTreeSet::from(["v1\x1b[2J".to_string()]),
+            pack_names: BTreeSet::from(["pack\x1b[2J".to_string()]),
+            pack_kinds: BTreeSet::from(["community\x1b[2J".to_string()]),
+            by_severity: BTreeMap::from([("high\x1b[2J".to_string(), 1)]),
+            by_category: BTreeMap::from([("remote_exec\x1b[2J".to_string(), 1)]),
+            tags: BTreeSet::from(["tag\x1b]8;;https://evil.invalid\x07click".to_string()]),
+        };
+
+        let rendered = format_rule_pack_info_text(&info);
+
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
     }
 }
