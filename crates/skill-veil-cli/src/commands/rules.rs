@@ -2,7 +2,8 @@ use crate::{
     cli_args::{OutputFormat, RecommendedActionArg, RulesAction, SeverityArg},
     rule_tools::{
         build_rule_pack_info, format_rule_pack_info_text, format_rules_validation_text,
-        validate_fixture_case, validate_rules_directory, RuleFixtureCase, RuleFixtureFile,
+        read_rule_text_file, validate_fixture_case, validate_rules_directory, RuleFixtureCase,
+        RuleFixtureFile,
     },
     util::terminal_safe::sanitise_for_terminal,
 };
@@ -121,7 +122,7 @@ fn rules_test(
     expectations: RuleTestExpectations,
 ) -> Result<()> {
     let test_content = if let Some(file_path) = file {
-        std::fs::read_to_string(&file_path).context("Failed to read test file")?
+        read_rule_text_file(&file_path).context("Failed to read test file")?
     } else if let Some(c) = content {
         c
     } else {
@@ -174,7 +175,7 @@ fn rules_test(
 
 fn rules_test_pack(rules_dir: PathBuf, fixtures: PathBuf) -> Result<()> {
     let engine = super::scan::load_rule_engine_from_dir(&rules_dir)?;
-    let fixture_content = std::fs::read_to_string(&fixtures)
+    let fixture_content = read_rule_text_file(&fixtures)
         .with_context(|| format!("Failed to read fixtures {}", fixtures.display()))?;
     let fixture_pack: RuleFixtureFile =
         serde_yaml::from_str(&fixture_content).context("Failed to parse rule fixtures")?;

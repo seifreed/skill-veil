@@ -6,7 +6,10 @@ use skill_veil_core::{
     RulePackMetadata, Severity,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{self, Read};
 use std::path::Path;
+
+pub const MAX_RULE_TEXT_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 pub enum ParsedRuleSource {
@@ -82,6 +85,45 @@ pub fn parse_rule_source(content: &str) -> Result<ParsedRuleSource> {
     Ok(ParsedRuleSource::PlainRules(parse_rules_file(content)?))
 }
 
+pub fn read_rule_text_file(path: &Path) -> Result<String> {
+    read_rule_text_file_with_cap(path, MAX_RULE_TEXT_FILE_BYTES)
+}
+
+fn read_rule_text_file_with_cap(path: &Path, cap: u64) -> Result<String> {
+    read_text_file_with_cap(path, cap).with_context(|| format!("Failed to read {}", path.display()))
+}
+
+fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size {} exceeds limit {}",
+                path.display(),
+                meta.len(),
+                cap
+            ),
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len().min(cap)).unwrap_or(0));
+    let mut limited = file.take(cap.saturating_add(1));
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size exceeds limit {}",
+                path.display(),
+                cap
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
 pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationReport> {
     let mut issues = Vec::new();
     let mut total_rules = 0_usize;
@@ -109,8 +151,7 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
     {
         pack_files += 1;
         let path = entry.path();
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let content = read_rule_text_file(path)?;
         let parsed = parse_rule_source(&content)
             .with_context(|| format!("Failed to parse {}", path.display()))?;
         let mut metadata_issues = Vec::new();
@@ -215,8 +256,7 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
     {
         pack_files += 1;
         let path = entry.path();
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read {}", path.display()))?;
+        let content = read_rule_text_file(path)?;
         let parsed = parse_rule_source(&content)
             .with_context(|| format!("Failed to parse {}", path.display()))?;
         let mut metadata_issues = Vec::new();
@@ -462,6 +502,38 @@ fn collect_pack_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    /// # Contract
+    ///
+    /// Rule-pack text files under the byte cap MUST read normally.
+    /// Validation, pack-info, and rule-test commands share this reader.
+    #[test]
+    fn read_rule_text_file_accepts_valid_text_under_cap() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rules.yaml");
+        std::fs::write(&path, "rules: []\n").unwrap();
+
+        let body = read_rule_text_file_with_cap(&path, 1024).unwrap();
+
+        assert_eq!(body, "rules: []\n");
+    }
+
+    /// # Contract
+    ///
+    /// Rule-pack text reads MUST reject files over the configured cap
+    /// before YAML parsing, so an external pack or fixture cannot force
+    /// an unbounded allocation.
+    #[test]
+    fn read_rule_text_file_rejects_oversized_text() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("rules.yaml");
+        std::fs::write(&path, vec![b'-'; 32]).unwrap();
+
+        let err = read_rule_text_file_with_cap(&path, 8).unwrap_err();
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
+    }
 
     #[test]
     fn format_rules_validation_text_sanitises_control_sequences() {
