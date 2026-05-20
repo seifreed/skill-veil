@@ -4,6 +4,7 @@
 //! each package; this module formats those labels for human review.
 
 use super::types::{Classification, CrossCheckSummary};
+use crate::util::terminal_safe::sanitise_for_terminal;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
@@ -184,14 +185,23 @@ pub(crate) fn render_markdown(summary: &CrossCheckSummary) -> String {
     if !overreached.is_empty() {
         let _ = writeln!(out, "\n## We overreached ({})\n", overreached.len());
         for pkg in overreached {
+            let findings = pkg
+                .our_findings
+                .iter()
+                .map(|finding| terminal_text(finding))
+                .collect::<Vec<_>>()
+                .join(",");
             let _ = writeln!(
                 out,
                 "- `{}` — our={} risk={}  vt={}  findings={}",
-                pkg.sha256,
-                pkg.our_verdict,
+                terminal_text(&pkg.sha256),
+                terminal_text(&pkg.our_verdict),
                 pkg.our_risk_score,
-                pkg.vt_verdict.as_deref().unwrap_or("?"),
-                pkg.our_findings.join(",")
+                pkg.vt_verdict
+                    .as_deref()
+                    .map(terminal_text)
+                    .unwrap_or_else(|| "?".to_string()),
+                findings
             );
         }
     }
@@ -235,31 +245,42 @@ fn render_missed_section(
     }
     let _ = writeln!(out, "\n## {} ({})\n", heading, pkgs.len());
     for pkg in pkgs {
-        let _ = writeln!(out, "### `{}`", pkg.sha256);
+        let _ = writeln!(out, "### `{}`", terminal_text(&pkg.sha256));
         if let Some(name) = &pkg.meaningful_name {
-            let _ = writeln!(out, "- **name**: {name}");
+            let _ = writeln!(out, "- **name**: {}", terminal_text(name));
         }
         let _ = writeln!(
             out,
             "- **our verdict**: {} (risk {})",
-            pkg.our_verdict, pkg.our_risk_score
+            terminal_text(&pkg.our_verdict),
+            pkg.our_risk_score
         );
         if pkg.our_findings.is_empty() {
             let _ = writeln!(out, "- **our findings**: _(none)_");
         } else {
-            let _ = writeln!(out, "- **our findings**: {}", pkg.our_findings.join(", "));
+            let findings = pkg
+                .our_findings
+                .iter()
+                .map(|finding| terminal_text(finding))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "- **our findings**: {findings}");
         }
         if let Some(v) = &pkg.vt_verdict {
-            let _ = writeln!(out, "- **VT verdict**: {v}");
+            let _ = writeln!(out, "- **VT verdict**: {}", terminal_text(v));
         }
         if let Some(analysis) = &pkg.vt_analysis {
             let _ = writeln!(out, "\n**VT Code Insight analysis:**\n");
             for line in analysis.lines() {
-                let _ = writeln!(out, "> {line}");
+                let _ = writeln!(out, "> {}", terminal_text(line));
             }
             let _ = writeln!(out);
         }
     }
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
 }
 
 #[cfg(test)]
@@ -379,5 +400,30 @@ mod tests {
             !md.contains("us: benign/suspicious"),
             "the pre-fix combined label must not reappear; markdown was:\n{md}"
         );
+    }
+
+    #[test]
+    fn render_markdown_sanitises_vt_control_sequences() {
+        let summary = CrossCheckSummary {
+            total: 1,
+            we_missed: 1,
+            packages: vec![super::super::types::PackageCrossCheck {
+                sha256: "aaaaaaaaaaaa0000\x1b[2J".to_string(),
+                our_verdict: "benign\x1b[2J".to_string(),
+                our_risk_score: 0,
+                our_findings: vec!["RULE\x1b[2J".to_string()],
+                vt_category: None,
+                vt_verdict: Some("malicious\x1b[2J".to_string()),
+                vt_analysis: Some("analysis\x1b]8;;https://evil.invalid\x07click".to_string()),
+                meaningful_name: Some("sample\x1b[2J".to_string()),
+                classification: Classification::WeMissed,
+            }],
+            ..Default::default()
+        };
+
+        let md = render_markdown(&summary);
+
+        assert!(!md.contains('\x1b'));
+        assert!(!md.contains('\x07'));
     }
 }
