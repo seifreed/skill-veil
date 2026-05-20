@@ -189,7 +189,7 @@ fn validate_sha_shape(sha: &str) -> Result<()> {
 /// (the same directory `init` writes into for skill-veil-rules).
 pub(crate) fn load_pointer(install_root: &Path) -> Result<Option<NovaInstallPointer>> {
     let path = install_root.join(NOVA_POINTER_FILENAME);
-    if !path.exists() {
+    if super::is_missing_path(&path)? {
         return Ok(None);
     }
     let body = super::read_install_pointer_file(&path)?;
@@ -208,7 +208,8 @@ pub(crate) fn write_pointer(install_root: &Path, pointer: &NovaInstallPointer) -
         .context("validating NOVA pointer tarball_sha256")?;
     let body = serde_json::to_vec_pretty(pointer).context("serialising NOVA pointer")?;
     let path = install_root.join(NOVA_POINTER_FILENAME);
-    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    super::write_install_file_atomic(&path, &body)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 

@@ -29,7 +29,8 @@ pub(crate) mod update_check;
 mod verify;
 
 use anyhow::{anyhow, Context, Result};
-use std::io::{self, Read};
+use std::fs::Metadata;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) use download::ReleaseAssets;
@@ -114,12 +115,7 @@ pub(crate) fn run_init(
         .with_context(|| "verifying extracted files against the signed manifest")?;
 
     let install_dir = install_root.join(&version);
-    if install_dir.exists() {
-        // Replace atomically by removing first; ignore errors here
-        // because the rename will surface a clearer error if the dir
-        // is still occupied.
-        std::fs::remove_dir_all(&install_dir).ok();
-    }
+    remove_existing_install_dir(&install_dir)?;
     std::fs::rename(&extract_root, &install_dir).with_context(|| {
         format!(
             "atomic rename {} -> {}",
@@ -172,9 +168,7 @@ pub(crate) fn install_nova_pinned_to(install_root: &Path, sha: &str) -> Result<N
         .context("downloading NOVA tarball")?;
 
     let install_dir = install_root.join(format!("nova-{sha}"));
-    if install_dir.exists() {
-        std::fs::remove_dir_all(&install_dir).ok();
-    }
+    remove_existing_install_dir(&install_dir)?;
     std::fs::rename(&extracted_root, &install_dir).with_context(|| {
         format!(
             "atomic rename {} -> {}",
@@ -203,7 +197,7 @@ pub(crate) fn current_install(cache_root: Option<PathBuf>) -> Result<CombinedIns
 
 fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>> {
     let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
-    if !pointer_path.exists() {
+    if is_missing_path(&pointer_path)? {
         return Ok(None);
     }
     let body = read_install_pointer_file(&pointer_path)?;
@@ -227,8 +221,28 @@ pub(crate) fn read_install_pointer_file(path: &Path) -> Result<String> {
 }
 
 fn read_file_to_string_with_cap(path: &Path, cap: u64) -> io::Result<String> {
+    let path_meta = std::fs::symlink_metadata(path)?;
+    if !path_meta.is_file() || path_meta.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read non-regular install pointer {}",
+                path.display()
+            ),
+        ));
+    }
+
     let file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
+    if !opened_file_matches_path(&meta, &path_meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read swapped install pointer {}",
+                path.display()
+            ),
+        ));
+    }
     if meta.len() > cap {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -302,8 +316,76 @@ fn write_current_pointer(install_root: &Path, version: &str, trusted_key_id: &st
     };
     let body = serde_json::to_vec_pretty(&pointer).context("serialising current pointer")?;
     let path = install_root.join(CURRENT_POINTER_FILENAME);
-    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+    write_install_file_atomic(&path, &body)
+        .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+pub(super) fn write_install_file_atomic(path: &Path, body: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent directory", path.display()))?;
+    ensure_real_dir(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temp file under {}", parent.display()))?;
+    tmp.write_all(body)
+        .with_context(|| format!("writing temp file under {}", parent.display()))?;
+    tmp.as_file_mut()
+        .sync_all()
+        .with_context(|| format!("syncing temp file under {}", parent.display()))?;
+    tmp.persist(path)
+        .map_err(|err| err.error)
+        .with_context(|| format!("renaming temp file to {}", path.display()))?;
+    Ok(())
+}
+
+fn remove_existing_install_dir(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!(
+                "refusing to replace symlinked install path {}",
+                path.display()
+            )
+        }
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path)
+            .with_context(|| format!("removing existing install {}", path.display())),
+        Ok(_) => anyhow::bail!(
+            "refusing to replace non-directory install path {}",
+            path.display()
+        ),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+fn ensure_real_dir(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real directory", path.display())
+    }
+}
+
+pub(super) fn is_missing_path(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 fn create_install_root(install_root: &Path) -> Result<()> {
@@ -484,6 +566,73 @@ mod tests {
         assert!(format!("{err:#}").contains("exceeds limit"));
     }
 
+    /// # Contract
+    ///
+    /// Installed rule-pack pointer reads only accept regular files.
+    /// Symlinks are not valid cache pointers, even when their target is
+    /// readable JSON.
+    #[cfg(unix)]
+    #[test]
+    fn install_pointer_read_rejects_symlinked_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real = tmp.path().join("real-current.json");
+        let link = tmp.path().join(CURRENT_POINTER_FILENAME);
+        std::fs::write(
+            &real,
+            br#"{"version":"v0.1.0","trusted_key_id":"skill-veil-rules-2026"}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = read_install_pointer_file(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("non-regular install pointer"));
+    }
+
+    /// # Contract
+    ///
+    /// Writing `current.json` must replace a symlinked directory entry,
+    /// not follow it and overwrite the target.
+    #[cfg(unix)]
+    #[test]
+    fn write_current_pointer_replaces_symlink_without_touching_target() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let outside = tmp.path().join("outside.json");
+        let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
+        std::fs::create_dir(&install_root).unwrap();
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &pointer_path).unwrap();
+
+        write_current_pointer(&install_root, "v0.1.0", "skill-veil-rules-2026").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&pointer_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    /// # Contract
+    ///
+    /// Existing install-version paths must be real directories before
+    /// replacement. A symlink there is rejected instead of removed or
+    /// traversed.
+    #[cfg(unix)]
+    #[test]
+    fn remove_existing_install_dir_rejects_symlinked_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("v0.1.0");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = remove_existing_install_dir(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlinked install path"));
+        assert!(outside.exists());
+    }
+
     /// Contract: the NOVA pointer round-trips independently of the
     /// skill-veil pointer. An operator who has run `init` once but
     /// never rotated NOVA still gets the skill-veil install reported,
@@ -505,6 +654,36 @@ mod tests {
         let nova = install.nova.expect("NOVA pointer must round-trip");
         assert_eq!(nova.commit_sha, pointer.commit_sha);
         assert_eq!(nova.file_count, 16);
+    }
+
+    /// # Contract
+    ///
+    /// Writing the NOVA pointer follows the same symlink replacement
+    /// contract as `current.json`.
+    #[cfg(unix)]
+    #[test]
+    fn nova_pointer_write_replaces_symlink_without_touching_target() {
+        use super::nova::{write_pointer, NovaInstallPointer, NOVA_POINTER_FILENAME};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let outside = tmp.path().join("outside.json");
+        let pointer_path = install_root.join(NOVA_POINTER_FILENAME);
+        std::fs::create_dir(&install_root).unwrap();
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &pointer_path).unwrap();
+        let pointer = NovaInstallPointer {
+            commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
+            tarball_sha256: "0".repeat(64),
+            file_count: 16,
+        };
+
+        write_pointer(&install_root, &pointer).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "keep");
+        assert!(!std::fs::symlink_metadata(&pointer_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     /// # Contract
