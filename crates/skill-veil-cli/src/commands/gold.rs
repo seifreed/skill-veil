@@ -79,6 +79,18 @@ fn vt_label_for(dir: &Path, sha: &str) -> Option<SampleLabel> {
     sample_label_from_vt(&report)
 }
 
+fn validate_sample_sha(sha: &str) -> Result<()> {
+    if sha.len() == 64
+        && sha
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("gold consensus id `{sha}` must be a lowercase 64-character SHA-256")
+    }
+}
+
 /// ≥2 DISTINCT providers agreeing on the same label is the consensus;
 /// otherwise `None` (no consensus → the sample is disputed and needs
 /// a human). Distinctness is keyed on provider name so a single
@@ -112,6 +124,7 @@ fn build(args: GoldBuildArgs) -> Result<()> {
     let samples: Vec<GoldSample> = records
         .iter()
         .map(|r| {
+            validate_sample_sha(&r.sha)?;
             let consensus = llm_consensus(&r.providers);
             let vt_label = args
                 .vt_reports
@@ -136,9 +149,9 @@ fn build(args: GoldBuildArgs) -> Result<()> {
             // derive_disputed (VT=None, LLM=None) path returns false,
             // so a no-consensus sample must still be flagged.
             s.disputed = s.derive_disputed() || consensus.is_none();
-            s
+            Ok(s)
         })
-        .collect();
+        .collect::<Result<_>>()?;
 
     let manifest = GoldCorpusManifest {
         schema_version: "1".to_string(),
@@ -220,6 +233,65 @@ mod tests {
             provider: p.to_string(),
             verdict: v.to_string(),
         }
+    }
+
+    /// # Contract
+    ///
+    /// Gold sample ids are lowercase SHA-256 strings because they become
+    /// filesystem path segments.
+    #[test]
+    fn validate_sample_sha_accepts_lowercase_sha256() {
+        assert!(validate_sample_sha(&"a".repeat(64)).is_ok());
+        assert!(validate_sample_sha(&"0".repeat(64)).is_ok());
+    }
+
+    /// # Contract
+    ///
+    /// Gold sample ids must reject path syntax before any VT report or
+    /// dataset path is constructed.
+    #[test]
+    fn validate_sample_sha_rejects_path_syntax() {
+        for bad in [
+            String::new(),
+            "a".to_string(),
+            "A".repeat(64),
+            "../../etc/passwd".to_string(),
+            "/tmp/escape".to_string(),
+            "a/b".to_string(),
+            "a".repeat(63),
+            "g".repeat(64),
+        ] {
+            assert!(
+                validate_sample_sha(&bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `gold build` rejects malformed ids before writing the output
+    /// manifest.
+    #[test]
+    fn build_rejects_path_like_consensus_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let consensus = tmp.path().join("consensus.jsonl");
+        let out = tmp.path().join("gold.yaml");
+        std::fs::write(
+            &consensus,
+            r#"{"sha":"../../escape","providers":[{"provider":"openai","verdict":"malicious"},{"provider":"grok","verdict":"malicious"}]}"#,
+        )
+        .unwrap();
+
+        let result = build(GoldBuildArgs {
+            consensus,
+            dataset_root: tmp.path().join("dataset"),
+            vt_reports: Some(tmp.path().join("vt-reports")),
+            out: out.clone(),
+        });
+
+        assert!(result.is_err());
+        assert!(!out.exists());
     }
 
     /// Contract: ≥2 distinct providers on the same label is consensus;
