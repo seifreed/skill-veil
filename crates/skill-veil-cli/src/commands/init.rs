@@ -7,7 +7,9 @@
 
 use crate::cli_args::{InitArgs, OutputFormat, RulesStatusArgs, RulesUpdateArgs};
 use crate::init;
+use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
+use std::path::Path;
 
 pub(crate) fn run_init(args: InitArgs) -> Result<()> {
     let outcome = init::run_init(args.version, args.cache_dir)
@@ -16,16 +18,16 @@ pub(crate) fn run_init(args: InitArgs) -> Result<()> {
         "skill-veil-rules {ver} installed ({files} files)\n  trusted key: {key}\n  install path: {path}",
         ver = outcome.version,
         files = outcome.file_count,
-        key = outcome.trusted_key_id,
-        path = outcome.install_dir.display(),
+        key = terminal_text(outcome.trusted_key_id),
+        path = terminal_path(&outcome.install_dir),
     );
     match &outcome.nova {
         Some(n) => {
             println!(
                 "nova-rules {sha} installed ({files} .nov files)\n  install path: {path}",
-                sha = short_sha(&n.commit_sha),
+                sha = terminal_text(short_sha(&n.commit_sha)),
                 files = n.file_count,
-                path = n.install_dir.display(),
+                path = terminal_path(&n.install_dir),
             );
         }
         None => {
@@ -77,9 +79,9 @@ pub(crate) fn run_rules_status(args: RulesStatusArgs) -> Result<()> {
             match &install.skill_veil {
                 Some(i) => println!(
                     "skill-veil-rules {ver}\n  trusted key: {key}\n  install path: {path}",
-                    ver = i.version,
-                    key = i.trusted_key_id,
-                    path = i.install_dir.display(),
+                    ver = terminal_text(&i.version),
+                    key = terminal_text(&i.trusted_key_id),
+                    path = terminal_path(&i.install_dir),
                 ),
                 None => println!(
                     "skill-veil-rules: NOT INSTALLED — run `skill-veil init` to download the latest signed release"
@@ -88,10 +90,10 @@ pub(crate) fn run_rules_status(args: RulesStatusArgs) -> Result<()> {
             match &install.nova {
                 Some(n) => println!(
                     "nova-rules {short}\n  tarball sha256: {sha}\n  files: {files} .nov files\n  install path: {path}",
-                    short = short_sha(&n.commit_sha),
-                    sha = n.tarball_sha256,
+                    short = terminal_text(short_sha(&n.commit_sha)),
+                    sha = terminal_text(&n.tarball_sha256),
                     files = n.file_count,
-                    path = n.install_dir.display(),
+                    path = terminal_path(&n.install_dir),
                 ),
                 None => println!(
                     "nova-rules: NOT INSTALLED — run `skill-veil rules update` to fetch from github.com/Nova-Hunting/nova-rules"
@@ -103,4 +105,34 @@ pub(crate) fn run_rules_status(args: RulesStatusArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+fn terminal_path(path: &Path) -> String {
+    terminal_text(&path.display().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{terminal_path, terminal_text};
+    use std::path::PathBuf;
+
+    #[test]
+    fn terminal_text_removes_rules_status_control_sequences() {
+        let cleaned = terminal_text("key\x1b]8;;https://evil.invalid\x07click");
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+    }
+
+    #[test]
+    fn terminal_path_removes_rules_status_control_sequences() {
+        let path = PathBuf::from("cache\x1b[2J/rules");
+        let cleaned = terminal_path(&path);
+
+        assert!(!cleaned.contains('\x1b'));
+    }
 }

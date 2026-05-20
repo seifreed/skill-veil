@@ -211,6 +211,8 @@ fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>
         .with_context(|| format!("parsing {}", pointer_path.display()))?;
     validate_version_string(&pointer.version)
         .with_context(|| format!("validating {}", pointer_path.display()))?;
+    validate_trusted_key_id(&pointer.trusted_key_id)
+        .with_context(|| format!("validating trusted_key_id in {}", pointer_path.display()))?;
     let install_dir = install_root.join(&pointer.version);
     Ok(Some(CurrentInstall {
         version: pointer.version,
@@ -366,6 +368,19 @@ fn validate_version_string(v: &str) -> Result<()> {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
     {
         anyhow::bail!("version `{v}` must contain only [A-Za-z0-9.-_] — refusing to embed in URL");
+    }
+    Ok(())
+}
+
+fn validate_trusted_key_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
+    {
+        anyhow::bail!(
+            "trusted_key_id must contain only [A-Za-z0-9.-_] — refusing to render pointer"
+        );
     }
     Ok(())
 }
@@ -532,5 +547,28 @@ mod tests {
             .expect_err("path-like pointer version must be rejected");
 
         assert!(format!("{err:#}").contains("must contain only"));
+    }
+
+    /// # Contract
+    ///
+    /// A persisted `trusted_key_id` is rendered by `rules status`;
+    /// therefore pointer loading MUST reject terminal-control and
+    /// delimiter characters before the text renderer sees them.
+    #[test]
+    fn current_install_rejects_unsafe_trusted_key_id() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        std::fs::create_dir_all(&install_root).unwrap();
+        let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
+        std::fs::write(
+            &pointer_path,
+            br#"{"version":"v0.1.0","trusted_key_id":"key\u001b[2J"}"#,
+        )
+        .unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("control characters in trusted_key_id must be rejected");
+
+        assert!(format!("{err:#}").contains("trusted_key_id"));
     }
 }
