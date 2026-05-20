@@ -19,9 +19,17 @@ const CONFIG_FILE_NAME: &str = ".vt.toml";
 const API_KEY_ENV_VAR: &str = "VT_APIKEY";
 const MAX_LEGACY_VT_CONFIG_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct VtConfig {
     pub(crate) apikey: String,
+}
+
+impl std::fmt::Debug for VtConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VtConfig")
+            .field("apikey", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +164,23 @@ mod tests {
         let body = r#"apikey = "abc123""#;
         let parsed: FileFormat = toml::from_str(body).unwrap();
         assert_eq!(parsed.apikey.as_deref(), Some("abc123"));
+    }
+
+    /// # Contract
+    ///
+    /// `VtConfig::Debug` must not print the VirusTotal API key. The
+    /// config value crosses command and enrichment boundaries, so debug
+    /// formatting is a realistic accidental log path.
+    #[test]
+    fn vt_config_debug_redacts_apikey() {
+        let cfg = VtConfig {
+            apikey: "vt-secret-do-not-leak".to_string(),
+        };
+
+        let rendered = format!("{cfg:?}");
+
+        assert!(!rendered.contains("vt-secret-do-not-leak"));
+        assert!(rendered.contains("<redacted>"));
     }
 
     #[test]

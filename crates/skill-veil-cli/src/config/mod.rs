@@ -37,7 +37,7 @@ pub(crate) use providers::{resolve_llm_provider_override, LlmProviderKind};
 use std::collections::BTreeMap;
 
 /// Fully-resolved config, ready for consumers.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub(crate) struct UnifiedConfig {
     pub llm: Option<LlmConfigSection>,
     /// Optional VirusTotal API key sourced from the `[vt]` section of
@@ -50,6 +50,22 @@ pub(crate) struct UnifiedConfig {
     /// `PROMPTINTEL` environment variable wins, then this field, then
     /// "not configured".
     pub promptintel_apikey: Option<String>,
+}
+
+impl std::fmt::Debug for UnifiedConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnifiedConfig")
+            .field("llm", &self.llm)
+            .field(
+                "vt_apikey",
+                &self.vt_apikey.as_deref().map(|_| "<redacted>"),
+            )
+            .field(
+                "promptintel_apikey",
+                &self.promptintel_apikey.as_deref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -147,5 +163,25 @@ mod tests {
             "Debug output for None api_key MUST NOT show redaction marker; got {rendered}"
         );
         assert!(rendered.contains("api_key: None"));
+    }
+
+    /// # Contract
+    ///
+    /// `UnifiedConfig::Debug` MUST redact VT and PromptIntel credentials.
+    /// Those keys sit beside the LLM section and can be formatted during
+    /// config troubleshooting just as easily as per-provider params.
+    #[test]
+    fn unified_config_debug_redacts_top_level_credentials() {
+        let config = UnifiedConfig {
+            llm: None,
+            vt_apikey: Some("vt-secret-do-not-leak".to_string()),
+            promptintel_apikey: Some("promptintel-secret-do-not-leak".to_string()),
+        };
+
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains("vt-secret-do-not-leak"));
+        assert!(!rendered.contains("promptintel-secret-do-not-leak"));
+        assert!(rendered.contains("<redacted>"));
     }
 }

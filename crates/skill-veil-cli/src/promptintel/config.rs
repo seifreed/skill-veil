@@ -14,9 +14,17 @@ use anyhow::{anyhow, Result};
 const API_KEY_ENV_VAR: &str = "PROMPTINTEL";
 
 /// PromptIntel credentials, ready for the HTTP client to consume.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(crate) struct PromptIntelConfig {
     pub(crate) apikey: String,
+}
+
+impl std::fmt::Debug for PromptIntelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PromptIntelConfig")
+            .field("apikey", &"<redacted>")
+            .finish()
+    }
 }
 
 impl PromptIntelConfig {
@@ -85,6 +93,23 @@ mod tests {
             .expect("env var path must produce credentials");
         assert_eq!(cfg.apikey, token);
         std::env::remove_var(API_KEY_ENV_VAR);
+    }
+
+    /// # Contract
+    ///
+    /// `PromptIntelConfig::Debug` must not print the API key. PromptIntel
+    /// commands construct this value before every authenticated request,
+    /// making debug-format logging an accidental credential leak path.
+    #[test]
+    fn promptintel_config_debug_redacts_apikey() {
+        let cfg = PromptIntelConfig {
+            apikey: "promptintel-secret-do-not-leak".to_string(),
+        };
+
+        let rendered = format!("{cfg:?}");
+
+        assert!(!rendered.contains("promptintel-secret-do-not-leak"));
+        assert!(rendered.contains("<redacted>"));
     }
 
     /// Contract: a whitespace-only `PROMPTINTEL` env var MUST NOT be
