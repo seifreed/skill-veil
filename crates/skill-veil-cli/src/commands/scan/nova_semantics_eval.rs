@@ -206,12 +206,7 @@ pub(crate) mod fastembed_impl {
             let cache_dir = nova_model_cache_dir()?;
             // hf-hub creates children under the cache root, but the
             // cache root itself must already exist before first use.
-            std::fs::create_dir_all(&cache_dir).map_err(|e| {
-                EmbedError::Failed(format!(
-                    "create nova model cache dir {}: {e}",
-                    cache_dir.display()
-                ))
-            })?;
+            create_model_cache_dir(&cache_dir)?;
             let opts =
                 InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir.clone());
             let model = TextEmbedding::try_new(opts).map_err(|e| {
@@ -237,6 +232,15 @@ pub(crate) mod fastembed_impl {
                     "could not determine user cache directory for NOVA model cache".into(),
                 )
             })
+    }
+
+    fn create_model_cache_dir(cache_dir: &std::path::Path) -> Result<(), EmbedError> {
+        crate::util::secure_fs::create_dir_secure(cache_dir).map_err(|e| {
+            EmbedError::Failed(format!(
+                "create nova model cache dir {}: {e}",
+                cache_dir.display()
+            ))
+        })
     }
 
     impl SentenceEmbedder for FastembedSentenceEmbedder {
@@ -281,6 +285,24 @@ pub(crate) mod fastembed_impl {
         #[test]
         fn nova_model_cache_dir_rejects_missing_user_cache_dir() {
             assert!(nova_model_cache_dir_from(None).is_err());
+        }
+
+        /// # Contract
+        ///
+        /// The model cache root is owner-only on Unix so another local
+        /// user cannot pre-populate or tamper with model cache files.
+        #[cfg(unix)]
+        #[test]
+        fn create_model_cache_dir_sets_owner_only_permissions() {
+            use std::os::unix::fs::PermissionsExt;
+
+            let tmp = tempfile::TempDir::new().unwrap();
+            let cache_dir = tmp.path().join("skill-veil").join("nova-models");
+
+            create_model_cache_dir(&cache_dir).unwrap();
+
+            let mode = std::fs::metadata(&cache_dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
         }
     }
 }
