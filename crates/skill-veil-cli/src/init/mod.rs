@@ -79,8 +79,7 @@ pub(crate) fn run_init(
 
     let cache_root = resolve_cache_root(cache_root)?;
     let install_root = cache_root.join("rules");
-    std::fs::create_dir_all(&install_root)
-        .with_context(|| format!("creating install root {}", install_root.display()))?;
+    create_install_root(&install_root)?;
 
     let staging = tempfile::tempdir_in(&install_root)
         .with_context(|| format!("creating staging dir under {}", install_root.display()))?;
@@ -268,6 +267,11 @@ fn write_current_pointer(install_root: &Path, version: &str, trusted_key_id: &st
     Ok(())
 }
 
+fn create_install_root(install_root: &Path) -> Result<()> {
+    crate::util::secure_fs::create_dir_secure(install_root)
+        .with_context(|| format!("creating install root {}", install_root.display()))
+}
+
 fn resolve_cache_root(override_dir: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(dir) = override_dir {
         return Ok(dir);
@@ -412,6 +416,28 @@ mod tests {
         let nova = install.nova.expect("NOVA pointer must round-trip");
         assert_eq!(nova.commit_sha, pointer.commit_sha);
         assert_eq!(nova.file_count, 16);
+    }
+
+    /// # Contract
+    ///
+    /// The installed rule-pack root must be owner-only on Unix because
+    /// `current.json` decides which verified pack the scanner trusts.
+    #[cfg(unix)]
+    #[test]
+    fn create_install_root_sets_owner_only_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+
+        create_install_root(&install_root).unwrap();
+
+        let mode = std::fs::metadata(&install_root)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
     }
 
     /// Contract: the skill-veil pointer version must be a release tag,
