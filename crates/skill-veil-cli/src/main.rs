@@ -25,6 +25,7 @@ use clap::Parser;
 use dataset::run_scan_dataset;
 use skill_veil_core::{PolicyProfile, RecommendedAction, ScanTargetMode, Severity};
 use std::process::ExitCode;
+use util::terminal_safe::sanitise_for_terminal;
 #[cfg(test)]
 mod main_tests;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -77,10 +78,14 @@ fn main() -> ExitCode {
         Ok(true) => ExitCode::from(EXIT_FINDINGS_OVER_THRESHOLD),
         Ok(false) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("error: {err:#}");
+            eprintln!("error: {}", terminal_error(&err));
             ExitCode::from(EXIT_RUNTIME_ERROR)
         }
     }
+}
+
+fn terminal_error(err: &anyhow::Error) -> String {
+    sanitise_for_terminal(&format!("{err:#}"))
 }
 
 fn init_tracing(quiet: bool, verbose: bool) {

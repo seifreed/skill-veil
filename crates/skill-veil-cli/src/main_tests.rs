@@ -28,6 +28,22 @@ fn make_temp_rules_dir() -> PathBuf {
 }
 
 /// # Contract
+///
+/// Runtime errors are the final CLI terminal boundary and may include
+/// attacker-controlled paths or parser input.
+#[test]
+fn terminal_error_sanitises_control_sequences() {
+    let err = anyhow::anyhow!("failed to read bad\x1b]8;;https://evil.invalid\x07path\nfake ok");
+
+    let rendered = terminal_error(&err);
+
+    assert!(!rendered.contains('\x1b'));
+    assert!(!rendered.contains('\x07'));
+    assert!(!rendered.contains('\n'));
+    assert!(rendered.contains("bad?]8;;https://evil.invalid?path?fake ok"));
+}
+
+/// # Contract
 /// `format_text_output` MUST surface every entry from
 /// `summary.action_triggers` under the "Policy escalation reasons"
 /// header so analysts see why an action was upgraded. Hiding triggers
