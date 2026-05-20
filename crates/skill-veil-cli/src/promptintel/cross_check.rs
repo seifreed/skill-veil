@@ -14,7 +14,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use skill_veil_core::{ScanOptions, ScanTargetMode, Scanner, Verdict};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -117,7 +117,19 @@ pub(crate) fn build_summary(opts: &CrossCheckOptions) -> Result<CrossCheckSummar
     let mut summary = CrossCheckSummary::default();
 
     for entry in index.values() {
-        let markdown_path = opts.corpus_dir.join(&entry.markdown_path);
+        let markdown_path = match prompt_markdown_path(&opts.corpus_dir, &entry.markdown_path) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!(
+                    "PromptIntel entry {} has unsafe markdown_path {:?}: {}",
+                    entry.id,
+                    entry.markdown_path,
+                    err
+                );
+                summary.errors += 1;
+                continue;
+            }
+        };
         match scanner.scan_file(&markdown_path) {
             Ok(scan) => {
                 let detected = scan.verdict != Verdict::Benign;
@@ -204,6 +216,35 @@ pub(crate) fn build_summary(opts: &CrossCheckOptions) -> Result<CrossCheckSummar
     summary.taxonomy_drift = drift;
 
     Ok(summary)
+}
+
+fn prompt_markdown_path(corpus_dir: &Path, raw: &str) -> Result<PathBuf> {
+    if raw.contains('\\') {
+        anyhow::bail!("markdown_path contains a backslash separator");
+    }
+
+    let mut rel = PathBuf::new();
+    for comp in Path::new(raw).components() {
+        match comp {
+            Component::Normal(part) => rel.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir => anyhow::bail!("markdown_path contains a `..` component"),
+            Component::RootDir => anyhow::bail!("markdown_path is absolute"),
+            Component::Prefix(_) => anyhow::bail!("markdown_path contains a Windows path prefix"),
+        }
+    }
+    if rel.as_os_str().is_empty() {
+        anyhow::bail!("markdown_path resolves to empty after sanitisation");
+    }
+
+    let path = corpus_dir.join(rel);
+    if let (Ok(root), Ok(candidate)) = (corpus_dir.canonicalize(), path.canonicalize()) {
+        if !candidate.starts_with(&root) {
+            anyhow::bail!("markdown_path resolves outside the corpus directory");
+        }
+        return Ok(candidate);
+    }
+    Ok(path)
 }
 
 /// Render a human-readable text report. Mirrors the `vt cross-check`
@@ -398,6 +439,17 @@ fn load_index(corpus_dir: &Path) -> Result<BTreeMap<String, IndexEntry>> {
 mod tests {
     use super::*;
 
+    fn index_entry(markdown_path: &str) -> IndexEntry {
+        IndexEntry {
+            id: "entry-1".to_string(),
+            title: "Entry".to_string(),
+            severity: PromptSeverity::Low,
+            categories: vec!["test".to_string()],
+            threats: vec!["Jailbreak".to_string()],
+            markdown_path: markdown_path.to_string(),
+        }
+    }
+
     /// Contract: `BucketCounts::detection_rate_pct` MUST return `0.0`
     /// for an empty bucket. The renderer iterates over every severity
     /// label whether or not any prompts populate it; a panic on
@@ -434,6 +486,94 @@ mod tests {
         b.record(true);
         assert_eq!(b.total, 3);
         assert_eq!(b.detected, 2);
+    }
+
+    /// # Contract
+    ///
+    /// Persisted PromptIntel corpus paths are relative paths inside the
+    /// corpus directory.
+    #[test]
+    fn prompt_markdown_path_accepts_downloaded_relative_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prompts = tmp.path().join("prompts");
+        std::fs::create_dir_all(&prompts).unwrap();
+        std::fs::write(prompts.join("entry.md"), "# Entry\n").unwrap();
+
+        let path = prompt_markdown_path(tmp.path(), "prompts/entry.md").unwrap();
+
+        assert!(path.starts_with(tmp.path().canonicalize().unwrap()));
+        assert_eq!(path.file_name().and_then(|s| s.to_str()), Some("entry.md"));
+    }
+
+    /// # Contract
+    ///
+    /// Path syntax that can escape the corpus directory is rejected before
+    /// scanning.
+    #[test]
+    fn prompt_markdown_path_rejects_escape_syntax() {
+        let tmp = tempfile::tempdir().unwrap();
+        for bad in [
+            "",
+            "../outside.md",
+            "/tmp/outside.md",
+            "prompts/../../outside.md",
+            "prompts\\outside.md",
+        ] {
+            assert!(
+                prompt_markdown_path(tmp.path(), bad).is_err(),
+                "{bad:?} must be rejected"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// A malformed `_index.json` path is counted as a corpus error and is
+    /// not scanned outside the corpus root.
+    #[test]
+    fn build_summary_rejects_index_path_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let corpus = tmp.path().join("corpus");
+        std::fs::create_dir_all(&corpus).unwrap();
+        std::fs::write(tmp.path().join("outside.md"), "# Outside\n").unwrap();
+        let index: BTreeMap<String, IndexEntry> =
+            [("entry-1".to_string(), index_entry("../outside.md"))]
+                .into_iter()
+                .collect();
+        std::fs::write(
+            corpus.join("_index.json"),
+            serde_json::to_vec_pretty(&index).unwrap(),
+        )
+        .unwrap();
+
+        let summary = build_summary(&CrossCheckOptions {
+            corpus_dir: corpus,
+            only_misses: false,
+            rules_dir: None,
+        })
+        .unwrap();
+
+        assert_eq!(summary.errors, 1);
+        assert_eq!(summary.total, 0);
+    }
+
+    /// # Contract
+    ///
+    /// Symlinks inside the corpus must not redirect scanning outside the
+    /// corpus root.
+    #[cfg(unix)]
+    #[test]
+    fn prompt_markdown_path_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let prompts = tmp.path().join("corpus").join("prompts");
+        std::fs::create_dir_all(&prompts).unwrap();
+        let outside = tmp.path().join("outside.md");
+        std::fs::write(&outside, "# Outside\n").unwrap();
+        std::os::unix::fs::symlink(&outside, prompts.join("entry.md")).unwrap();
+
+        let result = prompt_markdown_path(&tmp.path().join("corpus"), "prompts/entry.md");
+
+        assert!(result.is_err());
     }
 
     /// Contract: severities order critical → low so the rendered
