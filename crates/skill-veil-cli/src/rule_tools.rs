@@ -6,6 +6,7 @@ use skill_veil_core::{
     RulePackMetadata, Severity,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::fs::Metadata;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -94,8 +95,22 @@ fn read_rule_text_file_with_cap(path: &Path, cap: u64) -> Result<String> {
 }
 
 fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<String> {
+    let path_meta = std::fs::symlink_metadata(path)?;
+    if !path_meta.is_file() || path_meta.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read non-regular rule file {}", path.display()),
+        ));
+    }
+
     let file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
+    if !opened_file_matches_path(&meta, &path_meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read swapped rule file {}", path.display()),
+        ));
+    }
     if meta.len() > cap {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -124,6 +139,27 @@ fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<String> {
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
+}
+
+fn is_rule_yaml_file(entry: &walkdir::DirEntry) -> bool {
+    entry.file_type().is_file() && has_yaml_extension(entry.path())
+}
+
+fn has_yaml_extension(path: &Path) -> bool {
+    path.extension()
+        .map(|ext| ext == "yaml" || ext == "yml")
+        .unwrap_or(false)
+}
+
 pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationReport> {
     let mut issues = Vec::new();
     let mut total_rules = 0_usize;
@@ -142,12 +178,7 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
                 None
             }
         })
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "yaml" || ext == "yml")
-                .unwrap_or(false)
-        })
+        .filter(is_rule_yaml_file)
     {
         pack_files += 1;
         let path = entry.path();
@@ -247,12 +278,7 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
                 None
             }
         })
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|ext| ext == "yaml" || ext == "yml")
-                .unwrap_or(false)
-        })
+        .filter(is_rule_yaml_file)
     {
         pack_files += 1;
         let path = entry.path();
@@ -533,6 +559,72 @@ mod tests {
         let err = read_rule_text_file_with_cap(&path, 8).unwrap_err();
 
         assert!(format!("{err:#}").contains("exceeds limit"));
+    }
+
+    /// # Contract
+    ///
+    /// Rule-pack text reads only accept regular files. A symlinked YAML
+    /// path is not a rule-pack file, even when its target is readable.
+    #[cfg(unix)]
+    #[test]
+    fn read_rule_text_file_rejects_symlinked_text() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real.yaml");
+        let link = dir.path().join("rules.yaml");
+        std::fs::write(&real, "rules: []\n").unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let err = read_rule_text_file_with_cap(&link, 1024).unwrap_err();
+        let kind = err.downcast_ref::<io::Error>().map(|err| err.kind());
+
+        assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
+    }
+
+    /// # Contract
+    ///
+    /// Directory validation only loads YAML entries that are regular
+    /// files. Symlinked YAML entries are outside the rule-pack contract.
+    #[cfg(unix)]
+    #[test]
+    fn validate_rules_directory_skips_symlinked_yaml_entries() {
+        let dir = TempDir::new().unwrap();
+        let rules_dir = dir.path().join("rules");
+        std::fs::create_dir(&rules_dir).unwrap();
+        let real_rules = rules_dir.join("rules.yaml");
+        let outside = dir.path().join("outside.yaml");
+        let link = rules_dir.join("linked.yaml");
+        std::fs::write(&real_rules, valid_rule_pack("REAL_RULE", "real")).unwrap();
+        std::fs::write(&outside, valid_rule_pack("LINKED_RULE", "linked")).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let report = validate_rules_directory(&rules_dir).unwrap();
+
+        assert_eq!(report.total_rules, 1);
+        assert_eq!(report.pack_files, 1);
+        assert!(report.valid);
+    }
+
+    #[cfg(unix)]
+    fn valid_rule_pack(rule_id: &str, pattern: &str) -> String {
+        format!(
+            r#"
+schema_version: skill-veil.dev/rules/v1alpha1
+metadata:
+  name: test-pack
+  kind: official
+  compatibility:
+    - skill-veil.dev/rules/v1alpha1
+rules:
+  - id: {rule_id}
+    category: generic
+    severity: medium
+    confidence: 0.8
+    when: !regex
+      pattern: "{pattern}"
+    action: require_approval
+    reason: "test rule"
+"#
+        )
     }
 
     #[test]
