@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use skill_veil_core::{ScanOptions, ScanTargetMode, Scanner, Verdict};
 use std::collections::BTreeMap;
+use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -450,8 +451,18 @@ fn load_index_with_cap(corpus_dir: &Path, cap: u64) -> Result<BTreeMap<String, I
 }
 
 fn read_bytes_with_cap(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
-    let file = std::fs::File::open(path)?;
+    let path_meta = regular_index_file_metadata(path)?;
+    let file = File::open(path)?;
     let meta = file.metadata()?;
+    if !opened_file_matches_path(&meta, &path_meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read {}: path changed while opening",
+                path.display()
+            ),
+        ));
+    }
     if meta.len() > cap {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -477,7 +488,34 @@ fn read_bytes_with_cap(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
             ),
         ));
     }
+    debug_assert!(
+        bytes.len() as u64 <= cap,
+        "PromptIntel index reader must reject streams over the cap"
+    );
     Ok(bytes)
+}
+
+fn regular_index_file_metadata(path: &Path) -> io::Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_file() && !meta.file_type().is_symlink() {
+        Ok(meta)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read {}: not a regular file", path.display()),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(test)]
@@ -529,6 +567,27 @@ mod tests {
         let err = load_index_with_cap(dir.path(), 8).unwrap_err();
 
         assert!(format!("{err:#}").contains("exceeds limit"));
+    }
+
+    /// # Contract
+    ///
+    /// The PromptIntel corpus index must be a regular file in the
+    /// corpus directory; symlinks are rejected instead of followed.
+    #[cfg(unix)]
+    #[test]
+    fn load_index_rejects_symlinked_index() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("outside-index.json");
+        let expected: BTreeMap<String, IndexEntry> =
+            [("entry-1".to_string(), index_entry("prompts/entry-1.md"))]
+                .into_iter()
+                .collect();
+        std::fs::write(&target, serde_json::to_vec(&expected).unwrap()).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("_index.json")).unwrap();
+
+        let err = load_index_with_cap(dir.path(), 1024).unwrap_err();
+
+        assert!(format!("{err:#}").contains("not a regular file"));
     }
 
     /// Contract: `BucketCounts::detection_rate_pct` MUST return `0.0`
