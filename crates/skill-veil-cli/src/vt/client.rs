@@ -125,6 +125,8 @@ pub(crate) enum VtError {
         "VirusTotal download exceeded the {limit_bytes}-byte cap before reaching end of stream"
     )]
     DownloadTooLarge { limit_bytes: u64 },
+    #[error("invalid VirusTotal SHA-256 identifier")]
+    InvalidSha256,
     #[error(transparent)]
     Io(#[from] io::Error),
 }
@@ -224,6 +226,7 @@ impl VtClient {
     }
 
     pub(crate) fn get_file_report(&self, sha256: &str) -> Result<FileReportEnvelope, VtError> {
+        let sha256 = super::normalize_sha256_hex(sha256).ok_or(VtError::InvalidSha256)?;
         let url = format!("{BASE_URL}/files/{sha256}");
         self.get_json_with_retry(&url, &[])
     }
@@ -346,12 +349,13 @@ impl VtClient {
     /// redirect manually: first request with apikey, then a clean fetch
     /// of the redirect target without apikey, after host-allowlisting.
     pub(crate) fn download_file(&self, sha256: &str, dest: &Path) -> Result<(), VtError> {
+        let sha256 = super::normalize_sha256_hex(sha256).ok_or(VtError::InvalidSha256)?;
         let url = format!("{BASE_URL}/files/{sha256}/download");
         let resp = self.request_download_redirect(&url)?;
 
         let location = match resp {
             DownloadResponse::Direct(r) => {
-                return Self::stream_response_to(dest, *r, sha256, MAX_DOWNLOAD_BYTES);
+                return Self::stream_response_to(dest, *r, &sha256, MAX_DOWNLOAD_BYTES);
             }
             DownloadResponse::Redirect(loc) => loc,
         };
@@ -376,7 +380,7 @@ impl VtClient {
                 }
                 ureq::Error::Transport(e) => VtError::Network(e.to_string()),
             })?;
-        Self::stream_response_to(dest, response, sha256, MAX_DOWNLOAD_BYTES)
+        Self::stream_response_to(dest, response, &sha256, MAX_DOWNLOAD_BYTES)
     }
 
     fn request_download_redirect(&self, url: &str) -> Result<DownloadResponse, VtError> {
@@ -669,9 +673,35 @@ impl VtClient {
 #[cfg(test)]
 mod redirect_tests {
     use super::*;
+    use crate::vt::config::VtConfig;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::thread;
+
+    #[test]
+    fn file_report_rejects_invalid_sha_before_request() {
+        let client = VtClient::new(VtConfig {
+            apikey: "test-key".to_string(),
+        });
+
+        let result = client.get_file_report("../escape");
+
+        assert!(matches!(result, Err(VtError::InvalidSha256)));
+    }
+
+    #[test]
+    fn file_download_rejects_invalid_sha_before_path_or_request() {
+        let client = VtClient::new(VtConfig {
+            apikey: "test-key".to_string(),
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("sample");
+
+        let result = client.download_file("../escape", &dest);
+
+        assert!(matches!(result, Err(VtError::InvalidSha256)));
+        assert!(!dest.exists());
+    }
 
     /// # Contract
     ///

@@ -104,7 +104,13 @@ pub(crate) fn run_download(client: &VtClient, opts: DownloadOptions) -> Result<D
             if collected.len() >= opts.limit {
                 break;
             }
-            collected.push(entry.id);
+            match canonical_download_sha(&entry.id) {
+                Ok(sha) => collected.push(sha),
+                Err(err) => {
+                    tracing::warn!("skipping VT search result with invalid file id: {err}");
+                    summary.errors += 1;
+                }
+            }
         }
         cursor = response.meta.cursor.clone();
         if cursor.is_none() {
@@ -138,12 +144,13 @@ fn process_one(
     reports_dir: &Path,
     summary: &mut DownloadSummary,
 ) -> Result<()> {
+    let sha = canonical_download_sha(sha)?;
     // Fetch the report first — it is smaller, and we always want it even if
     // the file is already on disk or download is suppressed.
     let report_path = reports_dir.join(format!("{sha}.json"));
     if !report_path.exists() {
         let envelope = client
-            .get_file_report(sha)
+            .get_file_report(&sha)
             .with_context(|| format!("fetching report for {sha}"))?;
         let cached = CachedReport {
             sha256: envelope.data.id.clone(),
@@ -158,7 +165,7 @@ fn process_one(
         return Ok(());
     }
 
-    let file_path = opts.dest.join(sha);
+    let file_path = opts.dest.join(&sha);
     // Concurrent invocations may both pass this check and call
     // `download_file`. The rename inside `download_file` is atomic
     // (`util::cache_io::finalize_atomic_write`), so the on-disk cache
@@ -167,7 +174,7 @@ fn process_one(
         summary.files_skipped += 1;
         return Ok(());
     }
-    match client.download_file(sha, &file_path) {
+    match client.download_file(&sha, &file_path) {
         Ok(()) => {
             summary.files_downloaded += 1;
             Ok(())
@@ -181,6 +188,11 @@ fn process_one(
         }
         Err(err) => Err(err.into()),
     }
+}
+
+fn canonical_download_sha(raw: &str) -> Result<String> {
+    super::normalize_sha256_hex(raw)
+        .ok_or_else(|| anyhow::anyhow!("VT file id is not a 64-character SHA-256"))
 }
 
 /// Persist a VT report atomically: serialise to a `.tmp` sibling and then
@@ -210,6 +222,36 @@ mod tests {
             sha256: "a".repeat(64),
             fetched_at: "2026-04-27T00:00:00Z".to_string(),
             attributes: FileAttributes::default(),
+        }
+    }
+
+    /// # Contract
+    ///
+    /// VT search ids are canonicalized before they become filenames.
+    #[test]
+    fn canonical_download_sha_lowercases_hex() {
+        assert_eq!(
+            canonical_download_sha(&"A".repeat(64)).unwrap(),
+            "a".repeat(64)
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Path-like VT search ids are rejected before report or sample paths
+    /// are constructed.
+    #[test]
+    fn canonical_download_sha_rejects_path_segments() {
+        for bad in [
+            "../escape".to_string(),
+            "/tmp/escape".to_string(),
+            "aa/bb".to_string(),
+            "g".repeat(64),
+        ] {
+            assert!(
+                canonical_download_sha(&bad).is_err(),
+                "{bad:?} must be rejected"
+            );
         }
     }
 
