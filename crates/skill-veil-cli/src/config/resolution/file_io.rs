@@ -4,11 +4,14 @@
 //! outside `resolution/` should touch them. `read_file_if_exists` is the
 //! shared loader used by `UnifiedConfig::load`.
 
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io::Read;
 
+use serde::Deserialize;
+
 const MAX_CONFIG_FILE_BYTES: u64 = 1024 * 1024;
+const REDACTED_SECRET: &str = "<redacted>";
 
 /// Read `path` if it exists, surfacing a `tracing::warn!` if the file is
 /// group-/other-readable. Used for `~/.skill-veil.toml` and the legacy
@@ -57,7 +60,11 @@ fn read_config_file_bounded(path: &std::path::Path) -> std::io::Result<String> {
     Ok(body)
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+fn redacted_secret(value: &Option<String>) -> Option<&'static str> {
+    value.as_ref().map(|_| REDACTED_SECRET)
+}
+
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileFormat {
     #[serde(default)]
@@ -78,21 +85,47 @@ pub(super) struct FileFormat {
     pub(super) promptintel: Option<FilePromptIntelSection>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+impl fmt::Debug for FileFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileFormat")
+            .field("llm", &self.llm)
+            .field("vt", &self.vt)
+            .field("promptintel", &self.promptintel)
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileVtSection {
     #[serde(default)]
     pub(super) apikey: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+impl fmt::Debug for FileVtSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileVtSection")
+            .field("apikey", &redacted_secret(&self.apikey))
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FilePromptIntelSection {
     #[serde(default)]
     pub(super) apikey: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+impl fmt::Debug for FilePromptIntelSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FilePromptIntelSection")
+            .field("apikey", &redacted_secret(&self.apikey))
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Default)]
 pub(super) struct FileLlmSection {
     #[serde(default)]
     pub(super) provider: Option<String>,
@@ -102,7 +135,17 @@ pub(super) struct FileLlmSection {
     pub(super) limits: Option<FileLlmLimits>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+impl fmt::Debug for FileLlmSection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileLlmSection")
+            .field("provider", &self.provider)
+            .field("providers", &self.providers)
+            .field("limits", &self.limits)
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileProviderParams {
     #[serde(default)]
@@ -117,7 +160,19 @@ pub(super) struct FileProviderParams {
     pub(super) temperature: Option<f32>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+impl fmt::Debug for FileProviderParams {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileProviderParams")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("api_key", &redacted_secret(&self.api_key))
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .finish()
+    }
+}
+
+#[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub(super) struct FileLlmLimits {
     #[serde(default)]
@@ -134,6 +189,64 @@ pub(super) struct FileLlmLimits {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// # Contract
+    ///
+    /// Debug output for the file-backed config shape MUST redact every
+    /// credential while leaving non-secret configuration visible.
+    #[test]
+    fn file_format_debug_redacts_config_credentials() {
+        let src = r#"
+[vt]
+apikey = "vt-file-secret"
+
+[promptintel]
+apikey = "promptintel-file-secret"
+
+[llm]
+provider = "openai"
+
+[llm.openai]
+model = "gpt-4o-mini"
+base_url = "https://api.openai.com/v1"
+api_key = "sk-file-secret"
+"#;
+        let config: FileFormat = toml::from_str(src).expect("must parse full config");
+
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains("vt-file-secret"));
+        assert!(!rendered.contains("promptintel-file-secret"));
+        assert!(!rendered.contains("sk-file-secret"));
+        assert_eq!(rendered.matches(REDACTED_SECRET).count(), 3);
+        assert!(rendered.contains("gpt-4o-mini"));
+        assert!(rendered.contains("api.openai.com"));
+    }
+
+    /// # Contract
+    ///
+    /// Absent credentials MUST render as `None`, not as redacted values.
+    #[test]
+    fn file_format_debug_marks_absent_credentials_distinctly() {
+        let src = r#"
+[vt]
+
+[promptintel]
+
+[llm]
+provider = "openai"
+
+[llm.openai]
+model = "gpt-4o-mini"
+"#;
+        let config: FileFormat = toml::from_str(src).expect("must parse config without keys");
+
+        let rendered = format!("{config:?}");
+
+        assert!(!rendered.contains(REDACTED_SECRET));
+        assert!(rendered.contains("apikey: None"));
+        assert!(rendered.contains("api_key: None"));
+    }
 
     /// Contract: `~/.skill-veil.toml` accepts a `[vt]` section alongside
     /// `[llm]` so users can centralise both LLM and VirusTotal
