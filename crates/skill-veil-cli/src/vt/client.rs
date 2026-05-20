@@ -9,6 +9,7 @@
 
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
+use crate::util::terminal_safe::sanitise_for_terminal;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -55,7 +56,12 @@ const MAX_JSON_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 /// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
 /// UTF-8 char boundary, appending `"...[truncated]"` when shortened.
 fn truncate_error_body(body: String) -> String {
+    let body = sanitise_for_terminal(&body);
     if body.len() <= ERROR_BODY_MAX_BYTES {
+        debug_assert!(
+            !body.chars().any(|c| c.is_control()),
+            "VT error bodies must be terminal-safe"
+        );
         return body;
     }
     let mut end = ERROR_BODY_MAX_BYTES;
@@ -65,6 +71,10 @@ fn truncate_error_body(body: String) -> String {
     let mut out = String::with_capacity(end + 14);
     out.push_str(&body[..end]);
     out.push_str("...[truncated]");
+    debug_assert!(
+        !out.chars().any(|c| c.is_control()),
+        "VT error bodies must be terminal-safe"
+    );
     out
 }
 
@@ -794,6 +804,19 @@ mod truncate_error_body_tests {
     fn truncate_keeps_short_payloads_intact() {
         let body = "VT quota exceeded for this hour".to_string();
         assert_eq!(truncate_error_body(body.clone()), body);
+    }
+
+    /// Contract: VT error bodies are terminal-safe before they become
+    /// `VtError::HttpStatus`; scan enrichment prints those errors to
+    /// stderr when VT is configured but the remote side fails.
+    #[test]
+    fn truncate_sanitises_control_bytes() {
+        let body = "VT gateway \x1b[2J\x1b[Hfake ok".to_string();
+
+        let cleaned = truncate_error_body(body);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("VT gateway "));
     }
 
     /// Contract: a body longer than [`ERROR_BODY_MAX_BYTES`] is truncated

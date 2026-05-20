@@ -11,6 +11,7 @@ use super::config::PromptIntelConfig;
 use super::types::{
     FeedResponse, PromptListEnvelope, ReportListEnvelope, ReportSubmissionResponse,
 };
+use crate::util::terminal_safe::sanitise_for_terminal;
 use std::io::{self, Read};
 use std::time::Duration;
 use thiserror::Error;
@@ -296,7 +297,12 @@ fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String> {
 /// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes on a UTF-8
 /// boundary, appending `"...[truncated]"` when shortened.
 fn truncate_error_body(body: String) -> String {
+    let body = sanitise_for_terminal(&body);
     if body.len() <= ERROR_BODY_MAX_BYTES {
+        debug_assert!(
+            !body.chars().any(|c| c.is_control()),
+            "PromptIntel error bodies must be terminal-safe"
+        );
         return body;
     }
     let mut end = ERROR_BODY_MAX_BYTES;
@@ -306,6 +312,10 @@ fn truncate_error_body(body: String) -> String {
     let mut out = String::with_capacity(end + 14);
     out.push_str(&body[..end]);
     out.push_str("...[truncated]");
+    debug_assert!(
+        !out.chars().any(|c| c.is_control()),
+        "PromptIntel error bodies must be terminal-safe"
+    );
     out
 }
 
@@ -373,6 +383,20 @@ mod tests {
     fn truncate_error_body_passes_short_bodies_through() {
         let short = "short error".to_string();
         assert_eq!(truncate_error_body(short.clone()), short);
+    }
+
+    /// Contract: PromptIntel error bodies are terminal-safe before they
+    /// become `PromptIntelError::HttpStatus`; feed/report commands print
+    /// those errors through `Display` when the API rejects a request.
+    #[test]
+    fn truncate_error_body_sanitises_control_bytes() {
+        let body = "PromptIntel \x1b]8;;https://evil.invalid\x07click\x1b]8;;\x07".to_string();
+
+        let cleaned = truncate_error_body(body);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+        assert!(cleaned.contains("PromptIntel "));
     }
 
     /// Contract: a PromptIntel JSON response exactly at the byte cap is

@@ -6,6 +6,7 @@
 //! live in [`post_json_with_retry`].
 
 use super::types::{LlmError, LlmPrompt, LlmRawResponse};
+use crate::util::terminal_safe::sanitise_for_terminal;
 use std::time::Duration;
 
 /// Maximum number of *additional* attempts after the initial request
@@ -87,7 +88,12 @@ const ERROR_BODY_MAX_BYTES: usize = 512;
 /// downstream consumer (`tracing::warn!`, `eprintln!`, structured-output
 /// formatters) inherits the bound for free.
 fn truncate_error_body(body: String) -> String {
+    let body = sanitise_for_terminal(&body);
     if body.len() <= ERROR_BODY_MAX_BYTES {
+        debug_assert!(
+            !body.chars().any(|c| c.is_control()),
+            "LLM error bodies must be terminal-safe"
+        );
         return body;
     }
     let mut end = ERROR_BODY_MAX_BYTES;
@@ -97,6 +103,10 @@ fn truncate_error_body(body: String) -> String {
     let mut out = String::with_capacity(end + 14);
     out.push_str(&body[..end]);
     out.push_str("...[truncated]");
+    debug_assert!(
+        !out.chars().any(|c| c.is_control()),
+        "LLM error bodies must be terminal-safe"
+    );
     out
 }
 
@@ -318,6 +328,20 @@ mod tests {
     fn truncate_error_body_keeps_short_payloads_intact() {
         let body = "transient gateway timeout".to_string();
         assert_eq!(truncate_error_body(body.clone()), body);
+    }
+
+    /// Contract: provider error bodies are terminal-safe before they
+    /// become `LlmError::HttpStatus`. A compromised endpoint can return
+    /// OSC/CSI bytes; stderr call-sites print the error via `Display`.
+    #[test]
+    fn truncate_error_body_sanitises_control_bytes() {
+        let body = "gateway \x1b]8;;https://evil.invalid\x07click\x1b]8;;\x07".to_string();
+
+        let cleaned = truncate_error_body(body);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+        assert!(cleaned.contains("gateway "));
     }
 
     /// Contract: a body longer than [`ERROR_BODY_MAX_BYTES`] is truncated
