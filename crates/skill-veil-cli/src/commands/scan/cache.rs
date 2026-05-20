@@ -42,7 +42,7 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> R
     cache_base_dir_from_user_cache(override_dir, scan_path, dirs::cache_dir())
 }
 
-fn cache_base_dir_from_user_cache(
+pub(super) fn cache_base_dir_from_user_cache(
     override_dir: Option<&Path>,
     scan_path: &Path,
     user_cache: Option<PathBuf>,

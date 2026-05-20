@@ -458,6 +458,7 @@ pub(crate) fn run_scan(
     if !args.no_promptintel_enrich {
         if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
             &scan_result,
+            &args.path,
             args.cache_dir.as_deref(),
             quiet,
         )? {

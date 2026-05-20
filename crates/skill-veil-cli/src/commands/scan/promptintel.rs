@@ -16,10 +16,19 @@ use std::path::{Path, PathBuf};
 
 pub(super) fn try_enrich_with_promptintel(
     scan_result: &PackageScanResult,
+    scan_path: &Path,
     cache_dir_override: Option<&Path>,
     quiet: bool,
 ) -> Result<Option<String>> {
-    let cache_root = resolve_cache_root(cache_dir_override);
+    let cache_root = match resolve_cache_root(cache_dir_override, scan_path) {
+        Ok(root) => root,
+        Err(err) => {
+            if !quiet {
+                eprintln!("PromptIntel feed enrichment skipped: {err:#}");
+            }
+            return Ok(None);
+        }
+    };
     let consolidated = consolidate_iocs(scan_result.results.iter().map(|r| &r.extracted_iocs));
     let enrichment = enrich(&cache_root, &consolidated);
 
@@ -41,17 +50,16 @@ pub(super) fn try_enrich_with_promptintel(
     }
 }
 
-/// Default cache root mirrors the VT integration: a `skill-veil`
-/// subdirectory under the OS cache dir. Falling back to the temp
-/// directory keeps the command runnable on systems without an XDG
-/// cache home.
-fn resolve_cache_root(override_dir: Option<&Path>) -> PathBuf {
-    if let Some(dir) = override_dir {
-        return dir.to_path_buf();
-    }
-    dirs::cache_dir()
-        .map(|d| d.join("skill-veil"))
-        .unwrap_or_else(std::env::temp_dir)
+fn resolve_cache_root(override_dir: Option<&Path>, scan_path: &Path) -> Result<PathBuf> {
+    resolve_cache_root_from_user_cache(override_dir, scan_path, dirs::cache_dir())
+}
+
+fn resolve_cache_root_from_user_cache(
+    override_dir: Option<&Path>,
+    scan_path: &Path,
+    user_cache: Option<PathBuf>,
+) -> Result<PathBuf> {
+    super::cache::cache_base_dir_from_user_cache(override_dir, scan_path, user_cache)
 }
 
 fn consolidate_iocs<'a>(
@@ -132,5 +140,43 @@ fn severity_label(sev: PromptSeverity) -> &'static str {
         PromptSeverity::High => "high",
         PromptSeverity::Medium => "medium",
         PromptSeverity::Low => "low",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// # Contract
+    ///
+    /// PromptIntel scan enrichment must not fall back to the shared
+    /// system temp directory when the OS user cache is unavailable.
+    #[test]
+    fn resolve_cache_root_rejects_missing_user_cache_without_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scan_path = tmp.path().join("scan-target");
+        std::fs::create_dir_all(&scan_path).unwrap();
+
+        let err = resolve_cache_root_from_user_cache(None, &scan_path, None).unwrap_err();
+
+        assert!(format!("{err:#}").contains("pass --cache-dir"));
+    }
+
+    /// # Contract
+    ///
+    /// A verified override outside the scan path remains accepted even
+    /// when the OS user cache is unavailable.
+    #[test]
+    fn resolve_cache_root_accepts_override_without_user_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scan_path = tmp.path().join("scan-target");
+        let override_dir = tmp.path().join("promptintel-cache");
+        std::fs::create_dir_all(&scan_path).unwrap();
+        std::fs::create_dir_all(&override_dir).unwrap();
+
+        let resolved =
+            resolve_cache_root_from_user_cache(Some(&override_dir), &scan_path, None).unwrap();
+
+        assert_eq!(resolved, override_dir);
     }
 }
