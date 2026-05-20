@@ -11,7 +11,7 @@ This document describes the current enriched report contract used by:
 - `scan-dataset`
 
 The top-level serialized type is `JsonReport` from
-[policy.rs](/Users/seifreed/tools/malware/skill-veil/crates/skill-veil-core/src/policy.rs).
+[policy/reports.rs](../crates/skill-veil-core/src/policy/reports.rs).
 
 ## Stability
 
@@ -19,7 +19,7 @@ Treat this as the current integration contract for the enriched report format.
 
 Compatible changes may add fields. Existing documented fields should be treated
 as stable unless a major version policy says otherwise. For versioning rules,
-see [versioning.md](/Users/seifreed/tools/malware/skill-veil/docs/versioning.md).
+see [versioning.md](versioning.md).
 
 ## Top-Level Shape
 
@@ -266,4 +266,4 @@ For most integrations, consume the report in this order:
 
 See:
 
-- [json-report-v3-example.json](/Users/seifreed/tools/malware/skill-veil/docs/examples/json-report-v3-example.json)
+- [json-report-v3-example.json](examples/json-report-v3-example.json)

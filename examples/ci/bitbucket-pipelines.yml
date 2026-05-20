@@ -1,0 +1,31 @@
+# Bitbucket Pipelines PR gate, mirrors examples/ci/gitlab-ci.yml. Place
+# this file at the repo root (Bitbucket only reads bitbucket-pipelines.yml
+# at the root). The scan + diff + SARIF pattern is identical across
+# engines — only the variable names and PR-base resolution differ.
+
+image: rust:1.86
+
+definitions:
+  caches:
+    cargo: /usr/local/cargo/registry
+
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: skill-veil PR gate
+          caches:
+            - cargo
+          script:
+            - mkdir -p artifacts
+            - apt-get update && apt-get install -y --no-install-recommends git
+            - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH" --depth 1
+            - git worktree add ../skill-veil-base "origin/$BITBUCKET_PR_DESTINATION_BRANCH"
+            - cargo run -p skill-veil -- scan-package . --preset ci --no-update-check --format json --output artifacts/current.json
+            - cargo run -p skill-veil -- scan-package ../skill-veil-base --preset ci --no-update-check --format json --output artifacts/previous.json
+            - cargo run -p skill-veil -- scan-package . --no-update-check --format sarif --output artifacts/current.sarif
+            - cargo run -p skill-veil -- diff artifacts/previous.json artifacts/current.json --baseline .skill-veil/baseline.json --waivers .skill-veil/waivers.yaml --ci-summary --fail-on new-active
+          after-script:
+            - git worktree remove --force ../skill-veil-base || true
+          artifacts:
+            - artifacts/**
