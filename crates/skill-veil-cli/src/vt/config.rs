@@ -9,14 +9,15 @@
 //! The key is never logged, never surfaced in error messages, and never
 //! accepted via a CLI flag (to keep it out of shell history / `ps` output).
 
-use crate::util::secure_fs::warn_if_file_world_readable;
+use crate::util::{bounded_read::read_text_file_with_cap, secure_fs::warn_if_file_world_readable};
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = ".vt.toml";
 const API_KEY_ENV_VAR: &str = "VT_APIKEY";
+const MAX_LEGACY_VT_CONFIG_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct VtConfig {
@@ -102,14 +103,8 @@ impl VtConfig {
         // user simply hasn't created `~/.vt.toml` yet, which is not an
         // error — return `Ok(None)` so the unified-config fallback can
         // run.
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(contents) => contents,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                return Ok(None);
-            }
-            Err(err) => {
-                return Err(err).with_context(|| format!("failed to read {}", path.display()));
-            }
+        let Some(contents) = read_legacy_config_file(&path)? else {
+            return Ok(None);
         };
         let parsed: FileFormat = toml::from_str(&contents)
             .with_context(|| format!("failed to parse {} as TOML", path.display()))?;
@@ -143,9 +138,18 @@ impl VtConfig {
     }
 }
 
+fn read_legacy_config_file(path: &Path) -> Result<Option<String>> {
+    match read_text_file_with_cap(path, MAX_LEGACY_VT_CONFIG_BYTES) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_key_from_toml_body() {
@@ -234,5 +238,37 @@ mod tests {
         fn _signature_check() -> Result<Option<VtConfig>> {
             VtConfig::load_optional()
         }
+    }
+
+    /// # Contract
+    ///
+    /// The legacy VT config reader MUST accept normal TOML under the
+    /// byte cap so existing `~/.vt.toml` users keep working.
+    #[test]
+    fn legacy_config_read_accepts_valid_toml_under_cap() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&path, r#"apikey = "abc123""#).unwrap();
+
+        let body = read_legacy_config_file(&path).unwrap().unwrap();
+
+        assert!(body.contains("abc123"));
+    }
+
+    /// # Contract
+    ///
+    /// The legacy VT config reader MUST reject oversized files before
+    /// TOML parsing, so a poisoned config path cannot allocate
+    /// unbounded memory while resolving credentials.
+    #[test]
+    fn legacy_config_read_rejects_oversized_toml() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        let oversized_len = usize::try_from(MAX_LEGACY_VT_CONFIG_BYTES).unwrap() + 1;
+        std::fs::write(&path, vec![b'a'; oversized_len]).unwrap();
+
+        let err = read_legacy_config_file(&path).unwrap_err();
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
     }
 }
