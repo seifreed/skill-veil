@@ -22,7 +22,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use ed25519_dalek::{Signature, Verifier};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// Verify a base64-encoded detached Ed25519 signature over the raw
 /// `manifest.json` bytes against the embedded trusted keys. Returns
@@ -85,7 +85,7 @@ pub(crate) fn verify_manifest_against_extracted(
 
     for entry in &manifest.files {
         declared.insert(entry.path.clone());
-        let path = extracted_root.join(&entry.path);
+        let path = manifest_entry_path(extracted_root, &entry.path)?;
         let bytes = std::fs::read(&path).with_context(|| {
             format!(
                 "manifest declares `{}` but it is missing from the extracted tarball",
@@ -142,6 +142,33 @@ pub(crate) fn verify_manifest_against_extracted(
     }
 
     Ok(())
+}
+
+fn manifest_entry_path(extracted_root: &Path, raw: &str) -> Result<PathBuf> {
+    if raw.contains('\\') {
+        bail!("manifest path `{raw}` contains a backslash separator");
+    }
+
+    let mut rel = PathBuf::new();
+    for comp in Path::new(raw).components() {
+        match comp {
+            Component::Normal(part) => rel.push(part),
+            Component::CurDir => continue,
+            Component::ParentDir => bail!("manifest path `{raw}` contains a `..` component"),
+            Component::RootDir => bail!("manifest path `{raw}` is absolute"),
+            Component::Prefix(_) => bail!("manifest path `{raw}` contains a Windows path prefix"),
+        }
+    }
+    if rel.as_os_str().is_empty() {
+        bail!("manifest path `{raw}` resolves to empty after sanitisation");
+    }
+
+    let path = extracted_root.join(rel);
+    debug_assert!(
+        path.starts_with(extracted_root),
+        "manifest entry path must stay under extracted root"
+    );
+    Ok(path)
 }
 
 fn walk_collect(root: &Path, dir: &Path, out: &mut BTreeSet<String>) -> Result<()> {
@@ -205,6 +232,47 @@ mod tests {
         let manifest = make_manifest(&[("official/core.yaml", body)]);
         verify_manifest_against_extracted(&manifest, dir.path())
             .expect("clean extraction must verify");
+    }
+
+    /// Contract: manifest paths name files inside the extracted tree.
+    /// Parent components are invalid even when a same-hash file exists
+    /// outside the tree.
+    #[test]
+    fn manifest_parent_paths_are_rejected_before_file_read() {
+        let dir = TempDir::new().unwrap();
+        let body = b"rule: do_thing\n";
+        let outside =
+            tempfile::NamedTempFile::new_in(dir.path().parent().unwrap()).expect("outside file");
+        fs::write(outside.path(), body).expect("write outside file");
+        let outside_name = outside.path().file_name().unwrap().to_string_lossy();
+        let manifest_path = format!("../{outside_name}");
+        let manifest = make_manifest(&[(&manifest_path, body)]);
+
+        let err = verify_manifest_against_extracted(&manifest, dir.path())
+            .expect_err("manifest parent path must be rejected");
+
+        assert!(format!("{err:#}").contains(".."));
+    }
+
+    /// Contract: manifest paths are relative POSIX paths. Absolute
+    /// filesystem paths must not be interpreted as extracted files.
+    #[test]
+    fn manifest_absolute_paths_are_rejected_before_file_read() {
+        let dir = TempDir::new().unwrap();
+        let body = b"rule: do_thing\n";
+        let outside = tempfile::NamedTempFile::new().expect("outside file");
+        fs::write(outside.path(), body).expect("write outside file");
+        let manifest_path = outside.path().to_string_lossy().to_string();
+        let manifest = make_manifest(&[(&manifest_path, body)]);
+
+        let err = verify_manifest_against_extracted(&manifest, dir.path())
+            .expect_err("manifest absolute path must be rejected");
+        let msg = format!("{err:#}");
+
+        assert!(
+            msg.contains("absolute") || msg.contains("Windows path prefix"),
+            "unexpected error: {msg}"
+        );
     }
 
     /// Contract: any byte tampering in an extracted file fails the
