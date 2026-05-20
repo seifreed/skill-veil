@@ -23,7 +23,10 @@ use crate::promptintel::feed::{
 use crate::promptintel::types::ReportDraft;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+
+const MAX_PROMPTINTEL_REPORT_DRAFT_BYTES: u64 = 1024 * 1024;
 
 /// Returns `Ok(true)` when the action ran successfully but a CI gate
 /// (e.g. `cross-check --fail-below`) was tripped, `Ok(false)` otherwise.
@@ -113,10 +116,7 @@ fn run_report(action: PromptIntelReportAction) -> Result<()> {
 fn run_report_submit(args: PromptIntelReportSubmitArgs) -> Result<()> {
     let cache_root = resolve_cache_root(args.cache_dir.clone())?;
 
-    let raw = std::fs::read_to_string(&args.file)
-        .with_context(|| format!("reading report draft {}", args.file.display()))?;
-    let draft: ReportDraft = serde_json::from_str(&raw)
-        .with_context(|| format!("parsing report draft as JSON: {}", args.file.display()))?;
+    let draft = read_report_draft(&args.file)?;
 
     let validation = draft.validate();
     if !validation.is_empty() {
@@ -347,6 +347,48 @@ fn build_client() -> Result<PromptIntelClient> {
     Ok(PromptIntelClient::new(config))
 }
 
+fn read_report_draft(path: &Path) -> Result<ReportDraft> {
+    read_report_draft_with_cap(path, MAX_PROMPTINTEL_REPORT_DRAFT_BYTES)
+}
+
+fn read_report_draft_with_cap(path: &Path, cap: u64) -> Result<ReportDraft> {
+    let raw = read_to_string_with_cap(path, cap)
+        .with_context(|| format!("reading report draft {}", path.display()))?;
+    serde_json::from_str(&raw)
+        .with_context(|| format!("parsing report draft as JSON: {}", path.display()))
+}
+
+fn read_to_string_with_cap(path: &Path, cap: u64) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size {} exceeds limit {}",
+                path.display(),
+                meta.len(),
+                cap
+            ),
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len().min(cap)).unwrap_or(0));
+    let mut limited = file.take(cap.saturating_add(1));
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size exceeds limit {}",
+                path.display(),
+                cap
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
 fn terminal_field(value: &str) -> String {
     sanitise_for_terminal(value)
 }
@@ -358,9 +400,13 @@ fn terminal_snippet(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{detection_below_gate, resolve_cache_root_from, terminal_field, terminal_snippet};
+    use super::{
+        detection_below_gate, read_report_draft_with_cap, resolve_cache_root_from, terminal_field,
+        terminal_snippet,
+    };
     use crate::promptintel::cross_check::CrossCheckSummary;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     fn summary(total: usize, detected: usize, errors: usize) -> CrossCheckSummary {
         CrossCheckSummary {
@@ -445,5 +491,47 @@ mod tests {
         assert!(!cleaned.contains('\x1b'));
         assert!(!cleaned.contains('\n'));
         assert!(cleaned.contains("title?[2J?"));
+    }
+
+    /// # Contract
+    ///
+    /// A valid PromptIntel report draft under the byte cap MUST parse
+    /// normally. The cap is a memory guard, not a schema change.
+    #[test]
+    fn report_draft_read_accepts_valid_json_under_cap() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("draft.json");
+        std::fs::write(
+            &path,
+            r#"{
+                "category": "prompt",
+                "severity": "low",
+                "confidence": 0.8,
+                "fingerprint": "fp-1",
+                "title": "Valid draft"
+            }"#,
+        )
+        .unwrap();
+
+        let draft = read_report_draft_with_cap(&path, 1024).unwrap();
+
+        assert_eq!(draft.fingerprint, "fp-1");
+        assert_eq!(draft.title, "Valid draft");
+    }
+
+    /// # Contract
+    ///
+    /// PromptIntel report draft reads MUST reject files over the
+    /// configured cap before JSON parsing, so a local draft path cannot
+    /// force an unbounded allocation.
+    #[test]
+    fn report_draft_read_rejects_oversized_json() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("draft.json");
+        std::fs::write(&path, vec![b'{'; 32]).unwrap();
+
+        let err = read_report_draft_with_cap(&path, 8).unwrap_err();
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
     }
 }

@@ -15,8 +15,11 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use skill_veil_core::{ScanOptions, ScanTargetMode, Scanner, Verdict};
 use std::collections::BTreeMap;
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+
+const MAX_PROMPTINTEL_INDEX_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CrossCheckOptions {
@@ -430,21 +433,57 @@ fn severity_order(s: PromptSeverity) -> u8 {
 }
 
 fn load_index(corpus_dir: &Path) -> Result<BTreeMap<String, IndexEntry>> {
+    load_index_with_cap(corpus_dir, MAX_PROMPTINTEL_INDEX_BYTES)
+}
+
+fn load_index_with_cap(corpus_dir: &Path, cap: u64) -> Result<BTreeMap<String, IndexEntry>> {
     let path = corpus_dir.join("_index.json");
-    let body = std::fs::read_to_string(&path).with_context(|| {
+    let body = read_bytes_with_cap(&path, cap).with_context(|| {
         format!(
             "reading PromptIntel corpus index at {} (run `skill-veil promptintel download` first)",
             path.display()
         )
     })?;
-    let index: BTreeMap<String, IndexEntry> = serde_json::from_str(&body)
+    let index: BTreeMap<String, IndexEntry> = serde_json::from_slice(&body)
         .with_context(|| format!("parsing {} as PromptIntel index JSON", path.display()))?;
     Ok(index)
+}
+
+fn read_bytes_with_cap(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size {} exceeds limit {}",
+                path.display(),
+                meta.len(),
+                cap
+            ),
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len().min(cap)).unwrap_or(0));
+    let mut limited = file.take(cap.saturating_add(1));
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size exceeds limit {}",
+                path.display(),
+                cap
+            ),
+        ));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     fn index_entry(markdown_path: &str) -> IndexEntry {
         IndexEntry {
@@ -455,6 +494,41 @@ mod tests {
             threats: vec!["Jailbreak".to_string()],
             markdown_path: markdown_path.to_string(),
         }
+    }
+
+    /// # Contract
+    ///
+    /// A normal PromptIntel corpus index under the byte cap MUST load
+    /// unchanged. The cap only rejects abnormal oversized cache files.
+    #[test]
+    fn load_index_accepts_valid_index_under_cap() {
+        let dir = TempDir::new().unwrap();
+        let expected: BTreeMap<String, IndexEntry> =
+            [("entry-1".to_string(), index_entry("prompts/entry-1.md"))]
+                .into_iter()
+                .collect();
+        let body = serde_json::to_vec(&expected).unwrap();
+        std::fs::write(dir.path().join("_index.json"), body).unwrap();
+
+        let index = load_index_with_cap(dir.path(), 1024).unwrap();
+
+        assert_eq!(index.len(), 1);
+        assert_eq!(index["entry-1"].markdown_path, "prompts/entry-1.md");
+    }
+
+    /// # Contract
+    ///
+    /// PromptIntel corpus index loading MUST reject files over the
+    /// configured cap before JSON parsing, so a poisoned `_index.json`
+    /// cannot trigger an unbounded allocation during cross-checks.
+    #[test]
+    fn load_index_rejects_oversized_index() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("_index.json"), vec![b'['; 32]).unwrap();
+
+        let err = load_index_with_cap(dir.path(), 8).unwrap_err();
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
     }
 
     /// Contract: `BucketCounts::detection_rate_pct` MUST return `0.0`
