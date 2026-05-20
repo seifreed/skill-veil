@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::util::cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES};
+
 const RATELIMIT_FILENAME: &str = "ratelimit.json";
 
 /// Logical endpoint key. Stored as a string in the on-disk state so
@@ -99,11 +101,14 @@ pub(crate) struct RateLimitState {
 
 impl RateLimitState {
     pub(crate) fn load(cache_root: &Path) -> Result<Self> {
+        Self::load_with_cap(cache_root, MAX_CACHE_FILE_BYTES)
+    }
+
+    fn load_with_cap(cache_root: &Path, cap: u64) -> Result<Self> {
         let path = state_path(cache_root);
-        if !path.exists() {
+        let Some(bytes) = read_cache_file_with_cap(&path, cap)? else {
             return Ok(Self::default());
-        }
-        let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        };
         let state: Self = serde_json::from_slice(&bytes)
             .with_context(|| format!("parsing {}", path.display()))?;
         Ok(state)
@@ -380,6 +385,22 @@ mod tests {
     fn load_returns_empty_when_state_absent() {
         let tmp = tempdir().unwrap();
         let state = RateLimitState::load(tmp.path()).unwrap();
+        assert!(state.endpoints.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// An oversized `ratelimit.json` is a default-empty state, not an
+    /// unbounded read.
+    #[test]
+    fn load_returns_empty_when_state_cache_exceeds_cap() {
+        let tmp = tempdir().unwrap();
+        let dir = tmp.path().join("promptintel-feed");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(RATELIMIT_FILENAME), b"{}").unwrap();
+
+        let state = RateLimitState::load_with_cap(tmp.path(), 1).unwrap();
+
         assert!(state.endpoints.is_empty());
     }
 

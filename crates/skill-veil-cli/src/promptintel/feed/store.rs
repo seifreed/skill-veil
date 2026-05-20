@@ -12,7 +12,10 @@
 //! `O(1)` on the indicator value (case-insensitive on hostnames /
 //! file paths).
 
-use crate::promptintel::types::{FeedEntry, FeedIoc, FeedIocKind};
+use crate::{
+    promptintel::types::{FeedEntry, FeedIoc, FeedIocKind},
+    util::cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES},
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -53,31 +56,29 @@ impl FeedStore {
     /// the enrichment path can no-op silently when the operator has
     /// not run `feed sync` yet.
     pub(crate) fn load(cache_root: &Path) -> Result<Self> {
+        Self::load_with_cap(cache_root, MAX_CACHE_FILE_BYTES)
+    }
+
+    fn load_with_cap(cache_root: &Path, cap: u64) -> Result<Self> {
         let dir = feed_dir(cache_root);
         let feed_path = dir.join(FEED_FILENAME);
         let meta_path = dir.join(META_FILENAME);
 
-        if !feed_path.exists() {
+        let Some(feed_bytes) = read_cache_file_with_cap(&feed_path, cap)? else {
             return Ok(Self {
                 entries: Vec::new(),
                 meta: None,
             });
-        }
-
-        let feed_bytes = std::fs::read(&feed_path)
-            .with_context(|| format!("reading {}", feed_path.display()))?;
+        };
         let entries: Vec<FeedEntry> = serde_json::from_slice(&feed_bytes)
             .with_context(|| format!("parsing {}", feed_path.display()))?;
 
-        let meta = if meta_path.exists() {
-            let meta_bytes = std::fs::read(&meta_path)
-                .with_context(|| format!("reading {}", meta_path.display()))?;
-            Some(
+        let meta = match read_cache_file_with_cap(&meta_path, cap)? {
+            Some(meta_bytes) => Some(
                 serde_json::from_slice::<FeedMeta>(&meta_bytes)
                     .with_context(|| format!("parsing {}", meta_path.display()))?,
-            )
-        } else {
-            None
+            ),
+            None => None,
         };
 
         Ok(Self { entries, meta })
@@ -276,6 +277,40 @@ mod tests {
     fn load_returns_empty_when_cache_absent() {
         let tmp = tempdir().unwrap();
         let store = FeedStore::load(tmp.path()).expect("load");
+        assert!(store.entries.is_empty());
+        assert!(store.meta.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// An oversized `feed.json` is a cache miss, not an unbounded read.
+    #[test]
+    fn load_returns_empty_when_feed_cache_exceeds_cap() {
+        let tmp = tempdir().unwrap();
+        let dir = feed_dir(tmp.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FEED_FILENAME), b"[{}]").unwrap();
+
+        let store = FeedStore::load_with_cap(tmp.path(), 3).expect("load");
+
+        assert!(store.entries.is_empty());
+        assert!(store.meta.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// An oversized `meta.json` is ignored while the bounded feed cache
+    /// still loads.
+    #[test]
+    fn load_ignores_meta_when_meta_cache_exceeds_cap() {
+        let tmp = tempdir().unwrap();
+        let dir = feed_dir(tmp.path());
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(FEED_FILENAME), b"[]").unwrap();
+        std::fs::write(dir.join(META_FILENAME), vec![b'a'; 16]).unwrap();
+
+        let store = FeedStore::load_with_cap(tmp.path(), 8).expect("load");
+
         assert!(store.entries.is_empty());
         assert!(store.meta.is_none());
     }
