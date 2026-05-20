@@ -15,6 +15,7 @@
 //! and reuse the report for both.
 
 use crate::init::{current_install, NovaInstallSnapshot};
+use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::Result;
 use skill_veil_core::nova::{
     evaluate_rule, mapping::nova_match_to_findings, parse_rules, LlmEvaluator,
@@ -172,14 +173,20 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
         for hit in &report.hits {
             out.push_str(&format!(
                 "    - {} :: {}\n",
-                hit.source_path.display(),
-                hit.m.rule_name
+                sanitise_for_terminal(&hit.source_path.display().to_string()),
+                sanitise_for_terminal(&hit.m.rule_name)
             ));
-            let kw_hits: Vec<&str> = hit
+            let kw_hits: Vec<String> = hit
                 .m
                 .keyword_hits
                 .iter()
-                .filter_map(|(k, v)| if *v { Some(k.as_str()) } else { None })
+                .filter_map(|(k, v)| {
+                    if *v {
+                        Some(sanitise_for_terminal(k))
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             if !kw_hits.is_empty() {
                 out.push_str(&format!("        keywords:  ${}\n", kw_hits.join(" $")));
@@ -306,6 +313,9 @@ fn short(sha: &str) -> &str {
 mod tests {
     use super::*;
 
+    /// # Contract
+    ///
+    /// Normal-sized scan targets are read into the NOVA body set.
     #[test]
     fn collect_scan_bodies_accepts_small_target_file() {
         let tmp = tempfile::tempdir().unwrap();
@@ -318,6 +328,10 @@ mod tests {
         assert_eq!(bodies[0].1, "# Skill\nkeyword");
     }
 
+    /// # Contract
+    ///
+    /// Files above the NOVA per-body cap are skipped instead of read
+    /// into memory.
     #[test]
     fn collect_scan_bodies_rejects_oversized_target_file() {
         let tmp = tempfile::tempdir().unwrap();
@@ -328,5 +342,50 @@ mod tests {
         let bodies = collect_scan_bodies(&file);
 
         assert!(bodies.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// NOVA's human text block must not emit terminal control bytes
+    /// from package paths or external rule metadata.
+    #[test]
+    fn render_text_block_sanitises_nova_control_sequences() {
+        let mut keyword_hits = std::collections::BTreeMap::new();
+        keyword_hits.insert("kw\x1b[2J".to_string(), true);
+        let report = NovaScanReport {
+            install: NovaInstallSnapshot {
+                commit_sha: "0123456789abcdef".to_string(),
+                tarball_sha256: "a".repeat(64),
+                install_dir: PathBuf::from("/tmp/nova"),
+                file_count: 1,
+            },
+            hits: vec![NovaScanHit {
+                source_path: PathBuf::from("prompt\x1b]8;;https://evil.invalid\x07.md"),
+                rule: NovaRule {
+                    name: "rule".to_string(),
+                    meta: std::collections::BTreeMap::new(),
+                    keywords: std::collections::BTreeMap::new(),
+                    semantics: std::collections::BTreeMap::new(),
+                    llm: std::collections::BTreeMap::new(),
+                    condition: skill_veil_core::nova::condition::ConditionExpr::Literal(true),
+                },
+                m: NovaMatch {
+                    rule_name: "rule\x1b[2J".to_string(),
+                    matched: true,
+                    keyword_hits,
+                    semantic_hits: std::collections::BTreeMap::new(),
+                    llm_hits: std::collections::BTreeMap::new(),
+                    skipped_capabilities: Vec::new(),
+                },
+            }],
+            skipped_capabilities: Vec::new(),
+            rule_count: 1,
+            body_count: 1,
+        };
+
+        let rendered = render_text_block(&report);
+
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
     }
 }
