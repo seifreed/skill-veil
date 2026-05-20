@@ -1027,3 +1027,37 @@ fn diff_fail_on_accepts_value_form_and_rejects_flag_suffix_form() {
         "expected clap rejection mentioning `--fail-on-new-active`, got: {msg}"
     );
 }
+
+/// # Contract
+/// The reusable GitHub composite action treats all action inputs as data
+/// once execution enters the shell. Direct `${{ inputs.* }}` interpolation
+/// inside `run:` is forbidden because workflow authors often feed those
+/// values from pull request metadata.
+#[test]
+fn github_action_run_step_uses_env_backed_inputs() {
+    let action_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.github/actions/skill-veil/action.yml");
+    let action = fs::read_to_string(&action_path).expect("read composite action");
+    let run_block = action
+        .lines()
+        .skip_while(|line| *line != "      run: |")
+        .skip(1)
+        .take_while(|line| line.is_empty() || line.starts_with("        "))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!run_block.is_empty(), "expected composite action run block");
+    assert!(
+        !run_block.contains("${{ inputs."),
+        "action inputs must be passed through env vars before shell evaluation"
+    );
+    assert!(
+        !run_block.contains("echo \"command-line=")
+            && !run_block.contains("echo \"report-path=")
+            && !run_block.contains("echo \"sarif-path="),
+        "GITHUB_OUTPUT writes must use the multiline helper"
+    );
+    assert!(run_block.contains("write_output \"command-line\" \"$command_line\""));
+    assert!(run_block.contains("write_output \"report-path\" \"$report_path\""));
+    assert!(run_block.contains("write_output \"sarif-path\" \"$report_path\""));
+}

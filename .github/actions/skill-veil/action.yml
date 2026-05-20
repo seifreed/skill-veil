@@ -121,92 +121,124 @@ runs:
       id: run-scan
       shell: bash
       working-directory: ${{ inputs.cargo-root }}
+      env:
+        SKILL_VEIL_COMMAND: ${{ inputs.command }}
+        SKILL_VEIL_PATH: ${{ inputs.path }}
+        SKILL_VEIL_FORMAT: ${{ inputs.format }}
+        SKILL_VEIL_OUTPUT: ${{ inputs.output }}
+        SKILL_VEIL_FAIL_ON: ${{ inputs.fail-on }}
+        SKILL_VEIL_MIN_SEVERITY: ${{ inputs.min-severity }}
+        SKILL_VEIL_RULES_DIR: ${{ inputs.rules-dir }}
+        SKILL_VEIL_PROFILE: ${{ inputs.profile }}
+        SKILL_VEIL_BASELINE: ${{ inputs.baseline }}
+        SKILL_VEIL_WAIVERS: ${{ inputs.waivers }}
+        SKILL_VEIL_POLICY: ${{ inputs.policy }}
+        SKILL_VEIL_NO_RECURSIVE: ${{ inputs.no-recursive }}
+        SKILL_VEIL_QUIET_SUMMARY: ${{ inputs.quiet-summary }}
+        SKILL_VEIL_EXPLAIN_POLICY: ${{ inputs.explain-policy }}
+        SKILL_VEIL_PRESET: ${{ inputs.preset }}
+        SKILL_VEIL_FINDING_LIMIT: ${{ inputs.finding-limit }}
+        SKILL_VEIL_VERBOSE: ${{ inputs.verbose }}
+        SKILL_VEIL_QUIET: ${{ inputs.quiet }}
       run: |
         set -euo pipefail
 
-        cmd=(cargo run -p skill-veil -- "${{ inputs.command }}" "${{ inputs.path }}" --format "${{ inputs.format }}")
+        write_output() {
+          local name="$1"
+          local value="$2"
+          local delim
+          delim="$(uuidgen 2>/dev/null || openssl rand -hex 16 2>/dev/null || printf '%s_%s_%s' "$RANDOM" "$RANDOM" "$$")"
+          delim="skill_veil_${name}_${delim}"
+          {
+            printf '%s<<%s\n' "$name" "$delim"
+            printf '%s\n' "$value"
+            printf '%s\n' "$delim"
+          } >> "$GITHUB_OUTPUT"
+        }
 
-        if [ -n "${{ inputs.output }}" ]; then
-          mkdir -p "$(dirname "${{ inputs.output }}")"
-          cmd+=(--output "${{ inputs.output }}")
+        cmd=(cargo run -p skill-veil -- "$SKILL_VEIL_COMMAND" "$SKILL_VEIL_PATH" --format "$SKILL_VEIL_FORMAT")
+
+        if [ -n "$SKILL_VEIL_OUTPUT" ]; then
+          mkdir -p -- "$(dirname -- "$SKILL_VEIL_OUTPUT")"
+          cmd+=(--output "$SKILL_VEIL_OUTPUT")
         fi
 
-        if [ -n "${{ inputs.fail-on }}" ]; then
-          cmd+=(--fail-on "${{ inputs.fail-on }}")
+        if [ -n "$SKILL_VEIL_FAIL_ON" ]; then
+          cmd+=(--fail-on "$SKILL_VEIL_FAIL_ON")
         fi
 
-        if [ -n "${{ inputs.min-severity }}" ]; then
-          cmd+=(--min-severity "${{ inputs.min-severity }}")
+        if [ -n "$SKILL_VEIL_MIN_SEVERITY" ]; then
+          cmd+=(--min-severity "$SKILL_VEIL_MIN_SEVERITY")
         fi
 
-        if [ -n "${{ inputs.rules-dir }}" ]; then
-          cmd+=(--rules-dir "${{ inputs.rules-dir }}")
+        if [ -n "$SKILL_VEIL_RULES_DIR" ]; then
+          cmd+=(--rules-dir "$SKILL_VEIL_RULES_DIR")
         fi
 
-        if [ -n "${{ inputs.profile }}" ]; then
-          cmd+=(--profile "${{ inputs.profile }}")
+        if [ -n "$SKILL_VEIL_PROFILE" ]; then
+          cmd+=(--profile "$SKILL_VEIL_PROFILE")
         fi
 
-        if [ -n "${{ inputs.baseline }}" ]; then
-          cmd+=(--baseline "${{ inputs.baseline }}")
+        if [ -n "$SKILL_VEIL_BASELINE" ]; then
+          cmd+=(--baseline "$SKILL_VEIL_BASELINE")
         fi
 
-        if [ -n "${{ inputs.waivers }}" ]; then
-          cmd+=(--waivers "${{ inputs.waivers }}")
+        if [ -n "$SKILL_VEIL_WAIVERS" ]; then
+          cmd+=(--waivers "$SKILL_VEIL_WAIVERS")
         fi
 
-        if [ -n "${{ inputs.policy }}" ]; then
-          cmd+=(--policy "${{ inputs.policy }}")
+        if [ -n "$SKILL_VEIL_POLICY" ]; then
+          cmd+=(--policy "$SKILL_VEIL_POLICY")
         fi
 
-        if [ "${{ inputs.no-recursive }}" = "true" ]; then
+        if [ "$SKILL_VEIL_NO_RECURSIVE" = "true" ]; then
           cmd+=(--no-recursive)
         fi
 
-        if [ "${{ inputs.quiet-summary }}" = "true" ]; then
+        if [ "$SKILL_VEIL_QUIET_SUMMARY" = "true" ]; then
           cmd+=(--quiet-summary)
         fi
 
-        if [ "${{ inputs.explain-policy }}" = "true" ]; then
+        if [ "$SKILL_VEIL_EXPLAIN_POLICY" = "true" ]; then
           cmd+=(--explain-policy)
         fi
 
-        if [ -n "${{ inputs.preset }}" ]; then
-          cmd+=(--preset "${{ inputs.preset }}")
+        if [ -n "$SKILL_VEIL_PRESET" ]; then
+          cmd+=(--preset "$SKILL_VEIL_PRESET")
         fi
 
-        if [ -n "${{ inputs.finding-limit }}" ]; then
-          cmd+=(--finding-limit "${{ inputs.finding-limit }}")
+        if [ -n "$SKILL_VEIL_FINDING_LIMIT" ]; then
+          cmd+=(--finding-limit "$SKILL_VEIL_FINDING_LIMIT")
         fi
 
-        if [ "${{ inputs.verbose }}" = "true" ]; then
+        if [ "$SKILL_VEIL_VERBOSE" = "true" ]; then
           cmd+=(-v)
         fi
 
-        if [ "${{ inputs.quiet }}" = "true" ]; then
+        if [ "$SKILL_VEIL_QUIET" = "true" ]; then
           cmd+=(-q)
         fi
 
         command_line="$(printf '%q ' "${cmd[@]}")"
         command_line="${command_line% }"
         echo "Running ${command_line}"
-        echo "command-line=${command_line}" >> "$GITHUB_OUTPUT"
+        write_output "command-line" "$command_line"
 
         "${cmd[@]}"
 
-        if [ -n "${{ inputs.output }}" ]; then
-          if [[ "${{ inputs.output }}" = /* ]]; then
-            report_path="${{ inputs.output }}"
+        if [ -n "$SKILL_VEIL_OUTPUT" ]; then
+          if [[ "$SKILL_VEIL_OUTPUT" = /* ]]; then
+            report_path="$SKILL_VEIL_OUTPUT"
           else
-            report_path="${PWD}/${{ inputs.output }}"
+            report_path="${PWD}/${SKILL_VEIL_OUTPUT}"
           fi
         else
           report_path=""
         fi
 
-        echo "report-path=${report_path}" >> "$GITHUB_OUTPUT"
-        if [ "${{ inputs.format }}" = "sarif" ]; then
-          echo "sarif-path=${report_path}" >> "$GITHUB_OUTPUT"
+        write_output "report-path" "$report_path"
+        if [ "$SKILL_VEIL_FORMAT" = "sarif" ]; then
+          write_output "sarif-path" "$report_path"
         else
-          echo "sarif-path=" >> "$GITHUB_OUTPUT"
+          write_output "sarif-path" ""
         fi
