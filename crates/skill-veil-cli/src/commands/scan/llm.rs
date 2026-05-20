@@ -9,6 +9,7 @@ use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use skill_veil_core::PackageScanResult;
 use std::fmt::Write as _;
+use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
@@ -360,8 +361,18 @@ where
 }
 
 fn read_to_string_with_cap(path: &Path) -> io::Result<String> {
-    let file = std::fs::File::open(path)?;
+    let path_meta = regular_llm_input_metadata(path)?;
+    let file = File::open(path)?;
     let meta = file.metadata()?;
+    if !opened_file_matches_path(&meta, &path_meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read {}: path changed while opening",
+                path.display()
+            ),
+        ));
+    }
     if meta.len() > MAX_LLM_ENRICH_FILE_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -386,7 +397,34 @@ fn read_to_string_with_cap(path: &Path) -> io::Result<String> {
             ),
         ));
     }
+    debug_assert!(
+        bytes.len() as u64 <= MAX_LLM_ENRICH_FILE_BYTES,
+        "LLM file reader must reject streams over the cap"
+    );
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
+fn regular_llm_input_metadata(path: &Path) -> io::Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_file() && !meta.file_type().is_symlink() {
+        Ok(meta)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read {}: not a regular file", path.display()),
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 fn format_llm_enrichment(e: &LlmEnrichment) -> String {
@@ -679,6 +717,26 @@ mod tests {
             .expect_err("oversized file must fail");
 
         assert!(format!("{err:#}").contains("exceeds limit"));
+    }
+
+    /// # Contract
+    ///
+    /// LLM enrichment primary reads accept only regular files. A
+    /// symlinked primary is rejected instead of sending the target's
+    /// contents to the provider.
+    #[cfg(unix)]
+    #[test]
+    fn read_primary_contents_for_paths_rejects_symlinked_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.md");
+        let link = dir.path().join("SKILL.md");
+        std::fs::write(&target, "# target").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = super::read_primary_contents_for_paths(std::iter::once(link.as_path()))
+            .expect_err("symlinked primary must fail");
+
+        assert!(format!("{err:#}").contains("not a regular file"));
     }
 
     use crate::llm::types::LlmVerdict;
