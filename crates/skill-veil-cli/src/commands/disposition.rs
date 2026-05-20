@@ -19,6 +19,7 @@ use crate::cli_args::{
     DispositionAction, DispositionListArgs, DispositionRecordArgs, DispositionStatsArgs,
     DispositionVerdictArg,
 };
+use crate::util::bounded_read::read_operator_text_file;
 use crate::util::terminal_safe::sanitise_for_terminal;
 
 fn disposition_of(v: DispositionVerdictArg) -> Disposition {
@@ -33,8 +34,8 @@ fn load_overlay(path: &Path) -> Result<DispositionOverlay> {
     if !path.exists() {
         return Ok(DispositionOverlay::default());
     }
-    let text =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let text = read_operator_text_file(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
 }
 

@@ -5,6 +5,7 @@ use crate::{
         WaiversValidateArgs,
     },
     color::ColorMode,
+    util::bounded_read::read_operator_text_file,
 };
 use anyhow::{Context, Result};
 use skill_veil_core::{
@@ -12,10 +13,10 @@ use skill_veil_core::{
     validate_waivers, JsonReport, RecommendedAction, StdFileSystemProvider,
 };
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::Path;
 
-pub(crate) fn load_json_reports(path: &PathBuf) -> Result<Vec<JsonReport>> {
-    let content = std::fs::read_to_string(path)
+pub(crate) fn load_json_reports(path: &Path) -> Result<Vec<JsonReport>> {
+    let content = read_operator_text_file(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse JSON report {}", path.display()))

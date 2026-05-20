@@ -3,6 +3,7 @@ use crate::{
         format_benchmark_text, render_benchmark_dashboard, render_benchmark_tuning_report,
     },
     cli_args::{BenchmarkArgs, OutputFormat},
+    util::bounded_read::read_operator_text_file,
 };
 use anyhow::{Context, Result};
 use skill_veil_core::{
@@ -34,7 +35,7 @@ pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
         let history = if let Some(history) = dashboard_history.clone() {
             history
         } else if let Some(history_path) = args.history_file.as_ref() {
-            let content = std::fs::read_to_string(history_path)
+            let content = read_operator_text_file(history_path)
                 .with_context(|| format!("Failed to read {}", history_path.display()))?;
             serde_json::from_str::<BenchmarkHistory>(&content)
                 .with_context(|| format!("Failed to parse {}", history_path.display()))?
@@ -78,7 +79,7 @@ pub(crate) fn update_benchmark_history(
     evaluation: &CorpusEvaluation,
 ) -> Result<BenchmarkHistory> {
     let mut history = if history_path.exists() {
-        let content = std::fs::read_to_string(history_path)
+        let content = read_operator_text_file(history_path)
             .with_context(|| format!("Failed to read {}", history_path.display()))?;
         serde_json::from_str::<BenchmarkHistory>(&content)
             .with_context(|| format!("Failed to parse {}", history_path.display()))?

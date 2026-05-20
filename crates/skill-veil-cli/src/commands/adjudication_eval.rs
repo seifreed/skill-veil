@@ -35,6 +35,7 @@ use crate::cli_args::{AdjudicationEvalArgs, OutputFormat};
 use crate::llm::taint_adjudication::{
     effective_verdict, parse_provider_verdict, provider_consensus_benign,
 };
+use crate::util::bounded_read::read_operator_text_file;
 
 /// One recorded provider vote in the flat triage JSONL
 /// (`taint-fp-triage.jsonl`, `taint-fn-triage.jsonl`): one object per
@@ -290,7 +291,7 @@ fn render_text(report: &AdjudicationEvalReport) -> String {
 /// constructs a network client.
 pub(crate) fn run_adjudication_eval(args: AdjudicationEvalArgs) -> Result<()> {
     let read = |p: &std::path::Path| -> Result<String> {
-        fs::read_to_string(p).with_context(|| format!("failed to read {}", p.display()))
+        read_operator_text_file(p).with_context(|| format!("failed to read {}", p.display()))
     };
     let taint_fp: Vec<FlatTriageRecord> = parse_json_stream(&read(&args.taint_fp)?)?;
     let taint_fn: Vec<FlatTriageRecord> = parse_json_stream(&read(&args.taint_fn)?)?;

@@ -9,13 +9,14 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use skill_veil_core::{GoldCorpusManifest, GoldSample, SampleLabel};
 
 use crate::cli_args::{GoldAction, GoldBuildArgs, GoldLabelArg, GoldReviewArgs, GoldStatsArgs};
+use crate::util::bounded_read::read_operator_text_file;
 use crate::vt::types::CachedReport;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,7 +75,7 @@ fn sample_label_from_vt(report: &CachedReport) -> Option<SampleLabel> {
 /// yield `None` (best-effort enrichment, never fatal).
 fn vt_label_for(dir: &Path, sha: &str) -> Option<SampleLabel> {
     let path = dir.join(format!("{sha}.json"));
-    let text = fs::read_to_string(&path).ok()?;
+    let text = read_operator_text_file(&path).ok()?;
     let report: CachedReport = serde_json::from_str(&text).ok()?;
     sample_label_from_vt(&report)
 }
@@ -114,7 +115,7 @@ fn llm_consensus(votes: &[ProviderVoteRecord]) -> Option<SampleLabel> {
 }
 
 fn build(args: GoldBuildArgs) -> Result<()> {
-    let content = fs::read_to_string(&args.consensus)
+    let content = read_operator_text_file(&args.consensus)
         .with_context(|| format!("failed to read {}", args.consensus.display()))?;
     let records: Vec<ConsensusRecord> = serde_json::Deserializer::from_str(&content)
         .into_iter::<ConsensusRecord>()
@@ -171,9 +172,9 @@ fn build(args: GoldBuildArgs) -> Result<()> {
     Ok(())
 }
 
-fn load_manifest(path: &PathBuf) -> Result<GoldCorpusManifest> {
-    let text =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+fn load_manifest(path: &Path) -> Result<GoldCorpusManifest> {
+    let text = read_operator_text_file(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     serde_yaml::from_str(&text).with_context(|| format!("failed to parse {}", path.display()))
 }
 
