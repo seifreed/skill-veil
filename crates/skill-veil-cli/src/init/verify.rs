@@ -22,7 +22,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use ed25519_dalek::{Signature, Verifier};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+
+const MAX_MANIFEST_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Verify a base64-encoded detached Ed25519 signature over the raw
 /// `manifest.json` bytes against the embedded trusted keys. Returns
@@ -81,32 +84,46 @@ pub(crate) fn verify_manifest_against_extracted(
     manifest: &Manifest,
     extracted_root: &Path,
 ) -> Result<()> {
+    verify_manifest_against_extracted_with_cap(manifest, extracted_root, MAX_MANIFEST_ENTRY_BYTES)
+}
+
+fn verify_manifest_against_extracted_with_cap(
+    manifest: &Manifest,
+    extracted_root: &Path,
+    max_entry_bytes: u64,
+) -> Result<()> {
     let mut declared: BTreeSet<String> = BTreeSet::new();
 
     for entry in &manifest.files {
         declared.insert(entry.path.clone());
         let path = manifest_entry_path(extracted_root, &entry.path)?;
-        let bytes = std::fs::read(&path).with_context(|| {
-            format!(
-                "manifest declares `{}` but it is missing from the extracted tarball",
-                entry.path
-            )
-        })?;
+        let (actual_size, actual) = hash_manifest_file_with_cap(&path, max_entry_bytes)
+            .with_context(|| {
+                format!(
+                    "manifest declares `{}` but it is missing from the extracted tarball",
+                    entry.path
+                )
+            })?;
 
         if let Some(expected_size) = entry.size_bytes {
-            if bytes.len() as u64 != expected_size {
+            if expected_size > max_entry_bytes {
+                bail!(
+                    "size mismatch for `{}`: manifest says {} bytes, exceeding per-file cap {}",
+                    entry.path,
+                    expected_size,
+                    max_entry_bytes
+                );
+            }
+            if actual_size != expected_size {
                 bail!(
                     "size mismatch for `{}`: manifest says {} bytes, on-disk has {}",
                     entry.path,
                     expected_size,
-                    bytes.len()
+                    actual_size
                 );
             }
         }
 
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let actual = hex::encode(hasher.finalize());
         if !actual.eq_ignore_ascii_case(&entry.sha256) {
             bail!(
                 "SHA-256 mismatch for `{}`: manifest declares `{}`, computed `{}`",
@@ -142,6 +159,34 @@ pub(crate) fn verify_manifest_against_extracted(
     }
 
     Ok(())
+}
+
+fn hash_manifest_file_with_cap(path: &Path, cap: u64) -> Result<(u64, String)> {
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file).take(cap.saturating_add(1));
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut total_read = 0_u64;
+
+    loop {
+        let read = reader.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        total_read = total_read
+            .checked_add(read as u64)
+            .ok_or_else(|| anyhow!("manifest file byte count overflow"))?;
+        if total_read > cap {
+            bail!(
+                "refusing to hash {}: file exceeds per-file cap {}",
+                path.display(),
+                cap
+            );
+        }
+        hasher.update(&buf[..read]);
+    }
+
+    Ok((total_read, hex::encode(hasher.finalize())))
 }
 
 fn manifest_entry_path(extracted_root: &Path, raw: &str) -> Result<PathBuf> {
@@ -291,6 +336,39 @@ mod tests {
         let err = verify_manifest_against_extracted(&manifest, dir.path())
             .expect_err("tampered file must fail");
         assert!(format!("{err}").contains("SHA-256 mismatch"));
+    }
+
+    /// # Contract
+    ///
+    /// Per-file manifest verification is streaming and MUST accept an
+    /// extracted file whose size is exactly the configured cap.
+    #[test]
+    fn manifest_entry_at_per_file_cap_passes_verification() {
+        let dir = TempDir::new().unwrap();
+        let body = b"12345678";
+        write(dir.path(), "official/core.yaml", body);
+        let manifest = make_manifest(&[("official/core.yaml", body)]);
+
+        let cap = u64::try_from(body.len()).unwrap();
+        verify_manifest_against_extracted_with_cap(&manifest, dir.path(), cap)
+            .expect("file exactly at cap must verify");
+    }
+
+    /// # Contract
+    ///
+    /// Per-file manifest verification MUST reject an entry larger than
+    /// the configured cap before allocating the full file body.
+    #[test]
+    fn manifest_entry_over_per_file_cap_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let body = b"123456789";
+        write(dir.path(), "official/core.yaml", body);
+        let manifest = make_manifest(&[("official/core.yaml", body)]);
+
+        let err = verify_manifest_against_extracted_with_cap(&manifest, dir.path(), 8)
+            .expect_err("entry over cap must fail");
+
+        assert!(format!("{err:#}").contains("per-file cap"));
     }
 
     /// Contract: an extra file in the extracted tarball that is NOT in
