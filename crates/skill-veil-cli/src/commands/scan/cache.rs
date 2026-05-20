@@ -41,7 +41,8 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> P
         // Validate the override does not place the cache inside the
         // scanned package (see the invariant doc-comment above).
         if let (Ok(dir_canon), Ok(scan_canon)) = (dir.canonicalize(), scan_path.canonicalize()) {
-            if dir_canon.starts_with(&scan_canon) {
+            let scan_root = scan_containment_root(&scan_canon);
+            if dir_canon.starts_with(scan_root) {
                 tracing::warn!(
                     "--cache-dir {} is inside scan path {}; this allows a malicious skill to \
                      forge cache entries and suppress real enrichment. Using default cache location.",
@@ -77,6 +78,14 @@ pub(super) fn cache_base_dir(override_dir: Option<&Path>, scan_path: &Path) -> P
          Cache hits will not survive a reboot. Pass --cache-dir to override."
     );
     std::env::temp_dir().join(CACHE_NAMESPACE)
+}
+
+fn scan_containment_root(scan_canon: &Path) -> &Path {
+    if scan_canon.is_file() {
+        scan_canon.parent().unwrap_or(scan_canon)
+    } else {
+        scan_canon
+    }
 }
 
 pub(super) fn cache_root_for(scan_path: &Path, override_dir: Option<&Path>) -> PathBuf {
@@ -168,6 +177,53 @@ mod tests {
         assert!(
             llm_root.starts_with(&override_dir),
             "llm cache MUST be rooted under override; got {llm_root:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// When the scan target is a single file, the scanned package boundary
+    /// is that file's parent directory. A cache override under that parent
+    /// must be rejected for the same cache-forgery reason as package-dir
+    /// targets.
+    #[test]
+    fn cache_base_dir_rejects_override_inside_scan_file_parent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let package = tmp.path().join("package");
+        std::fs::create_dir_all(&package).expect("seed package");
+        let scan_file = package.join("SKILL.md");
+        std::fs::write(&scan_file, "# skill").expect("seed scan file");
+        let override_dir = package.join(".skill-veil-cache");
+        std::fs::create_dir_all(&override_dir).expect("seed override dir");
+
+        let result = cache_base_dir(Some(&override_dir), &scan_file);
+
+        assert!(
+            !result.starts_with(&override_dir),
+            "cache override inside scan-file parent MUST be rejected; got {result:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// A scan-file target may still use an explicit cache override outside
+    /// the package parent. CI jobs depend on this to put caches in a
+    /// workspace-owned directory without writing into the scanned package.
+    #[test]
+    fn cache_base_dir_accepts_override_outside_scan_file_parent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let package = tmp.path().join("package");
+        std::fs::create_dir_all(&package).expect("seed package");
+        let scan_file = package.join("SKILL.md");
+        std::fs::write(&scan_file, "# skill").expect("seed scan file");
+        let override_dir = tmp.path().join("cache");
+        std::fs::create_dir_all(&override_dir).expect("seed override dir");
+
+        let result = cache_base_dir(Some(&override_dir), &scan_file);
+
+        assert!(
+            result.starts_with(&override_dir),
+            "cache override outside scan-file parent MUST be accepted; got {result:?}",
         );
     }
 
