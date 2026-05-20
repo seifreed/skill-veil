@@ -105,40 +105,39 @@ fn sha_from_ancestors(path: &Path) -> Option<String> {
 }
 
 /// Maximum file size that `compute_file_sha256` will read. Files exceeding
-/// this cap are rejected with an error rather than read into memory. Pre-fix
-/// the function used `read_cache_file_with_cap`, which was designed for cache
-/// files (where oversized → cache miss is correct) but here returns a
-/// misleading "file exceeds size cap" message that discards the real I/O
-/// error. The streaming approach also avoids loading the entire file into
-/// memory — a 257 MiB artifact would previously allocate a 256 MiB buffer.
+/// this cap are rejected with an error rather than hashed as a truncated
+/// prefix. The streaming reader enforces the cap after open, so concurrent
+/// file growth cannot produce a digest for only the first capped bytes.
 const MAX_HASH_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Stream SHA-256 of `path` in 64 KiB chunks, rejecting files that exceed
-/// `MAX_HASH_FILE_BYTES`. Uses `BufReader` + `take(cap)` so peak memory stays
-/// bounded regardless of file size, matching the approach used by the VT
-/// download client's `stream_response_to`.
+/// `MAX_HASH_FILE_BYTES`.
 fn compute_file_sha256(path: &Path) -> Result<String> {
+    compute_file_sha256_with_cap(path, MAX_HASH_FILE_BYTES)
+}
+
+fn compute_file_sha256_with_cap(path: &Path, cap: u64) -> Result<String> {
     use std::io::Read;
     let file = std::fs::File::open(path)
         .with_context(|| format!("opening {} for hashing", path.display()))?;
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("stat {} for size check", path.display()))?;
-    if metadata.len() > MAX_HASH_FILE_BYTES {
-        anyhow::bail!(
-            "refusing to hash {}: file size {} exceeds cap ({} bytes)",
-            path.display(),
-            metadata.len(),
-            MAX_HASH_FILE_BYTES
-        );
-    }
-    let mut reader = std::io::BufReader::new(file).take(MAX_HASH_FILE_BYTES);
+    let mut reader = std::io::BufReader::new(file).take(cap.saturating_add(1));
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 64 * 1024];
+    let mut total_read = 0_u64;
     loop {
         let read = reader.read(&mut buf)?;
         if read == 0 {
             break;
+        }
+        total_read = total_read
+            .checked_add(read as u64)
+            .ok_or_else(|| anyhow::anyhow!("hash read byte count overflow"))?;
+        if total_read > cap {
+            anyhow::bail!(
+                "refusing to hash {}: file exceeds cap ({} bytes)",
+                path.display(),
+                cap
+            );
         }
         hasher.update(&buf[..read]);
     }
@@ -160,16 +159,16 @@ mod tests {
 
     #[test]
     fn sha_for_lookup_falls_back_to_file_hash_when_package_id_is_not_hex() {
-        let tmp = std::env::temp_dir().join("skill-veil-cross-check-test.bin");
-        std::fs::write(&tmp, b"hello").unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("cross-check-test.bin");
+        std::fs::write(&path, b"hello").unwrap();
         let id = Some("not-a-sha".to_string());
-        let sha = sha_for_lookup(&id, &tmp).expect("file hash fallback");
+        let sha = sha_for_lookup(&id, &path).expect("file hash fallback");
         // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
         assert_eq!(
             sha,
             "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         );
-        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]
@@ -209,38 +208,41 @@ mod tests {
         assert_eq!(resolved, id);
     }
 
-    /// Contract: `compute_file_sha256` refuses to read files exceeding
-    /// `MAX_HASH_FILE_BYTES`. Without this guard a maliciously large file
-    /// would be read entirely into memory, risking OOM.
+    /// Contract: `compute_file_sha256` hashes files under the default cap.
     #[test]
-    fn compute_file_sha256_rejects_oversized_file() {
+    fn compute_file_sha256_accepts_file_under_default_cap() {
         // Verify the guard exists and is a positive bound.
         const { assert!(MAX_HASH_FILE_BYTES > 0) };
-        let dir = std::env::temp_dir().join("skill-veil-sha-oversized-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("big.bin");
-        // Write a tiny file and confirm hashing succeeds (below the cap).
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("small.bin");
         std::fs::write(&path, b"tiny").unwrap();
         let result = compute_file_sha256(&path);
         assert!(result.is_ok(), "small file should hash successfully");
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Contract: files over the hash cap are rejected instead of hashed
+    /// as a capped prefix.
+    #[test]
+    fn compute_file_sha256_rejects_file_over_cap() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("over-cap.bin");
+        std::fs::write(&path, b"abcd").unwrap();
+
+        let err = compute_file_sha256_with_cap(&path, 3).expect_err("over-cap file must fail");
+
+        assert!(format!("{err:#}").contains("exceeds cap"));
     }
 
     /// # Contract
     ///
     /// `compute_file_sha256` MUST produce a correct SHA-256 digest using
-    /// streaming reads (64 KiB chunks). Pre-fix the function used
-    /// `read_cache_file_with_cap`, which loaded the entire file into memory
-    /// and had cache-miss semantics for oversized files (returning `Ok(None)`
-    /// instead of a typed error). The streaming approach keeps peak memory
-    /// bounded. This test pins that the streaming hash matches the all-at-once
-    /// hash for a file larger than a single chunk.
+    /// streaming reads. This test pins that the streaming hash matches the
+    /// all-at-once hash for a file larger than a single chunk.
     #[test]
     fn compute_file_sha256_streams_correct_hash() {
         use sha2::Digest;
-        let dir = std::env::temp_dir().join("skill-veil-sha-streaming-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("streaming.bin");
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("streaming.bin");
         // 256 KiB — larger than one 64 KiB chunk, exercises the loop.
         let payload = vec![0xABu8; 256 * 1024];
         std::fs::write(&path, &payload).unwrap();
@@ -252,8 +254,6 @@ mod tests {
             result, expected,
             "streaming hash must match all-at-once hash"
         );
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
