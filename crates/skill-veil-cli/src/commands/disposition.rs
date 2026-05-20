@@ -19,6 +19,7 @@ use crate::cli_args::{
     DispositionAction, DispositionListArgs, DispositionRecordArgs, DispositionStatsArgs,
     DispositionVerdictArg,
 };
+use crate::util::terminal_safe::sanitise_for_terminal;
 
 fn disposition_of(v: DispositionVerdictArg) -> Disposition {
     match v {
@@ -62,7 +63,7 @@ fn record(args: DispositionRecordArgs) -> Result<()> {
     save_overlay(&args.file, &overlay)?;
     println!(
         "recorded disposition for {} ({} total records)",
-        args.rule_id,
+        terminal_text(&args.rule_id),
         overlay.records.len()
     );
     Ok(())
@@ -79,9 +80,9 @@ fn list(args: DispositionListArgs) -> Result<()> {
         println!(
             "{} {} {:?} {}",
             r.recorded_at.to_rfc3339(),
-            r.rule_id,
+            terminal_text(&r.rule_id),
             r.analyst_disposition,
-            r.finding_fingerprint
+            terminal_text(&r.finding_fingerprint)
         );
     }
     Ok(())
@@ -91,7 +92,10 @@ fn stats(args: DispositionStatsArgs) -> Result<()> {
     let overlay = load_overlay(&args.file)?;
     let deltas = learned_confidence_adjustments(&overlay);
     let allowlist = learned_allowlist(&overlay);
-    println!("disposition overlay: {}", args.file.display());
+    println!(
+        "disposition overlay: {}",
+        terminal_text(&args.file.display().to_string())
+    );
     println!("  records: {}", overlay.records.len());
     if deltas.is_empty() {
         println!("  (no per-rule signal yet)");
@@ -104,7 +108,7 @@ fn stats(args: DispositionStatsArgs) -> Result<()> {
         } else {
             ""
         };
-        println!("    {rule}: {delta:+.4}{mark}");
+        println!("    {}: {delta:+.4}{mark}", terminal_text(rule));
     }
     Ok(())
 }
@@ -115,6 +119,10 @@ pub(crate) fn run_disposition(action: DispositionAction) -> Result<()> {
         DispositionAction::List(a) => list(a),
         DispositionAction::Stats(a) => stats(a),
     }
+}
+
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
 }
 
 #[cfg(test)]
@@ -167,5 +175,13 @@ mod tests {
             disposition_of(DispositionVerdictArg::Benign),
             Disposition::Benign
         );
+    }
+
+    #[test]
+    fn terminal_text_removes_disposition_control_sequences() {
+        let cleaned = terminal_text("RULE\x1b]8;;https://evil.invalid\x07click");
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
     }
 }
