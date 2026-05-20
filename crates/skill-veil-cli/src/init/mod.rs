@@ -29,6 +29,7 @@ pub(crate) mod update_check;
 mod verify;
 
 use anyhow::{anyhow, Context, Result};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub(crate) use download::ReleaseAssets;
@@ -37,6 +38,7 @@ pub(crate) use download::ReleaseAssets;
 /// version is "current". Read by `default_external_rule_dirs()` and
 /// `skill-veil rules status`.
 pub(crate) const CURRENT_POINTER_FILENAME: &str = "current.json";
+pub(crate) const MAX_INSTALL_POINTER_BYTES: u64 = 64 * 1024;
 
 /// Outcome of a successful `init` run, returned to the CLI for human
 /// rendering. Carries both the skill-veil-rules side and the NOVA
@@ -204,8 +206,7 @@ fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>
     if !pointer_path.exists() {
         return Ok(None);
     }
-    let body = std::fs::read_to_string(&pointer_path)
-        .with_context(|| format!("reading {}", pointer_path.display()))?;
+    let body = read_install_pointer_file(&pointer_path)?;
     let pointer: CurrentPointer = serde_json::from_str(&body)
         .with_context(|| format!("parsing {}", pointer_path.display()))?;
     validate_version_string(&pointer.version)
@@ -216,6 +217,42 @@ fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>
         trusted_key_id: pointer.trusted_key_id,
         install_dir,
     }))
+}
+
+pub(crate) fn read_install_pointer_file(path: &Path) -> Result<String> {
+    read_file_to_string_with_cap(path, MAX_INSTALL_POINTER_BYTES)
+        .with_context(|| format!("reading {}", path.display()))
+}
+
+fn read_file_to_string_with_cap(path: &Path, cap: u64) -> io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let meta = file.metadata()?;
+    if meta.len() > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size {} exceeds limit {}",
+                path.display(),
+                meta.len(),
+                cap
+            ),
+        ));
+    }
+
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len().min(cap)).unwrap_or(0));
+    let mut limited = file.take(cap.saturating_add(1));
+    limited.read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "refusing to read {}: size exceeds limit {}",
+                path.display(),
+                cap
+            ),
+        ));
+    }
+    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 fn read_nova_install(install_root: &Path) -> Option<NovaInstallSnapshot> {
@@ -393,6 +430,43 @@ mod tests {
         // NOVA side is independent — must remain absent until its
         // own pointer is written.
         assert!(install.nova.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// Installed rule-pack pointers under the byte cap MUST read
+    /// normally. The cap protects the cache lookup path without
+    /// changing the JSON pointer format.
+    #[test]
+    fn install_pointer_read_accepts_valid_json_under_cap() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join(CURRENT_POINTER_FILENAME);
+        std::fs::write(
+            &path,
+            br#"{"version":"v0.1.0","trusted_key_id":"skill-veil-rules-2026"}"#,
+        )
+        .unwrap();
+
+        let body = read_install_pointer_file(&path).unwrap();
+
+        assert!(body.contains("v0.1.0"));
+    }
+
+    /// # Contract
+    ///
+    /// Installed rule-pack pointer reads MUST reject oversized files
+    /// before JSON parsing, so a poisoned cache pointer cannot force
+    /// unbounded memory allocation during `rules status`.
+    #[test]
+    fn install_pointer_read_rejects_oversized_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join(CURRENT_POINTER_FILENAME);
+        let oversized_len = usize::try_from(MAX_INSTALL_POINTER_BYTES).unwrap() + 1;
+        std::fs::write(&path, vec![b'{'; oversized_len]).unwrap();
+
+        let err = read_install_pointer_file(&path).unwrap_err();
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
     }
 
     /// Contract: the NOVA pointer round-trips independently of the

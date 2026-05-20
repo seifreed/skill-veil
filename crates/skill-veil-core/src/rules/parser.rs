@@ -1,6 +1,7 @@
 use super::ioc::ioc_feed_to_rules;
 use super::schema::{IocFeedFile, Rule, RulePackFile};
 use super::{RuleError, RULE_PACK_SCHEMA_VERSION};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Parse a YAML rule file, attempting three formats in priority order:
@@ -96,6 +97,7 @@ pub const RULES_DIR_ENV: &str = "SKILL_VEIL_RULES_DIR";
 /// successful download. Kept here so the discovery contract is owned by
 /// the same module that defines the search order.
 const CURRENT_POINTER_FILENAME: &str = "current.json";
+const MAX_CURRENT_POINTER_BYTES: u64 = 64 * 1024;
 
 /// # Search order contract
 ///
@@ -161,8 +163,35 @@ const fn env_path_separator() -> char {
 fn current_install_overlay() -> Option<PathBuf> {
     let install_root = dirs::cache_dir()?.join("skill-veil").join("rules");
     let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
-    let body = std::fs::read_to_string(&pointer_path).ok()?;
+    let body = read_current_pointer_file(&pointer_path)?;
     current_install_overlay_from_pointer(&install_root, &body)
+}
+
+fn read_current_pointer_file(path: &Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if meta.len() > MAX_CURRENT_POINTER_BYTES {
+        tracing::warn!(
+            "ignoring installed rules pointer {} ({} bytes > cap {})",
+            path.display(),
+            meta.len(),
+            MAX_CURRENT_POINTER_BYTES,
+        );
+        return None;
+    }
+
+    let mut body = String::new();
+    let mut limited = file.take(MAX_CURRENT_POINTER_BYTES.saturating_add(1));
+    limited.read_to_string(&mut body).ok()?;
+    if body.len() as u64 > MAX_CURRENT_POINTER_BYTES {
+        tracing::warn!(
+            "ignoring installed rules pointer {} (stream exceeded cap {})",
+            path.display(),
+            MAX_CURRENT_POINTER_BYTES,
+        );
+        return None;
+    }
+    Some(body)
 }
 
 fn current_install_overlay_from_pointer(install_root: &Path, body: &str) -> Option<PathBuf> {
@@ -261,5 +290,38 @@ mod tests {
                 "{bad} must not produce an overlay path"
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// Runtime rule discovery MUST read a normal installed pointer
+    /// without requiring the CLI crate. The core scanner owns this
+    /// fallback path when callers use the library directly.
+    #[test]
+    fn current_pointer_read_accepts_valid_json_under_cap() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pointer_path = tmp.path().join(CURRENT_POINTER_FILENAME);
+        std::fs::write(&pointer_path, r#"{"version":"v0.1.0"}"#).unwrap();
+
+        let body = read_current_pointer_file(&pointer_path).unwrap();
+
+        assert!(body.contains("v0.1.0"));
+    }
+
+    /// # Contract
+    ///
+    /// Runtime rule discovery MUST ignore an oversized installed
+    /// pointer before parsing so a poisoned cache file cannot allocate
+    /// unbounded memory in library callers.
+    #[test]
+    fn current_pointer_read_rejects_oversized_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let pointer_path = tmp.path().join(CURRENT_POINTER_FILENAME);
+        let oversized_len = usize::try_from(MAX_CURRENT_POINTER_BYTES).unwrap() + 1;
+        std::fs::write(&pointer_path, vec![b'{'; oversized_len]).unwrap();
+
+        let body = read_current_pointer_file(&pointer_path);
+
+        assert!(body.is_none());
     }
 }

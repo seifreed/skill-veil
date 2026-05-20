@@ -192,8 +192,7 @@ pub(crate) fn load_pointer(install_root: &Path) -> Result<Option<NovaInstallPoin
     if !path.exists() {
         return Ok(None);
     }
-    let body =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let body = super::read_install_pointer_file(&path)?;
     let pointer: NovaInstallPointer =
         serde_json::from_str(&body).with_context(|| format!("parsing {}", path.display()))?;
     validate_sha_shape(&pointer.commit_sha)
@@ -279,6 +278,22 @@ mod tests {
     fn missing_pointer_is_ok_none() {
         let dir = tempfile::TempDir::new().unwrap();
         assert!(load_pointer(dir.path()).unwrap().is_none());
+    }
+
+    /// # Contract
+    ///
+    /// NOVA pointer loading MUST reject oversized persisted JSON before
+    /// parsing, matching the skill-veil-rules pointer contract.
+    #[test]
+    fn load_pointer_rejects_oversized_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join(NOVA_POINTER_FILENAME);
+        let oversized_len = usize::try_from(super::super::MAX_INSTALL_POINTER_BYTES).unwrap() + 1;
+        std::fs::write(&path, vec![b'{'; oversized_len]).unwrap();
+
+        let err = load_pointer(dir.path()).expect_err("oversized NOVA pointer must be rejected");
+
+        assert!(format!("{err:#}").contains("exceeds limit"));
     }
 
     /// Contract: a persisted pointer cannot turn `commit_sha` into a
