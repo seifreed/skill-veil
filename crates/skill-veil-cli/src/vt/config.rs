@@ -9,15 +9,19 @@
 //! The key is never logged, never surfaced in error messages, and never
 //! accepted via a CLI flag (to keep it out of shell history / `ps` output).
 
-use crate::util::{bounded_read::read_text_file_with_cap, secure_fs::warn_if_file_world_readable};
-use anyhow::{anyhow, Context, Result};
-use serde::Deserialize;
+use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, Context, Result};
+use serde::Deserialize;
+
+use crate::util::{bounded_read::read_text_file_with_cap, secure_fs::warn_if_file_world_readable};
 
 const CONFIG_FILE_NAME: &str = ".vt.toml";
 const API_KEY_ENV_VAR: &str = "VT_APIKEY";
 const MAX_LEGACY_VT_CONFIG_BYTES: u64 = 1024 * 1024;
+const REDACTED_SECRET: &str = "<redacted>";
 
 #[derive(Clone)]
 pub(crate) struct VtConfig {
@@ -32,10 +36,18 @@ impl std::fmt::Debug for VtConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileFormat {
     apikey: Option<String>,
+}
+
+impl fmt::Debug for FileFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FileFormat")
+            .field("apikey", &self.apikey.as_ref().map(|_| REDACTED_SECRET))
+            .finish()
+    }
 }
 
 impl VtConfig {
@@ -164,6 +176,34 @@ mod tests {
         let body = r#"apikey = "abc123""#;
         let parsed: FileFormat = toml::from_str(body).unwrap();
         assert_eq!(parsed.apikey.as_deref(), Some("abc123"));
+    }
+
+    /// # Contract
+    ///
+    /// Debug output for the legacy file-backed config shape MUST redact
+    /// the API key while keeping the field name visible.
+    #[test]
+    fn file_format_debug_redacts_apikey() {
+        let parsed: FileFormat = toml::from_str(r#"apikey = "vt-file-secret""#).unwrap();
+
+        let rendered = format!("{parsed:?}");
+
+        assert!(!rendered.contains("vt-file-secret"));
+        assert!(rendered.contains(REDACTED_SECRET));
+        assert!(rendered.contains("apikey"));
+    }
+
+    /// # Contract
+    ///
+    /// An absent legacy API key MUST render as `None`, not as redacted.
+    #[test]
+    fn file_format_debug_marks_absent_apikey_distinctly() {
+        let parsed: FileFormat = toml::from_str("").unwrap();
+
+        let rendered = format!("{parsed:?}");
+
+        assert!(!rendered.contains(REDACTED_SECRET));
+        assert!(rendered.contains("apikey: None"));
     }
 
     /// # Contract
