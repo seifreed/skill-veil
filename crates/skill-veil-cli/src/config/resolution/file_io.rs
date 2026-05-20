@@ -6,6 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read;
+
+const MAX_CONFIG_FILE_BYTES: u64 = 1024 * 1024;
 
 /// Read `path` if it exists, surfacing a `tracing::warn!` if the file is
 /// group-/other-readable. Used for `~/.skill-veil.toml` and the legacy
@@ -24,7 +27,7 @@ use std::collections::BTreeMap;
 /// who restricted the config without informing the user produced an
 /// undebuggable "no API key configured" failure.
 pub(super) fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
-    match std::fs::read_to_string(path) {
+    match read_config_file_bounded(path) {
         Ok(contents) => {
             crate::util::secure_fs::warn_if_file_world_readable(path);
             Some(contents)
@@ -38,6 +41,20 @@ pub(super) fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
             None
         }
     }
+}
+
+fn read_config_file_bounded(path: &std::path::Path) -> std::io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let mut body = String::new();
+    file.take(MAX_CONFIG_FILE_BYTES.saturating_add(1))
+        .read_to_string(&mut body)?;
+    if body.len() as u64 > MAX_CONFIG_FILE_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("config file exceeds {MAX_CONFIG_FILE_BYTES} byte limit; refusing to load"),
+        ));
+    }
+    Ok(body)
 }
 
 #[derive(Debug, Deserialize, Serialize, Default)]
@@ -209,6 +226,20 @@ request_timeout_secs = 60
             result.is_none(),
             "missing config files MUST yield None, not Some(empty)"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Config files are bounded before being loaded into memory.
+    #[test]
+    fn read_config_file_bounded_rejects_oversized_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = tmp.path().join("large.toml");
+        std::fs::write(&path, vec![b'a'; (MAX_CONFIG_FILE_BYTES + 1) as usize]).unwrap();
+
+        let err = read_config_file_bounded(&path).expect_err("oversized config must fail");
+
+        assert!(err.to_string().contains("exceeds"));
     }
 
     /// # Contract
