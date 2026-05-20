@@ -55,6 +55,7 @@ pub(super) fn prepare_dataset_packages(root: &Path) -> Result<DatasetPreparation
         .collect();
     if !archive_files.is_empty() {
         let cache_root = root.join(".skill-veil-cache").join("extracted");
+        ensure_existing_cache_path_stays_in_dataset(root, &root.join(".skill-veil-cache"))?;
         // `create_dir_secure` (owner-only `0o700` on Unix) instead of
         // `create_dir_all` so the extracted-package cache is not
         // world-readable on shared workstations / CI runners. The cache
@@ -64,6 +65,7 @@ pub(super) fn prepare_dataset_packages(root: &Path) -> Result<DatasetPreparation
         // same threat model.
         crate::util::secure_fs::create_dir_secure(&cache_root)
             .with_context(|| format!("Failed to create {}", cache_root.display()))?;
+        ensure_cache_root_stays_in_dataset(root, &cache_root)?;
 
         let extraction_results: Vec<_> = archive_files
             .par_iter()
@@ -330,7 +332,7 @@ fn wait_for_peer_or_take_lock(
     while started.elapsed() < EXTRACTION_LOCK_TIMEOUT {
         thread::sleep(EXTRACTION_LOCK_POLL);
         // Peer may have completed: check cache hit conditions again.
-        if output_dir.is_dir()
+        if is_real_dir(output_dir)
             && marker_path.exists()
             && read_marker_bounded(marker_path).as_deref() == Some(source_signature)
         {
@@ -389,7 +391,7 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
     let marker_path = output_dir.join(".skill-veil-source");
     let source_signature = zip_source_signature(zip_path)?;
 
-    if output_dir.is_dir()
+    if is_real_dir(&output_dir)
         && marker_path.exists()
         && read_marker_bounded(&marker_path).as_deref() == Some(source_signature.as_str())
     {
@@ -422,7 +424,7 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
 
     // Re-check cache hit after acquiring the lock — the peer may have
     // populated the cache between our pre-lock probe and the lock grab.
-    if output_dir.is_dir()
+    if is_real_dir(&output_dir)
         && marker_path.exists()
         && read_marker_bounded(&marker_path).as_deref() == Some(source_signature.as_str())
     {
@@ -430,26 +432,24 @@ fn extract_zip_package_cached(zip_path: &Path, cache_root: &Path) -> Result<()> 
     }
 
     let staging_dir = cache_root.join(format!(".{}.tmp", package_name));
-    if staging_dir.exists() {
-        fs::remove_dir_all(&staging_dir)
-            .with_context(|| format!("Failed to clean {}", staging_dir.display()))?;
-    }
+    remove_existing_cache_dir(&staging_dir)
+        .with_context(|| format!("Failed to clean {}", staging_dir.display()))?;
     fs::create_dir_all(&staging_dir)
         .with_context(|| format!("Failed to create {}", staging_dir.display()))?;
+    let staging_guard = StagingGuard::arm(&staging_dir);
     extract_zip_package(zip_path, &staging_dir)?;
     fs::write(staging_dir.join(".skill-veil-source"), &source_signature)
         .with_context(|| format!("Failed to write marker for {}", zip_path.display()))?;
 
-    if output_dir.exists() {
-        fs::remove_dir_all(&output_dir)
-            .with_context(|| format!("Failed to replace {}", output_dir.display()))?;
-    }
+    remove_existing_cache_dir(&output_dir)
+        .with_context(|| format!("Failed to replace {}", output_dir.display()))?;
     finalize_extraction(&staging_dir, &output_dir).with_context(|| {
         format!(
             "Failed to finalize cached extraction for {}",
             zip_path.display()
         )
     })?;
+    staging_guard.disarm();
     Ok(())
 }
 
@@ -476,8 +476,8 @@ impl<'a> StagingGuard<'a> {
 
 impl Drop for StagingGuard<'_> {
     fn drop(&mut self) {
-        if self.armed && self.path.exists() {
-            let _ = fs::remove_dir_all(self.path);
+        if self.armed {
+            let _ = remove_existing_cache_dir(self.path);
         }
     }
 }
@@ -495,6 +495,7 @@ fn finalize_extraction(staging_dir: &Path, output_dir: &Path) -> Result<()> {
     }
     fs::create_dir_all(output_dir)
         .with_context(|| format!("Failed to create {}", output_dir.display()))?;
+    ensure_real_dir(output_dir)?;
     for entry in fs::read_dir(staging_dir)
         .with_context(|| format!("Failed to read {}", staging_dir.display()))?
     {
@@ -513,6 +514,78 @@ fn finalize_extraction(staging_dir: &Path, output_dir: &Path) -> Result<()> {
         .with_context(|| format!("Failed to remove {}", staging_dir.display()))?;
     guard.disarm();
     Ok(())
+}
+
+fn ensure_existing_cache_path_stays_in_dataset(dataset_root: &Path, path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path).is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) {
+        return Ok(());
+    }
+    let dataset_root = dataset_root
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", dataset_root.display()))?;
+    let cache_path = path
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", path.display()))?;
+    if !cache_path.starts_with(&dataset_root) {
+        anyhow::bail!(
+            "Refusing to use extraction cache {} because it resolves outside dataset root {}",
+            cache_path.display(),
+            dataset_root.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_cache_root_stays_in_dataset(dataset_root: &Path, cache_root: &Path) -> Result<()> {
+    ensure_real_dir(cache_root)?;
+    let dataset_root = dataset_root
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", dataset_root.display()))?;
+    let cache_root = cache_root
+        .canonicalize()
+        .with_context(|| format!("Failed to canonicalize {}", cache_root.display()))?;
+    if !cache_root.starts_with(&dataset_root) {
+        anyhow::bail!(
+            "Refusing to use extraction cache {} because it resolves outside dataset root {}",
+            cache_root.display(),
+            dataset_root.display()
+        );
+    }
+    Ok(())
+}
+
+fn ensure_real_dir(path: &Path) -> Result<()> {
+    if is_real_dir(path) {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real directory", path.display())
+    }
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn remove_existing_cache_dir(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!(
+                "refusing to replace symlinked cache path {}",
+                path.display()
+            )
+        }
+        Ok(meta) if meta.is_dir() => {
+            fs::remove_dir_all(path).with_context(|| format!("Failed to remove {}", path.display()))
+        }
+        Ok(_) => anyhow::bail!(
+            "refusing to replace non-directory cache path {}",
+            path.display()
+        ),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("Failed to stat {}", path.display())),
+    }
 }
 
 /// Content-addressed signature: SHA-256 of the zip bytes. Stable across
@@ -548,6 +621,18 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::write::SimpleFileOptions;
+
+    fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = zip::ZipWriter::new(file);
+        for (name, body) in entries {
+            writer
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(body).unwrap();
+        }
+        writer.finish().unwrap();
+    }
 
     /// Contract: malicious ZIP entries that would escape `output_dir` MUST
     /// be skipped, never written. Defence in depth on top of `zip` crate's
@@ -769,6 +854,86 @@ mod tests {
             cache_root.join(FALLBACK_PACKAGE_NAME).is_dir(),
             "extraction must materialise under the sanitized fallback name"
         );
+    }
+
+    /// # Contract
+    ///
+    /// The dataset extraction cache must resolve inside the dataset root.
+    /// A corpus-controlled `.skill-veil-cache` symlink must not redirect
+    /// extracted ZIP contents to an attacker-chosen directory.
+    #[cfg(unix)]
+    #[test]
+    fn prepare_dataset_packages_rejects_symlinked_extraction_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dataset = tmp.path().join("dataset");
+        let outside_cache = tmp.path().join("outside-cache");
+        std::fs::create_dir(&dataset).unwrap();
+        std::fs::create_dir(&outside_cache).unwrap();
+        std::os::unix::fs::symlink(&outside_cache, dataset.join(".skill-veil-cache")).unwrap();
+        write_zip(&dataset.join("sample.zip"), &[("SKILL.md", b"# Skill\n")]);
+
+        let err = match prepare_dataset_packages(&dataset) {
+            Ok(_) => panic!("symlinked cache must fail"),
+            Err(err) => err,
+        };
+
+        assert!(format!("{err:#}").contains("outside dataset root"));
+        assert!(
+            !outside_cache
+                .join("extracted")
+                .join("sample")
+                .join("SKILL.md")
+                .exists(),
+            "zip contents must not be written through the cache symlink"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// A pre-existing package cache path that is a symlink must not be
+    /// replaced or traversed during cached extraction.
+    #[cfg(unix)]
+    #[test]
+    fn extract_zip_package_cached_rejects_symlinked_output_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_root = tmp.path().join("cache");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&cache_root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let zip_path = tmp.path().join("sample.zip");
+        write_zip(&zip_path, &[("SKILL.md", b"# Skill\n")]);
+        std::os::unix::fs::symlink(&outside, cache_root.join("sample")).unwrap();
+
+        let err =
+            extract_zip_package_cached(&zip_path, &cache_root).expect_err("symlink must fail");
+
+        assert!(format!("{err:#}").contains("symlinked cache path"));
+        assert!(!outside.join("SKILL.md").exists());
+        assert!(!cache_root.join(".sample.tmp").exists());
+    }
+
+    /// # Contract
+    ///
+    /// A pre-existing staging cache path that is a symlink must be
+    /// rejected before ZIP extraction writes any entry bytes.
+    #[cfg(unix)]
+    #[test]
+    fn extract_zip_package_cached_rejects_symlinked_staging_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_root = tmp.path().join("cache");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&cache_root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let zip_path = tmp.path().join("sample.zip");
+        write_zip(&zip_path, &[("SKILL.md", b"# Skill\n")]);
+        std::os::unix::fs::symlink(&outside, cache_root.join(".sample.tmp")).unwrap();
+
+        let err =
+            extract_zip_package_cached(&zip_path, &cache_root).expect_err("symlink must fail");
+
+        assert!(format!("{err:#}").contains("symlinked cache path"));
+        assert!(!outside.join("SKILL.md").exists());
+        assert!(!cache_root.join("sample").exists());
     }
 
     /// # Contract
