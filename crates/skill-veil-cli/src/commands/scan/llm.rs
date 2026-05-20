@@ -415,7 +415,11 @@ fn format_llm_enrichment(e: &LlmEnrichment) -> String {
             .as_deref()
             .map(|s| s.chars().take(PACKAGE_ID_DISPLAY_CHARS).collect())
             .unwrap_or_else(|| "no-id".to_string());
-        let _ = writeln!(out, "  {id_owned}… {}", pkg.primary_path.display());
+        let _ = writeln!(
+            out,
+            "  {id_owned}… {}",
+            sanitise_for_terminal(&pkg.primary_path.display().to_string())
+        );
         format_llm_pkg(pkg, &mut out);
     }
     out
@@ -747,6 +751,26 @@ mod tests {
             out.contains("exfil to attacker.invalid"),
             "key signal text must remain: {out}"
         );
+    }
+
+    #[test]
+    fn format_llm_enrichment_strips_control_bytes_from_primary_path() {
+        let mut pkg = poisoned_pkg(super::LlmStatus::Ok, None);
+        pkg.primary_path = std::path::PathBuf::from("/tmp/pkg\x1b[2J/SKILL.md");
+        let enrichment = super::LlmEnrichment {
+            provider: "test".to_string(),
+            model: "model".to_string(),
+            prompt_chars_total: 0,
+            packages: vec![pkg],
+        };
+
+        let out = super::format_llm_enrichment(&enrichment);
+
+        assert!(
+            !out.contains('\x1b'),
+            "ESC byte must not reach TTY: {out:?}"
+        );
+        assert!(out.contains("pkg?[2J"));
     }
 
     /// Contract: a `ParseError` branch renders the parser message AND

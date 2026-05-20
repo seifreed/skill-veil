@@ -1,6 +1,7 @@
 use crate::config::{resolve_llm_provider_override, UnifiedConfig};
 use crate::llm::providers::build_provider;
 use crate::text_output::{format_results, TextOutputOptions};
+use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::{
     cli_args::{ColorChoiceArg, PolicyProfileArg, ScanArgs, ScanPresetArg, SeverityArg},
     color::ColorMode,
@@ -360,8 +361,8 @@ pub(crate) fn run_scan(
         for err_entry in &scan_result.errors {
             eprintln!(
                 "Warning: Failed to scan {}: {}",
-                err_entry.path.display(),
-                err_entry.error
+                terminal_path(&err_entry.path),
+                terminal_text(&err_entry.error)
             );
         }
     }
@@ -371,7 +372,7 @@ pub(crate) fn run_scan(
     if let Some(output_path) = args.output {
         std::fs::write(&output_path, &output_content).context("Failed to write output file")?;
         if !quiet {
-            eprintln!("Output written to: {}", output_path.display());
+            eprintln!("Output written to: {}", terminal_path(&output_path));
         }
     } else {
         print!("{}", output_content);
@@ -508,11 +509,29 @@ pub(crate) fn run_scan(
     Ok(should_fail)
 }
 
+fn terminal_text(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+fn terminal_path(path: &Path) -> String {
+    terminal_text(&path.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli_args::{Cli, Commands};
     use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn terminal_path_removes_scan_warning_control_sequences() {
+        let path = PathBuf::from("pkg\x1b[2J/SKILL.md");
+        let cleaned = terminal_path(&path);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("pkg?[2J"));
+    }
 
     fn preset_args(preset: Option<&str>) -> crate::cli_args::ScanArgs {
         let mut argv = vec!["skill-veil", "scan"];
