@@ -10,6 +10,7 @@
 
 use super::corpus::IndexEntry;
 use super::types::PromptSeverity;
+use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use serde::Serialize;
 use skill_veil_core::{ScanOptions, ScanTargetMode, Scanner, Verdict};
@@ -286,7 +287,8 @@ pub(crate) fn render_text(summary: &CrossCheckSummary) -> String {
                 "  {cat:<20}  {:>3}/{:<3}  ({}%)\n",
                 b.detected,
                 b.total,
-                b.detection_rate_pct()
+                b.detection_rate_pct(),
+                cat = sanitise_for_terminal(cat),
             ));
         }
     }
@@ -303,8 +305,8 @@ pub(crate) fn render_text(summary: &CrossCheckSummary) -> String {
             sev = p.severity.as_str(),
             risk = p.our_risk_score,
             v = p.our_verdict,
-            id = p.id,
-            title = truncate(&p.title, 80),
+            id = sanitise_for_terminal(&p.id),
+            title = truncate_for_terminal(&p.title, 80),
         ));
     }
 
@@ -377,7 +379,8 @@ fn render_threats_grouped(
                 "    {threat:<48}  {:>3}/{:<3}  ({}%)\n",
                 b.detected,
                 b.total,
-                b.detection_rate_pct()
+                b.detection_rate_pct(),
+                threat = sanitise_for_terminal(threat),
             ));
         }
     }
@@ -399,6 +402,10 @@ fn truncate(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max - 1).collect();
     out.push('…');
     out
+}
+
+fn truncate_for_terminal(s: &str, max: usize) -> String {
+    truncate(&sanitise_for_terminal(s), max)
 }
 
 /// Single-file markdown mode without policy/profile/baseline so the
@@ -606,6 +613,46 @@ mod tests {
     #[test]
     fn truncate_passes_short_strings_through() {
         assert_eq!(truncate("short", 80), "short".to_string());
+    }
+
+    #[test]
+    fn render_text_sanitises_promptintel_control_sequences() {
+        let mut summary = CrossCheckSummary {
+            total: 1,
+            missed: 1,
+            ..CrossCheckSummary::default()
+        };
+        summary.by_category.insert(
+            "cat\x1b[2J".to_string(),
+            BucketCounts {
+                total: 1,
+                detected: 0,
+            },
+        );
+        summary.by_threat.insert(
+            "Threat\x1b[2J".to_string(),
+            BucketCounts {
+                total: 1,
+                detected: 0,
+            },
+        );
+        summary.prompts.push(PromptCrossCheck {
+            id: "id\x1b]8;;https://evil.invalid\x07click".to_string(),
+            title: "Title\nFAKE OK".to_string(),
+            severity: PromptSeverity::High,
+            categories: Vec::new(),
+            threats: Vec::new(),
+            our_verdict: "benign".to_string(),
+            our_risk_score: 0,
+            detected: false,
+            matched_rules: Vec::new(),
+        });
+
+        let rendered = render_text(&summary);
+
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
+        assert!(rendered.contains("Title?FAKE OK"));
     }
 
     fn counts(detected: usize, total: usize) -> BucketCounts {

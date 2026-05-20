@@ -111,7 +111,7 @@ fn format_enrichment(enrichment: &PromptIntelEnrichment) -> String {
             "\n  [{sev}] {action:<16} {id}\n    title       : {title}\n    category    : {category}\n    confidence  : {conf}",
             sev = severity_label(m.entry.severity),
             action = format!("{:?}", m.entry.action).to_lowercase(),
-            id = m.entry.id,
+            id = sanitise_for_terminal(&m.entry.id),
             title = sanitise_for_terminal(&m.entry.title),
             category = sanitise_for_terminal(&m.entry.category),
             conf = m
@@ -178,5 +178,38 @@ mod tests {
             resolve_cache_root_from_user_cache(Some(&override_dir), &scan_path, None).unwrap();
 
         assert_eq!(resolved, override_dir);
+    }
+
+    #[test]
+    fn format_enrichment_sanitises_feed_entry_id() {
+        let enrichment = PromptIntelEnrichment {
+            cache_total_entries: Some(1),
+            matches: vec![crate::promptintel::feed::enrich::EnrichmentMatch {
+                entry: crate::promptintel::types::FeedEntry {
+                    id: "id\x1b]8;;https://evil.invalid\x07click".to_string(),
+                    fingerprint: None,
+                    category: "credential".to_string(),
+                    severity: PromptSeverity::High,
+                    confidence: Some(1.0),
+                    action: crate::promptintel::types::FeedAction::Block,
+                    title: "Title".to_string(),
+                    description: None,
+                    source: None,
+                    source_identifier: None,
+                    recommendation_agent: None,
+                    iocs: Vec::new(),
+                    expires_at: None,
+                    revoked_at: None,
+                    created_at: None,
+                    revoked: false,
+                },
+                matched_indicators: std::collections::BTreeMap::new(),
+            }],
+        };
+
+        let rendered = format_enrichment(&enrichment);
+
+        assert!(!rendered.contains('\x1b'));
+        assert!(!rendered.contains('\x07'));
     }
 }

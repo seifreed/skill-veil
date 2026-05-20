@@ -21,6 +21,7 @@ use crate::promptintel::feed::{
     sync::{self as feed_sync, SyncMode},
 };
 use crate::promptintel::types::ReportDraft;
+use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -159,7 +160,11 @@ fn run_report_submit(args: PromptIntelReportSubmitArgs) -> Result<()> {
     }
     println!(
         "Report submitted: id={}",
-        response.id.as_deref().unwrap_or("(server returned no id)")
+        response
+            .id
+            .as_deref()
+            .map(terminal_field)
+            .unwrap_or_else(|| "(server returned no id)".to_string())
     );
     Ok(())
 }
@@ -198,8 +203,8 @@ fn run_report_list(args: PromptIntelReportListArgs) -> Result<()> {
                     "[{sev:<8}] {action:<16} {id}  {title}",
                     sev = entry.severity.as_str(),
                     action = format!("{:?}", entry.action).to_lowercase(),
-                    id = entry.id,
-                    title = entry.title.chars().take(70).collect::<String>(),
+                    id = terminal_field(&entry.id),
+                    title = terminal_snippet(&entry.title, 70),
                 );
             }
         }
@@ -238,8 +243,8 @@ fn run_feed_list(args: PromptIntelFeedListArgs) -> Result<()> {
                     "[{sev:<8}] {action:<16} {id}  {title}",
                     sev = entry.severity.as_str(),
                     action = format!("{:?}", entry.action).to_lowercase(),
-                    id = entry.id,
-                    title = entry.title.chars().take(70).collect::<String>(),
+                    id = terminal_field(&entry.id),
+                    title = terminal_snippet(&entry.title, 70),
                 );
             }
         }
@@ -342,9 +347,18 @@ fn build_client() -> Result<PromptIntelClient> {
     Ok(PromptIntelClient::new(config))
 }
 
+fn terminal_field(value: &str) -> String {
+    sanitise_for_terminal(value)
+}
+
+fn terminal_snippet(value: &str, max_chars: usize) -> String {
+    let truncated = value.chars().take(max_chars).collect::<String>();
+    sanitise_for_terminal(&truncated)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{detection_below_gate, resolve_cache_root_from};
+    use super::{detection_below_gate, resolve_cache_root_from, terminal_field, terminal_snippet};
     use crate::promptintel::cross_check::CrossCheckSummary;
     use std::path::PathBuf;
 
@@ -414,5 +428,22 @@ mod tests {
         let resolved = resolve_cache_root_from(Some(override_dir.clone()), None).unwrap();
 
         assert_eq!(resolved, override_dir);
+    }
+
+    #[test]
+    fn terminal_field_removes_promptintel_control_sequences() {
+        let cleaned = terminal_field("id-\x1b]8;;https://evil.invalid\x07click");
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\x07'));
+    }
+
+    #[test]
+    fn terminal_snippet_removes_layout_controls_after_truncation() {
+        let cleaned = terminal_snippet("title\x1b[2J\nfake verdict", 16);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(!cleaned.contains('\n'));
+        assert!(cleaned.contains("title?[2J?"));
     }
 }
