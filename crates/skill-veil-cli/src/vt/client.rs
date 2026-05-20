@@ -98,10 +98,24 @@ fn drain_error_body(status: u16, resp: ureq::Response) -> String {
 /// `resp.into_string()` which allocates the entire body before truncation,
 /// allowing a hostile endpoint to cause OOM.
 fn bounded_read_response(resp: ureq::Response) -> Result<String, io::Error> {
+    read_response_with_cap(resp, MAX_JSON_RESPONSE_BYTES)
+}
+
+fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String, io::Error> {
     let mut buf = String::new();
     resp.into_reader()
-        .take(MAX_JSON_RESPONSE_BYTES)
+        .take(cap.saturating_add(1))
         .read_to_string(&mut buf)?;
+    if buf.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("response body exceeds {cap} byte limit"),
+        ));
+    }
+    debug_assert!(
+        buf.len() as u64 <= cap,
+        "bounded response reader must reject bodies over the cap"
+    );
     Ok(buf)
 }
 
@@ -328,11 +342,7 @@ impl VtClient {
         let body = format!("url={encoded}");
         let endpoint = format!("{BASE_URL}/urls");
         let resp = self.post_form_with_retry(&endpoint, &body)?;
-        let mut buf = String::new();
-        resp.into_reader()
-            .take(MAX_JSON_RESPONSE_BYTES)
-            .read_to_string(&mut buf)
-            .map_err(|e| VtError::Decode(e.to_string()))?;
+        let buf = bounded_read_response(resp).map_err(|e| VtError::Decode(e.to_string()))?;
         Ok(buf)
     }
 
@@ -490,12 +500,8 @@ impl VtClient {
         T: serde::de::DeserializeOwned,
     {
         let response = self.request_with_retry(&self.agent, url, query)?;
-        let mut buf = String::new();
-        response
-            .into_reader()
-            .take(MAX_JSON_RESPONSE_BYTES)
-            .read_to_string(&mut buf)
-            .map_err(|err| VtError::Decode(err.to_string()))?;
+        let buf =
+            bounded_read_response(response).map_err(|err| VtError::Decode(err.to_string()))?;
         serde_json::from_str::<T>(&buf).map_err(|err| VtError::Decode(err.to_string()))
     }
 
@@ -771,6 +777,16 @@ mod redirect_tests {
 mod truncate_error_body_tests {
     use super::*;
 
+    fn response_with_body(body: &str) -> ureq::Response {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .parse()
+        .expect("synthetic response must parse")
+    }
+
     /// Contract: a body shorter than [`ERROR_BODY_MAX_BYTES`] is preserved
     /// verbatim. Pins the no-truncate branch so the cap doesn't silently
     /// shorten ordinary VT error messages (operator diagnostics need
@@ -802,6 +818,25 @@ mod truncate_error_body_tests {
             "truncated body must carry the suffix; got tail: {:?}",
             &truncated[truncated.len().saturating_sub(20)..]
         );
+    }
+
+    /// Contract: a VT JSON response exactly at the byte cap is accepted.
+    #[test]
+    fn bounded_read_response_accepts_body_at_cap() {
+        let body = read_response_with_cap(response_with_body("abcd"), 4).unwrap();
+
+        assert_eq!(body, "abcd");
+    }
+
+    /// Contract: a VT JSON response beyond the cap fails instead of
+    /// returning a truncated prefix that could be parsed as complete
+    /// JSON by a downstream caller.
+    #[test]
+    fn bounded_read_response_rejects_body_over_cap() {
+        let err = read_response_with_cap(response_with_body("abcde"), 4)
+            .expect_err("oversized response must fail");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }
 
