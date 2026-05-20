@@ -48,16 +48,21 @@ impl StdFileSystemProvider {
     /// well-known patterns from the discovery rules, so a malformed
     /// pattern is a programming error worth surfacing as "no matches"
     /// rather than crashing a long-running scan.
-    fn matches_pattern(filename: &str, pattern: &str) -> bool {
+    fn compile_matcher(pattern: &str) -> Option<globset::GlobMatcher> {
         match globset::Glob::new(pattern) {
-            Ok(glob) => glob.compile_matcher().is_match(filename),
+            Ok(glob) => Some(glob.compile_matcher()),
             Err(err) => {
                 tracing::debug!(
                     "invalid glob pattern {pattern:?} in file discovery (treating as no-match): {err}",
                 );
-                false
+                None
             }
         }
+    }
+
+    #[cfg(test)]
+    fn matches_pattern(filename: &str, pattern: &str) -> bool {
+        Self::compile_matcher(pattern).is_some_and(|matcher| matcher.is_match(filename))
     }
 }
 
@@ -175,6 +180,9 @@ impl FileSystemProvider for StdFileSystemProvider {
         recursive: bool,
     ) -> Result<Vec<PathBuf>, FileSystemError> {
         let mut files = Vec::new();
+        let Some(matcher) = Self::compile_matcher(pattern) else {
+            return Ok(files);
+        };
 
         if recursive {
             for result in WalkDir::new(path).follow_links(false) {
@@ -185,7 +193,7 @@ impl FileSystemProvider for StdFileSystemProvider {
                             let entry_path = entry.path();
                             if let Some(filename_os) = entry_path.file_name() {
                                 let filename = lossy_filename_with_warning(filename_os, entry_path);
-                                if Self::matches_pattern(&filename, pattern) {
+                                if matcher.is_match(filename.as_ref()) {
                                     files.push(entry_path.to_path_buf());
                                 }
                             }
@@ -237,7 +245,7 @@ impl FileSystemProvider for StdFileSystemProvider {
                     let entry_path = entry.path();
                     if let Some(filename_os) = entry_path.file_name() {
                         let filename = lossy_filename_with_warning(filename_os, &entry_path);
-                        if Self::matches_pattern(&filename, pattern) {
+                        if matcher.is_match(filename.as_ref()) {
                             files.push(entry_path);
                         }
                     }
@@ -454,6 +462,25 @@ mod tests {
 
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|f| f.extension().unwrap() == "md"));
+    }
+
+    /// # Contract
+    ///
+    /// A broad `*` listing over many siblings must still complete as a
+    /// single listing operation. This pins the scanner's sibling-file
+    /// path, which calls `list_files(parent, "*", false)` for every
+    /// scanned entrypoint.
+    #[test]
+    fn list_files_non_recursive_star_handles_many_siblings() {
+        let dir = TempDir::new().unwrap();
+        for i in 0..512 {
+            std::fs::write(dir.path().join(format!("file-{i}.txt")), "").unwrap();
+        }
+
+        let fs = StdFileSystemProvider::new();
+        let files = fs.list_files(dir.path(), "*", false).unwrap();
+
+        assert_eq!(files.len(), 512);
     }
 
     /// # Contract
