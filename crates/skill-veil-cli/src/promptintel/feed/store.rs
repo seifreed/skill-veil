@@ -14,7 +14,10 @@
 
 use crate::{
     promptintel::types::{FeedEntry, FeedIoc, FeedIocKind},
-    util::cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES},
+    util::{
+        cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES},
+        secure_fs::create_dir_secure,
+    },
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -89,7 +92,7 @@ impl FeedStore {
     /// partial cache that the next load would treat as authoritative.
     pub(crate) fn save(cache_root: &Path, entries: &[FeedEntry]) -> Result<FeedMeta> {
         let dir = feed_dir(cache_root);
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
 
         let feed_path = dir.join(FEED_FILENAME);
         let meta_path = dir.join(META_FILENAME);
@@ -267,6 +270,29 @@ mod tests {
         assert_eq!(store.entries.len(), 2);
         let meta = store.meta.expect("meta present after save");
         assert_eq!(meta.total_entries, 2);
+    }
+
+    /// # Contract
+    ///
+    /// Feed cache writes MUST create `promptintel-feed` as owner-only
+    /// because cached entries can include private report titles,
+    /// indicators, and source identifiers from the operator's tenant.
+    #[cfg(unix)]
+    #[test]
+    fn save_creates_owner_only_feed_cache_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().unwrap();
+        let entries = vec![entry_with("a", vec![ioc(FeedIocKind::Hash, "DEAD")])];
+
+        FeedStore::save(tmp.path(), &entries).expect("save");
+
+        let mode = std::fs::metadata(feed_dir(tmp.path()))
+            .expect("feed cache dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
     }
 
     /// A missing cache directory yields an empty store, NOT an error.

@@ -20,7 +20,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::util::cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES};
+use crate::util::{
+    cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES},
+    secure_fs::create_dir_secure,
+};
 
 const RATELIMIT_FILENAME: &str = "ratelimit.json";
 
@@ -116,7 +119,7 @@ impl RateLimitState {
 
     pub(crate) fn save(&self, cache_root: &Path) -> Result<()> {
         let dir = cache_root.join("promptintel-feed");
-        std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
         let path = state_path(cache_root);
         let tmp = path.with_extension("tmp");
         let bytes = serde_json::to_vec_pretty(self).context("serialising rate-limit state")?;
@@ -376,6 +379,30 @@ mod tests {
         let feed = loaded.endpoints.get(endpoint::AGENT_FEED).unwrap();
         assert_eq!(feed.calls.len(), 1);
         assert_eq!(feed.calls[0].server_remaining, Some(199));
+    }
+
+    /// # Contract
+    ///
+    /// Rate-limit state writes MUST create `promptintel-feed` as
+    /// owner-only because it exposes which PromptIntel endpoints the
+    /// operator used and when.
+    #[cfg(unix)]
+    #[test]
+    fn save_creates_owner_only_feed_cache_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempdir().unwrap();
+        let mut state = RateLimitState::default();
+        state.record_call_at(endpoint::REPORTS_SUBMIT, None, at(1_000_001));
+
+        state.save(tmp.path()).expect("save");
+
+        let mode = std::fs::metadata(tmp.path().join("promptintel-feed"))
+            .expect("rate-limit cache dir metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700);
     }
 
     /// A missing state file MUST yield a default-empty state, not an
