@@ -26,6 +26,7 @@ const MAX_ENTRIES: usize = 5_000;
 pub(crate) fn extract_into(tarball: &Path, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir)
         .with_context(|| format!("creating extraction dir {}", dest_dir.display()))?;
+    ensure_empty_extraction_dir(dest_dir)?;
 
     let canonical_dest = dest_dir
         .canonicalize()
@@ -123,6 +124,37 @@ pub(crate) fn extract_into(tarball: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn ensure_empty_extraction_dir(dest_dir: &Path) -> Result<()> {
+    let meta = std::fs::symlink_metadata(dest_dir)
+        .with_context(|| format!("stat extraction dir {}", dest_dir.display()))?;
+    if meta.file_type().is_symlink() {
+        bail!(
+            "extraction dir {} is a symlink — refusing to extract",
+            dest_dir.display()
+        );
+    }
+    if !meta.is_dir() {
+        bail!(
+            "extraction target {} is not a directory",
+            dest_dir.display()
+        );
+    }
+
+    let mut entries = std::fs::read_dir(dest_dir)
+        .with_context(|| format!("reading extraction dir {}", dest_dir.display()))?;
+    if entries.next().transpose()?.is_some() {
+        bail!(
+            "extraction dir {} is not empty — refusing to extract",
+            dest_dir.display()
+        );
+    }
+    debug_assert!(
+        dest_dir.is_dir(),
+        "extraction destination must remain a directory after validation"
+    );
+    Ok(())
+}
+
 fn entry_path_for_error<R: Read>(entry: &tar::Entry<R>) -> Result<String> {
     Ok(entry
         .path()
@@ -209,6 +241,43 @@ mod tests {
             std::fs::read(dest.path().join("official/behavioral.yaml")).unwrap(),
             b"b: 2\n"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Extraction only writes into a fresh destination. Pre-existing
+    /// entries could include symlinked path components that redirect a
+    /// later regular-file write outside the staging tree.
+    #[test]
+    fn rejects_non_empty_extraction_dir() {
+        let dest = TempDir::new().unwrap();
+        std::fs::write(dest.path().join("stale"), b"old").unwrap();
+        let tar = tarball_with(&[("official/core.yaml", b"a: 1\n")]);
+
+        let err = extract_into(tar.path(), dest.path()).expect_err("non-empty dest must fail");
+
+        assert!(format!("{err:#}").contains("not empty"));
+    }
+
+    /// # Contract
+    ///
+    /// The extraction root itself must not be a symlink. Canonicalising
+    /// and writing through it would put trusted release contents at an
+    /// attacker-chosen target.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_extraction_dir() {
+        let parent = TempDir::new().unwrap();
+        let target = parent.path().join("target");
+        let link = parent.path().join("link");
+        std::fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let tar = tarball_with(&[("official/core.yaml", b"a: 1\n")]);
+
+        let err = extract_into(tar.path(), &link).expect_err("symlink dest must fail");
+
+        assert!(format!("{err:#}").contains("symlink"));
+        assert!(!target.join("official/core.yaml").exists());
     }
 
     /// Build a tarball with a single entry whose name we set by
