@@ -248,16 +248,21 @@ fn run_feed_list(args: PromptIntelFeedListArgs) -> Result<()> {
 }
 
 /// Resolve the on-disk cache root for the PromptIntel feed. Prefers
-/// the explicit `--cache-dir` override, then `dirs::cache_dir()`, then
-/// the system temp directory as a last resort so the command can still
-/// run on systems without an XDG cache home.
+/// the explicit `--cache-dir` override, then `dirs::cache_dir()`.
 fn resolve_cache_root(override_dir: Option<PathBuf>) -> Result<PathBuf> {
+    resolve_cache_root_from(override_dir, dirs::cache_dir())
+}
+
+fn resolve_cache_root_from(
+    override_dir: Option<PathBuf>,
+    user_cache: Option<PathBuf>,
+) -> Result<PathBuf> {
     if let Some(dir) = override_dir {
         return Ok(dir);
     }
-    Ok(dirs::cache_dir()
+    user_cache
         .map(|d| d.join("skill-veil"))
-        .unwrap_or_else(std::env::temp_dir))
+        .ok_or_else(|| anyhow::anyhow!("could not determine cache directory; pass --cache-dir"))
 }
 
 fn run_download(args: PromptIntelDownloadArgs) -> Result<()> {
@@ -339,8 +344,9 @@ fn build_client() -> Result<PromptIntelClient> {
 
 #[cfg(test)]
 mod tests {
-    use super::detection_below_gate;
+    use super::{detection_below_gate, resolve_cache_root_from};
     use crate::promptintel::cross_check::CrossCheckSummary;
+    use std::path::PathBuf;
 
     fn summary(total: usize, detected: usize, errors: usize) -> CrossCheckSummary {
         CrossCheckSummary {
@@ -392,5 +398,21 @@ mod tests {
     #[test]
     fn zero_detections_trips() {
         assert!(detection_below_gate(&summary(50, 0, 0), Some(0.01)));
+    }
+
+    #[test]
+    fn resolve_cache_root_rejects_missing_user_cache_without_override() {
+        let err = resolve_cache_root_from(None, None)
+            .expect_err("missing cache dir without override must fail");
+
+        assert!(format!("{err:#}").contains("pass --cache-dir"));
+    }
+
+    #[test]
+    fn resolve_cache_root_accepts_override_without_user_cache() {
+        let override_dir = PathBuf::from("/tmp/promptintel-cache");
+        let resolved = resolve_cache_root_from(Some(override_dir.clone()), None).unwrap();
+
+        assert_eq!(resolved, override_dir);
     }
 }
