@@ -161,6 +161,7 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
     let mut depth: i32 = 1;
     let mut i = start;
     let mut in_dq_string = false;
+    let mut in_sq_string = false;
     let mut in_regex = false;
     let mut in_line_comment = false;
     while i < bytes.len() {
@@ -179,6 +180,17 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
             }
             if c == b'"' {
                 in_dq_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_sq_string {
+            if c == b'\\' && i + 1 < bytes.len() {
+                i += 2;
+                continue;
+            }
+            if c == b'\'' {
+                in_sq_string = false;
             }
             i += 1;
             continue;
@@ -216,12 +228,14 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
             i += 1;
             continue;
         }
-        // NOTE: single quotes (`'`) are NOT tracked as string
-        // delimiters. NOVA keyword values may use `'…'` but real-world
-        // packs use `"…"` plus regex `/…/`. Conflating apostrophes
-        // inside regex content (`O'Donnell`) with string delimiters
-        // would put the brace-finder into permanent string-mode and
-        // miss the closing `}` of the rule.
+        if c == b'\'' {
+            let prev_meaningful = input[..i].chars().rev().find(|c| !c.is_whitespace());
+            if matches!(prev_meaningful, Some('=') | Some('(') | Some(',') | None) {
+                in_sq_string = true;
+                i += 1;
+                continue;
+            }
+        }
         if c == b'{' {
             depth += 1;
         } else if c == b'}' {
@@ -292,11 +306,8 @@ fn strip_line_comment(line: &str) -> &str {
 fn find_unquoted(haystack: &str, needle: &str) -> Option<usize> {
     let bytes = haystack.as_bytes();
     let nb = needle.as_bytes();
-    // We only track `"…"` strings — NOT `'…'`. Apostrophes commonly
-    // appear inside regex literals (`O'Donnell`); treating them as
-    // string delimiters would silently consume real `//` comment
-    // markers downstream.
     let mut in_dq_string = false;
+    let mut in_sq_string = false;
     let mut in_regex = false;
     let mut i = 0;
     while i + nb.len() <= bytes.len() {
@@ -308,6 +319,17 @@ fn find_unquoted(haystack: &str, needle: &str) -> Option<usize> {
             }
             if c == b'"' {
                 in_dq_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_sq_string {
+            if c == b'\\' && i + 1 < bytes.len() {
+                i += 2;
+                continue;
+            }
+            if c == b'\'' {
+                in_sq_string = false;
             }
             i += 1;
             continue;
@@ -332,6 +354,14 @@ fn find_unquoted(haystack: &str, needle: &str) -> Option<usize> {
             let prev_meaningful = haystack[..i].chars().rev().find(|c| !c.is_whitespace());
             if matches!(prev_meaningful, Some('=') | Some('(') | Some(',')) {
                 in_regex = true;
+                i += 1;
+                continue;
+            }
+        }
+        if c == b'\'' {
+            let prev_meaningful = haystack[..i].chars().rev().find(|c| !c.is_whitespace());
+            if matches!(prev_meaningful, Some('=') | Some('(') | Some(',')) {
+                in_sq_string = true;
                 i += 1;
                 continue;
             }
@@ -1197,6 +1227,56 @@ rule InjectDynamicContext
         let rules = parse_rules(body).unwrap();
         assert!(rules[0].keywords["x"].is_regex);
         assert_eq!(rules[0].keywords["x"].pattern, "\\/foo\\/");
+    }
+
+    /// Contract: `//` inside a single-quoted keyword literal is pattern
+    /// content, not a line comment.
+    #[test]
+    fn line_comments_do_not_eat_single_quoted_keyword_literals() {
+        let body = r#"
+            rule SingleQuotedUrl {
+                keywords:
+                    $url = 'http://example.test/a//b' // trailing comment
+                condition:
+                    keywords.$url
+            }
+        "#;
+        let rules = parse_rules(body).unwrap();
+        assert_eq!(rules[0].keywords["url"].pattern, "http://example.test/a//b");
+    }
+
+    /// Contract: braces inside a single-quoted keyword literal do not
+    /// terminate the enclosing rule body.
+    #[test]
+    fn brace_inside_single_quoted_keyword_literal_is_not_rule_close() {
+        let body = r#"
+            rule SingleQuotedBrace {
+                keywords:
+                    $brace = 'literal } brace'
+                condition:
+                    keywords.$brace
+            }
+        "#;
+        let rules = parse_rules(body).unwrap();
+        assert_eq!(rules[0].keywords["brace"].pattern, "literal } brace");
+    }
+
+    /// Contract: an apostrophe in an unquoted metadata value is not a
+    /// single-quoted string opener.
+    #[test]
+    fn apostrophe_in_unquoted_meta_does_not_open_string_mode() {
+        let body = r#"
+            rule ApostropheMeta {
+                meta:
+                    author = O'Donnell
+                keywords:
+                    $x = "x"
+                condition:
+                    keywords.$x
+            }
+        "#;
+        let rules = parse_rules(body).unwrap();
+        assert_eq!(rules[0].meta["author"], "O'Donnell");
     }
 
     /// Contract: parser accepts a multi-rule file in source order,
