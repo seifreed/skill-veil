@@ -64,6 +64,31 @@ print("Hello, world!")
     assert!(!result.has_severity(Severity::Critical));
 }
 
+/// # Contract
+///
+/// Direct file scans MUST reject symlink entrypoints. Package discovery
+/// already skips symlinks, but `scan_file` is a public API and can be
+/// pointed at `SKILL.md -> /outside/secret.md` directly.
+#[cfg(unix)]
+#[test]
+fn scan_file_rejects_symlink_entrypoint() {
+    let dir = tempdir().unwrap();
+    let outside = dir.path().join("outside.md");
+    let link = dir.path().join("SKILL.md");
+    std::fs::write(&outside, "# Outside\n").unwrap();
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let err = scanner
+        .scan_file(&link)
+        .expect_err("symlink entrypoint must not be scanned");
+
+    assert!(
+        format!("{err:#}").contains("not a regular file"),
+        "error must identify a non-regular entrypoint, got {err:#}",
+    );
+}
+
 #[test]
 fn test_fail_on_option() {
     let mut file = NamedTempFile::new().unwrap();

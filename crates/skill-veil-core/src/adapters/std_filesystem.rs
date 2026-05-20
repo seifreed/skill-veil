@@ -1,9 +1,12 @@
 //! File system provider implementation using std::fs
 
-use crate::ports::{FileContent, FileMeta, FileSystemError, FileSystemProvider};
+use std::fs::{File, Metadata};
 use std::io;
 use std::path::{Path, PathBuf};
+
 use walkdir::WalkDir;
+
+use crate::ports::{FileContent, FileMeta, FileSystemError, FileSystemProvider};
 
 use super::walk_helpers::{is_skipped_dir, lossy_filename_with_warning};
 
@@ -77,13 +80,8 @@ impl FileSystemProvider for StdFileSystemProvider {
     /// would surface as `PathNotFound` and operators would see the scan
     /// silently skip artifacts that actually exist.
     fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
-        // Defence-in-depth size guard: open the file once, then check
-        // metadata on the already-open handle and use `.take()` to bound
-        // the read. Pre-fix the function used a separate `metadata()` call
-        // followed by `read()`, which was a TOCTOU race — a file could grow
-        // between the stat and the read, defeating the size cap. Opening
-        // once also avoids the symlink-swap risk of stat-then-read.
-        let file = match std::fs::File::open(path) {
+        let path_meta = regular_file_metadata(path)?;
+        let file = match File::open(path) {
             Ok(f) => f,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 return Err(FileSystemError::PathNotFound(path.to_path_buf()));
@@ -97,6 +95,7 @@ impl FileSystemProvider for StdFileSystemProvider {
             }
             Err(err) => return Err(FileSystemError::IoError(err)),
         };
+        validate_opened_regular_file(path, &path_meta, &meta)?;
         if meta.len() > MAX_READ_FILE_BYTES {
             return Err(FileSystemError::IoError(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -351,6 +350,60 @@ impl FileSystemProvider for StdFileSystemProvider {
     }
 }
 
+fn regular_file_metadata(path: &Path) -> Result<Metadata, FileSystemError> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(FileSystemError::PathNotFound(path.to_path_buf()));
+        }
+        Err(err) => return Err(FileSystemError::IoError(err)),
+    };
+    if !meta.is_file() || meta.is_symlink() {
+        return Err(FileSystemError::IoError(non_regular_file_error(path)));
+    }
+    Ok(meta)
+}
+
+fn validate_opened_regular_file(
+    path: &Path,
+    path_meta: &Metadata,
+    opened_meta: &Metadata,
+) -> Result<(), FileSystemError> {
+    let latest_meta = regular_file_metadata(path)?;
+    if !same_file_identity(path_meta, opened_meta) || !same_file_identity(&latest_meta, opened_meta)
+    {
+        return Err(FileSystemError::IoError(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read {}: path changed while opening",
+                path.display()
+            ),
+        )));
+    }
+    Ok(())
+}
+
+fn non_regular_file_error(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "refusing to read {}: path is not a regular file",
+            path.display()
+        ),
+    )
+}
+
+#[cfg(unix)]
+fn same_file_identity(a: &Metadata, b: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(_a: &Metadata, _b: &Metadata) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,6 +424,33 @@ mod tests {
         let fs = StdFileSystemProvider::new();
         let content = fs.read_file_bytes(&file_path).unwrap();
         assert_eq!(content.as_bytes(), b"hello world");
+    }
+
+    /// # Contract
+    ///
+    /// `read_file_bytes` MUST reject symlinks even when the symlink target
+    /// is a regular file. Untrusted packages can carry links that point
+    /// outside the package; the filesystem port is the final guard for
+    /// direct `scan-file` callers that bypass discovery.
+    #[cfg(unix)]
+    #[test]
+    fn read_file_bytes_rejects_symlink_to_regular_file() {
+        let dir = TempDir::new().unwrap();
+        let outside = dir.path().join("outside.txt");
+        let link = dir.path().join("link.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let err = fs
+            .read_file_bytes(&link)
+            .expect_err("symlinked file must be rejected");
+
+        assert!(
+            matches!(err, FileSystemError::IoError(ref io_err)
+                if io_err.kind() == std::io::ErrorKind::InvalidInput),
+            "symlink must surface as InvalidInput IoError, got {err:?}",
+        );
     }
 
     /// # Contract
