@@ -140,7 +140,7 @@ pub(crate) fn prepare_llm_inputs(
     };
     for res in scan_result.results.iter() {
         let mut supporting: Vec<(PathBuf, String)> = Vec::new();
-        if let Some(parent) = res.metadata.path.parent() {
+        if res.metadata.path.parent().is_some() {
             // Pre-compute the canonical primary path so we can detect the
             // primary file regardless of how `extracted_iocs.file_hashes`
             // expressed it (relative basename vs absolute path). A naive
@@ -162,48 +162,29 @@ pub(crate) fn prepare_llm_inputs(
                 }
             };
             for hash in &res.extracted_iocs.file_hashes {
-                if is_primary_artifact_path(
+                let support_path = match resolve_supporting_artifact_path(
                     &hash.path,
                     &res.metadata.path,
                     primary_canon.as_deref(),
                 ) {
-                    continue;
-                }
-                let mut read_ok = false;
-                match std::fs::read_to_string(&hash.path) {
-                    Ok(c) => {
-                        supporting.push((hash.path.clone(), c));
-                        read_ok = true;
+                    Ok(Some(path)) => path,
+                    Ok(None) => continue,
+                    Err(err) => {
+                        tracing::warn!("llm-enrich: skipping {}: {err:#}", hash.path.display());
+                        continue;
                     }
+                };
+                match std::fs::read_to_string(&support_path) {
+                    Ok(c) => supporting.push((support_path, c)),
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                         tracing::error!(
                             "llm-enrich: permission denied reading {}: {e}",
-                            hash.path.display()
+                            support_path.display()
                         );
                     }
                     Err(e) => {
-                        tracing::warn!("llm-enrich: skipping {}: {e}", hash.path.display());
-                    }
-                }
-                if !read_ok && hash.path.is_relative() {
-                    let abs = parent.join(&hash.path);
-                    if is_primary_artifact_path(&abs, &res.metadata.path, primary_canon.as_deref())
-                    {
-                        continue;
-                    }
-                    match std::fs::read_to_string(&abs) {
-                        Ok(c) => supporting.push((abs, c)),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                            tracing::error!(
-                                "llm-enrich: permission denied reading {}: {e}",
-                                abs.display()
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!("llm-enrich: skipping {}: {e}", abs.display());
-                        }
+                        tracing::warn!("llm-enrich: skipping {}: {e}", support_path.display());
                     }
                 }
             }
@@ -289,6 +270,54 @@ fn is_primary_artifact_path(
         return true;
     }
     false
+}
+
+fn resolve_supporting_artifact_path(
+    candidate: &Path,
+    primary: &Path,
+    primary_canon: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    if is_primary_artifact_path(candidate, primary, primary_canon) {
+        return Ok(None);
+    }
+    let Some(parent) = primary.parent() else {
+        return Ok(None);
+    };
+    let package_root = parent
+        .canonicalize()
+        .with_context(|| format!("canonicalizing primary package dir {}", parent.display()))?;
+    let candidate_path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        parent.join(candidate)
+    };
+    let candidate_canon = match candidate_path.canonicalize() {
+        Ok(path) => path,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "canonicalizing supporting artifact {}",
+                    candidate_path.display()
+                )
+            });
+        }
+    };
+    if !candidate_canon.starts_with(&package_root) {
+        anyhow::bail!(
+            "resolved outside primary package dir {} -> {}",
+            package_root.display(),
+            candidate_canon.display()
+        );
+    }
+    if primary_canon.is_some_and(|primary| candidate_canon.as_path() == primary) {
+        return Ok(None);
+    }
+    debug_assert!(
+        candidate_canon.starts_with(&package_root),
+        "supporting artifact path must stay under primary package dir"
+    );
+    Ok(Some(candidate_canon))
 }
 
 /// Reads each path's contents, propagating any I/O failure with context.
@@ -461,6 +490,100 @@ mod tests {
         let primary = std::path::PathBuf::from("/tmp/pkg/SKILL.md");
         let candidate = primary.clone();
         assert!(super::is_primary_artifact_path(&candidate, &primary, None));
+    }
+
+    /// Contract: supporting artifacts inside the primary package resolve
+    /// to their canonical path before content is sent to the LLM.
+    #[test]
+    fn resolve_supporting_artifact_path_accepts_nested_package_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("pkg");
+        let scripts = package.join("scripts");
+        std::fs::create_dir_all(&scripts).unwrap();
+        let primary = package.join("SKILL.md");
+        let helper = scripts.join("helper.sh");
+        std::fs::write(&primary, "# skill").unwrap();
+        std::fs::write(&helper, "echo ok").unwrap();
+        let primary_canon = primary.canonicalize().unwrap();
+
+        let resolved = super::resolve_supporting_artifact_path(
+            std::path::Path::new("scripts/helper.sh"),
+            &primary,
+            Some(&primary_canon),
+        )
+        .unwrap()
+        .expect("nested helper must resolve");
+
+        assert_eq!(resolved, helper.canonicalize().unwrap());
+    }
+
+    /// Contract: `..` components that resolve outside the primary package
+    /// are rejected before any supporting content can enter the LLM prompt.
+    #[test]
+    fn resolve_supporting_artifact_path_rejects_parent_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        let primary = package.join("SKILL.md");
+        let outside = dir.path().join("secret.txt");
+        std::fs::write(&primary, "# skill").unwrap();
+        std::fs::write(&outside, "secret").unwrap();
+        let primary_canon = primary.canonicalize().unwrap();
+
+        let err = super::resolve_supporting_artifact_path(
+            std::path::Path::new("../secret.txt"),
+            &primary,
+            Some(&primary_canon),
+        )
+        .expect_err("parent escape must be rejected");
+
+        assert!(format!("{err:#}").contains("outside primary package"));
+    }
+
+    /// Contract: the primary artifact itself is never included as a
+    /// supporting artifact, regardless of whether it is expressed as a
+    /// relative path.
+    #[test]
+    fn resolve_supporting_artifact_path_skips_primary_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let primary = dir.path().join("SKILL.md");
+        std::fs::write(&primary, "# skill").unwrap();
+        let primary_canon = primary.canonicalize().unwrap();
+
+        let resolved = super::resolve_supporting_artifact_path(
+            std::path::Path::new("SKILL.md"),
+            &primary,
+            Some(&primary_canon),
+        )
+        .unwrap();
+
+        assert!(resolved.is_none());
+    }
+
+    /// Contract: symlinks in the scanned package may not smuggle outside
+    /// files into the LLM prompt.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_supporting_artifact_path_rejects_symlink_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        let primary = package.join("SKILL.md");
+        let outside = dir.path().join("secret.txt");
+        let link = package.join("secret-link.txt");
+        std::fs::write(&primary, "# skill").unwrap();
+        std::fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let primary_canon = primary.canonicalize().unwrap();
+
+        let err = super::resolve_supporting_artifact_path(
+            std::path::Path::new("secret-link.txt"),
+            &primary,
+            Some(&primary_canon),
+        )
+        .expect_err("symlink escape must be rejected");
+
+        assert!(format!("{err:#}").contains("outside primary package"));
     }
 
     /// Contract: a missing primary `SKILL.md` MUST surface as an error so
