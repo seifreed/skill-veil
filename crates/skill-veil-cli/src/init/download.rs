@@ -133,9 +133,17 @@ fn stream_to_file(agent: &ureq::Agent, url: &str, dest: &Path, cap: u64) -> Resu
         bail!("HTTP {status} from {url}");
     }
 
-    let mut file =
-        std::fs::File::create(dest).with_context(|| format!("creating {}", dest.display()))?;
-    let mut reader = resp.into_reader().take(cap + 1);
+    stream_reader_to_file(resp.into_reader(), url, dest, cap)
+}
+
+fn stream_reader_to_file(reader: impl Read, url: &str, dest: &Path, cap: u64) -> Result<()> {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("{} has no parent directory", dest.display()))?;
+    ensure_real_dir(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temp file under {}", parent.display()))?;
+    let mut reader = reader.take(cap + 1);
     let mut written: u64 = 0;
     let mut buf = [0u8; 64 * 1024];
     loop {
@@ -147,17 +155,31 @@ fn stream_to_file(agent: &ureq::Agent, url: &str, dest: &Path, cap: u64) -> Resu
         }
         written += n as u64;
         if written > cap {
-            // Drop the partial file so a half-written tarball does not
-            // pollute the staging dir. Best-effort; if remove fails we
-            // still surface the size error to the caller.
-            let _ = std::fs::remove_file(dest);
             bail!("{url} body exceeded the {} byte cap mid-stream", cap);
         }
         file.write_all(&buf[..n])
-            .with_context(|| format!("writing {}", dest.display()))?;
+            .with_context(|| format!("writing temp file for {}", dest.display()))?;
     }
-    file.flush().ok();
+    file.flush()
+        .with_context(|| format!("flushing temp file for {}", dest.display()))?;
+    file.as_file_mut()
+        .sync_all()
+        .with_context(|| format!("syncing temp file for {}", dest.display()))?;
+    file.persist(dest)
+        .map_err(|err| err.error)
+        .with_context(|| format!("renaming temp file to {}", dest.display()))?;
     Ok(())
+}
+
+fn ensure_real_dir(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real directory", path.display())
+    }
 }
 
 #[cfg(test)]
@@ -183,5 +205,35 @@ mod tests {
             assets.tarball_url,
             "https://github.com/seifreed/skill-veil-rules/releases/download/v0.1.0/skill-veil-rules-v0.1.0.tar.gz"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Tarball streaming replaces a symlink at the destination path as
+    /// a directory entry. It must not follow the link and overwrite
+    /// the target outside the staging directory.
+    #[cfg(unix)]
+    #[test]
+    fn stream_reader_to_file_replaces_symlink_without_touching_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.tar.gz");
+        let dest = dir.path().join("release.tar.gz");
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &dest).unwrap();
+
+        stream_reader_to_file(
+            std::io::Cursor::new(b"fresh".to_vec()),
+            "test-url",
+            &dest,
+            1024,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        assert!(!std::fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh");
     }
 }

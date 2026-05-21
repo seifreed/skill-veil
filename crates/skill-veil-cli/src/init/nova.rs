@@ -105,32 +105,8 @@ pub(crate) fn download_and_extract(
     }
 
     let tarball_path = staging_dir.join("nova.tar.gz");
-    let mut hasher = Sha256::new();
-    {
-        let mut file = std::fs::File::create(&tarball_path)
-            .with_context(|| format!("creating {}", tarball_path.display()))?;
-        let mut reader = resp.into_reader().take(MAX_TARBALL_BYTES + 1);
-        let mut written: u64 = 0;
-        let mut buf = [0u8; 64 * 1024];
-        loop {
-            let n = reader
-                .read(&mut buf)
-                .with_context(|| format!("streaming {url}"))?;
-            if n == 0 {
-                break;
-            }
-            written += n as u64;
-            if written > MAX_TARBALL_BYTES {
-                let _ = std::fs::remove_file(&tarball_path);
-                bail!("{url} body exceeded the {MAX_TARBALL_BYTES} byte cap mid-stream");
-            }
-            hasher.update(&buf[..n]);
-            file.write_all(&buf[..n])
-                .with_context(|| format!("writing {}", tarball_path.display()))?;
-        }
-        file.flush().ok();
-    }
-    let tarball_sha256 = hex::encode(hasher.finalize());
+    let tarball_sha256 =
+        stream_reader_to_file(resp.into_reader(), &url, &tarball_path, MAX_TARBALL_BYTES)?;
 
     // Reuse the hardened extractor we built for skill-veil-rules.
     let extract_root = staging_dir.join("nova-extract");
@@ -244,6 +220,54 @@ fn validate_sha256_hex(value: &str) -> Result<()> {
     }
 }
 
+fn stream_reader_to_file(reader: impl Read, url: &str, dest: &Path, cap: u64) -> Result<String> {
+    let parent = dest
+        .parent()
+        .ok_or_else(|| anyhow!("{} has no parent directory", dest.display()))?;
+    ensure_real_dir(parent)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("creating temp file under {}", parent.display()))?;
+    let mut reader = reader.take(cap + 1);
+    let mut hasher = Sha256::new();
+    let mut written: u64 = 0;
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .with_context(|| format!("streaming {url}"))?;
+        if n == 0 {
+            break;
+        }
+        written += n as u64;
+        if written > cap {
+            bail!("{url} body exceeded the {cap} byte cap mid-stream");
+        }
+        hasher.update(&buf[..n]);
+        file.write_all(&buf[..n])
+            .with_context(|| format!("writing temp file for {}", dest.display()))?;
+    }
+    file.flush()
+        .with_context(|| format!("flushing temp file for {}", dest.display()))?;
+    file.as_file_mut()
+        .sync_all()
+        .with_context(|| format!("syncing temp file for {}", dest.display()))?;
+    file.persist(dest)
+        .map_err(|err| err.error)
+        .with_context(|| format!("renaming temp file to {}", dest.display()))?;
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn ensure_real_dir(path: &Path) -> Result<()> {
+    if std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real directory", path.display())
+    }
+}
+
 fn read_string_bounded(reader: impl Read, cap: u64) -> Result<String> {
     let mut body = String::new();
     reader
@@ -276,6 +300,37 @@ mod tests {
         }
         // Sanity: a real SHA passes.
         assert!(validate_sha_shape("9249cf49dce2b30550bc23d00a36ec64d42932d0").is_ok());
+    }
+
+    /// # Contract
+    ///
+    /// NOVA tarball streaming replaces a symlink at the destination
+    /// path as a directory entry. It must not follow the link and
+    /// overwrite the target outside the staging directory.
+    #[cfg(unix)]
+    #[test]
+    fn stream_reader_to_file_replaces_symlink_without_touching_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.tar.gz");
+        let dest = dir.path().join("nova.tar.gz");
+        std::fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, &dest).unwrap();
+
+        let digest = stream_reader_to_file(
+            std::io::Cursor::new(b"fresh".to_vec()),
+            "test-url",
+            &dest,
+            1024,
+        )
+        .unwrap();
+
+        assert_eq!(digest, hex::encode(Sha256::digest(b"fresh")));
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
+        assert!(!std::fs::symlink_metadata(&dest)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"fresh");
     }
 
     /// Contract: pointer round-trips through disk so `rules status`
