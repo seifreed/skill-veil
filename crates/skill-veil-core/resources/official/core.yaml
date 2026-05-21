@@ -80,7 +80,7 @@ rules:
     severity: critical
     confidence: 0.99
     when: !regex
-      pattern: "base64\\s+-D\\s*\\|\\s*(ba)?sh"
+      pattern: "\\bbase64\\b\\s+-D\\s*\\|\\s*(ba)?sh\\b"
     action: block
     reason: "macOS-style base64 decode piped directly to shell — encrypted dropper pattern"
     shield:
@@ -98,7 +98,7 @@ rules:
     severity: critical
     confidence: 0.97
     when: !regex
-      pattern: "base64\\s+-d\\s*\\|\\s*(ba)?sh|base64\\s+--decode\\s*\\|\\s*(ba)?sh"
+      pattern: "\\bbase64\\b\\s+-d\\s*\\|\\s*(ba)?sh\\b|\\bbase64\\b\\s+--decode\\s*\\|\\s*(ba)?sh\\b"
     action: block
     reason: "Base64 decode piped to shell — classic obfuscated dropper"
     shield:

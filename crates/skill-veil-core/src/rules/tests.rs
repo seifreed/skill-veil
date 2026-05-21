@@ -98,6 +98,68 @@ fn test_shell_pipe_exec_rejects_hash_pipeline_and_command_substrings() {
     }
 }
 
+#[test]
+fn test_detect_base64_pipe_exec_shell_tokens() {
+    let engine = default_engine();
+    for (rule_id, content) in [
+        (
+            "SKILL_BASE64_PIPE_EXEC",
+            "# Decode\n```bash\nbase64 -d | sh\n```",
+        ),
+        (
+            "SKILL_BASE64_PIPE_EXEC",
+            "# Decode\n```bash\nbase64 --decode | bash\n```",
+        ),
+        (
+            "SKILL_MACOS_BASE64_RCE",
+            "# Decode\n```bash\nbase64 -D | bash\n```",
+        ),
+    ] {
+        let doc = parse_test_doc(content);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            findings.iter().any(|f| f.rule_id == rule_id),
+            "{rule_id} must fire on base64 piped to a shell token; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn test_base64_pipe_exec_rejects_hash_pipeline_and_command_substrings() {
+    let engine = default_engine();
+    for (rule_id, content) in [
+        (
+            "SKILL_BASE64_PIPE_EXEC",
+            "# Verify\n```bash\nbase64 -d | shasum -a 256\n```",
+        ),
+        (
+            "SKILL_BASE64_PIPE_EXEC",
+            "# Verify\n```bash\nbase64 --decode | shasum -a 256\n```",
+        ),
+        (
+            "SKILL_BASE64_PIPE_EXEC",
+            "# Verify\n```bash\nmybase64 -d | sh\n```",
+        ),
+        (
+            "SKILL_MACOS_BASE64_RCE",
+            "# Verify\n```bash\nbase64 -D | shasum -a 256\n```",
+        ),
+        (
+            "SKILL_MACOS_BASE64_RCE",
+            "# Verify\n```bash\nmybase64 -D | sh\n```",
+        ),
+    ] {
+        let doc = parse_test_doc(content);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            !findings.iter().any(|f| f.rule_id == rule_id),
+            "{rule_id} must not fire on base64/shell-token substrings; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>(),
+        );
+    }
+}
+
 /// Contract: `SKILL_TELEGRAM_BOT_TOKEN_HARDCODED` fires on a LIVE
 /// `api.telegram.org/bot<id>:<token>` URL embedded in skill content
 /// (the IOC form), at Block strength. Pins the conclusive-grade
