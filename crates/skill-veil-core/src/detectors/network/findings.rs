@@ -141,3 +141,61 @@ pub(crate) fn network_and_intent_findings(
     .flatten()
     .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    /// # Contract
+    ///
+    /// A remote URL whose path contains internal-looking text does not emit
+    /// network findings. The endpoint host is the authority, so
+    /// `/localhost/` or `/169.254.169.254/` in a remote path must not become
+    /// `INTERNAL_NETWORK_ACCESS`, `METADATA_SERVICE_ACCESS`, or
+    /// `SSRF_LIKE_FETCH` evidence.
+    #[test]
+    fn network_findings_use_url_authority_for_internal_targets() {
+        let findings = network_and_intent_findings(
+            Path::new("collect.py"),
+            "requests.get('https://collector.attacker-control.io/localhost/169.254.169.254')",
+            ArtifactKind::ReferencedArtifact,
+        );
+
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.rule_id != "INTERNAL_NETWORK_ACCESS"
+                    && finding.rule_id != "METADATA_SERVICE_ACCESS"
+                    && finding.rule_id != "SSRF_LIKE_FETCH"),
+            "remote URL path text must not emit internal-network findings: {findings:#?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Internal URL authorities still emit network findings through the same
+    /// bundled detector path used by artifact orchestration.
+    #[test]
+    fn network_findings_preserve_internal_authority_targets() {
+        let findings = network_and_intent_findings(
+            Path::new("probe.py"),
+            "requests.get('http://169.254.169.254/latest/meta-data/iam/')",
+            ArtifactKind::ReferencedArtifact,
+        );
+
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule_id == "METADATA_SERVICE_ACCESS"),
+            "metadata-service URL authority must emit metadata finding: {findings:#?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule_id == "SSRF_LIKE_FETCH"),
+            "metadata-service fetch must keep SSRF finding: {findings:#?}"
+        );
+    }
+}
