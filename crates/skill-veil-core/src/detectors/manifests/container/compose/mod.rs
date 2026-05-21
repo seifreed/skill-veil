@@ -195,13 +195,24 @@ pub(crate) fn docker_compose_relations(content: &str) -> Vec<ArtifactLink> {
                 relation: ArtifactRelation::ConnectsTo,
             });
         }
-        if mapping.contains_key(serde_yaml::Value::String("volumes".to_string())) {
+        if mapping
+            .get(serde_yaml::Value::String("volumes".to_string()))
+            .and_then(serde_yaml::Value::as_sequence)
+            .is_some_and(|volumes| {
+                volumes.iter().any(|volume| {
+                    volume_entry_string(volume).is_some_and(|v| is_sensitive_host_volume(&v))
+                })
+            })
+        {
             links.push(ArtifactLink {
                 target: "host-filesystem".to_string(),
                 relation: ArtifactRelation::Mounts,
             });
         }
-        if mapping.contains_key(serde_yaml::Value::String("env_file".to_string())) {
+        if mapping
+            .get(serde_yaml::Value::String("env_file".to_string()))
+            .is_some_and(env_file_has_real_paths)
+        {
             links.push(ArtifactLink {
                 target: ".env".to_string(),
                 relation: ArtifactRelation::AccessesSecrets,
@@ -326,6 +337,30 @@ mod tests {
         ));
     }
 
+    /// Contract: relation inference mirrors the host-volume classifier, so a
+    /// project-relative volume must not create a host-filesystem Mounts edge.
+    #[test]
+    fn docker_compose_relations_skip_relative_project_volume() {
+        let yaml = "services:\n  app:\n    image: nginx\n    volumes:\n      - \"./data:/data\"\n";
+        let links = docker_compose_relations(yaml);
+        assert!(
+            !relation_present(&links, ArtifactRelation::Mounts, "host-filesystem"),
+            "relative project volume must not produce a host-filesystem Mounts edge; got {links:?}",
+        );
+    }
+
+    /// Contract: sensitive host volumes still create the host-filesystem Mounts
+    /// edge used by downstream graph analysis.
+    #[test]
+    fn docker_compose_relations_mount_sensitive_host_volume() {
+        let yaml = "services:\n  app:\n    image: nginx\n    volumes:\n      - \"/var/run/docker.sock:/var/run/docker.sock\"\n";
+        let links = docker_compose_relations(yaml);
+        assert!(
+            relation_present(&links, ArtifactRelation::Mounts, "host-filesystem"),
+            "sensitive host volume must produce a host-filesystem Mounts edge; got {links:?}",
+        );
+    }
+
     /// Contract: sharing the host network namespace is a network surface even
     /// without explicit `ports`, so capability and relation passes must agree
     /// with the host-network finding pass.
@@ -404,6 +439,30 @@ mod tests {
             "MANIFEST_DOCKER_COMPOSE_ENV_FILE"
         ));
         assert!(!capability_present(&caps, ArtifactCapability::SecretAccess));
+    }
+
+    /// Contract: relation inference mirrors the env_file classifier; null or
+    /// empty values carry no secret material and must not create a secret edge.
+    #[test]
+    fn docker_compose_relations_skip_empty_env_file() {
+        let yaml = "services:\n  app:\n    image: nginx\n    env_file: []\n";
+        let links = docker_compose_relations(yaml);
+        assert!(
+            !relation_present(&links, ArtifactRelation::AccessesSecrets, ".env"),
+            "empty env_file must not produce an AccessesSecrets edge; got {links:?}",
+        );
+    }
+
+    /// Contract: a real env_file value still creates the secret-access edge
+    /// used by graph-level taint analysis.
+    #[test]
+    fn docker_compose_relations_accept_real_env_file() {
+        let yaml = "services:\n  app:\n    image: nginx\n    env_file: .env\n";
+        let links = docker_compose_relations(yaml);
+        assert!(
+            relation_present(&links, ArtifactRelation::AccessesSecrets, ".env"),
+            "real env_file must produce an AccessesSecrets edge; got {links:?}",
+        );
     }
 
     /// Contract: a string `env_file` renders as the bare path in `match_value`,
