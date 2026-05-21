@@ -318,6 +318,12 @@ fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
     if !meta.is_file() || meta.is_symlink() {
         return Err(non_regular_file_error(path));
     }
+    if !has_single_hardlink(&meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read {}: multiple hard links", path.display()),
+        ));
+    }
     Ok(meta)
 }
 
@@ -373,6 +379,17 @@ fn same_file_identity(a: &Metadata, b: &Metadata) -> bool {
 
 #[cfg(not(unix))]
 fn same_file_identity(_a: &Metadata, _b: &Metadata) -> bool {
+    true
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
     true
 }
 
@@ -438,6 +455,41 @@ mod tests {
 
     /// # Contract
     ///
+    /// NOVA runtime rule loading rejects hardlinked `.nov` files. The
+    /// verified install directory may only contribute single-link rule
+    /// files that live as normal files under that install tree.
+    #[cfg(unix)]
+    #[test]
+    fn load_all_rules_rejects_hardlinked_rule_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install = tmp.path().join("nova");
+        std::fs::create_dir(&install).unwrap();
+        let outside_rule = tmp.path().join("outside.nov");
+        let linked_rule = install.join("linked.nov");
+        std::fs::write(
+            &outside_rule,
+            r#"
+            rule External {
+                meta:
+                    description = "Outside"
+                    severity = "low"
+                keywords:
+                    $a = "keyword"
+                condition:
+                    keywords.$a
+            }
+            "#,
+        )
+        .unwrap();
+        std::fs::hard_link(&outside_rule, &linked_rule).unwrap();
+
+        let rules = load_all_rules(&install);
+
+        assert!(rules.is_empty());
+    }
+
+    /// # Contract
+    ///
     /// Files above the NOVA per-body cap are skipped instead of read
     /// into memory.
     #[test]
@@ -467,6 +519,28 @@ mod tests {
         std::os::unix::fs::symlink(&outside, &link).unwrap();
 
         let bodies = collect_scan_bodies(&link);
+
+        assert!(bodies.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// NOVA scan body collection rejects hardlinked targets. A file can
+    /// look like a regular descendant of the scan tree while aliasing
+    /// content outside the package; `--nova-llm` must not upload that
+    /// body to a provider.
+    #[cfg(unix)]
+    #[test]
+    fn collect_scan_bodies_rejects_hardlinked_target_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside.md");
+        let package = tmp.path().join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        let hardlink = package.join("SKILL.md");
+        std::fs::write(&outside, "# Outside\nkeyword").unwrap();
+        std::fs::hard_link(&outside, &hardlink).unwrap();
+
+        let bodies = collect_scan_bodies(&hardlink);
 
         assert!(bodies.is_empty());
     }
