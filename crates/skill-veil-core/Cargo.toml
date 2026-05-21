@@ -26,6 +26,7 @@ chrono.workspace = true
 strum.workspace = true
 strum_macros.workspace = true
 dirs.workspace = true
+url.workspace = true
 
 [dependencies.yara-x]
 version = "1.15.0"

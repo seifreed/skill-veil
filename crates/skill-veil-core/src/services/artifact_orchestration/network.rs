@@ -51,16 +51,13 @@ pub(crate) fn is_common_lockfile_source(url: &str) -> bool {
     .any(|host| host_matches_url(host, url))
 }
 
-/// Exact-host matching: `://host/`, `://host:`, or `@host/` (for
-/// authenticated registry URLs like `https://user:pass@registry.npmjs.org/pkg`)
-/// prevents substring false positives like `evil.registry.npmjs.org.attacker.com`
-/// from matching `registry.npmjs.org`.
+/// Exact host matching for lockfile registry allowlists.
 fn host_matches_url(host: &str, url: &str) -> bool {
-    let lower_url = url.to_ascii_lowercase();
-    lower_url.contains(&format!("://{host}/"))
-        || lower_url.contains(&format!("://{host}:"))
-        || lower_url.contains(&format!("@{host}/"))
-        || lower_url.contains(&format!("@{host}:"))
+    url::Url::parse(url).is_ok_and(|parsed| {
+        parsed
+            .host_str()
+            .is_some_and(|parsed_host| parsed_host.eq_ignore_ascii_case(host))
+    })
 }
 
 #[cfg(test)]
@@ -162,6 +159,20 @@ mod tests {
         ));
         assert!(!is_common_lockfile_source(
             "https://my-registry.npmmirror.com.evil.com/pkg/-/pkg-1.0.0.tgz"
+        ));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A known registry host mentioned in the URL path is not the URL
+    /// authority and must not satisfy the common-source allowlist.
+    #[test]
+    fn is_common_lockfile_source_rejects_known_host_in_path() {
+        assert!(!is_common_lockfile_source(
+            "https://packages.attacker.example/@registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
+        ));
+        assert!(!is_common_lockfile_source(
+            "https://packages.attacker.example/mirror/@pypi.org/simple/pkg"
         ));
     }
 

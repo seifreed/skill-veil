@@ -771,6 +771,30 @@ packages:
 
     /// # Contract
     ///
+    /// The common-registry allowlist applies to the resolved URL host,
+    /// not to known registry hostnames embedded in a remote path.
+    #[test]
+    fn analyze_package_lock_detects_known_registry_host_in_path() {
+        let content = r#"{
+  "packages": {
+    "node_modules/pkg": {
+      "version": "1.0.0",
+      "resolved": "https://packages.attacker.example/@registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
+    }
+  }
+}"#;
+
+        let findings = analyze_package_lock(Path::new("package-lock.json"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_PACKAGE_REMOTE_TARBALL"]);
+        assert_eq!(
+            findings[0].match_value,
+            "https://packages.attacker.example/@registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
+        );
+    }
+
+    /// # Contract
+    ///
     /// Pipfile.lock JSON source entries with non-default indexes are
     /// remote dependency sources.
     #[test]
