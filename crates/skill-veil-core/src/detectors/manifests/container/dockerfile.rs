@@ -20,19 +20,8 @@ use super::image_uses_mutable_latest;
 /// word-boundary awareness: a token matches when followed by whitespace,
 /// a shell operator (`|`, `;`, `&`, `>`), or end-of-line. This catches
 /// pipe-joined commands like `curl|sh` that lack trailing whitespace.
-const DOCKERFILE_NETWORK_DOWNLOAD_TOKENS: &[&str] = &[
-    "curl",
-    "wget",
-    "invoke-webrequest",
-    "ncat",
-    " nc",
-    "fetch",
-    "python -m urllib",
-    "python -m http",
-    "python -c \"import urllib",
-    "python -c 'import urllib",
-    "perl -mlwp",
-];
+const DOCKERFILE_NETWORK_DOWNLOAD_TOKENS: &[&str] =
+    &["curl", "wget", "invoke-webrequest", "ncat", " nc", "fetch"];
 
 pub(crate) fn analyze_dockerfile(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
@@ -77,11 +66,7 @@ pub(crate) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
         if !has_copy_or_add && (trimmed.starts_with("copy ") || trimmed.starts_with("add ")) {
             has_copy_or_add = true;
         }
-        if !has_network_download
-            && DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
-                .iter()
-                .any(|t| token_with_boundary(&trimmed, t))
-        {
+        if !has_network_download && dockerfile_has_network_download(&trimmed) {
             has_network_download = true;
         }
         if !has_network_download && is_remote_add_instruction(&trimmed) {
@@ -125,18 +110,7 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
                 relation: ArtifactRelation::Loads,
             });
         }
-        // Mirror `dockerfile_capabilities`: any token in
-        // `DOCKERFILE_NETWORK_DOWNLOAD_TOKENS` is a remote-fetch.
-        // Pre-fix relations only saw `curl` and `wget`, so a Dockerfile
-        // using `python -m urllib`, `nc`, `fetch`, etc. recorded
-        // `NetworkAccess` capability without the matching `Downloads`
-        // edge — the artifact graph then missed cross-artifact composite
-        // capabilities (e.g. `ShellDownloadExec`) that key off the edge.
-        if DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
-            .iter()
-            .any(|t| token_with_boundary(&lower, t))
-            || is_remote_add_instruction(&lower)
-        {
+        if dockerfile_has_network_download(&lower) || is_remote_add_instruction(&lower) {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
                 relation: ArtifactRelation::Downloads,
@@ -158,6 +132,63 @@ fn dockerfile_from_image(line: &str) -> Option<&str> {
         return None;
     }
     tokens.find(|token| !token.starts_with("--"))
+}
+
+fn dockerfile_has_network_download(lower_line: &str) -> bool {
+    DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
+        .iter()
+        .any(|token| token_with_boundary(lower_line, token))
+        || line_invokes_python_module_download(lower_line)
+        || line_invokes_python_c_urllib(lower_line)
+        || line_invokes_perl_lwp(lower_line)
+}
+
+fn line_invokes_python_module_download(lower_line: &str) -> bool {
+    let tokens = shell_tokens(lower_line);
+    for (index, token) in tokens.iter().enumerate() {
+        if token_basename(token) != "python" {
+            continue;
+        }
+        if tokens[index + 1..].windows(2).any(|window| {
+            window[0] == "-m"
+                && (window[1] == "urllib"
+                    || window[1].starts_with("urllib.")
+                    || window[1] == "http"
+                    || window[1].starts_with("http."))
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
+fn line_invokes_python_c_urllib(lower_line: &str) -> bool {
+    let tokens = shell_tokens(lower_line);
+    tokens.iter().enumerate().any(|(index, token)| {
+        token_basename(token) == "python"
+            && tokens[index + 1..].contains(&"-c")
+            && lower_line.contains("import urllib")
+    })
+}
+
+fn line_invokes_perl_lwp(lower_line: &str) -> bool {
+    let tokens = shell_tokens(lower_line);
+    tokens.iter().enumerate().any(|(index, token)| {
+        token_basename(token) == "perl"
+            && tokens[index + 1..]
+                .iter()
+                .any(|arg| arg.starts_with("-mlwp"))
+    })
+}
+
+fn shell_tokens(line: &str) -> Vec<&str> {
+    line.split(|c: char| c.is_ascii_whitespace() || matches!(c, '|' | ';' | '&' | '('))
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn token_basename(token: &str) -> &str {
+    token.rsplit(['/', '\\']).next().unwrap_or(token)
 }
 
 /// Match a network-download token with word-boundary awareness.
@@ -342,6 +373,51 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// Multi-token Dockerfile download commands accept shell whitespace,
+    /// including tabs between command, flag, and module arguments.
+    #[test]
+    fn dockerfile_capabilities_detects_tab_separated_multitoken_downloads() {
+        for content in [
+            "FROM python:3.11-slim\nRUN python\t-m\turllib.request https://x/payload\n",
+            "FROM python:3.11-slim\nRUN python\t-c\t'import urllib.request'\n",
+            "FROM perl:5\nRUN perl\t-MLWP::Simple -e 'getstore(...)'\n",
+        ] {
+            let caps = dockerfile_capabilities(content);
+            let has_observed_network = caps.iter().any(|fact| {
+                fact.capability == ArtifactCapability::NetworkAccess
+                    && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+            });
+            assert!(
+                has_observed_network,
+                "{content:?} must flip observed NetworkAccess; got {caps:?}",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Multi-token Dockerfile download command matching is command-token aware.
+    #[test]
+    fn dockerfile_capabilities_rejects_multitoken_command_substrings() {
+        for content in [
+            "FROM python:3.11-slim\nRUN mypython\t-m\turllib.request https://x/payload\n",
+            "FROM python:3.11-slim\nRUN mypython\t-c\t'import urllib.request'\n",
+            "FROM perl:5\nRUN helperl\t-MLWP::Simple -e 'getstore(...)'\n",
+        ] {
+            let caps = dockerfile_capabilities(content);
+            let has_observed_network = caps.iter().any(|fact| {
+                fact.capability == ArtifactCapability::NetworkAccess
+                    && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+            });
+            assert!(
+                !has_observed_network,
+                "{content:?} must not flip observed NetworkAccess; got {caps:?}",
+            );
+        }
+    }
+
     /// Contract: BSD `fetch` and raw `nc` (netcat) are equally valid
     /// download/exfil tools and must trip the same capability gate.
     #[test]
@@ -411,6 +487,27 @@ mod tests {
                     && l.target == "remote-resource"),
             "python -m urllib must produce a Downloads edge; got {links:?}",
         );
+    }
+
+    /// # Contract
+    ///
+    /// Dockerfile download edges mirror observed network capability detection
+    /// for tab-separated multi-token download commands.
+    #[test]
+    fn dockerfile_relations_records_download_edge_for_tab_separated_multitoken_downloads() {
+        for content in [
+            "FROM python:3.11-slim\nRUN python\t-m\turllib.request https://x/payload\n",
+            "FROM python:3.11-slim\nRUN python\t-c\t'import urllib.request'\n",
+            "FROM perl:5\nRUN perl\t-MLWP::Simple -e 'getstore(...)'\n",
+        ] {
+            let links = dockerfile_relations(content);
+            assert!(
+                links
+                    .iter()
+                    .any(|link| matches!(link.relation, ArtifactRelation::Downloads)),
+                "{content:?} must produce a Downloads edge; got {links:?}",
+            );
+        }
     }
 
     /// Contract: same coverage parity for `nc`/`ncat`/`fetch`/`perl -mlwp`
