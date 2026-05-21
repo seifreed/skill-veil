@@ -21,12 +21,14 @@
 /// embed CSI / OSC sequences that clear the screen, repaint the
 /// verdict, or open an OSC-8 hyperlink to an attacker URL.
 ///
-/// We strip every ASCII control byte (`0x00..=0x1F`, `0x7F`) plus the
-/// C1 control set (`0x80..=0x9F`) reachable through UTF-8. Tabs are
-/// replaced with a single space (preserving column alignment), and
-/// other controls (newlines, BEL, NUL, ESC) are replaced with `?`
-/// because they would visually break the indented output block; line
-/// and column metadata already lives in dedicated fields rendered
+/// We strip every ASCII control byte (`0x00..=0x1F`, `0x7F`), the C1
+/// control set (`0x80..=0x9F`) reachable through UTF-8, and Unicode
+/// bidi format controls that reorder visible text without being
+/// classified as `char::is_control()`. Tabs are replaced with a single
+/// space (preserving column alignment), and other controls (newlines,
+/// BEL, NUL, ESC, bidi overrides) are replaced with `?` because they
+/// would visually break or spoof the indented output block; line and
+/// column metadata already lives in dedicated fields rendered
 /// separately.
 pub(crate) fn sanitise_for_terminal(value: &str) -> String {
     value
@@ -34,13 +36,20 @@ pub(crate) fn sanitise_for_terminal(value: &str) -> String {
         .map(|c| {
             if c == '\t' {
                 ' '
-            } else if c.is_control() {
+            } else if c.is_control() || is_bidi_format_control(c) {
                 '?'
             } else {
                 c
             }
         })
         .collect()
+}
+
+fn is_bidi_format_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 #[cfg(test)]
@@ -109,5 +118,20 @@ mod tests {
         let cleaned = sanitise_for_terminal(attacker);
         assert!(!cleaned.contains('\x1b'));
         assert!(!cleaned.contains('\x07'));
+    }
+
+    /// Contract: Unicode bidi format controls MUST be neutralised. They
+    /// are not `char::is_control()`, but terminals and renderers still
+    /// use them to reorder visible text. A filename like
+    /// `safe\u{202e}gpj.exe` can be displayed as an innocuous-looking
+    /// extension while preserving attacker-controlled bytes in the
+    /// underlying path.
+    #[test]
+    fn sanitise_for_terminal_replaces_bidi_format_controls() {
+        let attacker = "safe\u{202e}gpj.exe";
+        let cleaned = sanitise_for_terminal(attacker);
+
+        assert!(!cleaned.contains('\u{202e}'));
+        assert_eq!(cleaned, "safe?gpj.exe");
     }
 }
