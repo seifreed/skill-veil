@@ -81,7 +81,7 @@ pub(crate) fn analyze_pnpm_lock(path: &Path, content: &str) -> Vec<Finding> {
 pub(crate) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
     let lower = content.to_ascii_lowercase();
     let mut capabilities = Vec::new();
-    if lower.contains("http://") || lower.contains("https://") || lower.contains("tarball:") {
+    if lower.contains("http://") || lower.contains("https://") {
         capabilities.push(ArtifactOrchestratorService::declared_capability(
             ArtifactCapability::NetworkAccess,
         ));
@@ -92,7 +92,7 @@ pub(crate) fn lockfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
 pub(crate) fn lockfile_relations(content: &str) -> Vec<ArtifactLink> {
     let lower = content.to_ascii_lowercase();
     let mut links = Vec::new();
-    if lower.contains("http://") || lower.contains("https://") || lower.contains("tarball:") {
+    if lower.contains("http://") || lower.contains("https://") {
         links.push(ArtifactLink {
             target: "registry".to_string(),
             relation: ArtifactRelation::ConnectsTo,
@@ -149,6 +149,14 @@ fn analyze_lockfile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capability_present(caps: &[ArtifactCapabilityFact], target: ArtifactCapability) -> bool {
+        caps.iter().any(|fact| fact.capability == target)
+    }
+
+    fn relation_target_present(links: &[ArtifactLink], target: &str) -> bool {
+        links.iter().any(|link| link.target == target)
+    }
 
     fn rule_ids(findings: &[Finding]) -> Vec<&str> {
         findings
@@ -303,6 +311,47 @@ packages:
 
             assert!(findings.is_empty(), "{path}: unexpected {findings:?}");
         }
+    }
+
+    /// # Contract
+    ///
+    /// A local tarball reference is not a network edge.
+    #[test]
+    fn lockfile_graph_inference_rejects_local_tarball_entries() {
+        let content = r#"
+packages:
+  /pkg@1.0.0:
+    resolution:
+      tarball: file:../vendor/pkg-1.0.0.tgz
+"#;
+
+        let caps = lockfile_capabilities(content);
+        let links = lockfile_relations(content);
+
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+        assert!(!relation_target_present(&links, "registry"));
+    }
+
+    /// # Contract
+    ///
+    /// HTTP(S) URLs in lockfiles still produce the registry network edge.
+    #[test]
+    fn lockfile_graph_inference_accepts_remote_urls() {
+        let content = r#"
+packages:
+  /pkg@1.0.0:
+    resolution:
+      tarball: HTTPS://packages.attacker.example/pkg-1.0.0.tgz
+"#;
+
+        let caps = lockfile_capabilities(content);
+        let links = lockfile_relations(content);
+
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(relation_target_present(&links, "registry"));
     }
 
     /// # Contract (negative)
