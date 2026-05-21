@@ -196,7 +196,7 @@ pub(crate) fn current_install(cache_root: Option<PathBuf>) -> Result<CombinedIns
         });
     };
     let skill_veil = read_skill_veil_install(&install_root)?;
-    let nova = read_nova_install(&install_root);
+    let nova = read_nova_install(&install_root)?;
     Ok(CombinedInstall { skill_veil, nova })
 }
 
@@ -276,15 +276,17 @@ fn read_file_to_string_with_cap(path: &Path, cap: u64) -> io::Result<String> {
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-fn read_nova_install(install_root: &Path) -> Option<NovaInstallSnapshot> {
-    let pointer = nova::load_pointer(install_root).ok().flatten()?;
+fn read_nova_install(install_root: &Path) -> Result<Option<NovaInstallSnapshot>> {
+    let Some(pointer) = nova::load_pointer(install_root)? else {
+        return Ok(None);
+    };
     let install_dir = install_root.join(format!("nova-{}", pointer.commit_sha));
-    Some(NovaInstallSnapshot {
+    Ok(Some(NovaInstallSnapshot {
         commit_sha: pointer.commit_sha,
         tarball_sha256: pointer.tarball_sha256,
         install_dir,
         file_count: pointer.file_count,
-    })
+    }))
 }
 
 #[derive(Debug)]
@@ -744,6 +746,58 @@ mod tests {
         let nova = install.nova.expect("NOVA pointer must round-trip");
         assert_eq!(nova.commit_sha, pointer.commit_sha);
         assert_eq!(nova.file_count, 16);
+    }
+
+    /// # Contract
+    ///
+    /// `current_install` must propagate malformed NOVA pointers instead
+    /// of reporting NOVA as not installed. A path-shaped commit pin is a
+    /// corrupted cache state, not an absent optional rule source.
+    #[test]
+    fn current_install_rejects_path_like_nova_pointer_commit() {
+        use super::nova::NOVA_POINTER_FILENAME;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        std::fs::create_dir_all(&install_root).unwrap();
+        let body = format!(
+            r#"{{"commit_sha":"9249cf49dce2b30550bc23d00a36ec64d42932d0/../../evil","tarball_sha256":"{}","file_count":1}}"#,
+            "0".repeat(64)
+        );
+        std::fs::write(install_root.join(NOVA_POINTER_FILENAME), body).unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("path-like NOVA commit pin must be rejected");
+
+        assert!(format!("{err:#}").contains("not a 40-char hex SHA"));
+    }
+
+    /// # Contract
+    ///
+    /// `current_install` must reject a symlinked NOVA pointer instead of
+    /// treating the optional NOVA source as absent.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_rejects_symlinked_nova_pointer() {
+        use super::nova::NOVA_POINTER_FILENAME;
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let outside = tmp.path().join("outside-nova-current.json");
+        let pointer_path = install_root.join(NOVA_POINTER_FILENAME);
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::write(
+            &outside,
+            format!(
+                r#"{{"commit_sha":"9249cf49dce2b30550bc23d00a36ec64d42932d0","tarball_sha256":"{}","file_count":1}}"#,
+                "0".repeat(64)
+            ),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, &pointer_path).unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("symlinked NOVA pointer must be rejected");
+
+        assert!(format!("{err:#}").contains("non-regular install pointer"));
     }
 
     /// # Contract
