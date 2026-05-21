@@ -323,6 +323,17 @@ fn lockfile_mentions_remote_source(content: &str) -> bool {
         || REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES
             .iter()
             .any(|prefix| lower.contains(prefix))
+        || content.split(is_lockfile_source_delimiter).any(|token| {
+            let lower_token = token.trim().to_ascii_lowercase();
+            let transport = lower_token
+                .strip_prefix(GIT_SOURCE_PREFIX)
+                .unwrap_or(lower_token.as_str());
+            is_scp_like_git_source(transport)
+        })
+}
+
+fn is_lockfile_source_delimiter(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | '{' | '}' | '[' | ']' | '(' | ')')
 }
 
 fn remote_urls_for_json_key(content: &str, key: &str) -> Vec<String> {
@@ -1009,6 +1020,50 @@ name = "pkg"
 version = "0.1.0"
 source = "git+file:///tmp/pkg.git#0123456789abcdef0123456789abcdef01234567"
 "#;
+
+        let caps = lockfile_capabilities(content);
+        let links = lockfile_relations(content);
+
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+        assert!(!relation_target_present(&links, "registry"));
+    }
+
+    /// # Contract
+    ///
+    /// SCP-like Git sources in lockfiles are remote dependency sources
+    /// and produce the same network graph facts as URL-form remotes.
+    #[test]
+    fn lockfile_graph_inference_accepts_scp_like_git_sources() {
+        let content = r#"{
+  "default": {
+    "pkg": {
+      "git": "git@github.com:example/pkg.git",
+      "ref": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}"#;
+
+        let caps = lockfile_capabilities(content);
+        let links = lockfile_relations(content);
+
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(relation_target_present(&links, "registry"));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Email-like metadata without an SCP remote path does not create
+    /// lockfile network graph facts.
+    #[test]
+    fn lockfile_graph_inference_rejects_email_like_metadata() {
+        let content = r#"{
+  "metadata": {
+    "maintainer": "dev@example.com"
+  }
+}"#;
 
         let caps = lockfile_capabilities(content);
         let links = lockfile_relations(content);
