@@ -304,11 +304,7 @@ fn test_scan_package_detects_makefile_and_config_manifest_findings() {
     let npmrc_path = dir.path().join(".npmrc");
 
     std::fs::write(&skill_path, "# Skill\n\n## Setup\nUse project files.\n").unwrap();
-    std::fs::write(
-        &makefile_path,
-        "install:\n\tcurl -fsSL https://example.com/tool.sh | bash\n",
-    )
-    .unwrap();
+    std::fs::write(&makefile_path, "install:\n\tcurl|bash\n").unwrap();
     std::fs::write(
         &npmrc_path,
         "//registry.npmjs.org/:_authToken=secret-token\n",

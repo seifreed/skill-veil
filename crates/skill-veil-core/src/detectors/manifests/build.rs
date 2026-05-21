@@ -7,13 +7,15 @@ use crate::services::artifact_orchestration::manifests::strip_inline_hash_commen
 use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
+const MAKEFILE_REMOTE_DOWNLOAD_TOKENS: &[&str] = &["curl", "wget"];
+
 pub(crate) fn analyze_makefile(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
     for line in content.lines().map(str::trim) {
         let code = strip_inline_hash_comment(line);
         let lower = code.to_ascii_lowercase();
-        if lower.contains("curl ") || lower.contains("wget ") {
+        if makefile_has_remote_download(&lower) {
             findings.push(
                 Finding::builder(
                     "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD",
@@ -41,7 +43,7 @@ pub(crate) fn makefile_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     for line in content.lines() {
         let code = strip_inline_hash_comment(line.trim_start());
         let lower = code.to_ascii_lowercase();
-        if !has_network && (lower.contains("curl ") || lower.contains("wget ")) {
+        if !has_network && makefile_has_remote_download(&lower) {
             has_network = true;
         }
         if !has_exec && line_invokes_shell_or_interpreter(&lower) {
@@ -67,7 +69,7 @@ pub(crate) fn makefile_relations(content: &str) -> Vec<ArtifactLink> {
     for line in content.lines().map(str::trim) {
         let code = strip_inline_hash_comment(line);
         let lower = code.to_ascii_lowercase();
-        if lower.contains("curl ") || lower.contains("wget ") {
+        if makefile_has_remote_download(&lower) {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
                 relation: ArtifactRelation::Downloads,
@@ -81,6 +83,50 @@ pub(crate) fn makefile_relations(content: &str) -> Vec<ArtifactLink> {
         }
     }
     links
+}
+
+fn makefile_has_remote_download(lower_line: &str) -> bool {
+    MAKEFILE_REMOTE_DOWNLOAD_TOKENS
+        .iter()
+        .any(|token| command_token_with_boundary(lower_line, token))
+}
+
+fn command_token_with_boundary(lower_line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = lower_line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            lower_line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let make_prefix_ok = matches!(before, Some(b'@' | b'-' | b'+'))
+            && lower_line
+                .as_bytes()
+                .get(..abs_pos)
+                .is_some_and(|prefix| prefix.iter().all(|b| matches!(b, b'@' | b'-' | b'+')));
+        let left_ok = before.is_none()
+            || make_prefix_ok
+            || matches!(
+                before,
+                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+            );
+        let after = lower_line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -204,6 +250,28 @@ mod tests {
         assert_eq!(findings[0].rule_id, "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD");
     }
 
+    /// Contract: pipe-joined download commands are still command
+    /// invocations even when there is no trailing space after `curl`.
+    #[test]
+    fn analyze_makefile_detects_pipe_joined_curl() {
+        let content = "all:\n\tcurl|bash\n";
+        let findings = analyze_makefile(Path::new("Makefile"), content);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD");
+    }
+
+    /// Contract: lookalike words containing `curl` or `wget` are not
+    /// command invocations and must not raise download findings.
+    #[test]
+    fn analyze_makefile_rejects_remote_download_substrings() {
+        let content = "all:\n\t@echo uncurl prewget pre-wget\n";
+        let findings = analyze_makefile(Path::new("Makefile"), content);
+        assert!(
+            findings.is_empty(),
+            "lookalike words must not raise remote-download finding; got {findings:?}",
+        );
+    }
+
     /// Contract: an inline comment mentioning `wget` does not flip the
     /// `NetworkAccess` capability flag.
     #[test]
@@ -214,6 +282,30 @@ mod tests {
             &caps,
             ArtifactCapability::NetworkAccess
         ));
+    }
+
+    /// Contract: Make recipe prefixes and absolute command paths still
+    /// count as real download invocations.
+    #[test]
+    fn makefile_capabilities_detects_prefixed_and_absolute_download_commands() {
+        for content in [
+            "all:\n\t@curl https://x\n",
+            "all:\n\t-/usr/bin/wget https://x\n",
+        ] {
+            let caps = makefile_capabilities(content);
+            assert!(
+                capability_present(&caps, ArtifactCapability::NetworkAccess),
+                "download command in {content:?} must flip NetworkAccess; got {caps:?}",
+            );
+        }
+    }
+
+    /// Contract: boundary-aware detection applies to relations too.
+    #[test]
+    fn makefile_relations_detects_pipe_joined_download_command() {
+        let content = "all:\n\tcurl|bash\n";
+        let links = makefile_relations(content);
+        assert!(relation_target_present(&links, "remote-resource"));
     }
 
     /// Contract: an inline comment mentioning `bash` does not flip
