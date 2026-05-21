@@ -156,25 +156,22 @@ pub(super) fn is_real_external_sink(edge: &ArtifactEdge) -> bool {
 /// VT-clean corpus showed install-documentation is the single
 /// largest benign class flagged by the secret→network rule.
 ///
-/// Anchored on the URL **path** ending in a package/installer/archive
-/// extension (after stripping query/fragment) or the GitHub
-/// `releases/download/` path. Exfil endpoints (`/collect`,
-/// `/api/log`, webhook receivers) do not end in these extensions, so
-/// recall on real secret-to-network exfil is preserved. The
-/// known-exfil short-circuit (`pastebin`, `discord webhook`,
-/// `telegram bot`, `ngrok`, `raw.githubusercontent`, …) runs BEFORE
-/// this check, so a `.rpm` hosted on a known drop host still fires.
+/// Anchored on the parsed URL path ending in a package/installer/archive
+/// extension, or on GitHub's release-download path. Exfil endpoints
+/// (`/collect`, `/api/log`, webhook receivers) do not end in these
+/// extensions, so recall on real secret-to-network exfil is preserved.
+/// The known-exfil short-circuit (`pastebin`, `discord webhook`,
+/// `telegram bot`, `ngrok`, `raw.githubusercontent`, …) runs BEFORE this
+/// check, so a `.rpm` hosted on a known drop host still fires.
 pub(super) fn looks_like_software_distribution_url(lower: &str) -> bool {
-    let after_scheme = lower
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(lower);
-    let path = after_scheme
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(after_scheme)
-        .trim_end_matches('/');
-    if path.contains("/releases/download/") || path.contains("/dist/") {
+    let Some(parsed) = parse_endpoint_url(lower) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let path = parsed.path().trim_end_matches('/');
+    if host == "github.com" && path.contains("/releases/download/") {
         return true;
     }
     const ARTIFACT_EXTENSIONS: &[&str] = &[
@@ -432,6 +429,7 @@ mod tests {
         for url in [
             "https://repo.percona.com/yum/percona-release-latest.noarch.rpm",
             "https://github.com/org/tool/releases/download/v1.2.3/tool-linux.tar.gz",
+            "https://github.com/org/tool/releases/download/v1.2.3/tool",
             "https://host.example/pkg/app.whl",
             "https://downloads.vendor.io/cli/cli_amd64.deb",
             "https://get.example.org/installer.pkg?os=mac",
@@ -467,6 +465,8 @@ mod tests {
             "https://api.evil.net/v1/log?d=secret",
             "https://exfil.example/upload.php",
             "https://hooks.example.com/webhook/abc",
+            "https://attacker.example/releases/download/collect",
+            "https://attacker.example/dist/collect",
         ] {
             let edge = ArtifactEdge {
                 from: "a".to_string(),
