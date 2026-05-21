@@ -13,7 +13,7 @@ use skill_veil_core::{
     RegexPatternMatcher, ScanOptions, ScanTargetMode, Scanner, StdFileSystemProvider,
 };
 use std::io::IsTerminal;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod cache;
@@ -157,10 +157,7 @@ fn run_update_notifier(args: &ScanArgs) {
     } else {
         Behaviour::Notify
     };
-    let cache_root = args
-        .cache_dir
-        .clone()
-        .or_else(|| dirs::cache_dir().map(|d| d.join("skill-veil")));
+    let cache_root = update_notifier_cache_root_from(args.cache_dir.as_deref(), dirs::cache_dir());
     let Some(cache_root) = cache_root else {
         return;
     };
@@ -171,6 +168,13 @@ fn run_update_notifier(args: &ScanArgs) {
     let sv_pin = install.skill_veil.as_ref().map(|s| s.version.as_str());
     let nova_pin = install.nova.as_ref().map(|n| n.commit_sha.as_str());
     maybe_notify(behaviour, &cache_root, sv_pin, nova_pin);
+}
+
+fn update_notifier_cache_root_from(
+    _scan_cache_override: Option<&Path>,
+    user_cache: Option<PathBuf>,
+) -> Option<PathBuf> {
+    user_cache.map(|d| d.join("skill-veil"))
 }
 
 pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
@@ -543,6 +547,38 @@ mod tests {
 
         assert!(!cleaned.contains('\x1b'));
         assert!(cleaned.contains("pkg?[2J"));
+    }
+
+    /// # Contract
+    ///
+    /// `scan --cache-dir` is the enrichment-cache override for VT, LLM,
+    /// and PromptIntel lookups. The update notifier must ignore it and
+    /// inspect the rules install cache under the OS user cache instead,
+    /// matching the rule-loader search path.
+    #[test]
+    fn update_notifier_ignores_scan_cache_override() {
+        let scan_cache = PathBuf::from("/tmp/package/.skill-veil-cache");
+        let user_cache = PathBuf::from("/home/test/.cache");
+
+        let resolved = update_notifier_cache_root_from(Some(&scan_cache), Some(user_cache.clone()))
+            .expect("user cache root");
+
+        assert_eq!(resolved, user_cache.join("skill-veil"));
+        assert_ne!(resolved, scan_cache);
+    }
+
+    /// # Contract
+    ///
+    /// Without an OS user cache directory, the update notifier has no
+    /// trusted place to read rule-install pins or write its TTL marker.
+    /// It must not fall back to the scan enrichment cache override.
+    #[test]
+    fn update_notifier_rejects_missing_user_cache_even_with_scan_cache_override() {
+        let scan_cache = PathBuf::from("/tmp/package/.skill-veil-cache");
+
+        let resolved = update_notifier_cache_root_from(Some(&scan_cache), None);
+
+        assert!(resolved.is_none());
     }
 
     /// # Contract
