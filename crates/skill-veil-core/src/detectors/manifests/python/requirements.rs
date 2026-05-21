@@ -11,7 +11,10 @@ use crate::findings::{
 use crate::services::artifact_orchestration::manifests::strip_inline_hash_comment;
 use crate::services::artifact_orchestration::ArtifactOrchestratorService;
 
-use super::{parse_python_dep_name, PYTHON_EXEC_DEPS, PYTHON_NETWORK_DEPS, PYTHON_VCS_PREFIXES};
+use super::{
+    has_python_vcs_prefix, parse_python_dep_name, starts_with_ignore_ascii_case, PYTHON_EXEC_DEPS,
+    PYTHON_NETWORK_DEPS,
+};
 
 pub(crate) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
@@ -24,7 +27,7 @@ pub(crate) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
         .map(|line| strip_inline_hash_comment(line).trim())
         .filter(|line| !line.is_empty())
         .filter(|line| !line.starts_with("-r ") && !line.starts_with("--requirement"))
-        .filter(|line| !line.starts_with("git+") && !line.starts_with("http"))
+        .filter(|line| !is_direct_url_requirement(line))
         .filter(|line| !line.starts_with("-c ") && !line.starts_with("--"))
         // `==` and `~=` are pinning operators; `!=` is exclusion
         // (`requests!=2.0` means "any version except 2.0") and is NOT a
@@ -63,7 +66,7 @@ pub(crate) fn requirements_txt_capabilities(content: &str) -> Vec<ArtifactCapabi
         // kept as a splitter, not a comment marker, so the PEP 508 env
         // marker (`requests; python_version>='3.6'`) cuts at the right spot.
         let trimmed = raw_line.trim();
-        let line = if PYTHON_VCS_PREFIXES.iter().any(|p| trimmed.starts_with(p)) {
+        let line = if has_python_vcs_prefix(trimmed) {
             trimmed
         } else {
             strip_inline_hash_comment(raw_line).trim()
@@ -90,6 +93,12 @@ pub(crate) fn requirements_txt_capabilities(content: &str) -> Vec<ArtifactCapabi
     capabilities.sort_by_key(|c| c.capability);
     capabilities.dedup_by_key(|c| c.capability);
     capabilities
+}
+
+fn is_direct_url_requirement(line: &str) -> bool {
+    has_python_vcs_prefix(line)
+        || starts_with_ignore_ascii_case(line, "http://")
+        || starts_with_ignore_ascii_case(line, "https://")
 }
 
 #[cfg(test)]
@@ -132,6 +141,32 @@ mod tests {
         assert!(
             !finding_present(&findings, "MANIFEST_REQUIREMENTS_UNPINNED_DEP"),
             "real `==` pin must suppress the unpinned finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: `httpx` is a dependency name, not an HTTP URL. A bare
+    /// unpinned `httpx` line must fire the unpinned-dependency finding.
+    #[test]
+    fn analyze_requirements_txt_flags_httpx_as_unpinned() {
+        let content = "httpx\n";
+        let path = std::path::Path::new("/pkg/requirements.txt");
+        let findings = analyze_requirements_txt(path, content);
+        assert!(
+            finding_present(&findings, "MANIFEST_REQUIREMENTS_UNPINNED_DEP"),
+            "`httpx` must not be swallowed by URL filtering; got {findings:?}",
+        );
+    }
+
+    /// Contract: direct URL requirements are skipped by the unpinned-dep
+    /// detector, and URL schemes are case-insensitive.
+    #[test]
+    fn analyze_requirements_txt_skips_case_variant_direct_http_url() {
+        let content = "HTTPS://example.invalid/packages/tool.whl\n";
+        let path = std::path::Path::new("/pkg/requirements.txt");
+        let findings = analyze_requirements_txt(path, content);
+        assert!(
+            !finding_present(&findings, "MANIFEST_REQUIREMENTS_UNPINNED_DEP"),
+            "direct URL requirements must not fire unpinned-dep finding; got {findings:?}",
         );
     }
 
@@ -227,6 +262,30 @@ mod tests {
         assert!(
             capability_present(&caps, ArtifactCapability::NetworkAccess),
             "PEP 508 `NAME @ URL` must flip NetworkAccess; got {caps:?}",
+        );
+    }
+
+    /// Contract: PEP 508 direct references allow compact `NAME@URL` syntax
+    /// and extras on `NAME`; capability inference keys on the base name.
+    #[test]
+    fn requirements_txt_capabilities_detects_compact_direct_reference_with_extras() {
+        let content = "requests[security]@git+https://github.com/psf/requests.git\n";
+        let caps = requirements_txt_capabilities(content);
+        assert!(
+            capability_present(&caps, ArtifactCapability::NetworkAccess),
+            "compact direct reference with extras must flip NetworkAccess; got {caps:?}",
+        );
+    }
+
+    /// Contract: VCS scheme matching is case-insensitive so `#egg=NAME`
+    /// fragments survive comment stripping.
+    #[test]
+    fn requirements_txt_capabilities_detects_case_variant_vcs_egg_fragment() {
+        let content = "GIT+https://github.com/psf/requests.git#egg=requests\n";
+        let caps = requirements_txt_capabilities(content);
+        assert!(
+            capability_present(&caps, ArtifactCapability::NetworkAccess),
+            "case-variant VCS egg=requests must flip NetworkAccess; got {caps:?}",
         );
     }
 

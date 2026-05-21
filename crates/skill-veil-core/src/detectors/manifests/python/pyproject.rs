@@ -238,6 +238,22 @@ dependencies = ["requests @ git+https://github.com/psf/requests.git"]
         );
     }
 
+    /// Contract: compact PEP 508 direct references with extras still use
+    /// the base dependency name for capability inference.
+    #[test]
+    fn pyproject_toml_capabilities_detects_compact_direct_reference_with_extras() {
+        let content = r#"[project]
+name = "x"
+version = "0"
+dependencies = ["requests[security]@git+https://github.com/psf/requests.git"]
+"#;
+        let caps = pyproject_toml_capabilities(content);
+        assert!(
+            capability_present(&caps, ArtifactCapability::NetworkAccess),
+            "compact direct reference with extras must flip NetworkAccess; got {caps:?}",
+        );
+    }
+
     /// # Contract
     /// Same dedup contract for `pyproject.toml`. The pre-fix `dedup_by_key`
     /// silently passed when all deps of one kind were grouped together, so

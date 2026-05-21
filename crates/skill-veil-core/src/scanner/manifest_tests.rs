@@ -1,6 +1,6 @@
 use super::*;
 use crate::analyzer::{AgentExtensionKind, ArtifactClassification};
-use crate::artifact_graph::ArtifactRelation;
+use crate::artifact_graph::{ArtifactCapability, ArtifactRelation};
 use crate::findings::ArtifactKind;
 use tempfile::tempdir;
 
@@ -169,6 +169,39 @@ fn test_scan_package_manifest_emits_manifest_findings() {
         .findings
         .iter()
         .any(|finding| finding.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK"));
+}
+
+#[test]
+fn test_scan_package_flags_unpinned_httpx_requirement() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let requirements_path = dir.path().join("requirements.txt");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(&requirements_path, "httpx\n").unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let requirements_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path == requirements_path)
+        .unwrap();
+
+    assert!(requirements_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "MANIFEST_REQUIREMENTS_UNPINNED_DEP"));
+    assert!(
+        requirements_result.artifact_graph.nodes.iter().any(|node| {
+            node.path.ends_with("requirements.txt")
+                && node
+                    .capabilities
+                    .iter()
+                    .any(|fact| fact.capability == ArtifactCapability::NetworkAccess)
+        }),
+        "requirements.txt node must retain httpx NetworkAccess capability"
+    );
 }
 
 #[test]
