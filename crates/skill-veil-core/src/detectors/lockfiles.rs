@@ -11,7 +11,10 @@ use std::path::Path;
 
 lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"source\s*=\s*"git\+"#);
 lazy_pattern!(RE_POETRY_URL_SOURCE, r#"url\s*=\s*"https?://"#);
-lazy_pattern!(RE_UV_GIT_SOURCE, r"git\+https?://");
+lazy_pattern!(
+    RE_UV_GIT_SOURCE,
+    r#"(?i)(?:\bgit\s*=\s*"https?://|git\+https?://)"#
+);
 lazy_pattern!(RE_YARN_REMOTE_TARBALL, r#"resolved\s+"https?://"#);
 lazy_pattern!(RE_PNPM_REMOTE_TARBALL, r"tarball:\s*https?://");
 
@@ -139,4 +142,62 @@ fn analyze_lockfile(
         .match_value(suspicious_urls[0].clone())
         .reason(format!("{reason} from a non-standard remote source"))
         .build()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule_ids(findings: &[Finding]) -> Vec<&str> {
+        findings
+            .iter()
+            .map(|finding| finding.rule_id.as_str())
+            .collect()
+    }
+
+    /// # Contract
+    ///
+    /// uv Git sources are stored in the lockfile as `source = { git = ... }`,
+    /// not only as PEP 508 `git+https://...` requirement strings.
+    #[test]
+    fn analyze_uv_lock_detects_inline_table_git_sources() {
+        let content = r#"
+version = 1
+revision = 3
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = { git = "https://packages.attacker.example/pkg.git#0123456789abcdef0123456789abcdef01234567" }
+"#;
+
+        let findings = analyze_uv_lock(Path::new("uv.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_UV_GIT_SOURCE"]);
+        assert_eq!(
+            findings[0].match_value,
+            "https://packages.attacker.example/pkg.git#0123456789abcdef0123456789abcdef01234567"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A registry-only uv lockfile source should not emit the Git-source
+    /// supply-chain finding merely because the lockfile has an HTTPS URL.
+    #[test]
+    fn analyze_uv_lock_skips_registry_sources_without_git_key() {
+        let content = r#"
+version = 1
+revision = 3
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = { registry = "https://packages.attacker.example/simple" }
+"#;
+
+        let findings = analyze_uv_lock(Path::new("uv.lock"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
 }
