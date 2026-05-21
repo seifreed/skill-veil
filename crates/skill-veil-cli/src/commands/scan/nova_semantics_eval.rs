@@ -192,7 +192,7 @@ pub(crate) mod fastembed_impl {
 
     use super::{EmbedError, SentenceEmbedder};
     use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Mutex;
 
     pub(crate) struct FastembedSentenceEmbedder {
@@ -226,12 +226,14 @@ pub(crate) mod fastembed_impl {
     }
 
     pub(crate) fn nova_model_cache_dir_from(base: Option<PathBuf>) -> Result<PathBuf, EmbedError> {
-        base.map(|base| base.join("skill-veil").join("nova-models"))
-            .ok_or_else(|| {
-                EmbedError::Failed(
-                    "could not determine user cache directory for NOVA model cache".into(),
-                )
-            })
+        let base = base.ok_or_else(|| {
+            EmbedError::Failed(
+                "could not determine user cache directory for NOVA model cache".into(),
+            )
+        })?;
+        let namespace = base.join("skill-veil");
+        reject_existing_symlink(&namespace)?;
+        Ok(namespace.join("nova-models"))
     }
 
     fn create_model_cache_dir(cache_dir: &std::path::Path) -> Result<(), EmbedError> {
@@ -241,6 +243,21 @@ pub(crate) mod fastembed_impl {
                 cache_dir.display()
             ))
         })
+    }
+
+    fn reject_existing_symlink(path: &Path) -> Result<(), EmbedError> {
+        match std::fs::symlink_metadata(path) {
+            Ok(meta) if meta.file_type().is_symlink() => Err(EmbedError::Failed(format!(
+                "{} is a symlink",
+                path.display()
+            ))),
+            Ok(_) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(EmbedError::Failed(format!(
+                "stat {}: {err}",
+                path.display()
+            ))),
+        }
     }
 
     impl SentenceEmbedder for FastembedSentenceEmbedder {
@@ -285,6 +302,26 @@ pub(crate) mod fastembed_impl {
         #[test]
         fn nova_model_cache_dir_rejects_missing_user_cache_dir() {
             assert!(nova_model_cache_dir_from(None).is_err());
+        }
+
+        /// # Contract
+        ///
+        /// The `skill-veil` namespace under the user cache must be a real
+        /// directory when it exists. A symlink there would redirect model
+        /// cache writes to an attacker-chosen location.
+        #[cfg(unix)]
+        #[test]
+        fn nova_model_cache_dir_rejects_symlinked_skill_veil_namespace() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let outside = tmp.path().join("outside-cache");
+            let namespace = tmp.path().join("skill-veil");
+            std::fs::create_dir(&outside).unwrap();
+            std::os::unix::fs::symlink(&outside, &namespace).unwrap();
+
+            let err = nova_model_cache_dir_from(Some(tmp.path().to_path_buf()))
+                .expect_err("symlinked namespace must be rejected");
+
+            assert!(format!("{err:?}").contains("symlink"));
         }
 
         /// # Contract
