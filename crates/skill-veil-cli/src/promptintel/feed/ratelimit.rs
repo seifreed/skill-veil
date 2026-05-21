@@ -84,15 +84,20 @@ impl EndpointHistory {
     fn count_within(&self, window: Duration, now: DateTime<Utc>) -> u32 {
         self.calls
             .iter()
-            .filter(|c| now.signed_duration_since(c.at) < window)
+            .filter(|c| {
+                let age = now.signed_duration_since(c.at);
+                age >= Duration::zero() && age < window
+            })
             .count() as u32
     }
 
     /// Drop calls older than the longest window (24h) so the on-disk
     /// state cannot grow unbounded across long-running sessions.
     fn evict_older_than(&mut self, max_age: Duration, now: DateTime<Utc>) {
-        self.calls
-            .retain(|c| now.signed_duration_since(c.at) < max_age);
+        self.calls.retain(|c| {
+            let age = now.signed_duration_since(c.at);
+            age >= Duration::zero() && age < max_age
+        });
     }
 }
 
@@ -403,6 +408,24 @@ mod tests {
         assert!(state
             .check_can_call_at(endpoint::REPORTS_SUBMIT, now)
             .is_ok());
+    }
+
+    /// Contract: future-dated cache records MUST NOT count against the
+    /// rolling window. Clock skew or a poisoned `ratelimit.json` must
+    /// not freeze PromptIntel calls until the future timestamp elapses.
+    #[test]
+    fn future_records_do_not_count_against_hourly_cap() {
+        let mut state = RateLimitState::default();
+        let now = at(1_000_000);
+        for i in 0..120 {
+            state.record_call_at(
+                endpoint::AGENT_FEED,
+                None,
+                now + Duration::hours(24) + Duration::seconds(i),
+            );
+        }
+
+        assert!(state.check_can_call_at(endpoint::AGENT_FEED, now).is_ok());
     }
 
     /// Contract: the daily cap (20 for `agents/reports`) refuses even
