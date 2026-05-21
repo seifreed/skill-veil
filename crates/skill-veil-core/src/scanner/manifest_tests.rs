@@ -708,6 +708,53 @@ source = "git+ssh://git@github.com/example/pkg.git?rev=main#0123456789abcdef0123
 }
 
 #[test]
+fn test_scan_package_flags_uv_lock_git_ssh_source() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let pyproject = dir.path().join("pyproject.toml");
+    let uv_lock = dir.path().join("uv.lock");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &pyproject,
+        r#"[project]
+name = "skill-fixture"
+version = "0.1.0"
+dependencies = ["pkg==0.1.0"]
+
+[tool.uv]
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &uv_lock,
+        r#"
+version = 1
+revision = 3
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/example/pkg.git#0123456789abcdef0123456789abcdef01234567" }
+"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let lock_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path == uv_lock)
+        .unwrap();
+
+    assert!(lock_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "LOCKFILE_UV_GIT_SOURCE"));
+}
+
+#[test]
 fn test_scan_package_links_only_expected_lockfile_for_package_manager() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

@@ -22,10 +22,10 @@ lazy_pattern!(
 lazy_pattern!(RE_YARN_REMOTE_TARBALL, r#"(?i)\bresolved\s+"https?://"#);
 lazy_pattern!(RE_PNPM_REMOTE_TARBALL, r"(?i)\btarball:\s*https?://");
 
-const CARGO_GIT_SOURCE_PREFIX: &str = "git+";
-const CARGO_GIT_FILE_SOURCE_PREFIX: &str = "git+file://";
-const CARGO_REMOTE_HTTP_GIT_SOURCE_PREFIXES: &[&str] = &["git+http://", "git+https://"];
-const CARGO_REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES: &[&str] = &["git+ssh://", "git+git://"];
+const GIT_SOURCE_PREFIX: &str = "git+";
+const FILE_SOURCE_PREFIX: &str = "file://";
+const REMOTE_HTTP_SOURCE_PREFIXES: &[&str] = &["http://", "https://"];
+const REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES: &[&str] = &["ssh://", "git://"];
 
 pub(crate) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile(
@@ -67,12 +67,21 @@ pub(crate) fn analyze_poetry_lock(path: &Path, content: &str) -> Vec<Finding> {
 }
 
 pub(crate) fn analyze_uv_lock(path: &Path, content: &str) -> Vec<Finding> {
-    analyze_lockfile(
+    let Some(git_sources) = uv_lock_git_sources(content) else {
+        return analyze_lockfile(
+            path,
+            content,
+            "LOCKFILE_UV_GIT_SOURCE",
+            LockfilePattern::Regex(&RE_UV_GIT_SOURCE),
+            "uv.lock references git-based dependency sources",
+        );
+    };
+
+    lockfile_findings_for_sources(
         path,
-        content,
         "LOCKFILE_UV_GIT_SOURCE",
-        LockfilePattern::Regex(&RE_UV_GIT_SOURCE),
         "uv.lock references git-based dependency sources",
+        git_sources,
     )
 }
 
@@ -184,20 +193,60 @@ fn cargo_lock_git_sources(content: &str) -> Option<Vec<String>> {
 fn remote_cargo_git_source(source: &str) -> Option<String> {
     let trimmed = source.trim();
     let lower = trimmed.to_ascii_lowercase();
-    if !lower.starts_with(CARGO_GIT_SOURCE_PREFIX)
-        || lower.starts_with(CARGO_GIT_FILE_SOURCE_PREFIX)
-    {
+    if !lower.starts_with(GIT_SOURCE_PREFIX) {
         return None;
     }
-    if CARGO_REMOTE_HTTP_GIT_SOURCE_PREFIXES
+    remote_git_source_match_value(trimmed)
+}
+
+fn uv_lock_git_sources(content: &str) -> Option<Vec<String>> {
+    let toml = content.parse::<TomlValue>().ok()?;
+    let packages = toml.get("package").and_then(TomlValue::as_array)?;
+    Some(
+        packages
+            .iter()
+            .filter_map(|package| package.get("source"))
+            .filter_map(uv_git_source)
+            .collect(),
+    )
+}
+
+fn uv_git_source(source: &TomlValue) -> Option<String> {
+    match source {
+        TomlValue::Table(table) => table
+            .get("git")
+            .and_then(TomlValue::as_str)
+            .and_then(remote_git_source_match_value),
+        TomlValue::String(source) => {
+            let lower = source.trim().to_ascii_lowercase();
+            if lower.starts_with(GIT_SOURCE_PREFIX) {
+                remote_git_source_match_value(source)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn remote_git_source_match_value(source: &str) -> Option<String> {
+    let trimmed = source.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    let transport = lower
+        .strip_prefix(GIT_SOURCE_PREFIX)
+        .unwrap_or(lower.as_str());
+    if transport.starts_with(FILE_SOURCE_PREFIX) {
+        return None;
+    }
+    if REMOTE_HTTP_SOURCE_PREFIXES
         .iter()
-        .any(|prefix| lower.starts_with(prefix))
+        .any(|prefix| transport.starts_with(prefix))
     {
         return extract_http_urls(trimmed).into_iter().next();
     }
-    CARGO_REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES
+    REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES
         .iter()
-        .any(|prefix| lower.starts_with(prefix))
+        .any(|prefix| transport.starts_with(prefix))
         .then(|| trimmed.to_string())
 }
 
@@ -205,7 +254,7 @@ fn lockfile_mentions_remote_source(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     lower.contains("http://")
         || lower.contains("https://")
-        || CARGO_REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES
+        || REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES
             .iter()
             .any(|prefix| lower.contains(prefix))
 }
@@ -371,6 +420,52 @@ source = { git = "HTTPS://packages.attacker.example/pkg.git#0123456789abcdef0123
         let findings = analyze_uv_lock(Path::new("uv.lock"), content);
 
         assert_eq!(rule_ids(&findings), vec!["LOCKFILE_UV_GIT_SOURCE"]);
+    }
+
+    /// # Contract
+    ///
+    /// uv Git sources can be pinned through SSH remotes; those are still
+    /// remote dependency sources even though they are not HTTP URLs.
+    #[test]
+    fn analyze_uv_lock_detects_ssh_inline_table_git_sources() {
+        let content = r#"
+version = 1
+revision = 3
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = { git = "ssh://git@github.com/example/pkg.git#0123456789abcdef0123456789abcdef01234567" }
+"#;
+
+        let findings = analyze_uv_lock(Path::new("uv.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_UV_GIT_SOURCE"]);
+        assert_eq!(
+            findings[0].match_value,
+            "ssh://git@github.com/example/pkg.git#0123456789abcdef0123456789abcdef01234567"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A local file-backed uv Git source is not a remote dependency
+    /// source and must not emit the remote-source lockfile finding.
+    #[test]
+    fn analyze_uv_lock_skips_local_git_file_sources() {
+        let content = r#"
+version = 1
+revision = 3
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = { git = "file:///tmp/pkg.git#0123456789abcdef0123456789abcdef01234567" }
+"#;
+
+        let findings = analyze_uv_lock(Path::new("uv.lock"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 
     /// # Contract
