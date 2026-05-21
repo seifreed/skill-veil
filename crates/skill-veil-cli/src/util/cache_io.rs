@@ -136,6 +136,13 @@ fn regular_cache_file_metadata(path: &Path) -> Result<Option<Metadata>> {
             );
             Ok(None)
         }
+        Ok(meta) if !has_single_hardlink(&meta) => {
+            tracing::warn!(
+                "ignoring cache file {} (multiple hard links); will refetch",
+                path.display(),
+            );
+            Ok(None)
+        }
         Ok(meta) => Ok(Some(meta)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).with_context(|| format!("stat cache file {}", path.display())),
@@ -191,6 +198,17 @@ fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
     true
 }
 
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +260,27 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let result = read_cache_file_with_cap(&link, MAX_CACHE_FILE_BYTES).unwrap();
+
+        assert!(result.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// Cache reads treat hardlinked entries as cache misses. A cache
+    /// file must be owned by the cache tree, not a second directory
+    /// entry for an inode created elsewhere.
+    #[cfg(unix)]
+    #[test]
+    fn read_cache_file_with_cap_returns_none_for_hardlinked_file() {
+        let dir = TempDir::new().unwrap();
+        let cache_dir = dir.path().join("cache");
+        std::fs::create_dir(&cache_dir).unwrap();
+        let outside = dir.path().join("outside.json");
+        let linked = cache_dir.join("cache.json");
+        std::fs::write(&outside, br#"{"cached":true}"#).unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let result = read_cache_file_with_cap(&linked, MAX_CACHE_FILE_BYTES).unwrap();
 
         assert!(result.is_none());
     }
