@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
@@ -83,17 +84,68 @@ pub(super) fn cache_base_dir_from_user_cache(
         }
     }
     if let Some(user_cache) = user_cache {
-        return default_cache_base_dir(&user_cache);
+        return default_cache_base_dir(&user_cache, scan_path);
     }
     Err(anyhow!(
         "could not determine user cache directory; pass --cache-dir outside the scan path"
     ))
 }
 
-fn default_cache_base_dir(user_cache: &Path) -> Result<PathBuf> {
+fn default_cache_base_dir(user_cache: &Path, scan_path: &Path) -> Result<PathBuf> {
     let base = user_cache.join(CACHE_NAMESPACE);
     reject_existing_symlink(&base)?;
+    reject_cache_base_inside_scan_path(&base, scan_path)?;
     Ok(base)
+}
+
+fn reject_cache_base_inside_scan_path(base: &Path, scan_path: &Path) -> Result<()> {
+    let base_resolved = resolve_existing_or_missing_path(base)?;
+    let scan_canon = scan_path.canonicalize()?;
+    let scan_root = scan_containment_root(&scan_canon);
+    if base_resolved.starts_with(scan_root) {
+        return Err(anyhow!(
+            "default cache directory {} is inside scan path {}; pass --cache-dir outside the scan path",
+            base.display(),
+            scan_path.display()
+        ));
+    }
+    debug_assert!(
+        !base_resolved.starts_with(scan_root),
+        "default cache directory must resolve outside scan path"
+    );
+    Ok(())
+}
+
+fn resolve_existing_or_missing_path(path: &Path) -> Result<PathBuf> {
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return path.canonicalize().map_err(Into::into);
+    }
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut missing_components: Vec<OsString> = Vec::new();
+    let mut candidate = absolute.as_path();
+    loop {
+        match candidate.canonicalize() {
+            Ok(mut resolved) => {
+                for component in missing_components.iter().rev() {
+                    resolved.push(component);
+                }
+                return Ok(resolved);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                let component = candidate.file_name().ok_or(err)?;
+                missing_components.push(component.to_os_string());
+                candidate = candidate.parent().ok_or_else(|| {
+                    anyhow!("could not resolve existing parent for {}", path.display())
+                })?;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
 }
 
 fn existing_path_is_symlink(path: &Path) -> bool {
@@ -322,6 +374,70 @@ mod tests {
             .expect_err("symlinked default namespace must be rejected");
 
         assert!(format!("{err:#}").contains("symlink"));
+    }
+
+    /// # Contract
+    ///
+    /// The default OS user cache root is subject to the same package
+    /// containment rule as `--cache-dir`. If `XDG_CACHE_HOME` or the
+    /// injected cache root points inside the scanned package, enrichment
+    /// must fail closed instead of trusting attacker-controlled cache
+    /// entries shipped with the package.
+    #[test]
+    fn cache_base_dir_rejects_default_user_cache_inside_scan_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        let user_cache = scan_path.join(".cache");
+        std::fs::create_dir_all(&user_cache).expect("seed in-package user cache");
+
+        let err = cache_base_dir_from_user_cache(None, &scan_path, Some(user_cache))
+            .expect_err("default user cache inside scan path must be rejected");
+
+        assert!(format!("{err:#}").contains("inside scan path"));
+    }
+
+    /// # Contract
+    ///
+    /// Missing default cache directories are resolved through their
+    /// existing parent before containment is checked. A not-yet-created
+    /// `XDG_CACHE_HOME` under the scanned package must not be created
+    /// there during enrichment.
+    #[test]
+    fn cache_base_dir_rejects_missing_default_user_cache_inside_scan_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        std::fs::create_dir_all(&scan_path).expect("seed scan dir");
+        let user_cache = scan_path.join(".cache");
+        debug_assert!(
+            !user_cache.exists(),
+            "fixture invariant: in-package user cache starts missing"
+        );
+
+        let err = cache_base_dir_from_user_cache(None, &scan_path, Some(user_cache.clone()))
+            .expect_err("missing default user cache inside scan path must be rejected");
+
+        assert!(format!("{err:#}").contains("inside scan path"));
+        assert!(
+            !user_cache.exists(),
+            "rejected in-package cache root must not be created"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// A default user cache outside the scanned package remains valid
+    /// even when the final `skill-veil` namespace does not exist yet.
+    #[test]
+    fn cache_base_dir_accepts_default_user_cache_outside_scan_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        let user_cache = tmp.path().join("user-cache");
+        std::fs::create_dir_all(&scan_path).expect("seed scan dir");
+
+        let result = cache_base_dir_from_user_cache(None, &scan_path, Some(user_cache.clone()))
+            .expect("default user cache outside scan path must be accepted");
+
+        assert_eq!(result, user_cache.join(CACHE_NAMESPACE));
     }
 
     /// # Contract
