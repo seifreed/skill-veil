@@ -84,6 +84,9 @@ fn run_feed_sync(args: PromptIntelFeedSyncArgs) -> Result<()> {
         feed_sync::ResolvedSyncMode::IncrementalUpgradedToFull => {
             "incremental → upgraded to full (no prior cache)"
         }
+        feed_sync::ResolvedSyncMode::IncrementalRecoveredFromFutureCache => {
+            "incremental → upgraded to full (cache timestamp is in the future)"
+        }
     };
     println!(
         "PromptIntel feed sync complete ({mode}): pulled={pulled} merged={merged} previous={prev}\nCache: {cache}",

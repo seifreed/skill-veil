@@ -11,10 +11,11 @@
 //!   force this with `--full`.
 
 use super::ratelimit::{endpoint, RateLimitState};
-use super::store::FeedStore;
+use super::store::{FeedMeta, FeedStore};
 use crate::promptintel::client::PromptIntelClient;
 use crate::promptintel::types::FeedEntry;
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -51,6 +52,9 @@ pub(crate) enum ResolvedSyncMode {
     Incremental,
     /// Asked-for: incremental. Resolved: full because no prior sync.
     IncrementalUpgradedToFull,
+    /// Asked-for: incremental. Resolved: full because cached metadata
+    /// points into the future and cannot safely drive `?since=`.
+    IncrementalRecoveredFromFutureCache,
 }
 
 /// Pull and merge the feed into the local cache.
@@ -67,22 +71,7 @@ pub(crate) fn run_sync(
     let existing = FeedStore::load(cache_root)?;
     let previous_total = existing.entries.len();
 
-    let (resolved_mode, since) = match mode {
-        SyncMode::Full => (ResolvedSyncMode::Full, None),
-        SyncMode::Incremental => existing
-            .meta
-            .as_ref()
-            .map(|m| {
-                // Second-precision `...Z` form. The upstream returns
-                // HTTP 500 for fractional-second timestamps and for
-                // the `+00:00` zone form `to_rfc3339()` produces.
-                (
-                    ResolvedSyncMode::Incremental,
-                    Some(m.last_sync.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
-                )
-            })
-            .unwrap_or((ResolvedSyncMode::IncrementalUpgradedToFull, None)),
-    };
+    let (resolved_mode, since) = resolve_sync_request(mode, existing.meta.as_ref(), Utc::now());
 
     let (response, response_meta) = client
         .agent_feed(FEED_PULL_LIMIT, since.as_deref())
@@ -97,7 +86,9 @@ pub(crate) fn run_sync(
 
     let pulled = response.data.len();
     let merged = match resolved_mode {
-        ResolvedSyncMode::Full | ResolvedSyncMode::IncrementalUpgradedToFull => response.data,
+        ResolvedSyncMode::Full
+        | ResolvedSyncMode::IncrementalUpgradedToFull
+        | ResolvedSyncMode::IncrementalRecoveredFromFutureCache => response.data,
         ResolvedSyncMode::Incremental => merge_incremental(existing.entries, response.data),
     };
     let new_total = merged.len();
@@ -132,10 +123,36 @@ fn merge_incremental(existing: Vec<FeedEntry>, additions: Vec<FeedEntry>) -> Vec
     merged
 }
 
+fn resolve_sync_request(
+    mode: SyncMode,
+    meta: Option<&FeedMeta>,
+    now: DateTime<Utc>,
+) -> (ResolvedSyncMode, Option<String>) {
+    match mode {
+        SyncMode::Full => (ResolvedSyncMode::Full, None),
+        SyncMode::Incremental => match meta {
+            Some(m) if m.last_sync > now => {
+                (ResolvedSyncMode::IncrementalRecoveredFromFutureCache, None)
+            }
+            Some(m) => {
+                // Second-precision `...Z` form. The upstream returns
+                // HTTP 500 for fractional-second timestamps and for
+                // the `+00:00` zone form `to_rfc3339()` produces.
+                (
+                    ResolvedSyncMode::Incremental,
+                    Some(m.last_sync.format("%Y-%m-%dT%H:%M:%SZ").to_string()),
+                )
+            }
+            None => (ResolvedSyncMode::IncrementalUpgradedToFull, None),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::promptintel::types::{FeedAction, FeedEntry, PromptSeverity};
+    use chrono::{Duration, TimeZone};
 
     fn entry(id: &str, title: &str) -> FeedEntry {
         FeedEntry {
@@ -156,6 +173,42 @@ mod tests {
             created_at: None,
             revoked: false,
         }
+    }
+
+    fn meta(last_sync: DateTime<Utc>) -> FeedMeta {
+        FeedMeta {
+            last_sync,
+            source: "test".to_string(),
+            total_entries: 1,
+        }
+    }
+
+    /// Contract: a future-dated `meta.last_sync` MUST trigger a full
+    /// feed pull. Clock skew or a poisoned `meta.json` must not keep
+    /// passing a future `?since=` that suppresses new threat intel.
+    #[test]
+    fn future_last_sync_uses_full_pull_without_since() {
+        let now = Utc.timestamp_opt(1_000_000, 0).unwrap();
+        let cache_meta = meta(now + Duration::hours(24));
+
+        let (mode, since) = resolve_sync_request(SyncMode::Incremental, Some(&cache_meta), now);
+
+        assert_eq!(mode, ResolvedSyncMode::IncrementalRecoveredFromFutureCache);
+        assert!(since.is_none());
+    }
+
+    /// Contract: a non-future `meta.last_sync` still drives the cheap
+    /// incremental path with the upstream-compatible second-precision
+    /// `...Z` timestamp format.
+    #[test]
+    fn past_last_sync_uses_incremental_since() {
+        let now = Utc.timestamp_opt(1_000_000, 0).unwrap();
+        let cache_meta = meta(now - Duration::hours(1));
+
+        let (mode, since) = resolve_sync_request(SyncMode::Incremental, Some(&cache_meta), now);
+
+        assert_eq!(mode, ResolvedSyncMode::Incremental);
+        assert_eq!(since.as_deref(), Some("1970-01-12T12:46:40Z"));
     }
 
     /// Contract: a new entry id MUST extend the existing snapshot.
