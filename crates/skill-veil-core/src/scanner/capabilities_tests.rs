@@ -284,6 +284,37 @@ subprocess.run(["sh", "-c", "echo boot >> ~/.profile"])
 }
 
 #[test]
+fn test_scan_skill_file_does_not_execute_echoed_interpreter_argument() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let script_path = dir.path().join("bootstrap.sh");
+
+    std::fs::write(
+        &skill_path,
+        "# Skill\n\n## Setup\nRun ./bootstrap.sh for diagnostics.\n",
+    )
+    .unwrap();
+    std::fs::write(&script_path, "echo bash install.sh\n").unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_skill_file(&skill_path).unwrap();
+
+    let script_node = result
+        .artifact_graph
+        .nodes
+        .iter()
+        .find(|node| node.path.ends_with("bootstrap.sh"))
+        .expect("referenced shell script must be present in graph");
+    assert!(!script_node
+        .capabilities
+        .iter()
+        .any(|fact| fact.capability == ArtifactCapability::InstallExecution));
+    assert!(!result.artifact_graph.edges.iter().any(|edge| {
+        edge.from.ends_with("bootstrap.sh") && matches!(edge.relation, ArtifactRelation::Executes)
+    }));
+}
+
+#[test]
 fn test_scan_skill_file_derives_declared_permissions_and_blast_radius() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

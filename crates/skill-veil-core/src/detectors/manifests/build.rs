@@ -161,6 +161,18 @@ mod tests {
         ));
     }
 
+    /// Contract: Make recipe prefixes do not hide shell interpreter
+    /// invocations.
+    #[test]
+    fn makefile_capabilities_detects_prefixed_bash_recipe() {
+        let content = "all:\n\t@bash install.sh\n";
+        let caps = makefile_capabilities(content);
+        assert!(capability_present(
+            &caps,
+            ArtifactCapability::ProcessExecution
+        ));
+    }
+
     /// Contract: a Make recipe that invokes bare `sh` at column 0 (after
     /// the recipe indent) produces ProcessExecution. Anchors the
     /// column-0 fix in the new helper.
@@ -199,6 +211,18 @@ mod tests {
         ));
     }
 
+    /// Contract: an interpreter name printed by `echo` is data, not an
+    /// executed command.
+    #[test]
+    fn makefile_capabilities_rejects_echoed_interpreter_argument() {
+        let content = "ready:\n\t@echo bash install.sh\n";
+        let caps = makefile_capabilities(content);
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::ProcessExecution
+        ));
+    }
+
     /// Contract: comment-only lines are filtered by the existing comment
     /// guard and never contribute to the capability set, even if the
     /// comment text contains `bash`.
@@ -219,6 +243,24 @@ mod tests {
         let content = "all:\n\tsh install.sh\n";
         let links = makefile_relations(content);
         assert!(relation_target_present(&links, "sh install.sh"));
+    }
+
+    /// Contract: Make recipe prefixes do not hide shell interpreter
+    /// relations.
+    #[test]
+    fn makefile_relations_detects_prefixed_bash_recipe() {
+        let content = "all:\n\t@bash install.sh\n";
+        let links = makefile_relations(content);
+        assert!(relation_target_present(&links, "@bash install.sh"));
+    }
+
+    /// Contract: an interpreter name printed by `echo` is data, not an
+    /// Executes relation.
+    #[test]
+    fn makefile_relations_rejects_echoed_interpreter_argument() {
+        let content = "ready:\n\t@echo bash install.sh\n";
+        let links = makefile_relations(content);
+        assert!(!relation_target_present(&links, "echo bash"));
     }
 
     /// Contract: a `Publish docs` recipe must NOT produce an Executes

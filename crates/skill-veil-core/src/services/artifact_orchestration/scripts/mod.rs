@@ -492,6 +492,18 @@ mod tests {
         ));
     }
 
+    /// Contract: interpreter names passed as ordinary arguments do not
+    /// declare install execution.
+    #[test]
+    fn script_capabilities_rejects_echoed_interpreter_argument() {
+        let content = "echo bash install.sh\n";
+        let caps = script_capabilities(content);
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::InstallExecution
+        ));
+    }
+
     /// Contract: the multi-word phrase `npm install` still produces
     /// InstallExecution via the dedicated phrase clause, separate from
     /// the shell-token helper. Pins the separation so a future refactor
@@ -544,6 +556,24 @@ mod tests {
         let content = "bash install.sh\n";
         let links = script_relations(content);
         assert!(relation_target_present(&links, "process"));
+    }
+
+    /// Contract: shell separators create command positions for relation
+    /// inference.
+    #[test]
+    fn script_relations_detects_pipe_joined_shell_token() {
+        let content = "curl|bash\n";
+        let links = script_relations(content);
+        assert!(relation_target_present(&links, "process"));
+    }
+
+    /// Contract: interpreter names passed as ordinary arguments do not
+    /// produce an Executes relation.
+    #[test]
+    fn script_relations_rejects_echoed_interpreter_argument() {
+        let content = "echo bash install.sh\n";
+        let links = script_relations(content);
+        assert!(!relation_target_present(&links, "process"));
     }
 
     /// Contract: an `npm run publish` script must NOT produce an Executes

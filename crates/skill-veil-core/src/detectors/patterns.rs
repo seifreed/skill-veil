@@ -30,48 +30,118 @@ lazy_pattern!(pub(crate) RE_GENERIC_URL, r#"(?i)https?://[^\s"']+"#);
 lazy_pattern!(pub(crate) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 
 /// Whether `line` invokes a shell or interpreter as a command — `bash`, `sh`,
-/// `dash`, `zsh`, `pwsh`, `powershell`, `python`, or `node`. Detection looks
-/// at whitespace-delimited tokens and compares the lowercased basename
-/// (stripped of a case-insensitive `.exe` suffix, leading `/` or `\` path
-/// components) against a known set.
+/// `dash`, `zsh`, `pwsh`, `powershell`, `python`, or `node`. Detection walks
+/// command-position tokens and compares the lowercased basename (stripped of a
+/// case-insensitive `.exe` suffix and leading `/` or `\` path components)
+/// against a known set.
 ///
 /// Avoids false positives on English words ending in "-sh" like `publish`,
 /// `finish`, `wash`, `polish` — those words appear inside a single token
 /// (e.g. `"publish"`) whose basename is the word itself, which is not in the
 /// matched set. Handles `bash`, `/bin/bash`, `\tbash`,
-/// `C:\Windows\System32\bash.exe`, `POWERSHELL.EXE`. Does not match
-/// `python3` or `node22` (basename comparison is exact) — consistent with the
-/// prior `contains("python ")` substring behavior.
-///
-/// Acceptable misses: quoted commands like `"bash" install.sh` (rare in
-/// real fixtures) and backtick command substitution. Comments containing
-/// `bash` text are out of scope here — comment filtering is the caller's
-/// responsibility.
+/// `C:\Windows\System32\bash.exe`, `POWERSHELL.EXE`, Make recipe prefixes such
+/// as `@bash`, and separator-joined pipelines such as `curl|bash`. Does not
+/// match `python3` or `node22` (basename comparison is exact).
 pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
-    line.split_whitespace().any(|token| {
-        let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
-        // Lowercase first, then strip .exe — avoids evasion via mixed-case
-        // suffixes like .eXe that the prior per-casing strip missed.
-        let mut basename_lower = basename.to_ascii_lowercase();
-        if basename_lower.ends_with(".exe") {
-            basename_lower.truncate(basename_lower.len() - 4);
+    let mut expects_command = true;
+    let mut start = 0;
+    while start < line.len() {
+        let Some((offset, ch)) = line[start..]
+            .char_indices()
+            .find(|(_, ch)| !ch.is_ascii_whitespace())
+        else {
+            break;
+        };
+        start += offset;
+        if is_shell_command_separator(ch) {
+            expects_command = true;
+            start += ch.len_utf8();
+            continue;
         }
-        matches!(
-            basename_lower.as_str(),
-            "bash"
-                | "sh"
-                | "dash"
-                | "zsh"
-                | "fish"
-                | "ksh"
-                | "csh"
-                | "tcsh"
-                | "pwsh"
-                | "powershell"
-                | "python"
-                | "node"
-        )
-    })
+        let token_start = start;
+        let token_end = line[token_start..]
+            .char_indices()
+            .find_map(|(idx, ch)| {
+                (ch.is_ascii_whitespace() || is_shell_command_separator(ch))
+                    .then_some(token_start + idx)
+            })
+            .unwrap_or(line.len());
+        let token = &line[token_start..token_end];
+        let basename = normalized_command_basename(token, expects_command);
+        if expects_command && is_interpreter_basename(&basename) {
+            return true;
+        }
+        expects_command = expects_command && token_keeps_command_position(&basename);
+        start = token_end;
+    }
+    false
+}
+
+fn is_shell_command_separator(ch: char) -> bool {
+    matches!(ch, '|' | ';' | '&' | '(')
+}
+
+fn normalized_command_basename(token: &str, expects_command: bool) -> String {
+    let mut command = token.trim_matches(['"', '\'', '`', ')', ']', '}']);
+    if expects_command {
+        command = command.trim_start_matches(['@', '-', '+']);
+    }
+    let basename = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    let mut basename_lower = basename.to_ascii_lowercase();
+    if basename_lower.ends_with(".exe") {
+        basename_lower.truncate(basename_lower.len() - 4);
+    }
+    basename_lower
+}
+
+fn is_interpreter_basename(basename: &str) -> bool {
+    matches!(
+        basename,
+        "bash"
+            | "sh"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "ksh"
+            | "csh"
+            | "tcsh"
+            | "pwsh"
+            | "powershell"
+            | "python"
+            | "node"
+    )
+}
+
+fn token_keeps_command_position(token: &str) -> bool {
+    matches!(
+        token,
+        "sudo"
+            | "doas"
+            | "env"
+            | "command"
+            | "exec"
+            | "nohup"
+            | "time"
+            | "nice"
+            | "xargs"
+            | "if"
+            | "elif"
+            | "while"
+            | "until"
+            | "then"
+            | "else"
+            | "do"
+    ) || is_shell_assignment(token)
+}
+
+fn is_shell_assignment(token: &str) -> bool {
+    let Some((name, _)) = token.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
@@ -233,6 +303,14 @@ mod tests {
         assert!(line_invokes_shell_or_interpreter("\tsh install.sh"));
     }
 
+    /// Contract: Make recipe prefixes do not hide interpreter commands.
+    #[test]
+    fn line_invokes_shell_or_interpreter_handles_make_recipe_prefixes() {
+        assert!(line_invokes_shell_or_interpreter("@bash install.sh"));
+        assert!(line_invokes_shell_or_interpreter("-/bin/sh install.sh"));
+        assert!(line_invokes_shell_or_interpreter("+pwsh -c x"));
+    }
+
     /// Contract: empty / whitespace-only lines never match.
     #[test]
     fn line_invokes_shell_or_interpreter_rejects_empty_line() {
@@ -281,6 +359,41 @@ mod tests {
             line_invokes_shell_or_interpreter("/usr/bin/python.eXE -c x"),
             "mixed-case .eXE must be stripped and detected"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Shell separators create a new command position. Piped or
+    /// semicolon-joined interpreters are command invocations even without
+    /// surrounding spaces.
+    #[test]
+    fn line_invokes_shell_or_interpreter_detects_separator_joined_commands() {
+        assert!(line_invokes_shell_or_interpreter("curl|bash"));
+        assert!(line_invokes_shell_or_interpreter("wget -qO- https://x|sh"));
+        assert!(line_invokes_shell_or_interpreter("echo ok;python -c x"));
+    }
+
+    /// # Contract
+    ///
+    /// Shell wrappers and environment assignments preserve command
+    /// position for the following token.
+    #[test]
+    fn line_invokes_shell_or_interpreter_detects_wrapped_commands() {
+        assert!(line_invokes_shell_or_interpreter("sudo bash install.sh"));
+        assert!(line_invokes_shell_or_interpreter("env FOO=1 python -c x"));
+        assert!(line_invokes_shell_or_interpreter("NOHUP pwsh -c x"));
+        assert!(line_invokes_shell_or_interpreter("if bash --version; then"));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Interpreter names in ordinary command arguments are not command
+    /// invocations.
+    #[test]
+    fn line_invokes_shell_or_interpreter_rejects_argument_mentions() {
+        assert!(!line_invokes_shell_or_interpreter("echo bash install.sh"));
+        assert!(!line_invokes_shell_or_interpreter("printf python -c x"));
+        assert!(!line_invokes_shell_or_interpreter("grep bash install.sh"));
     }
 
     /// # Contract
