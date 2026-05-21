@@ -62,6 +62,31 @@ fn test_apply_waivers_filters_matching_findings() {
     assert!(filtered.is_empty());
 }
 
+/// Contract: `apply_waivers` treats `artifact_path` as a narrowing
+/// selector. A path-scoped waiver MUST NOT suppress a finding whose
+/// `artifact_path` is absent.
+#[test]
+fn test_apply_waivers_keeps_pathless_finding_for_path_selector() {
+    let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
+        .matched_on(MatchTarget::Document)
+        .match_value("x")
+        .reason("x")
+        .build();
+    let waivers = WaiverFile {
+        schema_version: POLICY_SCHEMA_VERSION.to_string(),
+        waivers: vec![WaiverEntry {
+            rule_id: None,
+            artifact_path: Some("scripts/install.sh".to_string()),
+            context: None,
+            reason: "accepted".to_string(),
+            expires_at: None,
+        }],
+    };
+
+    let filtered = apply_waivers(vec![finding], Some(&waivers));
+    assert_eq!(filtered.len(), 1);
+}
+
 /// Contract: `apply_waivers` MUST also accept `OperationalContext` as a
 /// matching dimension — a waiver can wave findings of a given rule_id
 /// across all artifact paths whenever they fire under the declared
@@ -132,6 +157,35 @@ fn test_apply_policy_overrides_uses_most_specific_match() {
 
     let overridden = apply_policy_overrides(vec![finding], Some(&policy));
     assert_eq!(overridden[0].recommended_action, RecommendedAction::Log);
+}
+
+/// Contract: `apply_policy_overrides` treats `artifact_path` as a
+/// narrowing selector. A path-scoped override MUST NOT downgrade a
+/// finding whose `artifact_path` is absent.
+#[test]
+fn test_apply_policy_overrides_keeps_pathless_finding_for_path_selector() {
+    let finding = Finding::builder("TEST_RULE", ThreatCategory::SupplyChain)
+        .matched_on(MatchTarget::Document)
+        .match_value("x")
+        .reason("x")
+        .action(RecommendedAction::Block)
+        .build();
+    let policy = PolicyFile {
+        schema_version: POLICY_SCHEMA_VERSION.to_string(),
+        profiles: PolicyProfiles::default(),
+        overrides: vec![PolicyOverride {
+            id: None,
+            rule_id: None,
+            artifact_path: Some("scripts/install.sh".to_string()),
+            context: None,
+            action: RecommendedAction::Log,
+            reason: "path-scoped override".to_string(),
+            expires_at: None,
+        }],
+    };
+
+    let overridden = apply_policy_overrides(vec![finding], Some(&policy));
+    assert_eq!(overridden[0].recommended_action, RecommendedAction::Block);
 }
 
 /// Contract: `apply_policy_overrides_with_audit` MUST emit an

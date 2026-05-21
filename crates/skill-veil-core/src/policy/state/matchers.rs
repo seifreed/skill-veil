@@ -21,14 +21,10 @@ pub(crate) fn waiver_matches_finding(
         .as_ref()
         .is_none_or(|rule_id| rule_id.eq_ignore_ascii_case(&finding.rule_id));
     let path_matches = waiver.artifact_path.as_ref().is_none_or(|path| {
-        // When the finding has no artifact_path (e.g. graph-derived taint
-        // findings), the waiver's path selector cannot be confirmed or
-        // denied. Allow the match so that intentional waivers are not
-        // bypassed by findings that lack a concrete path.
         finding
             .artifact_path
             .as_ref()
-            .is_none_or(|artifact_path| paths_match(artifact_path, path))
+            .is_some_and(|artifact_path| paths_match(artifact_path, path))
     });
     let context_matches = waiver
         .context
@@ -57,7 +53,7 @@ pub(crate) fn policy_override_matches(
         finding
             .artifact_path
             .as_ref()
-            .is_none_or(|artifact_path| paths_match(artifact_path, path))
+            .is_some_and(|artifact_path| paths_match(artifact_path, path))
     });
     let context_matches = policy_override
         .context
@@ -184,6 +180,25 @@ mod tests {
         );
     }
 
+    /// Contract: a path-scoped waiver MUST NOT match a finding with no
+    /// `artifact_path`. The path selector is a narrowing constraint; if
+    /// the finding cannot be attributed to a path, the selector cannot
+    /// be proven true.
+    #[test]
+    fn waiver_artifact_path_selector_rejects_pathless_finding() {
+        let now = Utc::now();
+        let finding = make_finding("SKILL_REMOTE_EXEC");
+        let waiver = WaiverEntry {
+            rule_id: None,
+            artifact_path: Some("pkg/scripts/install.sh".to_string()),
+            context: None,
+            reason: "test".to_string(),
+            expires_at: None,
+        };
+
+        assert!(!waiver_matches_finding(&waiver, &finding, now));
+    }
+
     /// # Contract
     ///
     /// Waiver rule_id must NOT match a different rule regardless of case.
@@ -265,6 +280,27 @@ mod tests {
             policy_override_matches(&po_mixed, &finding, now),
             "mixed-case override must match"
         );
+    }
+
+    /// Contract: a path-scoped policy override MUST NOT match a finding
+    /// with no `artifact_path`. Otherwise an override intended for one
+    /// supporting artifact can downgrade graph-derived or package-level
+    /// findings whose location is intentionally absent.
+    #[test]
+    fn policy_override_artifact_path_selector_rejects_pathless_finding() {
+        let now = Utc::now();
+        let finding = make_finding("SKILL_REMOTE_EXEC");
+        let policy_override = PolicyOverride {
+            id: None,
+            rule_id: None,
+            artifact_path: Some("pkg/scripts/install.sh".to_string()),
+            context: None,
+            action: RecommendedAction::Log,
+            reason: "test".to_string(),
+            expires_at: None,
+        };
+
+        assert!(!policy_override_matches(&policy_override, &finding, now));
     }
 
     /// # Contract
