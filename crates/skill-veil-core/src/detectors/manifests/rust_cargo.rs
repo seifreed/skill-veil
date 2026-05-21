@@ -12,11 +12,12 @@ pub(crate) fn analyze_cargo_toml(
     content: &str,
     sibling_files: &[PathBuf],
 ) -> Vec<Finding> {
-    let Ok(toml) = content.parse::<TomlValue>() else {
-        return Vec::new();
+    let artifact_path = path.display().to_string();
+    let toml = match content.parse::<TomlValue>() {
+        Ok(value) => value,
+        Err(err) => return vec![cargo_toml_parse_failure_finding(&artifact_path, &err)],
     };
 
-    let artifact_path = path.display().to_string();
     let mut findings = Vec::new();
 
     // Suppress unpinned dep findings when Cargo.lock exists, since the
@@ -118,6 +119,29 @@ fn cargo_unpinned_dep_finding(name: &str, dep: &TomlValue, artifact_path: &str) 
     )
 }
 
+/// A `Cargo.toml` whose body fails to parse is suspicious on its own:
+/// dependency pinning, lockfile expectations, and capability inference
+/// cannot run against it.
+fn cargo_toml_parse_failure_finding(artifact_path: &str, err: &toml::de::Error) -> Finding {
+    Finding::builder("MANIFEST_CARGO_PARSE_FAILURE", ThreatCategory::Generic)
+        .severity(Severity::Low)
+        .action(RecommendedAction::Log)
+        .evidence_kind(EvidenceKind::Context)
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
+        .match_value(err.to_string())
+        .reason(
+            "Cargo manifest is not valid TOML; dependency-pinning and \
+             lockfile analyses cannot run against this file",
+        )
+        .build()
+}
+
 /// Whether a Cargo dependency `version` string is a strict pin to one
 /// release. Only `=X.Y.Z` qualifies — bare versions (`"1.0.0"`) and the
 /// `^`, `~`, `*` operators all resolve to a *range* under Cargo's default
@@ -172,6 +196,46 @@ duct = "0.13"
 
     fn finding_present(findings: &[Finding], rule_id: &str) -> bool {
         findings.iter().any(|f| f.rule_id == rule_id)
+    }
+
+    /// # Contract
+    ///
+    /// Invalid `Cargo.toml` must produce an explicit parse-failure
+    /// finding instead of silently disabling dependency and lockfile
+    /// analysis for that manifest.
+    #[test]
+    fn analyze_cargo_toml_emits_parse_failure_finding_for_invalid_toml() {
+        let service = ArtifactOrchestratorService::new();
+        let content = "[package\nname = \"broken\"\n";
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &[]);
+
+        assert!(
+            finding_present(&findings, "MANIFEST_CARGO_PARSE_FAILURE"),
+            "invalid TOML must produce parse-failure finding; got {findings:?}",
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.rule_id == "MANIFEST_CARGO_PARSE_FAILURE"),
+            "no other detector should fire on invalid TOML; got {findings:?}",
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Valid `Cargo.toml` must not produce a parse-failure finding.
+    #[test]
+    fn analyze_cargo_toml_does_not_emit_parse_failure_for_valid_toml() {
+        let service = ArtifactOrchestratorService::new();
+        let content = "[package]\nname = \"ok\"\nversion = \"0.1.0\"\n";
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &["Cargo.lock".into()]);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_CARGO_PARSE_FAILURE"),
+            "valid TOML must not produce parse-failure finding; got {findings:?}",
+        );
     }
 
     /// Contract: a bare-version Cargo dep like `serde = "1.0.0"` is NOT
