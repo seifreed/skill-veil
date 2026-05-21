@@ -9,14 +9,14 @@ use crate::services::artifact_orchestration::network::{
 use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
-lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"source\s*=\s*"git\+"#);
-lazy_pattern!(RE_POETRY_URL_SOURCE, r#"url\s*=\s*"https?://"#);
+lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"(?i)\bsource\s*=\s*"git\+"#);
+lazy_pattern!(RE_POETRY_URL_SOURCE, r#"(?i)\burl\s*=\s*"https?://"#);
 lazy_pattern!(
     RE_UV_GIT_SOURCE,
     r#"(?i)(?:\bgit\s*=\s*"https?://|git\+https?://)"#
 );
-lazy_pattern!(RE_YARN_REMOTE_TARBALL, r#"resolved\s+"https?://"#);
-lazy_pattern!(RE_PNPM_REMOTE_TARBALL, r"tarball:\s*https?://");
+lazy_pattern!(RE_YARN_REMOTE_TARBALL, r#"(?i)\bresolved\s+"https?://"#);
+lazy_pattern!(RE_PNPM_REMOTE_TARBALL, r"(?i)\btarball:\s*https?://");
 
 pub(crate) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
     analyze_lockfile(
@@ -116,7 +116,9 @@ fn analyze_lockfile(
     let artifact_path = path.display().to_string();
     let pattern_matches = match &pattern {
         LockfilePattern::JsonKey(key) => {
-            content.contains(key) && (content.contains("http://") || content.contains("https://"))
+            let lower_content = content.to_ascii_lowercase();
+            content.contains(key)
+                && (lower_content.contains("http://") || lower_content.contains("https://"))
         }
         LockfilePattern::Regex(regex) => regex.is_match(content),
     };
@@ -199,6 +201,108 @@ source = { git = "HTTPS://packages.attacker.example/pkg.git#0123456789abcdef0123
         let findings = analyze_uv_lock(Path::new("uv.lock"), content);
 
         assert_eq!(rule_ids(&findings), vec!["LOCKFILE_UV_GIT_SOURCE"]);
+    }
+
+    /// # Contract
+    ///
+    /// Lockfile remote-source triggers honor case-insensitive URL schemes
+    /// before classifying the extracted URL.
+    #[test]
+    fn lockfile_analyzers_detect_case_variant_remote_url_sources() {
+        let cases = [
+            (
+                "package-lock.json",
+                analyze_package_lock as fn(&Path, &str) -> Vec<Finding>,
+                r#"{"packages":{"node_modules/pkg":{"resolved":"HTTPS://packages.attacker.example/pkg.tgz"}}}"#,
+                "LOCKFILE_PACKAGE_REMOTE_TARBALL",
+            ),
+            (
+                "poetry.lock",
+                analyze_poetry_lock,
+                r#"
+[[package]]
+name = "pkg"
+version = "0.1.0"
+url = "HTTPS://packages.attacker.example/pkg.tar.gz"
+"#,
+                "LOCKFILE_POETRY_URL_SOURCE",
+            ),
+            (
+                "yarn.lock",
+                analyze_yarn_lock,
+                r#"
+"pkg@npm:1.0.0":
+  resolved "HTTPS://packages.attacker.example/pkg.tgz"
+"#,
+                "LOCKFILE_YARN_REMOTE_TARBALL",
+            ),
+            (
+                "pnpm-lock.yaml",
+                analyze_pnpm_lock,
+                r#"
+packages:
+  /pkg@1.0.0:
+    resolution:
+      tarball: HTTPS://packages.attacker.example/pkg.tgz
+"#,
+                "LOCKFILE_PNPM_REMOTE_TARBALL",
+            ),
+        ];
+
+        for (path, analyzer, content, expected_rule) in cases {
+            let findings = analyzer(Path::new(path), content);
+
+            assert_eq!(rule_ids(&findings), vec![expected_rule], "{path}");
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Case-insensitive URL-scheme matching must not treat non-HTTP scheme
+    /// lookalikes as remote lockfile sources.
+    #[test]
+    fn lockfile_analyzers_reject_non_http_scheme_lookalikes() {
+        let cases = [
+            (
+                "package-lock.json",
+                analyze_package_lock as fn(&Path, &str) -> Vec<Finding>,
+                r#"{"packages":{"node_modules/pkg":{"resolved":"HTXP://packages.attacker.example/pkg.tgz"}}}"#,
+            ),
+            (
+                "poetry.lock",
+                analyze_poetry_lock,
+                r#"
+[[package]]
+name = "pkg"
+version = "0.1.0"
+url = "HTXP://packages.attacker.example/pkg.tar.gz"
+"#,
+            ),
+            (
+                "yarn.lock",
+                analyze_yarn_lock,
+                r#"
+"pkg@npm:1.0.0":
+  resolved "HTXP://packages.attacker.example/pkg.tgz"
+"#,
+            ),
+            (
+                "pnpm-lock.yaml",
+                analyze_pnpm_lock,
+                r#"
+packages:
+  /pkg@1.0.0:
+    resolution:
+      tarball: HTXP://packages.attacker.example/pkg.tgz
+"#,
+            ),
+        ];
+
+        for (path, analyzer, content) in cases {
+            let findings = analyzer(Path::new(path), content);
+
+            assert!(findings.is_empty(), "{path}: unexpected {findings:?}");
+        }
     }
 
     /// # Contract (negative)
