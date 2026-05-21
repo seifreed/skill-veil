@@ -24,18 +24,17 @@
 //! breakdown (`softened` / `escalated`, split by true label), which is
 //! what the operator-facing exit-code semantics actually key off.
 
-use std::collections::BTreeMap;
-use std::fs;
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use skill_veil_core::{benchmark::compute_metrics, RegressionMetrics, SampleLabel, Verdict};
+use std::collections::BTreeMap;
 
 use crate::cli_args::{AdjudicationEvalArgs, OutputFormat};
 use crate::llm::taint_adjudication::{
     effective_verdict, parse_provider_verdict, provider_consensus_benign,
 };
 use crate::util::bounded_read::read_operator_text_file;
+use crate::util::output_file::write_output_file_atomic;
 
 /// One recorded provider vote in the flat triage JSONL
 /// (`taint-fp-triage.jsonl`, `taint-fn-triage.jsonl`): one object per
@@ -307,7 +306,7 @@ pub(crate) fn run_adjudication_eval(args: AdjudicationEvalArgs) -> Result<()> {
     };
 
     if let Some(path) = &args.output {
-        fs::write(path, &rendered)
+        write_output_file_atomic(path, rendered.as_bytes())
             .with_context(|| format!("failed to write {}", path.display()))?;
     } else {
         println!("{rendered}");

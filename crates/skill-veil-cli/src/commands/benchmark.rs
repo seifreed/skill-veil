@@ -3,14 +3,14 @@ use crate::{
         format_benchmark_text, render_benchmark_dashboard, render_benchmark_tuning_report,
     },
     cli_args::{BenchmarkArgs, OutputFormat},
-    util::bounded_read::read_operator_text_file,
+    util::{bounded_read::read_operator_text_file, output_file::write_output_file_atomic},
 };
 use anyhow::{Context, Result};
 use skill_veil_core::{
     benchmark::{evaluate_corpus, BenchmarkHistory, BenchmarkHistoryEntry, CorpusEvaluation},
     Scanner, StdFileSystemProvider, POLICY_SCHEMA_VERSION,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
     let scanner = Scanner::new().context("Failed to initialize scanner")?;
@@ -74,7 +74,7 @@ pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
 }
 
 pub(crate) fn update_benchmark_history(
-    history_path: &PathBuf,
+    history_path: &Path,
     release_id: &str,
     evaluation: &CorpusEvaluation,
 ) -> Result<BenchmarkHistory> {
@@ -111,11 +111,7 @@ pub(crate) fn update_benchmark_history(
 
     let content =
         serde_json::to_string_pretty(&history).context("Failed to serialize benchmark history")?;
-    if let Some(parent) = history_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    std::fs::write(history_path, content)
+    write_output_file_atomic(history_path, content.as_bytes())
         .with_context(|| format!("Failed to write {}", history_path.display()))?;
 
     Ok(history)
@@ -150,9 +146,6 @@ fn write_benchmark_report_files(
 }
 
 fn write_file_ensuring_parent(path: &Path, content: String) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    std::fs::write(path, content).with_context(|| format!("Failed to write {}", path.display()))
+    write_output_file_atomic(path, content.as_bytes())
+        .with_context(|| format!("Failed to write {}", path.display()))
 }

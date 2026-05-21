@@ -8,7 +8,6 @@
 //! regression corpus via `evaluate_gold_corpus`.
 
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -17,6 +16,7 @@ use skill_veil_core::{GoldCorpusManifest, GoldSample, SampleLabel};
 
 use crate::cli_args::{GoldAction, GoldBuildArgs, GoldLabelArg, GoldReviewArgs, GoldStatsArgs};
 use crate::util::bounded_read::read_operator_text_file;
+use crate::util::output_file::write_output_file_atomic;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::vt::types::CachedReport;
 
@@ -160,7 +160,7 @@ fn build(args: GoldBuildArgs) -> Result<()> {
         samples,
     };
     let yaml = serde_yaml::to_string(&manifest).context("failed to serialise gold manifest")?;
-    fs::write(&args.out, yaml)
+    write_output_file_atomic(&args.out, yaml.as_bytes())
         .with_context(|| format!("failed to write {}", args.out.display()))?;
     let disputed = manifest.samples.iter().filter(|s| s.disputed).count();
     println!(
@@ -212,7 +212,7 @@ fn review(args: GoldReviewArgs) -> Result<()> {
     sample.final_label = label;
     sample.disputed = false;
     let yaml = serde_yaml::to_string(&m).context("failed to serialise gold manifest")?;
-    fs::write(&args.manifest, yaml)
+    write_output_file_atomic(&args.manifest, yaml.as_bytes())
         .with_context(|| format!("failed to write {}", args.manifest.display()))?;
     println!("adjudicated {} → {:?}", terminal_text(&args.id), label);
     Ok(())

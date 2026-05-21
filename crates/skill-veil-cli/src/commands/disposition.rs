@@ -5,7 +5,6 @@
 //! derived, bounded confidence adjustment / allowlist the scanner will
 //! apply. Recording is append-only.
 
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -20,6 +19,7 @@ use crate::cli_args::{
     DispositionVerdictArg,
 };
 use crate::util::bounded_read::read_operator_text_file;
+use crate::util::output_file::write_output_file_atomic;
 use crate::util::terminal_safe::sanitise_for_terminal;
 
 fn disposition_of(v: DispositionVerdictArg) -> Disposition {
@@ -40,15 +40,10 @@ fn load_overlay(path: &Path) -> Result<DispositionOverlay> {
 }
 
 fn save_overlay(path: &Path, overlay: &DispositionOverlay) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("failed to create {}", parent.display()))?;
-        }
-    }
     let json =
         serde_json::to_string_pretty(overlay).context("failed to serialise disposition overlay")?;
-    fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))
+    write_output_file_atomic(path, json.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn record(args: DispositionRecordArgs) -> Result<()> {
@@ -159,6 +154,28 @@ mod tests {
         let dir = tempdir().unwrap();
         let overlay = load_overlay(&dir.path().join("absent.json")).unwrap();
         assert!(overlay.records.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// Saving a disposition overlay MUST replace a symlink at the final
+    /// path without writing through to the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn save_overlay_replaces_symlink_without_touching_target() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("outside.json");
+        let link = dir.path().join("overlay.json");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        save_overlay(&link, &DispositionOverlay::default()).unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(!std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     /// Contract: the verdict arg maps 1:1 to the core disposition.

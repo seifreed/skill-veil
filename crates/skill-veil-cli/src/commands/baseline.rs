@@ -1,4 +1,5 @@
 use crate::cli_args::{BaselineCreateArgs, BaselineUpdateArgs};
+use crate::util::output_file::write_output_file_atomic;
 use anyhow::{Context, Result};
 use skill_veil_core::{
     baseline_from_reports, load_baseline, BaselineEntry, BaselineFile, StdFileSystemProvider,
@@ -11,7 +12,8 @@ pub(crate) fn run_baseline_create(args: BaselineCreateArgs) -> Result<()> {
     let baseline = baseline_from_reports(&reports);
     let content =
         serde_json::to_string_pretty(&baseline).context("Failed to serialize baseline")?;
-    std::fs::write(&args.output, content).context("Failed to write baseline file")?;
+    write_output_file_atomic(&args.output, content.as_bytes())
+        .context("Failed to write baseline file")?;
     Ok(())
 }
 
@@ -56,6 +58,7 @@ pub(crate) fn run_baseline_update(args: BaselineUpdateArgs) -> Result<()> {
     };
     let content =
         serde_json::to_string_pretty(&updated).context("Failed to serialize updated baseline")?;
-    std::fs::write(&args.output, content).context("Failed to write updated baseline file")?;
+    write_output_file_atomic(&args.output, content.as_bytes())
+        .context("Failed to write updated baseline file")?;
     Ok(())
 }

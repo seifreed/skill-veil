@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use crate::cli_args::{
     VtAction, VtCrossCheckArgs, VtCrossCheckFormat, VtDownloadArgs, VtReportArgs,
 };
+use crate::util::output_file::write_output_file_atomic;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::vt::client::VtClient;
 use crate::vt::config::VtConfig;
@@ -79,7 +80,8 @@ fn run_report(args: VtReportArgs) -> Result<()> {
     let json = serde_json::to_string_pretty(&cached)?;
     match args.output {
         Some(path) => {
-            std::fs::write(&path, &json).with_context(|| format!("writing {}", path.display()))?;
+            write_output_file_atomic(&path, json.as_bytes())
+                .with_context(|| format!("writing {}", path.display()))?;
             // Status to stderr so stdout stays clean for piped consumers.
             eprintln!("wrote VT report to {}", terminal_path(&path));
         }
@@ -118,7 +120,7 @@ fn run_cross_check(args: VtCrossCheckArgs) -> Result<()> {
     };
     match args.output {
         Some(path) => {
-            std::fs::write(&path, &rendered)
+            write_output_file_atomic(&path, rendered.as_bytes())
                 .with_context(|| format!("writing {}", path.display()))?;
             // Status + summary go to STDERR so STDOUT stays empty when
             // `--output` is set. Pre-fix this `println!` wrote the text

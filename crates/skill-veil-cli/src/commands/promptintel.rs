@@ -21,7 +21,10 @@ use crate::promptintel::feed::{
     sync::{self as feed_sync, SyncMode},
 };
 use crate::promptintel::types::ReportDraft;
-use crate::util::{bounded_read::read_text_file_with_cap, terminal_safe::sanitise_for_terminal};
+use crate::util::{
+    bounded_read::read_text_file_with_cap, output_file::write_output_file_atomic,
+    terminal_safe::sanitise_for_terminal,
+};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -299,7 +302,7 @@ fn run_cross_check(args: PromptIntelCrossCheckArgs) -> Result<bool> {
     };
     match args.output {
         Some(path) => {
-            std::fs::write(&path, &rendered)
+            write_output_file_atomic(&path, rendered.as_bytes())
                 .with_context(|| format!("writing {}", path.display()))?;
             // Status to stderr so stdout stays empty when `--output` is
             // set — mirrors `vt cross-check` so pipelines that consume
