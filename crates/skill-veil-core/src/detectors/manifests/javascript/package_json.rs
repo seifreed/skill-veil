@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
-use crate::detectors::patterns::line_contains_command_token;
+use crate::detectors::patterns::{line_contains_command_token, line_invokes_command_with_arg};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
@@ -210,7 +210,7 @@ fn package_json_install_hook_is_risky(command: &str) -> bool {
         || lower_command.lines().any(|line| {
             INSTALL_HOOK_EXEC_COMMAND_ARGS
                 .iter()
-                .any(|(command, arg)| command_token_followed_by_arg(line, command, arg))
+                .any(|(command, arg)| line_invokes_command_with_arg(line, command, arg))
         })
 }
 
@@ -222,18 +222,6 @@ fn package_json_install_hook_has_network(command: &str) -> bool {
             .any(|token| line_contains_command_token(line, token))
     }) || lower_command.contains("http://")
         || lower_command.contains("https://")
-}
-
-fn command_token_followed_by_arg(line: &str, command: &str, arg: &str) -> bool {
-    let mut tokens =
-        line.split(|c: char| c.is_ascii_whitespace() || matches!(c, '|' | ';' | '&' | '('));
-    while let Some(token) = tokens.next() {
-        let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
-        if basename == command {
-            return tokens.any(|candidate| candidate.trim_end_matches([';', '|', '&', ')']) == arg);
-        }
-    }
-    false
 }
 
 /// Whether a `package.json` dependency version specifier is anything
@@ -728,9 +716,13 @@ mod tests {
     fn analyze_package_json_marks_tab_separated_exec_hook_risky() {
         for command in [
             "bash\t-c ./install.sh",
+            "/bin/bash\t-c ./install.sh",
+            "\"bash\" -c ./install.sh",
             "sh\t-c ./install.sh",
             "python\t-c 'import os'",
+            "env FOO=1 python -c 'import os'",
             "node\t-e 'require(\"./install\")'",
+            "sudo node -e 'require(\"./install\")'",
         ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
             let path = std::path::Path::new("/pkg/package.json");
@@ -750,6 +742,39 @@ mod tests {
                 install_hook_finding.recommended_action,
                 RecommendedAction::RequireApproval,
                 "{command:?} must require approval",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Interpreter names passed as ordinary arguments do not make an install
+    /// hook risky just because `-c` or `-e` appears later on the same line.
+    #[test]
+    fn analyze_package_json_rejects_exec_hook_argument_mentions() {
+        for command in [
+            "echo bash -c ./install.sh",
+            "printf python -c 'import os'",
+            "bash ; echo -c ./install.sh",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
+            let path = std::path::Path::new("/pkg/package.json");
+            let service = ArtifactOrchestratorService::new();
+            let findings = analyze_package_json(&service, path, &manifest, &[]);
+
+            let install_hook_finding = findings
+                .iter()
+                .find(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+                .expect("postinstall hook must raise an install-hook finding");
+            assert_eq!(
+                install_hook_finding.severity,
+                Severity::Low,
+                "{command:?} must remain a plain install hook",
+            );
+            assert_eq!(
+                install_hook_finding.recommended_action,
+                RecommendedAction::Log,
+                "{command:?} must not require approval",
             );
         }
     }

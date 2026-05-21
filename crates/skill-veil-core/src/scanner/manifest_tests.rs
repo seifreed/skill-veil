@@ -546,6 +546,40 @@ fn test_scan_package_manifest_emits_manifest_findings() {
 }
 
 #[test]
+fn test_scan_package_keeps_echoed_package_interpreter_hook_low_risk() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let package_json = dir.path().join("package.json");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &package_json,
+        r#"{
+  "scripts": {
+    "postinstall": "echo bash -c ./install.sh"
+  }
+}"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let manifest_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path.ends_with("package.json"))
+        .unwrap();
+    let finding = manifest_result
+        .findings
+        .iter()
+        .find(|finding| finding.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+        .expect("postinstall hook must still be reported");
+
+    assert_eq!(finding.severity, Severity::Low);
+    assert_eq!(finding.recommended_action, RecommendedAction::Log);
+}
+
+#[test]
 fn test_scan_package_flags_unpinned_httpx_requirement() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

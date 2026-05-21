@@ -77,6 +77,74 @@ pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
     false
 }
 
+pub(crate) fn line_invokes_command_with_arg(line: &str, command: &str, arg: &str) -> bool {
+    let mut expects_command = true;
+    let mut start = 0;
+    while start < line.len() {
+        let Some((offset, ch)) = line[start..]
+            .char_indices()
+            .find(|(_, ch)| !ch.is_ascii_whitespace())
+        else {
+            break;
+        };
+        start += offset;
+        if is_shell_command_separator(ch) {
+            expects_command = true;
+            start += ch.len_utf8();
+            continue;
+        }
+        let token_start = start;
+        let token_end = line[token_start..]
+            .char_indices()
+            .find_map(|(idx, ch)| {
+                (ch.is_ascii_whitespace() || is_shell_command_separator(ch))
+                    .then_some(token_start + idx)
+            })
+            .unwrap_or(line.len());
+        let token = &line[token_start..token_end];
+        let basename = normalized_command_basename(token, expects_command);
+        if expects_command
+            && basename == command
+            && command_invocation_has_arg(&line[token_end..], arg)
+        {
+            return true;
+        }
+        expects_command = expects_command && token_keeps_command_position(&basename);
+        start = token_end;
+    }
+    false
+}
+
+fn command_invocation_has_arg(rest: &str, arg: &str) -> bool {
+    let mut start = 0;
+    while start < rest.len() {
+        let Some((offset, ch)) = rest[start..]
+            .char_indices()
+            .find(|(_, ch)| !ch.is_ascii_whitespace())
+        else {
+            break;
+        };
+        start += offset;
+        if is_shell_command_separator(ch) {
+            return false;
+        }
+        let token_start = start;
+        let token_end = rest[token_start..]
+            .char_indices()
+            .find_map(|(idx, ch)| {
+                (ch.is_ascii_whitespace() || is_shell_command_separator(ch))
+                    .then_some(token_start + idx)
+            })
+            .unwrap_or(rest.len());
+        let token = rest[token_start..token_end].trim_matches(['"', '\'', '`', ')', ']', '}']);
+        if token == arg {
+            return true;
+        }
+        start = token_end;
+    }
+    false
+}
+
 fn is_shell_command_separator(ch: char) -> bool {
     matches!(ch, '|' | ';' | '&' | '(')
 }
@@ -394,6 +462,63 @@ mod tests {
         assert!(!line_invokes_shell_or_interpreter("echo bash install.sh"));
         assert!(!line_invokes_shell_or_interpreter("printf python -c x"));
         assert!(!line_invokes_shell_or_interpreter("grep bash install.sh"));
+    }
+
+    /// # Contract
+    ///
+    /// Command+argument matching is command-position aware and accepts
+    /// wrappers, environment assignments, absolute paths, and quoted command
+    /// tokens.
+    #[test]
+    fn line_invokes_command_with_arg_accepts_command_position_tokens() {
+        assert!(line_invokes_command_with_arg(
+            "bash -c ./install.sh",
+            "bash",
+            "-c"
+        ));
+        assert!(line_invokes_command_with_arg(
+            "/bin/bash\t-c ./install.sh",
+            "bash",
+            "-c",
+        ));
+        assert!(line_invokes_command_with_arg(
+            "\"bash\" -c ./install.sh",
+            "bash",
+            "-c",
+        ));
+        assert!(line_invokes_command_with_arg(
+            "env FOO=1 python -c x",
+            "python",
+            "-c",
+        ));
+        assert!(line_invokes_command_with_arg(
+            "sudo node -e 'require(\"./install\")'",
+            "node",
+            "-e",
+        ));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Command+argument matching rejects command names in ordinary
+    /// arguments and does not borrow an argument from a later command.
+    #[test]
+    fn line_invokes_command_with_arg_rejects_argument_mentions() {
+        assert!(!line_invokes_command_with_arg(
+            "echo bash -c ./install.sh",
+            "bash",
+            "-c",
+        ));
+        assert!(!line_invokes_command_with_arg(
+            "bash ; echo -c ./install.sh",
+            "bash",
+            "-c",
+        ));
+        assert!(!line_invokes_command_with_arg(
+            "printf python -c x",
+            "python",
+            "-c",
+        ));
     }
 
     /// # Contract
