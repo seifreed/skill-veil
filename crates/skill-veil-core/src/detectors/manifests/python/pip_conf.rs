@@ -31,10 +31,26 @@ fn pip_conf_significant_lines(content: &str) -> impl Iterator<Item = &str> {
         .filter(|line| !line.is_empty())
 }
 
+fn pip_conf_directive_key(line: &str) -> Option<&str> {
+    line.split_once('=').map(|(key, _)| key.trim())
+}
+
+fn pip_conf_key_is(line: &str, expected: &str) -> bool {
+    pip_conf_directive_key(line).is_some_and(|key| key.eq_ignore_ascii_case(expected))
+}
+
+fn pip_conf_key_in(line: &str, expected: &[&str]) -> bool {
+    pip_conf_directive_key(line).is_some_and(|key| {
+        expected
+            .iter()
+            .any(|candidate| key.eq_ignore_ascii_case(candidate))
+    })
+}
+
 pub(crate) fn analyze_pip_conf(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings: Vec<_> = pip_conf_significant_lines(content)
-        .filter(|line| line.to_ascii_lowercase().contains("extra-index-url"))
+        .filter(|line| pip_conf_key_is(line, "extra-index-url"))
         .map(|line| {
             Finding::builder("MANIFEST_PIP_CONF_EXTRA_INDEX", ThreatCategory::SupplyChain)
                 .severity(Severity::Medium)
@@ -50,9 +66,7 @@ pub(crate) fn analyze_pip_conf(path: &Path, content: &str) -> Vec<Finding> {
         })
         .collect();
 
-    if pip_conf_significant_lines(content)
-        .any(|line| line.to_ascii_lowercase().contains("trusted-host"))
-    {
+    if pip_conf_significant_lines(content).any(|line| pip_conf_key_is(line, "trusted-host")) {
         findings.push(
             Finding::builder(
                 "MANIFEST_PIP_CONF_TRUSTED_HOST",
@@ -79,11 +93,10 @@ pub(crate) fn pip_conf_capabilities(content: &str) -> Vec<ArtifactCapabilityFact
     let mut has_index_directive = false;
     let mut has_client_cert = false;
     for line in pip_conf_significant_lines(content) {
-        let lower = line.to_ascii_lowercase();
-        if lower.contains("extra-index-url") || lower.contains("index-url") {
+        if pip_conf_key_in(line, &["extra-index-url", "index-url"]) {
             has_index_directive = true;
         }
-        if lower.contains("client-cert") {
+        if pip_conf_key_is(line, "client-cert") {
             has_client_cert = true;
         }
     }
@@ -105,11 +118,10 @@ pub(crate) fn pip_conf_relations(content: &str) -> Vec<ArtifactLink> {
     let mut has_index_directive = false;
     let mut has_client_cert = false;
     for line in pip_conf_significant_lines(content) {
-        let lower = line.to_ascii_lowercase();
-        if lower.contains("extra-index-url") || lower.contains("index-url") {
+        if pip_conf_key_in(line, &["extra-index-url", "index-url"]) {
             has_index_directive = true;
         }
-        if lower.contains("client-cert") {
+        if pip_conf_key_is(line, "client-cert") {
             has_client_cert = true;
         }
     }
@@ -239,5 +251,59 @@ mod tests {
             "inline `;` comment must be stripped from match_value; got {:?}",
             finding.match_value,
         );
+    }
+
+    /// Contract: exact pip.conf directive keys still drive the expected
+    /// findings, capabilities, and graph relations.
+    #[test]
+    fn pip_conf_accepts_exact_directive_keys() {
+        let content = "\
+index-url = https://internal.example/simple
+extra-index-url = https://mirror.example/simple
+trusted-host = internal.example
+client-cert = /tmp/client.pem
+";
+        let path = std::path::Path::new("/pkg/pip.conf");
+        let findings = analyze_pip_conf(path, content);
+        let caps = pip_conf_capabilities(content);
+        let links = pip_conf_relations(content);
+
+        assert!(finding_present(&findings, "MANIFEST_PIP_CONF_EXTRA_INDEX"));
+        assert!(finding_present(&findings, "MANIFEST_PIP_CONF_TRUSTED_HOST"));
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(capability_present(&caps, ArtifactCapability::SecretAccess));
+        assert!(relation_target_present(&links, "package-index"));
+        assert!(relation_target_present(&links, "client-cert"));
+    }
+
+    /// Contract: directive detection is key-exact. Lookalike keys must not
+    /// raise findings, capabilities, or graph relations.
+    #[test]
+    fn pip_conf_rejects_lookalike_directive_keys() {
+        let content = "\
+not-extra-index-url = https://internal.example/simple
+trusted-hostname = internal.example
+client-cert-path = /tmp/client.pem
+";
+        let path = std::path::Path::new("/pkg/pip.conf");
+        let findings = analyze_pip_conf(path, content);
+        let caps = pip_conf_capabilities(content);
+        let links = pip_conf_relations(content);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_PIP_CONF_EXTRA_INDEX"),
+            "lookalike extra-index key must not fire; got {findings:?}",
+        );
+        assert!(
+            !finding_present(&findings, "MANIFEST_PIP_CONF_TRUSTED_HOST"),
+            "lookalike trusted-host key must not fire; got {findings:?}",
+        );
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+        assert!(!capability_present(&caps, ArtifactCapability::SecretAccess));
+        assert!(!relation_target_present(&links, "package-index"));
+        assert!(!relation_target_present(&links, "client-cert"));
     }
 }
