@@ -45,7 +45,7 @@ const ERROR_BODY_MAX_BYTES: usize = 512;
 /// streaming (`stream_response_to`) so the temporary file never exceeds
 /// the limit and an attacker cannot fill the disk before the producer
 /// notices.
-const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
+pub(crate) const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
 
 /// Cap on VT JSON API response bodies to prevent unbounded memory allocation
 /// from a compromised or misconfigured endpoint. Mirrors the LLM client's

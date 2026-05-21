@@ -3,16 +3,20 @@
 //! Given a search query and a destination directory, this module paginates
 //! through VT Intelligence, downloads each file binary (unless `--report-only`
 //! is set), fetches its metadata report, and caches both to disk. Repeat runs
-//! are idempotent: files already present are skipped based on a SHA-side
-//! marker, matching the dataset-extraction cache pattern.
+//! are idempotent: reports are reused only when their payload SHA matches the
+//! filename, and samples are skipped only after their bytes hash to that SHA.
 
-use super::client::{VtClient, VtError};
-use super::types::CachedReport;
-use anyhow::{Context, Result};
-use std::io::Write;
+use std::fs::{File, Metadata};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
+
+use super::client::{VtClient, VtError};
+use super::types::CachedReport;
 
 /// Default VT Intelligence query for the malicious-skill corpus. Used by
 /// `vt download` when no `--query` and no `--clean` are passed. Mirrors
@@ -152,7 +156,7 @@ fn process_one(
     // Fetch the report first — it is smaller, and we always want it even if
     // the file is already on disk or download is suppressed.
     let report_path = reports_dir.join(format!("{sha}.json"));
-    if !cache_file_exists(&report_path)? {
+    if !report_cache_hit(&report_path, &sha)? {
         let envelope = client
             .get_file_report(&sha)
             .with_context(|| format!("fetching report for {sha}"))?;
@@ -174,7 +178,7 @@ fn process_one(
     // `download_file`. The final persist inside `download_file` is
     // atomic, so the on-disk cache stays consistent — only API quota is
     // wasted in that edge case.
-    if cache_file_exists(&file_path)? {
+    if sample_cache_hit(&file_path, &sha)? {
         summary.files_skipped += 1;
         return Ok(());
     }
@@ -228,16 +232,124 @@ fn write_cache_file(path: &Path, body: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn cache_file_exists(path: &Path) -> Result<bool> {
+fn existing_cache_metadata(path: &Path) -> Result<Option<Metadata>> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => {
             anyhow::bail!("refusing to use symlinked VT cache path {}", path.display())
         }
-        Ok(meta) if meta.is_file() => Ok(true),
+        Ok(meta) if meta.is_file() => Ok(Some(meta)),
         Ok(_) => anyhow::bail!("refusing to use non-file VT cache path {}", path.display()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
     }
+}
+
+fn report_cache_hit(path: &Path, expected_sha: &str) -> Result<bool> {
+    if existing_cache_metadata(path)?.is_none() {
+        return Ok(false);
+    }
+    let Some(bytes) = crate::util::cache_io::read_cache_file_bounded(path)? else {
+        return Ok(false);
+    };
+    let Ok(report) = serde_json::from_slice::<CachedReport>(&bytes) else {
+        tracing::warn!(
+            "ignoring cached VT report {} (invalid JSON); refetching",
+            path.display()
+        );
+        return Ok(false);
+    };
+    let payload_sha = report.sha256.to_ascii_lowercase();
+    if payload_sha == expected_sha {
+        Ok(true)
+    } else {
+        tracing::warn!(
+            "ignoring cached VT report {} (payload sha256 {} does not match expected {}); refetching",
+            path.display(),
+            payload_sha,
+            expected_sha
+        );
+        Ok(false)
+    }
+}
+
+fn sample_cache_hit(path: &Path, expected_sha: &str) -> Result<bool> {
+    let Some(path_meta) = existing_cache_metadata(path)? else {
+        return Ok(false);
+    };
+    if path_meta.len() > super::client::MAX_DOWNLOAD_BYTES {
+        tracing::warn!(
+            "ignoring cached VT sample {} ({} bytes > cap {}); refetching",
+            path.display(),
+            path_meta.len(),
+            super::client::MAX_DOWNLOAD_BYTES
+        );
+        return Ok(false);
+    }
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let meta = file
+        .metadata()
+        .with_context(|| format!("stat {}", path.display()))?;
+    if !meta.is_file() || !opened_file_matches_path(&meta, &path_meta) {
+        tracing::warn!(
+            "ignoring cached VT sample {} (path changed while opening); refetching",
+            path.display()
+        );
+        return Ok(false);
+    }
+    let Some(actual_sha) = sha256_file_with_cap(file, super::client::MAX_DOWNLOAD_BYTES)
+        .with_context(|| format!("hashing {}", path.display()))?
+    else {
+        tracing::warn!(
+            "ignoring cached VT sample {} (stream exceeded cap {}); refetching",
+            path.display(),
+            super::client::MAX_DOWNLOAD_BYTES
+        );
+        return Ok(false);
+    };
+    if actual_sha == expected_sha {
+        Ok(true)
+    } else {
+        tracing::warn!(
+            "ignoring cached VT sample {} (actual sha256 {} does not match expected {}); refetching",
+            path.display(),
+            actual_sha,
+            expected_sha
+        );
+        Ok(false)
+    }
+}
+
+fn sha256_file_with_cap(mut file: File, max_bytes: u64) -> std::io::Result<Option<String>> {
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        total = total.saturating_add(read as u64);
+        if total > max_bytes {
+            return Ok(None);
+        }
+        hasher.update(&buf[..read]);
+    }
+    debug_assert!(
+        total <= max_bytes,
+        "sample cache verifier must reject streams over the cap"
+    );
+    Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+#[cfg(unix)]
+fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
+}
+
+#[cfg(not(unix))]
+fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
 }
 
 fn ensure_existing_child_stays_in_base(base: &Path, child: &Path) -> Result<()> {
@@ -288,11 +400,21 @@ mod tests {
     use tempfile::TempDir;
 
     fn fixture_report() -> CachedReport {
+        report_with_sha(&"a".repeat(64))
+    }
+
+    fn report_with_sha(sha256: &str) -> CachedReport {
         CachedReport {
-            sha256: "a".repeat(64),
+            sha256: sha256.to_string(),
             fetched_at: "2026-04-27T00:00:00Z".to_string(),
             attributes: FileAttributes::default(),
         }
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        format!("{:x}", h.finalize())
     }
 
     /// # Contract
@@ -414,16 +536,107 @@ mod tests {
     /// treating them as valid cached files.
     #[cfg(unix)]
     #[test]
-    fn cache_file_exists_rejects_symlinked_cache_path() {
+    fn sample_cache_hit_rejects_symlinked_cache_path() {
         let dir = TempDir::new().expect("tempdir");
         let outside = dir.path().join("outside.bin");
         let link = dir.path().join("aa");
         std::fs::write(&outside, b"sample").unwrap();
         std::os::unix::fs::symlink(&outside, &link).unwrap();
 
-        let err = cache_file_exists(&link).unwrap_err();
+        let err = sample_cache_hit(&link, &"a".repeat(64)).unwrap_err();
 
         assert!(format!("{err:#}").contains("symlinked VT cache path"));
+    }
+
+    /// # Contract
+    ///
+    /// A cached report is reusable only when it is valid JSON and its
+    /// payload SHA matches the requested report SHA.
+    #[test]
+    fn report_cache_hit_accepts_matching_report() {
+        let dir = TempDir::new().expect("tempdir");
+        let sha = "a".repeat(64);
+        let path = dir.path().join(format!("{sha}.json"));
+        let report = report_with_sha(&sha);
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+
+        assert!(report_cache_hit(&path, &sha).unwrap());
+    }
+
+    /// # Contract
+    ///
+    /// A cached report whose JSON payload names a different SHA must not
+    /// be treated as a hit. `vt download` must refetch it instead of
+    /// preserving a poisoned `<sha>.json` forever.
+    #[test]
+    fn report_cache_hit_rejects_payload_sha_mismatch() {
+        let dir = TempDir::new().expect("tempdir");
+        let requested = "a".repeat(64);
+        let payload = "b".repeat(64);
+        let path = dir.path().join(format!("{requested}.json"));
+        let report = report_with_sha(&payload);
+        std::fs::write(&path, serde_json::to_vec(&report).unwrap()).unwrap();
+
+        assert!(!report_cache_hit(&path, &requested).unwrap());
+    }
+
+    /// # Contract
+    ///
+    /// A malformed cached report must be a miss, not a permanent skip.
+    /// The next `vt download` pass should fetch a fresh report.
+    #[test]
+    fn report_cache_hit_rejects_invalid_json() {
+        let dir = TempDir::new().expect("tempdir");
+        let sha = "a".repeat(64);
+        let path = dir.path().join(format!("{sha}.json"));
+        std::fs::write(&path, b"{").unwrap();
+
+        assert!(!report_cache_hit(&path, &sha).unwrap());
+    }
+
+    /// # Contract
+    ///
+    /// An existing sample file is reusable only when its bytes hash to
+    /// the SHA filename returned by VT.
+    #[test]
+    fn sample_cache_hit_accepts_matching_sample() {
+        let dir = TempDir::new().expect("tempdir");
+        let body = b"cached sample bytes";
+        let sha = sha256_hex(body);
+        let path = dir.path().join(&sha);
+        std::fs::write(&path, body).unwrap();
+
+        assert!(sample_cache_hit(&path, &sha).unwrap());
+    }
+
+    /// # Contract
+    ///
+    /// An existing sample file whose bytes do not match the expected SHA
+    /// must be a miss. Otherwise a corrupt or operator-planted cache
+    /// entry under `<dest>/<sha>` poisons every rerun because the
+    /// downloader never asks VT for the real sample again.
+    #[test]
+    fn sample_cache_hit_rejects_mismatched_sample_bytes() {
+        let dir = TempDir::new().expect("tempdir");
+        let expected = "a".repeat(64);
+        let path = dir.path().join(&expected);
+        std::fs::write(&path, b"wrong bytes").unwrap();
+
+        assert!(!sample_cache_hit(&path, &expected).unwrap());
+    }
+
+    /// # Contract
+    ///
+    /// The sample verifier must fail closed when the stream exceeds its
+    /// cap after the metadata check.
+    #[test]
+    fn sha256_file_with_cap_rejects_stream_over_cap() {
+        let dir = TempDir::new().expect("tempdir");
+        let path = dir.path().join("sample");
+        std::fs::write(&path, b"abcde").unwrap();
+        let file = File::open(&path).unwrap();
+
+        assert!(sha256_file_with_cap(file, 4).unwrap().is_none());
     }
 
     /// # Contract
