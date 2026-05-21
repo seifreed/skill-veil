@@ -121,7 +121,7 @@ rules:
     severity: critical
     confidence: 0.90
     when: !regex
-      pattern: "(?is)(requests\\.get\\(|urllib\\.request\\.urlopen\\(|fetch\\(|Invoke-WebRequest|iwr).{0,220}(exec\\(|eval\\(|child_process\\.(exec|spawn)|Invoke-Expression|iex)"
+      pattern: "(?is)(requests\\.get\\(|urllib\\.request\\.urlopen\\(|fetch\\(|\\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b).{0,220}(exec\\(|eval\\(|child_process\\.(exec|spawn)|Invoke-Expression|iex)"
     action: block
     reason: "Artifact combines remote fetch with direct execution in Python, Node, or PowerShell"
     shield:
@@ -496,7 +496,7 @@ rules:
     severity: low
     confidence: 0.68
     when: !regex
-      pattern: "(?is)(fetch|query|connect|proxy|call|request|send|POST|GET|curl|wget|invoke-webrequest|requests\\.(get|post)|axios\\.(get|post)).{0,180}(169\\.254\\.169\\.254|127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(1[6-9]|2\\d|3[0-1])\\.\\d{1,3}\\.\\d{1,3}|\\.internal|\\.local)"
+      pattern: "(?is)(fetch|query|connect|proxy|call|request|send|POST|GET|curl|wget|\\b(?:invoke-webrequest|invoke-restmethod|iwr|irm)\\b|requests\\.(get|post)|axios\\.(get|post)).{0,180}(169\\.254\\.169\\.254|127\\.0\\.0\\.1|localhost|0\\.0\\.0\\.0|10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|192\\.168\\.\\d{1,3}\\.\\d{1,3}|172\\.(1[6-9]|2\\d|3[0-1])\\.\\d{1,3}\\.\\d{1,3}|\\.internal|\\.local)"
     action: log
     reason: "Artifact references internal network or metadata service targets"
     shield:

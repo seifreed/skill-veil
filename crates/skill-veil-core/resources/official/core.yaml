@@ -27,7 +27,7 @@ rules:
     severity: critical
     confidence: 0.98
     when: !regex
-      pattern: "(?i)(invoke-webrequest|iwr)\\s+.*\\|\\s*(iex|invoke-expression)"
+      pattern: "(?i)\\b(invoke-webrequest|invoke-restmethod|iwr|irm)\\b\\s*.*\\|\\s*(iex|invoke-expression)\\b"
     action: block
     reason: "Remote download and execution via PowerShell IEX"
     shield:
