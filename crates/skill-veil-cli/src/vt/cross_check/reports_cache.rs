@@ -27,6 +27,13 @@ pub(super) fn load_reports(reports_dir: &Path) -> Result<BTreeMap<String, Cached
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
+        let Some(filename_sha) = report_filename_sha(&path) else {
+            tracing::warn!(
+                "skipping VT report {} (filename is not a lowercase SHA-256)",
+                path.display()
+            );
+            continue;
+        };
         let bytes = match crate::util::cache_io::read_cache_file_bounded(&path) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue, // missing or over-cap → treat as no report
@@ -43,15 +50,30 @@ pub(super) fn load_reports(reports_dir: &Path) -> Result<BTreeMap<String, Cached
             tracing::warn!("skipping unreadable VT report {}", path.display());
             continue;
         };
+        let payload_sha = cached.sha256.to_ascii_lowercase();
+        if payload_sha != filename_sha {
+            tracing::warn!(
+                "skipping VT report {} (payload sha256 {} does not match filename {})",
+                path.display(),
+                payload_sha,
+                filename_sha
+            );
+            continue;
+        }
         // Lookup keys (`sha_for_lookup`) are guaranteed lowercase via
         // `is_sha256_hex` (rejects uppercase) and `format!("{:x}")` for
         // on-disk hashing. Cache keys MUST match that contract — a report
         // file with `"sha256": "FF00AA..."` would otherwise be stored
         // verbatim and never matched by the lookup, surfacing as `Unknown`
         // even though the report exists.
-        out.insert(cached.sha256.to_ascii_lowercase(), cached);
+        out.insert(filename_sha, cached);
     }
     Ok(out)
+}
+
+fn report_filename_sha(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    super::sha_lookup::is_sha256_hex(stem).then(|| stem.to_string())
 }
 
 fn is_real_dir(path: &Path) -> bool {
@@ -86,10 +108,10 @@ mod tests {
     fn load_reports_normalizes_uppercase_sha_to_lowercase() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let upper = "FF".repeat(32); // 64 uppercase hex chars
-        write_report(&tmp.path().join("report.json"), &upper);
+        let lower = upper.to_ascii_lowercase();
+        write_report(&tmp.path().join(format!("{lower}.json")), &upper);
 
         let loaded = load_reports(tmp.path()).expect("load_reports");
-        let lower = upper.to_ascii_lowercase();
         assert!(
             loaded.contains_key(&lower),
             "cache key must be lowercase; got keys: {:?}",
@@ -98,6 +120,34 @@ mod tests {
         assert!(
             !loaded.contains_key(&upper),
             "uppercase key must NOT be present; the lookup path normalises to lowercase"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// A cached VT report is authoritative only for the SHA named by
+    /// its filename. The embedded JSON `sha256` field must match that
+    /// filename after lowercase normalisation; otherwise a poisoned
+    /// report file can masquerade as a different sample.
+    #[test]
+    fn load_reports_rejects_payload_sha_that_disagrees_with_filename() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let filename_sha = "a".repeat(64);
+        let payload_sha = "b".repeat(64);
+        write_report(
+            &tmp.path().join(format!("{filename_sha}.json")),
+            &payload_sha,
+        );
+
+        let loaded = load_reports(tmp.path()).expect("load_reports");
+
+        assert!(
+            !loaded.contains_key(&payload_sha),
+            "payload sha must not become the cache key when it disagrees with the filename",
+        );
+        assert!(
+            !loaded.contains_key(&filename_sha),
+            "mismatched reports must be skipped instead of trusted under either key",
         );
     }
 
@@ -114,7 +164,8 @@ mod tests {
         let real = tmp.path().join("real-reports");
         let link = tmp.path().join(".vt-reports");
         std::fs::create_dir(&real).unwrap();
-        write_report(&real.join("report.json"), &"a".repeat(64));
+        let report_sha = "a".repeat(64);
+        write_report(&real.join(format!("{report_sha}.json")), &report_sha);
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
         let loaded = load_reports(&link).expect("load_reports");
@@ -133,17 +184,19 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let reports = tmp.path().join("reports");
         std::fs::create_dir(&reports).unwrap();
-        let real = reports.join("real.json");
-        let outside = tmp.path().join("outside.json");
-        let link = reports.join("link.json");
-        write_report(&real, &"a".repeat(64));
-        write_report(&outside, &"b".repeat(64));
+        let real_sha = "a".repeat(64);
+        let outside_sha = "b".repeat(64);
+        let real = reports.join(format!("{real_sha}.json"));
+        let outside = tmp.path().join(format!("{outside_sha}.json"));
+        let link = reports.join(format!("{outside_sha}.json"));
+        write_report(&real, &real_sha);
+        write_report(&outside, &outside_sha);
         std::os::unix::fs::symlink(&outside, &link).unwrap();
 
         let loaded = load_reports(&reports).expect("load_reports");
 
-        assert!(loaded.contains_key(&"a".repeat(64)));
-        assert!(!loaded.contains_key(&"b".repeat(64)));
+        assert!(loaded.contains_key(&real_sha));
+        assert!(!loaded.contains_key(&outside_sha));
         assert_eq!(loaded.len(), 1);
     }
 }
