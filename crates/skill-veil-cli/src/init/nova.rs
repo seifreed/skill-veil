@@ -213,6 +213,29 @@ pub(crate) fn write_pointer(install_root: &Path, pointer: &NovaInstallPointer) -
     Ok(())
 }
 
+pub(crate) fn reject_tarball_rewrite(
+    existing: Option<&NovaInstallPointer>,
+    candidate: &NovaInstallPointer,
+) -> Result<()> {
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    if existing.commit_sha == candidate.commit_sha
+        && !existing
+            .tarball_sha256
+            .eq_ignore_ascii_case(&candidate.tarball_sha256)
+    {
+        bail!(
+            "NOVA tarball SHA-256 changed for already-installed commit {}: \
+             previous {}, downloaded {}",
+            candidate.commit_sha,
+            existing.tarball_sha256,
+            candidate.tarball_sha256
+        );
+    }
+    Ok(())
+}
+
 fn validate_sha256_hex(value: &str) -> Result<()> {
     if value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()) {
         Ok(())
@@ -328,6 +351,75 @@ mod tests {
         let err = load_pointer(dir.path()).expect_err("bad tarball digest must be rejected");
 
         assert!(format!("{err:#}").contains("not a 64-char hex digest"));
+    }
+
+    /// # Contract
+    ///
+    /// Reinstalling the same NOVA commit MUST reject a changed tarball
+    /// digest before the extracted tree becomes active.
+    #[test]
+    fn same_commit_tarball_digest_change_is_rejected() {
+        let commit_sha = "9249cf49dce2b30550bc23d00a36ec64d42932d0";
+        let existing = NovaInstallPointer {
+            commit_sha: commit_sha.into(),
+            tarball_sha256: "a".repeat(64),
+            file_count: 16,
+        };
+        let candidate = NovaInstallPointer {
+            commit_sha: commit_sha.into(),
+            tarball_sha256: "b".repeat(64),
+            file_count: 16,
+        };
+
+        let err = reject_tarball_rewrite(Some(&existing), &candidate)
+            .expect_err("same commit with changed digest must be rejected");
+
+        let msg = format!("{err:#}");
+        assert!(msg.contains("tarball SHA-256 changed"));
+        assert!(msg.contains(commit_sha));
+    }
+
+    /// # Contract
+    ///
+    /// A different NOVA commit gets its own tarball digest. Updating to
+    /// a new commit must not be blocked by the previous commit's hash.
+    #[test]
+    fn new_commit_tarball_digest_is_accepted() {
+        let existing = NovaInstallPointer {
+            commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
+            tarball_sha256: "a".repeat(64),
+            file_count: 16,
+        };
+        let candidate = NovaInstallPointer {
+            commit_sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            tarball_sha256: "b".repeat(64),
+            file_count: 16,
+        };
+
+        reject_tarball_rewrite(Some(&existing), &candidate)
+            .expect("new commit must be accepted even with a different digest");
+    }
+
+    /// # Contract
+    ///
+    /// Reinstalling the same NOVA commit is valid when the tarball
+    /// digest matches the previously recorded value.
+    #[test]
+    fn same_commit_same_tarball_digest_is_accepted() {
+        let commit_sha = "9249cf49dce2b30550bc23d00a36ec64d42932d0";
+        let existing = NovaInstallPointer {
+            commit_sha: commit_sha.into(),
+            tarball_sha256: "a".repeat(64),
+            file_count: 16,
+        };
+        let candidate = NovaInstallPointer {
+            commit_sha: commit_sha.into(),
+            tarball_sha256: "a".repeat(64),
+            file_count: 20,
+        };
+
+        reject_tarball_rewrite(Some(&existing), &candidate)
+            .expect("same commit with the same digest must be accepted");
     }
 
     /// Contract: GitHub commit JSON bodies are bounded before parsing.

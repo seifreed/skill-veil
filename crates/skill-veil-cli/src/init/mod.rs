@@ -161,10 +161,14 @@ pub(crate) fn install_nova_pinned_to_latest(install_root: &Path) -> Result<NovaO
 }
 
 pub(crate) fn install_nova_pinned_to(install_root: &Path, sha: &str) -> Result<NovaOutcome> {
+    let existing_pointer =
+        nova::load_pointer(install_root).context("loading existing NOVA install pointer")?;
     let staging = tempfile::tempdir_in(install_root)
         .with_context(|| format!("creating staging dir under {}", install_root.display()))?;
     let (pointer, extracted_root) = nova::download_and_extract(&sha.to_string(), staging.path())
         .context("downloading NOVA tarball")?;
+    nova::reject_tarball_rewrite(existing_pointer.as_ref(), &pointer)
+        .context("checking NOVA tarball rewrite guard")?;
 
     let install_dir = install_root.join(format!("nova-{sha}"));
     remove_existing_install_dir(&install_dir)?;
