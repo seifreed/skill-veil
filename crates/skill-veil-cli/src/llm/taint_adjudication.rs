@@ -110,9 +110,23 @@ const CONSENSUS_PROVIDERS: &[LlmProviderKind] = &[
 #[must_use]
 pub(crate) fn resolve_consensus_providers(section: &LlmConfigSection) -> Vec<LlmProviderKind> {
     match section.limits.consensus_providers.as_deref() {
-        Some(p) if !p.is_empty() => p.to_vec(),
+        Some(p) if !p.is_empty() => distinct_provider_order(p),
         _ => CONSENSUS_PROVIDERS.to_vec(),
     }
+}
+
+fn distinct_provider_order(providers: &[LlmProviderKind]) -> Vec<LlmProviderKind> {
+    let mut seen = BTreeSet::new();
+    let distinct: Vec<_> = providers
+        .iter()
+        .copied()
+        .filter(|provider| seen.insert(*provider))
+        .collect();
+    debug_assert!(
+        distinct.len() <= providers.len(),
+        "distinct consensus providers cannot outnumber raw providers",
+    );
+    distinct
 }
 
 /// Maximum chars of a filesystem path rendered in the adjudication
@@ -1174,7 +1188,7 @@ mod tests {
         );
     }
 
-    /// Contract: a non-empty operator override is honoured verbatim
+    /// Contract: a non-empty operator override is honoured in order
     /// (the ≥2-configured guard still applies downstream).
     #[test]
     fn resolve_consensus_providers_honours_nonempty_override() {
@@ -1182,6 +1196,26 @@ mod tests {
         assert_eq!(
             resolve_consensus_providers(&section_with(Some(over.clone()))),
             over,
+        );
+    }
+
+    /// Contract: duplicate providers in an override are not distinct
+    /// evidence and must not trigger duplicate provider calls.
+    #[test]
+    fn resolve_consensus_providers_deduplicates_override_preserving_order() {
+        assert_eq!(
+            resolve_consensus_providers(&section_with(Some(vec![
+                LlmProviderKind::OpenAi,
+                LlmProviderKind::Grok,
+                LlmProviderKind::OpenAi,
+                LlmProviderKind::OllamaCloud,
+                LlmProviderKind::Grok,
+            ]))),
+            vec![
+                LlmProviderKind::OpenAi,
+                LlmProviderKind::Grok,
+                LlmProviderKind::OllamaCloud,
+            ],
         );
     }
 
