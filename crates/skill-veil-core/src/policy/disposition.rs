@@ -62,6 +62,12 @@ impl Disposition {
 }
 
 /// One recorded analyst disposition. Append-only; never edited.
+///
+/// # Identity contract
+///
+/// Learned rule counts treat `(rule_id, finding_fingerprint)` as one sample.
+/// Multiple records for the same pair are correction history; the last record
+/// in overlay order is the effective label.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DispositionRecord {
@@ -98,15 +104,29 @@ impl Default for DispositionOverlay {
 /// `(true_positive, non_true_positive)` disposition counts per rule.
 /// `Benign` and `FalsePositive` both count as non-TP.
 fn per_rule_counts(overlay: &DispositionOverlay) -> BTreeMap<String, (usize, usize)> {
-    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    let mut latest_by_finding: BTreeMap<(String, String), Disposition> = BTreeMap::new();
     for r in &overlay.records {
-        let entry = counts.entry(r.rule_id.clone()).or_insert((0, 0));
-        if r.analyst_disposition.is_true_positive() {
+        latest_by_finding.insert(
+            (r.rule_id.clone(), r.finding_fingerprint.clone()),
+            r.analyst_disposition,
+        );
+    }
+
+    let unique_sample_count = latest_by_finding.len();
+    let mut counts: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    for ((rule_id, _), disposition) in latest_by_finding {
+        let entry = counts.entry(rule_id).or_insert((0, 0));
+        if disposition.is_true_positive() {
             entry.0 += 1;
         } else {
             entry.1 += 1;
         }
     }
+    debug_assert_eq!(
+        counts.values().map(|(tp, fp)| tp + fp).sum::<usize>(),
+        unique_sample_count,
+        "disposition counts must count each unique rule/fingerprint sample once"
+    );
     counts
 }
 
@@ -154,15 +174,25 @@ pub fn adjust_confidence(base: f32, delta: f32) -> f32 {
 mod tests {
     use super::*;
 
-    fn rec(rule: &str, d: Disposition) -> DispositionRecord {
+    fn rec(
+        rule: &str,
+        finding_fingerprint: impl Into<String>,
+        d: Disposition,
+    ) -> DispositionRecord {
         DispositionRecord {
-            finding_fingerprint: format!("fp-{rule}-{d:?}"),
+            finding_fingerprint: finding_fingerprint.into(),
             rule_id: rule.to_string(),
             sha256: None,
             analyst_disposition: d,
             recorded_at: Utc::now(),
             note: None,
         }
+    }
+
+    fn records(rule: &str, d: Disposition, count: usize) -> Vec<DispositionRecord> {
+        (0..count)
+            .map(|i| rec(rule, format!("fp-{rule}-{d:?}-{i}"), d))
+            .collect()
     }
 
     fn overlay(records: Vec<DispositionRecord>) -> DispositionOverlay {
@@ -176,18 +206,13 @@ mod tests {
     /// lowers it (monotone in the TP ratio), both directions.
     #[test]
     fn confidence_delta_is_monotone_in_tp_ratio() {
-        let mostly_tp = overlay(vec![
-            rec("R", Disposition::TruePositive),
-            rec("R", Disposition::TruePositive),
-            rec("R", Disposition::TruePositive),
-            rec("R", Disposition::FalsePositive),
-        ]);
-        let mostly_fp = overlay(vec![
-            rec("R", Disposition::FalsePositive),
-            rec("R", Disposition::FalsePositive),
-            rec("R", Disposition::FalsePositive),
-            rec("R", Disposition::TruePositive),
-        ]);
+        let mut mostly_tp = records("R", Disposition::TruePositive, 3);
+        mostly_tp.push(rec("R", "fp-R-fp-0", Disposition::FalsePositive));
+        let mostly_tp = overlay(mostly_tp);
+
+        let mut mostly_fp = records("R", Disposition::FalsePositive, 3);
+        mostly_fp.push(rec("R", "fp-R-tp-0", Disposition::TruePositive));
+        let mostly_fp = overlay(mostly_fp);
         let up = learned_confidence_adjustments(&mostly_tp)["R"];
         let down = learned_confidence_adjustments(&mostly_fp)["R"];
         assert!(up > 0.0, "TP-heavy must raise confidence: {up}");
@@ -199,9 +224,7 @@ mod tests {
     /// the anti-poisoning guarantee.
     #[test]
     fn confidence_delta_is_hard_bounded() {
-        let flood: Vec<_> = (0..10_000)
-            .map(|_| rec("R", Disposition::TruePositive))
-            .collect();
+        let flood = records("R", Disposition::TruePositive, 10_000);
         let d = learned_confidence_adjustments(&overlay(flood))["R"];
         assert!(d <= MAX_CONFIDENCE_DELTA, "delta exceeded the cap: {d}");
         assert!(adjust_confidence(0.95, d) <= MAX_LEARNED_CONFIDENCE);
@@ -212,33 +235,65 @@ mod tests {
     /// a low TP rate (both directions).
     #[test]
     fn allowlist_requires_min_samples_and_low_tp_rate() {
-        let few_fp = overlay(vec![
-            rec("R", Disposition::FalsePositive),
-            rec("R", Disposition::FalsePositive),
-            rec("R", Disposition::FalsePositive),
-        ]);
+        let few_fp = overlay(records("R", Disposition::FalsePositive, 3));
         assert!(
             !learned_allowlist(&few_fp).contains("R"),
             "3 FP must not allowlist"
         );
 
-        let many_fp = overlay(
-            (0..ALLOWLIST_MIN_FP_SAMPLES)
-                .map(|_| rec("R", Disposition::FalsePositive))
-                .collect(),
-        );
+        let many_fp = overlay(records(
+            "R",
+            Disposition::FalsePositive,
+            ALLOWLIST_MIN_FP_SAMPLES,
+        ));
         assert!(
             learned_allowlist(&many_fp).contains("R"),
             "{ALLOWLIST_MIN_FP_SAMPLES} FP with ~0 TP rate must allowlist"
         );
 
-        let mut mixed: Vec<_> = (0..ALLOWLIST_MIN_FP_SAMPLES)
-            .map(|_| rec("R", Disposition::FalsePositive))
-            .collect();
-        mixed.extend((0..ALLOWLIST_MIN_FP_SAMPLES).map(|_| rec("R", Disposition::TruePositive)));
+        let mut mixed = records("R", Disposition::FalsePositive, ALLOWLIST_MIN_FP_SAMPLES);
+        mixed.extend(records(
+            "R",
+            Disposition::TruePositive,
+            ALLOWLIST_MIN_FP_SAMPLES,
+        ));
         assert!(
             !learned_allowlist(&overlay(mixed)).contains("R"),
             "a high TP rate must keep the rule active even with many FP"
+        );
+    }
+
+    /// Contract: allowlist promotion counts distinct findings, not raw
+    /// appended records. Re-recording the same false positive cannot meet
+    /// the minimum-sample floor by itself.
+    #[test]
+    fn allowlist_requires_distinct_finding_fingerprints() {
+        let repeated = overlay(
+            (0..ALLOWLIST_MIN_FP_SAMPLES)
+                .map(|_| rec("R", "same-finding", Disposition::FalsePositive))
+                .collect(),
+        );
+
+        assert!(
+            !learned_allowlist(&repeated).contains("R"),
+            "duplicate records for one finding must not allowlist a rule"
+        );
+    }
+
+    /// Contract: a later disposition for the same `(rule_id,
+    /// finding_fingerprint)` replaces the earlier label. Append-only history
+    /// preserves the correction trail without double-counting one sample.
+    #[test]
+    fn latest_disposition_for_same_finding_replaces_prior_label() {
+        let corrected = overlay(vec![
+            rec("R", "same-finding", Disposition::FalsePositive),
+            rec("R", "same-finding", Disposition::TruePositive),
+        ]);
+        let true_positive_only = overlay(vec![rec("R", "same-finding", Disposition::TruePositive)]);
+
+        assert_eq!(
+            learned_confidence_adjustments(&corrected)["R"],
+            learned_confidence_adjustments(&true_positive_only)["R"]
         );
     }
 

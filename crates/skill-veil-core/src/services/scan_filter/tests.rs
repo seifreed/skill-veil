@@ -365,8 +365,16 @@ fn test_fingerprint_is_stable_when_only_reason_changes() {
 }
 
 fn disp_record(rule: &str, d: crate::policy::Disposition) -> crate::policy::DispositionRecord {
+    disp_record_for_finding(rule, format!("fp-{rule}"), d)
+}
+
+fn disp_record_for_finding(
+    rule: &str,
+    finding_fingerprint: impl Into<String>,
+    d: crate::policy::Disposition,
+) -> crate::policy::DispositionRecord {
     crate::policy::DispositionRecord {
-        finding_fingerprint: format!("fp-{rule}"),
+        finding_fingerprint: finding_fingerprint.into(),
         rule_id: rule.to_string(),
         sha256: None,
         analyst_disposition: d,
@@ -394,7 +402,13 @@ fn disposition_allowlist_demotes_to_log_and_is_counted() {
     let overlay = crate::policy::DispositionOverlay {
         schema_version: "1".into(),
         records: (0..10)
-            .map(|_| disp_record("NOISY", crate::policy::Disposition::FalsePositive))
+            .map(|i| {
+                disp_record_for_finding(
+                    "NOISY",
+                    format!("fp-NOISY-{i}"),
+                    crate::policy::Disposition::FalsePositive,
+                )
+            })
             .collect(),
     };
     let filter = ScanFilterService::with_policy_state(
@@ -411,6 +425,42 @@ fn disposition_allowlist_demotes_to_log_and_is_counted() {
         outcome.findings[0].recommended_action,
         RecommendedAction::Log,
         "an allowlisted rule's finding must be demoted to Log"
+    );
+}
+
+/// Contract: learned disposition allowlisting uses distinct finding
+/// fingerprints. Repeated false-positive records for one finding do not
+/// demote future findings for the rule.
+#[test]
+fn disposition_duplicate_records_do_not_allowlist_rule() {
+    let overlay = crate::policy::DispositionOverlay {
+        schema_version: "1".into(),
+        records: (0..10)
+            .map(|_| {
+                disp_record_for_finding(
+                    "NOISY",
+                    "same-finding",
+                    crate::policy::Disposition::FalsePositive,
+                )
+            })
+            .collect(),
+    };
+    let filter = ScanFilterService::with_policy_state(
+        ScanOptions::default(),
+        None,
+        None,
+        None,
+        Some(overlay),
+    );
+
+    let outcome =
+        filter.filter_with_summary(vec![actioned_finding("NOISY", RecommendedAction::Block)]);
+
+    assert_eq!(outcome.suppression_summary.disposition_allowlisted, 0);
+    assert_eq!(
+        outcome.findings[0].recommended_action,
+        RecommendedAction::Block,
+        "one repeatedly recorded sample must not demote the rule to Log"
     );
 }
 
