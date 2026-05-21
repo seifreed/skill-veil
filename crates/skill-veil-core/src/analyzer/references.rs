@@ -24,7 +24,7 @@ const KNOWN_BARE_URL_PREFIXES: &[&str] = &["mailto:", "data:", "javascript:", "t
 fn has_url_scheme(candidate: &str) -> bool {
     if KNOWN_BARE_URL_PREFIXES
         .iter()
-        .any(|prefix| candidate.starts_with(prefix) && candidate.len() > prefix.len())
+        .any(|prefix| starts_with_bare_url_prefix(candidate, prefix))
     {
         return true;
     }
@@ -51,6 +51,13 @@ fn has_url_scheme(candidate: &str) -> bool {
         idx += 1;
     }
     false
+}
+
+fn starts_with_bare_url_prefix(candidate: &str, prefix: &str) -> bool {
+    candidate.len() > prefix.len()
+        && candidate
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
 }
 
 /// Extract paths to supporting artifacts referenced from a markdown skill doc.
@@ -221,6 +228,7 @@ mod tests {
         let base_path = Path::new("/tmp/pkg/SKILL.md");
         for sample in [
             "[install](https://example.com/install.sh)",
+            "[install](MAILTO:security@example.com/install.sh)",
             "[install](http://example.com/install.sh)",
             "[install](ftp://example.com/install.sh)",
             "[install](file:///etc/install.sh)",
@@ -249,6 +257,9 @@ mod tests {
             "file:///etc/passwd",
             "git+ssh://example.com/repo.git",
             "data:text/plain,hello",
+            "DATA:text/plain,hello",
+            "JavaScript:alert(1)",
+            "TEL:+15551234567",
         ] {
             assert!(has_url_scheme(url), "must classify as URL: {url:?}");
         }
