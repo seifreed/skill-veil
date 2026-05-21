@@ -96,7 +96,12 @@ fn verify_manifest_against_extracted_with_cap(
     let mut declared: BTreeSet<String> = BTreeSet::new();
 
     for entry in &manifest.files {
-        declared.insert(entry.path.clone());
+        if !declared.insert(entry.path.clone()) {
+            bail!(
+                "manifest declares duplicate path `{}` - refusing ambiguous release manifest",
+                entry.path
+            );
+        }
         let path = manifest_entry_path(extracted_root, &entry.path)?;
         let (actual_size, actual) = hash_manifest_file_with_cap(&path, max_entry_bytes)
             .with_context(|| {
@@ -328,6 +333,24 @@ mod tests {
         let manifest = make_manifest(&[("official/core.yaml", body)]);
         verify_manifest_against_extracted(&manifest, dir.path())
             .expect("clean extraction must verify");
+    }
+
+    /// # Contract
+    ///
+    /// A release manifest may name each extracted file at most once.
+    /// Duplicate path entries are ambiguous audit evidence even when
+    /// both entries carry the same hash.
+    #[test]
+    fn duplicate_manifest_paths_are_rejected() {
+        let dir = TempDir::new().unwrap();
+        let body = b"rule: do_thing\n";
+        write(dir.path(), "official/core.yaml", body);
+        let manifest = make_manifest(&[("official/core.yaml", body), ("official/core.yaml", body)]);
+
+        let err = verify_manifest_against_extracted(&manifest, dir.path())
+            .expect_err("duplicate manifest path must be rejected");
+
+        assert!(format!("{err:#}").contains("duplicate path"));
     }
 
     /// Contract: manifest paths name files inside the extracted tree.
