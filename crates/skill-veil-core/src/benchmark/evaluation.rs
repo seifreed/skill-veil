@@ -17,7 +17,7 @@ use crate::ports::FileSystemProvider;
 use crate::scanner::PackageScanResult;
 use crate::{Finding, RecommendedAction, Scanner, ThreatCategory, Verdict};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Per-sample aggregation extracted from a `PackageScanResult`. Keeps
 /// the inner loop of `evaluate_corpus` focused on routing data into
@@ -83,7 +83,7 @@ pub fn evaluate_manifest<F: FileSystemProvider>(
     let mut coverage = CoverageBuckets::default();
 
     for sample in manifest.samples {
-        let sample_path = root.join(&sample.path);
+        let sample_path = resolve_corpus_sample_path(&sample, root)?;
         let pkg_result = scan_corpus_sample(fs, scanner, &sample, &sample_path)?;
         let results = &pkg_result.results;
 
@@ -132,6 +132,20 @@ pub fn evaluate_manifest<F: FileSystemProvider>(
         family_metrics,
         samples,
     })
+}
+
+fn resolve_corpus_sample_path(
+    sample: &LabeledSample,
+    root: &Path,
+) -> Result<PathBuf, BenchmarkError> {
+    if sample.path.is_absolute() {
+        return Err(BenchmarkError::SampleScan {
+            id: sample.id.clone(),
+            path: sample.path.clone(),
+            message: "sample path must be relative to the corpus manifest".to_string(),
+        });
+    }
+    Ok(root.join(&sample.path))
 }
 
 /// Run the scanner on one corpus sample and validate the result.
@@ -429,14 +443,13 @@ fn finalize_coverage_buckets(buckets: BTreeMap<String, u32>) -> Vec<CoverageBuck
 #[cfg(test)]
 mod tests {
     use super::*;
-    // The `Scanner`/`ScanOptions`/`ScanTargetMode` and `tempdir` imports are
-    // only consumed by the unix-gated permission-denied test below. On
-    // Windows the bracketed `#[cfg(unix)]` block compiles to nothing, so
-    // unused-import would fire under `-D warnings`. Mirror the gate on the
-    // imports themselves to keep the cross-platform build clean.
+    // The `ScanOptions`/`ScanTargetMode` imports are only consumed by
+    // the unix-gated permission-denied test below. On Windows the
+    // bracketed `#[cfg(unix)]` block compiles to nothing, so unused-import
+    // would fire under `-D warnings`. Mirror the gate on those imports.
+    use crate::Scanner;
     #[cfg(unix)]
-    use crate::{ScanOptions, ScanTargetMode, Scanner};
-    #[cfg(unix)]
+    use crate::{ScanOptions, ScanTargetMode};
     use tempfile::tempdir;
 
     #[test]
@@ -485,6 +498,98 @@ mod tests {
                 other => panic!("unexpected error: {other:?}"),
             }
         }
+    }
+
+    /// Contract: corpus sample paths are relative. Absolute paths would
+    /// make `Path::join(root, sample)` discard the manifest root entirely.
+    #[test]
+    fn evaluate_corpus_rejects_absolute_sample_path() {
+        let dir = tempdir().unwrap();
+        let outside_dir = dir.path().join("outside");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let sample_path = outside_dir.join("SKILL.md");
+        std::fs::write(&sample_path, "# Skill\n\n## Setup\nSafe docs.\n").unwrap();
+        let corpus_path = dir.path().join("corpus.yaml");
+        let manifest = CorpusManifest {
+            samples: vec![LabeledSample {
+                id: "absolute".to_string(),
+                path: sample_path,
+                label: SampleLabel::Benign,
+                focus_category: None,
+                attack_family: None,
+            }],
+        };
+        std::fs::write(&corpus_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
+
+        let scanner = Scanner::new().unwrap();
+        let fs = crate::adapters::StdFileSystemProvider::new();
+        let error = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap_err();
+
+        match error {
+            BenchmarkError::SampleScan { id, message, .. } => {
+                assert_eq!(id, "absolute");
+                assert!(
+                    message.contains("must be relative"),
+                    "error should name the relative-path contract; got {message}"
+                );
+            }
+            other => panic!("expected SampleScan error, got {other:?}"),
+        }
+    }
+
+    /// Contract: repository corpora may share fixtures with relative
+    /// parent components, as long as the manifest does not use an
+    /// absolute path.
+    #[test]
+    fn evaluate_corpus_accepts_relative_parent_sample_path() {
+        let dir = tempdir().unwrap();
+        let corpus_dir = dir.path().join("corpus");
+        let examples_dir = dir.path().join("examples");
+        std::fs::create_dir_all(&corpus_dir).unwrap();
+        std::fs::create_dir_all(&examples_dir).unwrap();
+        std::fs::write(
+            examples_dir.join("SKILL.md"),
+            "# Skill\n\n## Usage\nThis skill documents normal setup.\n",
+        )
+        .unwrap();
+        let corpus_path = corpus_dir.join("corpus.yaml");
+        std::fs::write(
+            &corpus_path,
+            "samples:\n  - id: shared\n    path: ../examples/SKILL.md\n    label: benign\n",
+        )
+        .unwrap();
+
+        let scanner = Scanner::new().unwrap();
+        let fs = crate::adapters::StdFileSystemProvider::new();
+        let evaluation = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap();
+
+        assert_eq!(evaluation.samples.len(), 1);
+        assert_eq!(evaluation.samples[0].id, "shared");
+    }
+
+    /// Contract: ordinary in-root sample paths still evaluate normally.
+    #[test]
+    fn evaluate_corpus_accepts_sample_path_inside_manifest_root() {
+        let dir = tempdir().unwrap();
+        let corpus_path = dir.path().join("corpus.yaml");
+        let sample_path = dir.path().join("SKILL.md");
+        std::fs::write(
+            &sample_path,
+            "# Skill\n\n## Usage\nThis skill documents normal setup.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &corpus_path,
+            "samples:\n  - id: inside\n    path: SKILL.md\n    label: benign\n",
+        )
+        .unwrap();
+
+        let scanner = Scanner::new().unwrap();
+        let fs = crate::adapters::StdFileSystemProvider::new();
+        let evaluation = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap();
+
+        assert_eq!(evaluation.samples.len(), 1);
+        assert_eq!(evaluation.samples[0].id, "inside");
     }
 
     /// Contract: empty corpus yields NaN for sample-level rates so
