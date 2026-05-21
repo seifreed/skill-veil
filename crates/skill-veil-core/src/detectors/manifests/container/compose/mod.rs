@@ -20,8 +20,8 @@ use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestrator
 use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, volume_entry_string};
 use detectors::{
     detect_dangerous_cap_add, detect_env_file, detect_host_network, detect_host_volumes,
-    detect_latest_image_tag, detect_privileged, mapping_declares_dangerous_cap, parse_compose_yaml,
-    parse_failure_finding,
+    detect_latest_image_tag, detect_privileged, mapping_declares_dangerous_cap,
+    mapping_declares_host_network, parse_compose_yaml, parse_failure_finding,
 };
 
 pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding> {
@@ -137,7 +137,7 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
             }
         }
 
-        if mapping.contains_key(serde_yaml::Value::String("ports".to_string()))
+        if mapping_declares_network_surface(mapping)
             && !capabilities.iter().any(|fact| {
                 fact.capability == ArtifactCapability::NetworkAccess
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
@@ -189,7 +189,7 @@ pub(crate) fn docker_compose_relations(content: &str) -> Vec<ArtifactLink> {
                 relation: ArtifactRelation::Loads,
             });
         }
-        if mapping.contains_key(serde_yaml::Value::String("ports".to_string())) {
+        if mapping_declares_network_surface(mapping) {
             links.push(ArtifactLink {
                 target: "network".to_string(),
                 relation: ArtifactRelation::ConnectsTo,
@@ -219,6 +219,29 @@ pub(crate) fn docker_compose_relations(content: &str) -> Vec<ArtifactLink> {
     links
 }
 
+fn mapping_declares_network_surface(mapping: &serde_yaml::Mapping) -> bool {
+    mapping_declares_host_network(mapping)
+        || mapping
+            .get(serde_yaml::Value::String("ports".to_string()))
+            .is_some_and(ports_value_has_real_entries)
+}
+
+fn ports_value_has_real_entries(value: &serde_yaml::Value) -> bool {
+    match value {
+        serde_yaml::Value::Sequence(seq) => seq.iter().any(port_entry_has_real_value),
+        serde_yaml::Value::String(s) => !s.trim().is_empty(),
+        _ => false,
+    }
+}
+
+fn port_entry_has_real_value(value: &serde_yaml::Value) -> bool {
+    match value {
+        serde_yaml::Value::String(s) => !s.trim().is_empty(),
+        serde_yaml::Value::Mapping(map) => !map.is_empty(),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,6 +259,13 @@ mod tests {
             .iter()
             .find(|finding| finding.rule_id == rule_id)
             .map(|finding| finding.match_value.clone())
+    }
+
+    fn relation_present(links: &[ArtifactLink], relation: ArtifactRelation, target: &str) -> bool {
+        let expected = std::mem::discriminant(&relation);
+        links
+            .iter()
+            .any(|link| std::mem::discriminant(&link.relation) == expected && link.target == target)
     }
 
     /// Contract: a relative bind mount contained in the project (`./data:/data`)
@@ -293,6 +323,56 @@ mod tests {
         assert!(!finding_present(
             &findings,
             "MANIFEST_DOCKER_COMPOSE_HOST_MOUNT"
+        ));
+    }
+
+    /// Contract: sharing the host network namespace is a network surface even
+    /// without explicit `ports`, so capability and relation passes must agree
+    /// with the host-network finding pass.
+    #[test]
+    fn docker_compose_network_surface_detects_host_network_mode() {
+        let yaml = "services:\n  app:\n    image: nginx\n    network_mode: host\n";
+        let caps = docker_compose_capabilities(yaml);
+        let links = docker_compose_relations(yaml);
+        assert!(
+            capability_present(&caps, ArtifactCapability::NetworkAccess),
+            "host network mode must declare NetworkAccess; got {caps:?}",
+        );
+        assert!(
+            relation_present(&links, ArtifactRelation::ConnectsTo, "network"),
+            "host network mode must produce a network relation; got {links:?}",
+        );
+    }
+
+    /// Contract: an empty `ports` list carries no exposed network surface and
+    /// must not produce network capability or graph relation facts.
+    #[test]
+    fn docker_compose_network_surface_skips_empty_ports() {
+        let yaml = "services:\n  app:\n    image: nginx\n    ports: []\n";
+        let caps = docker_compose_capabilities(yaml);
+        let links = docker_compose_relations(yaml);
+        assert!(
+            !capability_present(&caps, ArtifactCapability::NetworkAccess),
+            "empty ports must not declare NetworkAccess; got {caps:?}",
+        );
+        assert!(
+            !relation_present(&links, ArtifactRelation::ConnectsTo, "network"),
+            "empty ports must not produce a network relation; got {links:?}",
+        );
+    }
+
+    /// Contract: a real short-syntax port mapping still declares a network
+    /// surface after filtering out empty `ports` values.
+    #[test]
+    fn docker_compose_network_surface_accepts_port_mapping() {
+        let yaml = "services:\n  app:\n    image: nginx\n    ports:\n      - \"8080:80\"\n";
+        let caps = docker_compose_capabilities(yaml);
+        let links = docker_compose_relations(yaml);
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(relation_present(
+            &links,
+            ArtifactRelation::ConnectsTo,
+            "network"
         ));
     }
 

@@ -322,7 +322,7 @@ pub(super) fn detect_host_network(
     let network_mode = mapping
         .get(serde_yaml::Value::String("network_mode".to_string()))
         .and_then(serde_yaml::Value::as_str)?;
-    if !matches!(network_mode, "host" | "service:host") {
+    if !is_host_network_mode(network_mode) {
         return None;
     }
     Some(
@@ -344,6 +344,17 @@ pub(super) fn detect_host_network(
         .reason("docker-compose service shares the host network namespace")
         .build(),
     )
+}
+
+pub(super) fn mapping_declares_host_network(mapping: &serde_yaml::Mapping) -> bool {
+    mapping
+        .get(serde_yaml::Value::String("network_mode".to_string()))
+        .and_then(serde_yaml::Value::as_str)
+        .is_some_and(is_host_network_mode)
+}
+
+fn is_host_network_mode(network_mode: &str) -> bool {
+    matches!(network_mode, "host" | "service:host")
 }
 
 pub(super) fn detect_env_file(
