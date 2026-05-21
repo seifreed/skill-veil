@@ -8,7 +8,8 @@
 //! regression corpus via `evaluate_gold_corpus`.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -118,6 +119,98 @@ fn llm_consensus(votes: &[ProviderVoteRecord]) -> Option<SampleLabel> {
     None
 }
 
+fn output_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn absolute_lexical(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("failed to resolve current directory")?
+            .join(path)
+    };
+    Ok(normalize_lexical(&absolute))
+}
+
+fn normalize_lexical(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() && !normalized.has_root() {
+                    normalized.push("..");
+                }
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
+fn split_path_parts(path: &Path) -> (Vec<OsString>, Vec<OsString>) {
+    let mut root = Vec::new();
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                root.push(component.as_os_str().to_os_string());
+            }
+            Component::Normal(part) => parts.push(part.to_os_string()),
+            Component::CurDir => {}
+            Component::ParentDir => parts.push(OsString::from("..")),
+        }
+    }
+    (root, parts)
+}
+
+fn relative_path_between(base_dir: &Path, target: &Path) -> Result<PathBuf> {
+    let base_dir = absolute_lexical(base_dir)?;
+    let target = absolute_lexical(target)?;
+    let (base_root, base_parts) = split_path_parts(&base_dir);
+    let (target_root, target_parts) = split_path_parts(&target);
+
+    if base_root != target_root {
+        anyhow::bail!(
+            "{} and {} do not share a filesystem root",
+            base_dir.display(),
+            target.display()
+        );
+    }
+
+    let common = base_parts
+        .iter()
+        .zip(target_parts.iter())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut relative = PathBuf::new();
+    for _ in common..base_parts.len() {
+        relative.push("..");
+    }
+    for part in target_parts.iter().skip(common) {
+        relative.push(part);
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    Ok(relative)
+}
+
+fn sample_path_for_manifest(dataset_root: &Path, out: &Path, sha: &str) -> Result<PathBuf> {
+    let sample_path = dataset_root.join(sha).join("SKILL.md");
+    let manifest_path = relative_path_between(output_parent(out), &sample_path)?;
+    debug_assert!(
+        !manifest_path.is_absolute(),
+        "gold manifest sample paths must be relative"
+    );
+    Ok(manifest_path)
+}
+
 fn build(args: GoldBuildArgs) -> Result<()> {
     let content = read_operator_text_file(&args.consensus)
         .with_context(|| format!("failed to read {}", args.consensus.display()))?;
@@ -137,7 +230,7 @@ fn build(args: GoldBuildArgs) -> Result<()> {
                 .and_then(|dir| vt_label_for(dir, &r.sha));
             let mut s = GoldSample {
                 id: r.sha.clone(),
-                path: args.dataset_root.join(&r.sha).join("SKILL.md"),
+                path: sample_path_for_manifest(&args.dataset_root, &args.out, &r.sha)?,
                 // Provisional curated label = the consensus when it
                 // formed; otherwise a conservative Suspicious that the
                 // dispute gate excludes from scoring until reviewed.
@@ -322,6 +415,47 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!out.exists());
+    }
+
+    /// # Contract
+    ///
+    /// `gold build` writes sample paths relative to the output manifest
+    /// directory. Absolute operator input must not leak into the
+    /// manifest because the scorer resolves paths from the manifest
+    /// location.
+    #[test]
+    fn build_writes_sample_paths_relative_to_manifest_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sha = "a".repeat(64);
+        let consensus = tmp.path().join("consensus.jsonl");
+        let out = tmp.path().join("manifests").join("gold.yaml");
+        std::fs::write(
+            &consensus,
+            format!(
+                r#"{{"sha":"{sha}","providers":[{{"provider":"openai","verdict":"malicious"}},{{"provider":"grok","verdict":"malicious"}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        build(GoldBuildArgs {
+            consensus,
+            dataset_root: tmp.path().join("dataset"),
+            vt_reports: None,
+            out: out.clone(),
+        })
+        .unwrap();
+
+        let manifest: GoldCorpusManifest =
+            serde_yaml::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let path = &manifest.samples[0].path;
+        assert!(!path.is_absolute());
+        assert_eq!(
+            path,
+            &PathBuf::from("..")
+                .join("dataset")
+                .join(&sha)
+                .join("SKILL.md")
+        );
     }
 
     /// Contract: ≥2 distinct providers on the same label is consensus;
