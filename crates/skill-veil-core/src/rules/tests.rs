@@ -1184,6 +1184,24 @@ fn skill_supply_chain_typosquatting_matches_global_install_typo() {
     );
 }
 
+/// # Contract
+///
+/// `SKILL_SUPPLY_CHAIN_TYPOSQUATTING` accepts tabs inside package-manager
+/// command phrases.
+#[test]
+fn skill_supply_chain_typosquatting_matches_tab_separated_install_typo() {
+    let engine = default_engine();
+    let doc = parse_test_doc("# Install\n\n```bash\nnpm\tinstall -g shersh\n```\n");
+    let findings = engine.evaluate(&doc);
+    assert!(
+        findings
+            .iter()
+            .any(|f| f.rule_id == "SKILL_SUPPLY_CHAIN_TYPOSQUATTING"),
+        "expected SKILL_SUPPLY_CHAIN_TYPOSQUATTING on tab-separated install, got {:?}",
+        findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+    );
+}
+
 /// Contract (negative): legitimate global installs of well-known packages
 /// MUST NOT fire. The rule lists specific typo strings; `npm install -g
 /// typescript` should never match.

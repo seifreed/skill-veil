@@ -166,9 +166,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
     }
 
     if lower.lines().any(line_invokes_shell_or_interpreter)
-        || lower.contains("npm install")
-        || lower.contains("pip install")
-        || lower.contains("cargo install")
+        || lower.lines().any(line_contains_package_install_command)
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::InstallExecution,
@@ -410,6 +408,30 @@ fn line_contains_download_command(line: &str) -> bool {
         .any(|token| line_contains_command_token(line, token))
 }
 
+fn line_contains_package_install_command(line: &str) -> bool {
+    let mut previous = None;
+    for token in line.split_whitespace().map(normalized_command_token) {
+        let has_install_pair = matches!(
+            (previous, token),
+            (Some("npm" | "pip" | "cargo"), "install")
+        );
+        if has_install_pair {
+            return true;
+        }
+        previous = Some(token);
+    }
+    false
+}
+
+fn normalized_command_token(token: &str) -> &str {
+    let stem = token
+        .trim_matches(['"', '\'', '`'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(token);
+    stem.trim_matches(['|', ';', '&'])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +490,38 @@ mod tests {
         let content = "npm install foo\n";
         let caps = script_capabilities(content);
         assert!(capability_present(
+            &caps,
+            ArtifactCapability::InstallExecution
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// Package-manager install phrases still produce InstallExecution when
+    /// command words are separated by tabs.
+    #[test]
+    fn script_capabilities_detects_tab_separated_install_phrase() {
+        for content in [
+            "npm\tinstall foo\n",
+            "pip\tinstall ./dist/pkg.whl\n",
+            "/usr/bin/cargo\tinstall tool\n",
+        ] {
+            let caps = script_capabilities(content);
+            assert!(
+                capability_present(&caps, ArtifactCapability::InstallExecution),
+                "{content:?} must produce InstallExecution; got {caps:?}"
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Package-manager install phrase detection is token-aware.
+    #[test]
+    fn script_capabilities_rejects_install_phrase_substrings() {
+        let content = "benpm\tinstall foo\n";
+        let caps = script_capabilities(content);
+        assert!(!capability_present(
             &caps,
             ArtifactCapability::InstallExecution
         ));

@@ -15,7 +15,7 @@ use crate::lazy_pattern;
 // `-g`.
 lazy_pattern!(
     INSTALL_RE,
-    r"(?i)\b(?:npm install|npm i|npx|yarn add|pnpm add|clawhub install|clauhub install)[ \t]+(?:-g|--global|--force)[ \t]+([a-z][a-z0-9_.-]{2,40})"
+    r"(?i)\b(?:npm[ \t]+install|npm[ \t]+i\b|npx|yarn[ \t]+add|pnpm[ \t]+add|clawhub[ \t]+install|clauhub[ \t]+install)[ \t]+(?:-g|--global|--force)[ \t]+([a-z][a-z0-9_.-]{2,40})"
 );
 
 const TYPOSQUAT_KNOWN_GOOD: &[&str] = &[
@@ -120,6 +120,23 @@ mod tests {
                 .iter()
                 .any(|f| f.rule_id == "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT"),
             "expected SCRIPT_SUPPLY_CHAIN_TYPOSQUAT, got {findings:?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Package-manager command phrases accept tabs between command words.
+    #[test]
+    fn detect_typosquatted_install_accepts_tab_separated_command_phrase() {
+        let script = "npm\tinstall -g shersh\nclawhub\tinstall --force openclaaw\n";
+        let lower = script.to_ascii_lowercase();
+        let findings = detect_typosquatted_install(&lower, "sh", "/tmp/install.sh");
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| finding.rule_id == "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT")
+                .count(),
+            2
         );
     }
 
