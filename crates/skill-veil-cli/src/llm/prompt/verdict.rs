@@ -78,26 +78,35 @@ fn sanitize_llm_confidence(verdict: &mut LlmVerdict) {
 
 fn strip_json_fences(raw: &str) -> String {
     let trimmed = raw.trim();
+    if trimmed.starts_with('{') {
+        debug_assert_eq!(
+            trimmed.as_bytes().first().copied(),
+            Some(b'{'),
+            "plain JSON response must stay anchored at the opening object byte",
+        );
+        return trimmed.to_string();
+    }
+
     // Some LLM providers prepend preamble text before the JSON fence.
     // Search for the opening fence anywhere in the response, not just at
     // the start, so "Here is my analysis:\n```json\n{…}" still parses.
-    let opening = trimmed
-        .find("```json")
-        .or_else(|| trimmed.find("```"))
-        .map(|pos| {
-            let after = &trimmed[pos..]
-                .strip_prefix("```json")
-                .or_else(|| trimmed.get(pos..)?.strip_prefix("```"))
-                .unwrap_or(&trimmed[pos..]);
-            after.trim_start_matches(['\r', '\n'])
-        })
-        .unwrap_or(trimmed);
-    let without_trailing = opening.trim_end();
-    let stripped = without_trailing
-        .strip_suffix("```")
-        .unwrap_or(without_trailing)
-        .trim();
-    stripped.to_string()
+    let Some(pos) = trimmed.find("```") else {
+        return trimmed.to_string();
+    };
+    let after_ticks = &trimmed[pos + 3..];
+    let opening = if after_ticks.trim_start().starts_with('{') {
+        after_ticks.trim_start()
+    } else {
+        after_ticks
+            .find('\n')
+            .map(|line_end| &after_ticks[line_end + 1..])
+            .unwrap_or(after_ticks)
+    };
+    opening
+        .split_once("```")
+        .map_or(opening, |(body, _)| body)
+        .trim()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -126,6 +135,29 @@ mod tests {
     #[test]
     fn parse_verdict_handles_fenced_json() {
         let raw = "```json\n{\"verdict\":\"benign\",\"confidence\":0.5,\"analysis\":\"x\"}\n```";
+        let v = parse_verdict_json(raw).unwrap();
+        assert_eq!(v.verdict, "benign");
+    }
+
+    /// Contract: a plain JSON response is already the parse target; code
+    /// fence text inside a JSON string is content, not an outer wrapper.
+    #[test]
+    fn parse_verdict_handles_plain_json_with_internal_fence_text() {
+        let raw = serde_json::json!({
+            "verdict": "benign",
+            "confidence": 0.5,
+            "analysis": "mentions ```json\n{\"x\":1}\n``` inside analysis"
+        })
+        .to_string();
+        let v = parse_verdict_json(&raw).expect("plain JSON must not be stripped at inner fences");
+        assert!(v.analysis.contains("```json"));
+    }
+
+    /// Contract: a fenced response may include prose after the closing
+    /// fence; only the fenced JSON body is parsed.
+    #[test]
+    fn parse_verdict_handles_fenced_json_with_trailing_text() {
+        let raw = "Here is the result:\n```JSON\n{\"verdict\":\"benign\",\"confidence\":0.5,\"analysis\":\"x\"}\n```\nDone.";
         let v = parse_verdict_json(raw).unwrap();
         assert_eq!(v.verdict, "benign");
     }
