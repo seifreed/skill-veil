@@ -92,7 +92,12 @@ fn build_nova_llm_eval(
             return None;
         }
     };
-    Some(Box::new(ProviderLlmEvaluator::new(provider)))
+    let max_prompt_chars =
+        llm_section.effective_max_prompt_chars_with_probe(provider.probe_context_length());
+    Some(Box::new(ProviderLlmEvaluator::with_max_prompt_chars(
+        provider,
+        max_prompt_chars,
+    )))
 }
 
 /// Build the native NOVA `semantics:` evaluator. Returns `None` when
