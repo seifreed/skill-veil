@@ -38,6 +38,14 @@ pub(crate) const CACHE_TTL_DAYS: i64 = 30;
 /// successful results keep the long TTL.
 pub(crate) const ERROR_CACHE_TTL: Duration = Duration::minutes(5);
 
+fn update_cache_key_field(hasher: &mut Sha256, label: &str, value: &[u8]) {
+    hasher.update(label.as_bytes());
+    hasher.update(b":");
+    hasher.update(value.len().to_string().as_bytes());
+    hasher.update(b":");
+    hasher.update(value);
+}
+
 /// Compute the content-addressed cache key for a turn-1 manifest prompt.
 ///
 /// `sampling_fingerprint` MUST encode every per-call inference parameter
@@ -53,15 +61,11 @@ pub(crate) fn compute_cache_key(
     prompt: &LlmPrompt,
 ) -> String {
     let mut h = Sha256::new();
-    h.update(provider.as_bytes());
-    h.update(b"|");
-    h.update(model.as_bytes());
-    h.update(b"|sampling=");
-    h.update(sampling_fingerprint.as_bytes());
-    h.update(b"|");
-    h.update(prompt.system.as_bytes());
-    h.update(b"|");
-    h.update(prompt.user_json.as_bytes());
+    update_cache_key_field(&mut h, "provider", provider.as_bytes());
+    update_cache_key_field(&mut h, "model", model.as_bytes());
+    update_cache_key_field(&mut h, "sampling", sampling_fingerprint.as_bytes());
+    update_cache_key_field(&mut h, "system", prompt.system.as_bytes());
+    update_cache_key_field(&mut h, "user_json", prompt.user_json.as_bytes());
     format!("{:x}", h.finalize())
 }
 
@@ -86,25 +90,19 @@ pub(crate) fn compute_cache_key_with_followup(
     followup: &[(PathBuf, String)],
 ) -> String {
     let mut h = Sha256::new();
-    h.update(provider.as_bytes());
-    h.update(b"|");
-    h.update(model.as_bytes());
-    h.update(b"|sampling=");
-    h.update(sampling_fingerprint.as_bytes());
-    h.update(b"|");
-    h.update(prompt.system.as_bytes());
-    h.update(b"|");
-    h.update(prompt.user_json.as_bytes());
-    h.update(b"|followup|");
+    update_cache_key_field(&mut h, "provider", provider.as_bytes());
+    update_cache_key_field(&mut h, "model", model.as_bytes());
+    update_cache_key_field(&mut h, "sampling", sampling_fingerprint.as_bytes());
+    update_cache_key_field(&mut h, "system", prompt.system.as_bytes());
+    update_cache_key_field(&mut h, "user_json", prompt.user_json.as_bytes());
+    update_cache_key_field(&mut h, "turn", b"followup");
     let mut sorted: Vec<&(PathBuf, String)> = followup.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     for (path, content) in sorted {
-        h.update(path.display().to_string().as_bytes());
-        h.update(b"=");
-        let mut content_hash = Sha256::new();
-        content_hash.update(content.as_bytes());
-        h.update(format!("{:x}", content_hash.finalize()).as_bytes());
-        h.update(b"\n");
+        let path = path.display().to_string();
+        let content_digest = Sha256::digest(content.as_bytes());
+        update_cache_key_field(&mut h, "followup_path", path.as_bytes());
+        update_cache_key_field(&mut h, "followup_content_sha256", content_digest.as_ref());
     }
     format!("{:x}", h.finalize())
 }
@@ -221,6 +219,23 @@ mod tests {
         );
     }
 
+    /// Contract: cache-key fields are structurally separated, not just
+    /// joined with printable delimiters. Model and sampling strings may
+    /// contain `|sampling=`, so the two distinct tuples below must not
+    /// hash the same byte stream.
+    #[test]
+    fn cache_key_length_delimits_model_and_sampling_fields() {
+        let p = LlmPrompt {
+            system: "s".into(),
+            user_json: "u".into(),
+        };
+
+        let a = compute_cache_key("provider", "m|sampling=x", "y", &p);
+        let b = compute_cache_key("provider", "m", "x|sampling=y", &p);
+
+        assert_ne!(a, b);
+    }
+
     /// Contract: the sampling fingerprint MUST participate in the key.
     /// Two scans with identical prompt content but different
     /// `temperature` / `max_tokens` config MUST hash to different keys —
@@ -333,6 +348,31 @@ mod tests {
         let k2 =
             compute_cache_key_with_followup("openai", "gpt-4", TEST_SAMPLING_FP, &p, &files_v2);
         assert_ne!(k1, k2, "follow-up file content must change the cache key");
+    }
+
+    /// Contract: follow-up cache keys length-delimit every path and
+    /// content digest. A path containing `=` and `\n` must not be able
+    /// to make one requested-file set hash like a different set.
+    #[test]
+    fn cache_key_with_followup_length_delimits_file_entries() {
+        let p = LlmPrompt {
+            system: "s".into(),
+            user_json: "u".into(),
+        };
+        let one_digest = format!("{:x}", Sha256::digest(b"one"));
+        let two_files = vec![
+            (std::path::PathBuf::from("a"), "one".to_string()),
+            (std::path::PathBuf::from("b"), "two".to_string()),
+        ];
+        let one_file = vec![(
+            std::path::PathBuf::from(format!("a={one_digest}\nb")),
+            "two".to_string(),
+        )];
+
+        assert_ne!(
+            compute_cache_key_with_followup("provider", "model", TEST_SAMPLING_FP, &p, &two_files),
+            compute_cache_key_with_followup("provider", "model", TEST_SAMPLING_FP, &p, &one_file),
+        );
     }
 
     /// Contract: file ordering must NOT affect the key (sort by path).
