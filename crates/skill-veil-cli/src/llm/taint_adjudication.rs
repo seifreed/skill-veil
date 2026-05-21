@@ -167,22 +167,16 @@ pub(crate) fn result_eligible(r: &ScanResult) -> bool {
 }
 
 /// Parse a provider verdict string into a [`Verdict`].
-/// Case-insensitive, **fail-closed**: `malicious` is matched first so
-/// a hedged "not malicious, looks benign" conservatively counts as
-/// malicious; unknown / unparseable text returns `None` (the caller
-/// treats `None` as a non-benign vote so an ambiguous provider
-/// response can never drive a downgrade).
+/// Case-insensitive, exact-label only. Unknown / unparseable text
+/// returns `None`, so an ambiguous provider response can never drive
+/// either a downgrade or an upgrade.
 #[must_use]
 pub(crate) fn parse_provider_verdict(raw: &str) -> Option<Verdict> {
-    let s = raw.trim().to_ascii_lowercase();
-    if s.contains("malicious") {
-        Some(Verdict::Malicious)
-    } else if s.contains("suspicious") {
-        Some(Verdict::Suspicious)
-    } else if s.contains("benign") {
-        Some(Verdict::Benign)
-    } else {
-        None
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "malicious" => Some(Verdict::Malicious),
+        "suspicious" => Some(Verdict::Suspicious),
+        "benign" => Some(Verdict::Benign),
+        _ => None,
     }
 }
 
@@ -191,12 +185,16 @@ pub(crate) fn parse_provider_verdict(raw: &str) -> Option<Verdict> {
 /// from one provider cannot inflate the count.
 #[must_use]
 pub(crate) fn provider_consensus_benign(provider_verdicts: &[(String, Verdict)]) -> bool {
-    let benign: BTreeSet<&str> = provider_verdicts
+    let benign: BTreeSet<String> = provider_verdicts
         .iter()
         .filter(|(_, v)| *v == Verdict::Benign)
-        .map(|(p, _)| p.as_str())
+        .map(|(p, _)| normalized_provider_key(p))
         .collect();
     benign.len() >= 2
+}
+
+fn normalized_provider_key(provider: &str) -> String {
+    provider.trim().to_ascii_lowercase()
 }
 
 /// Pure reconciliation. Returns the verdict to use for the appended
@@ -271,10 +269,10 @@ pub(crate) fn result_upgrade_eligible(r: &ScanResult) -> bool {
 /// so it can never drive an upgrade.
 #[must_use]
 pub(crate) fn provider_consensus_malicious(provider_verdicts: &[(String, Verdict)]) -> bool {
-    let malicious: BTreeSet<&str> = provider_verdicts
+    let malicious: BTreeSet<String> = provider_verdicts
         .iter()
         .filter(|(_, v)| *v == Verdict::Malicious)
-        .map(|(p, _)| p.as_str())
+        .map(|(p, _)| normalized_provider_key(p))
         .collect();
     malicious.len() >= 2
 }
@@ -776,6 +774,10 @@ mod tests {
             ("grok".into(), Verdict::Benign),
             ("grok".into(), Verdict::Benign),
         ]));
+        assert!(!provider_consensus_benign(&[
+            ("grok".into(), Verdict::Benign),
+            (" Grok ".into(), Verdict::Benign),
+        ]));
         assert!(provider_consensus_benign(&[
             ("openai".into(), Verdict::Benign),
             ("grok".into(), Verdict::Benign),
@@ -794,19 +796,19 @@ mod tests {
         assert_eq!(parse_provider_verdict("benign"), Some(Verdict::Benign));
         assert_eq!(parse_provider_verdict("  BENIGN "), Some(Verdict::Benign));
         assert_eq!(
-            parse_provider_verdict("verdict: malicious"),
+            parse_provider_verdict("malicious"),
             Some(Verdict::Malicious)
         );
         assert_eq!(
-            parse_provider_verdict("Suspicious — review"),
+            parse_provider_verdict("suspicious"),
             Some(Verdict::Suspicious)
         );
         assert_eq!(parse_provider_verdict(""), None);
         assert_eq!(parse_provider_verdict("cannot determine"), None);
-        assert_eq!(
-            parse_provider_verdict("not malicious, looks benign"),
-            Some(Verdict::Malicious)
-        );
+        assert_eq!(parse_provider_verdict("verdict: malicious"), None);
+        assert_eq!(parse_provider_verdict("Suspicious — review"), None);
+        assert_eq!(parse_provider_verdict("not malicious, looks benign"), None);
+        assert_eq!(parse_provider_verdict("not benign"), None);
     }
 
     /// Contract: a Malicious package whose only Block-strength
@@ -939,6 +941,10 @@ mod tests {
         assert!(!provider_consensus_malicious(&[
             ("grok".into(), Verdict::Malicious),
             ("grok".into(), Verdict::Malicious),
+        ]));
+        assert!(!provider_consensus_malicious(&[
+            ("grok".into(), Verdict::Malicious),
+            (" Grok ".into(), Verdict::Malicious),
         ]));
         assert!(provider_consensus_malicious(&[
             ("openai".into(), Verdict::Malicious),
