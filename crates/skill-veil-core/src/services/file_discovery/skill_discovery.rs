@@ -38,6 +38,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             }
         }
 
+        candidates.sort();
+        candidates.dedup();
+        debug_assert!(
+            candidates.windows(2).all(|pair| pair[0] < pair[1]),
+            "skill discovery candidates must be sorted and deduplicated"
+        );
         candidates
             .into_iter()
             .filter(|file_path| Self::is_explicit_skill_file(file_path))
@@ -62,6 +68,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
             }
         }
 
+        candidates.sort();
+        candidates.dedup();
+        debug_assert!(
+            candidates.windows(2).all(|pair| pair[0] < pair[1]),
+            "heuristic discovery candidates must be sorted and deduplicated"
+        );
         candidates
             .into_iter()
             .filter(|file_path| self.looks_like_agent_extension(file_path))
@@ -139,6 +151,7 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
 mod tests {
     use super::*;
     use crate::adapters::StdFileSystemProvider;
+    use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
     use std::io::Write;
     use tempfile::{tempdir, NamedTempFile};
 
@@ -149,6 +162,50 @@ mod tests {
     /// adapter binding in the production type.
     fn default_service(recursive: bool) -> FileDiscoveryService<StdFileSystemProvider> {
         FileDiscoveryService::with_fs_provider(recursive, StdFileSystemProvider::new())
+    }
+
+    struct UnsortedDiscoveryFs {
+        listed: Vec<PathBuf>,
+    }
+
+    impl FileSystemProvider for UnsortedDiscoveryFs {
+        fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
+            Err(FileSystemError::PathNotFound(path.to_path_buf()))
+        }
+
+        fn list_files(
+            &self,
+            _path: &Path,
+            pattern: &str,
+            _recursive: bool,
+        ) -> Result<Vec<PathBuf>, FileSystemError> {
+            if pattern == MARKDOWN_GLOB_PATTERN {
+                Ok(self.listed.clone())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn exists(&self, _path: &Path) -> bool {
+            true
+        }
+    }
+
+    /// Contract: explicit skill entrypoint discovery returns paths in
+    /// sorted order regardless of the filesystem adapter's traversal
+    /// order.
+    #[test]
+    fn discover_skill_entrypoints_sorts_unsorted_provider_paths() {
+        let first = PathBuf::from("/pkg/a.skill.md");
+        let second = PathBuf::from("/pkg/z.skill.md");
+        let fs = UnsortedDiscoveryFs {
+            listed: vec![second.clone(), first.clone()],
+        };
+        let service = FileDiscoveryService::with_fs_provider(false, fs);
+
+        let entrypoints = service.discover_skill_entrypoints(Path::new("/pkg"));
+
+        assert_eq!(entrypoints, vec![first, second]);
     }
 
     /// Contract: `is_skill_file` recognises canonical entrypoint filenames

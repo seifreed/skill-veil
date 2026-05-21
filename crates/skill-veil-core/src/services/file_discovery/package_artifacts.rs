@@ -188,6 +188,12 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
                 }
                 combined
             };
+            let mut files = files;
+            files.sort();
+            debug_assert!(
+                files.windows(2).all(|pair| pair[0] <= pair[1]),
+                "discovered package artifact paths must be sorted before capping"
+            );
             let extensions: Vec<&str> = patterns
                 .iter()
                 .filter_map(|p| p.strip_prefix("*."))
@@ -284,7 +290,7 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
                 }
             };
 
-        files
+        let mut matches = files
             .into_iter()
             .filter_map(|path| {
                 // Use lossy conversion consistent with `list_files` / `walk_files`
@@ -293,7 +299,13 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
                 let file_name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
                 names.contains(&file_name.as_str()).then_some(path)
             })
-            .collect()
+            .collect::<Vec<_>>();
+        matches.sort();
+        debug_assert!(
+            matches.windows(2).all(|pair| pair[0] <= pair[1]),
+            "manifest and lockfile discovery results must be sorted"
+        );
+        matches
     }
 }
 
@@ -549,6 +561,7 @@ mod tests {
     /// name list, and pre-fix appeared in BOTH discovery streams.
     struct FixedListFs {
         per_pattern: Vec<(String, Vec<PathBuf>)>,
+        walked_files: Vec<PathBuf>,
     }
 
     impl FileSystemProvider for FixedListFs {
@@ -574,6 +587,9 @@ mod tests {
         fn exists(&self, _path: &Path) -> bool {
             true
         }
+        fn is_dir(&self, _path: &Path) -> bool {
+            false
+        }
         fn metadata(
             &self,
             _path: &Path,
@@ -582,6 +598,56 @@ mod tests {
             // not skip the file as oversized.
             Ok(crate::ports::FileMeta { len: 1024 })
         }
+        fn walk_files(
+            &self,
+            _path: &Path,
+            _max_depth: usize,
+            _skip_dirs: &[&str],
+        ) -> Result<Vec<PathBuf>, crate::ports::FileSystemError> {
+            Ok(self.walked_files.clone())
+        }
+    }
+
+    /// # Contract
+    ///
+    /// Package script discovery sorts provider results before capping or
+    /// returning them. Otherwise an adapter's filesystem traversal order
+    /// can decide which supporting scripts are scanned first.
+    #[test]
+    fn package_script_discovery_sorts_unsorted_provider_paths() {
+        let pkg_root = PathBuf::from("/virtual/pkg");
+        let first = pkg_root.join("a.sh");
+        let second = pkg_root.join("z.sh");
+        let fs = FixedListFs {
+            per_pattern: vec![("*.sh".to_string(), vec![second.clone(), first.clone()])],
+            walked_files: Vec::new(),
+        };
+        let service = FileDiscoveryService::with_fs_provider(false, fs);
+
+        let results = service.discover_package_scripts(&pkg_root);
+
+        assert_eq!(results, vec![first, second]);
+    }
+
+    /// # Contract
+    ///
+    /// Manifest discovery sorts matching paths from recursive walks.
+    /// Graph construction and scan reports should not depend on the
+    /// order a filesystem adapter returns directory entries.
+    #[test]
+    fn package_manifest_discovery_sorts_unsorted_walk_paths() {
+        let pkg_root = PathBuf::from("/virtual/pkg");
+        let first = pkg_root.join("a").join("pyproject.toml");
+        let second = pkg_root.join("z").join("package.json");
+        let fs = FixedListFs {
+            per_pattern: Vec::new(),
+            walked_files: vec![second.clone(), first.clone()],
+        };
+        let service = FileDiscoveryService::with_fs_provider(false, fs);
+
+        let results = service.discover_package_manifests(&pkg_root);
+
+        assert_eq!(results, vec![first, second]);
     }
 
     /// # Contract
@@ -612,6 +678,7 @@ mod tests {
                 ("*.yaml".to_string(), yaml_files.clone()),
                 ("*.json".to_string(), json_files.clone()),
             ],
+            walked_files: Vec::new(),
         };
         let service = FileDiscoveryService::with_fs_provider(false, fs);
         let results = service.discover_package_data_files(&pkg_root);
