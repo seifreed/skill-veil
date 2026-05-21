@@ -87,6 +87,31 @@ mod tests {
 
     /// # Contract
     ///
+    /// URL scheme matching is case-insensitive. Case-variant schemes must
+    /// still enter lockfile and IOC source classification.
+    #[test]
+    fn extract_http_urls_accepts_case_variant_schemes() {
+        let urls =
+            extract_http_urls("source = { git = \"HTTPS://packages.attacker.example/pkg.git\" }");
+
+        assert_eq!(
+            urls,
+            vec!["HTTPS://packages.attacker.example/pkg.git".to_string()]
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Case-insensitive matching must not widen beyond HTTP(S) schemes.
+    #[test]
+    fn extract_http_urls_rejects_non_http_scheme_lookalikes() {
+        let urls = extract_http_urls("fetch HTXP://packages.attacker.example/pkg.git");
+
+        assert!(urls.is_empty(), "unexpected URLs: {urls:?}");
+    }
+
+    /// # Contract
+    ///
     /// `is_common_lockfile_source` MUST accept GitHub Package Registry.
     /// Pins the allowlist so a future contraction does not silently
     /// re-introduce false-positive `LOCKFILE_PACKAGE_REMOTE_TARBALL`

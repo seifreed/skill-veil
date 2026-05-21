@@ -1,6 +1,6 @@
 use crate::lazy_pattern;
 
-lazy_pattern!(pub(crate) RE_HTTP_URL, r#"https?://[^\s"'`)]+"#);
+lazy_pattern!(pub(crate) RE_HTTP_URL, r#"(?i)https?://[^\s"'`)]+"#);
 lazy_pattern!(pub(crate) RE_RFC1918_10, r"\b10\.\d{1,3}\.\d{1,3}\.\d{1,3}\b");
 lazy_pattern!(pub(crate) RE_RFC1918_192, r"\b192\.168\.\d{1,3}\.\d{1,3}\b");
 lazy_pattern!(

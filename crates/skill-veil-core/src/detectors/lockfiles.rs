@@ -180,6 +180,27 @@ source = { git = "https://packages.attacker.example/pkg.git#0123456789abcdef0123
         );
     }
 
+    /// # Contract
+    ///
+    /// URL schemes in uv Git sources are case-insensitive all the way through
+    /// extraction and non-standard-source classification.
+    #[test]
+    fn analyze_uv_lock_detects_case_variant_inline_table_git_sources() {
+        let content = r#"
+version = 1
+revision = 3
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = { git = "HTTPS://packages.attacker.example/pkg.git#0123456789abcdef0123456789abcdef01234567" }
+"#;
+
+        let findings = analyze_uv_lock(Path::new("uv.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_UV_GIT_SOURCE"]);
+    }
+
     /// # Contract (negative)
     ///
     /// A registry-only uv lockfile source should not emit the Git-source
