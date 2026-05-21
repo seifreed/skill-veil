@@ -166,7 +166,9 @@ pub(crate) fn enrich_iocs(
     for hash in &iocs.file_hashes {
         let indicator = hash.sha256.clone();
         let cache_path = cache_file_path(&opts.cache_root, "files", &indicator);
-        if let Some(fresh) = load_fresh(&cache_path, Duration::days(FILE_CACHE_TTL_DAYS))? {
+        if let Some(fresh) =
+            load_fresh(&cache_path, Duration::days(FILE_CACHE_TTL_DAYS), &indicator)?
+        {
             out.files.push(fresh);
             continue;
         }
@@ -178,7 +180,8 @@ pub(crate) fn enrich_iocs(
     for domain in &iocs.domains {
         let key = sha256_of_str(domain);
         let cache_path = cache_file_path(&opts.cache_root, "domains", &key);
-        if let Some(fresh) = load_fresh(&cache_path, Duration::days(DOMAIN_CACHE_TTL_DAYS))? {
+        if let Some(fresh) = load_fresh(&cache_path, Duration::days(DOMAIN_CACHE_TTL_DAYS), domain)?
+        {
             out.domains.push(fresh);
             continue;
         }
@@ -197,7 +200,7 @@ pub(crate) fn enrich_iocs(
         // glance even if individual entries are no longer human-readable.
         let key = sha256_of_str(ip);
         let cache_path = cache_file_path(&opts.cache_root, "ips", &key);
-        if let Some(fresh) = load_fresh(&cache_path, Duration::days(IP_CACHE_TTL_DAYS))? {
+        if let Some(fresh) = load_fresh(&cache_path, Duration::days(IP_CACHE_TTL_DAYS), ip)? {
             out.ips.push(fresh);
             continue;
         }
@@ -210,7 +213,7 @@ pub(crate) fn enrich_iocs(
         // URL cache key: sha256 of canonical URL so filesystem-safe.
         let key = sha256_of_str(url);
         let cache_path = cache_file_path(&opts.cache_root, "urls", &key);
-        if let Some(fresh) = load_fresh(&cache_path, Duration::days(URL_CACHE_TTL_DAYS))? {
+        if let Some(fresh) = load_fresh(&cache_path, Duration::days(URL_CACHE_TTL_DAYS), url)? {
             out.urls.push(fresh);
             continue;
         }
@@ -362,13 +365,20 @@ fn persist_indicator(ind: &EnrichedIndicator) -> Result<()> {
 /// brief upstream outages without manual cache eviction.
 pub(crate) const ERROR_CACHE_TTL: Duration = Duration::minutes(5);
 
-fn load_fresh(path: &Path, ttl: Duration) -> Result<Option<EnrichedIndicator>> {
+fn load_fresh(
+    path: &Path,
+    ttl: Duration,
+    expected_indicator: &str,
+) -> Result<Option<EnrichedIndicator>> {
     let Some(bytes) = crate::util::cache_io::read_cache_file_bounded(path)? else {
         return Ok(None);
     };
     let Ok(record) = serde_json::from_slice::<EnrichedIndicator>(&bytes) else {
         return Ok(None);
     };
+    if record.indicator != expected_indicator {
+        return Ok(None);
+    }
     let age = Utc::now() - record.fetched_at;
     // A future-dated fetched_at (clock skew or tampering) produces a
     // negative age, which never exceeds the TTL — freezing the entry
@@ -494,7 +504,7 @@ mod tests {
             summary: None,
         };
         std::fs::write(&path, serde_json::to_string(&stale).unwrap()).unwrap();
-        assert!(load_fresh(&path, Duration::days(7)).unwrap().is_none());
+        assert!(load_fresh(&path, Duration::days(7), "x").unwrap().is_none());
     }
 
     #[test]
@@ -509,9 +519,31 @@ mod tests {
             summary: None,
         };
         std::fs::write(&path, serde_json::to_string(&fresh).unwrap()).unwrap();
-        let got = load_fresh(&path, Duration::days(7)).unwrap();
+        let got = load_fresh(&path, Duration::days(7), "y").unwrap();
         assert!(got.is_some());
         assert_eq!(got.unwrap().indicator, "y");
+    }
+
+    /// Contract: a cache record is fresh only for the indicator it was
+    /// written for. A poisoned cache file must not masquerade as a VT
+    /// response for a different IOC merely because it sits at the
+    /// requested path and is inside the TTL.
+    #[test]
+    fn load_fresh_rejects_indicator_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("record.json");
+        let poisoned = EnrichedIndicator {
+            indicator: "attacker-controlled.example".into(),
+            cache_path: path.clone(),
+            fetched_at: Utc::now(),
+            status: EnrichmentStatus::Found,
+            summary: None,
+        };
+        std::fs::write(&path, serde_json::to_string(&poisoned).unwrap()).unwrap();
+
+        assert!(load_fresh(&path, Duration::days(7), "expected.example")
+            .unwrap()
+            .is_none());
     }
 
     /// Contract: cached `Error` indicators expire after `ERROR_CACHE_TTL`
@@ -533,7 +565,7 @@ mod tests {
         };
         std::fs::write(&path, serde_json::to_string(&stale_error).unwrap()).unwrap();
         assert!(
-            load_fresh(&path, Duration::days(7)).unwrap().is_none(),
+            load_fresh(&path, Duration::days(7), "z").unwrap().is_none(),
             "Error records older than ERROR_CACHE_TTL must be treated as expired"
         );
     }
@@ -556,7 +588,7 @@ mod tests {
         };
         std::fs::write(&path, serde_json::to_string(&recent_error).unwrap()).unwrap();
         assert!(
-            load_fresh(&path, Duration::days(7)).unwrap().is_some(),
+            load_fresh(&path, Duration::days(7), "w").unwrap().is_some(),
             "Error records younger than ERROR_CACHE_TTL must hit the cache"
         );
     }
@@ -582,7 +614,9 @@ mod tests {
         };
         std::fs::write(&path, serde_json::to_string(&future).unwrap()).unwrap();
         assert!(
-            load_fresh(&path, Duration::days(90)).unwrap().is_none(),
+            load_fresh(&path, Duration::days(90), "future")
+                .unwrap()
+                .is_none(),
             "future-dated records must be treated as expired (fail-closed)"
         );
     }
