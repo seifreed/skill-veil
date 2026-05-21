@@ -108,6 +108,13 @@ impl RateLimitState {
     }
 
     fn load_with_cap(cache_root: &Path, cap: u64) -> Result<Self> {
+        if !real_dir_exists_for_read(cache_root)? {
+            return Ok(Self::default());
+        }
+        let dir = cache_root.join("promptintel-feed");
+        if !real_dir_exists_for_read(&dir)? {
+            return Ok(Self::default());
+        }
         let path = state_path(cache_root);
         let Some(bytes) = read_cache_file_with_cap(&path, cap)? else {
             return Ok(Self::default());
@@ -261,6 +268,18 @@ fn prepare_rate_limit_cache_dir(cache_root: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
+fn real_dir_exists_for_read(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("{} is a symlink", path.display())
+        }
+        Ok(meta) if meta.is_dir() => Ok(true),
+        Ok(_) => anyhow::bail!("{} is not a directory", path.display()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +327,42 @@ mod tests {
 
         assert!(format!("{err:#}").contains("symlink"));
         assert!(!outside.join("promptintel-feed").exists());
+    }
+
+    /// # Contract
+    ///
+    /// Loading rate-limit state must reject a symlink supplied as the
+    /// cache root rather than trusting state from the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_symlinked_cache_root() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("cache");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = RateLimitState::load(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
+    }
+
+    /// # Contract
+    ///
+    /// Loading rate-limit state must reject a symlinked
+    /// `promptintel-feed` directory before reading `ratelimit.json`.
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_symlinked_feed_dir() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside-feed");
+        let link = tmp.path().join("promptintel-feed");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = RateLimitState::load(tmp.path()).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
     }
 
     /// Contract: hitting exactly `hourly_cap` calls in a 1-hour

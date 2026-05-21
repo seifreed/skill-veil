@@ -63,7 +63,19 @@ impl FeedStore {
     }
 
     fn load_with_cap(cache_root: &Path, cap: u64) -> Result<Self> {
+        if !real_dir_exists_for_read(cache_root)? {
+            return Ok(Self {
+                entries: Vec::new(),
+                meta: None,
+            });
+        }
         let dir = feed_dir(cache_root);
+        if !real_dir_exists_for_read(&dir)? {
+            return Ok(Self {
+                entries: Vec::new(),
+                meta: None,
+            });
+        }
         let feed_path = dir.join(FEED_FILENAME);
         let meta_path = dir.join(META_FILENAME);
 
@@ -217,6 +229,18 @@ fn prepare_feed_cache_dir(cache_root: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
+fn real_dir_exists_for_read(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("{} is a symlink", path.display())
+        }
+        Ok(meta) if meta.is_dir() => Ok(true),
+        Ok(_) => anyhow::bail!("{} is not a directory", path.display()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
 fn write_atomic(target: &Path, bytes: Vec<u8>) -> Result<()> {
     crate::util::cache_io::write_cache_file_atomic(target, &bytes)
         .with_context(|| format!("writing {}", target.display()))?;
@@ -317,6 +341,42 @@ mod tests {
 
         assert!(format!("{err:#}").contains("symlink"));
         assert!(!outside.join("promptintel-feed").exists());
+    }
+
+    /// # Contract
+    ///
+    /// Feed cache reads must reject a symlink supplied as the cache root
+    /// rather than ingesting entries from the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_symlinked_cache_root() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("cache");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = FeedStore::load(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
+    }
+
+    /// # Contract
+    ///
+    /// Feed cache reads must reject a symlinked `promptintel-feed`
+    /// directory before reading `feed.json` or `meta.json`.
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_symlinked_feed_dir() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside-feed");
+        let link = tmp.path().join("promptintel-feed");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = FeedStore::load(tmp.path()).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
     }
 
     /// A missing cache directory yields an empty store, NOT an error.
