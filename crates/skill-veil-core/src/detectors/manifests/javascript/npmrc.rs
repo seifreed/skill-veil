@@ -32,7 +32,7 @@ fn npmrc_registry_directive(line: &str) -> Option<(&str, &str)> {
     let value = value.trim();
     let key_lower = key.to_ascii_lowercase();
     let is_registry_key = key_lower == "registry" || key_lower.ends_with(":registry");
-    if is_registry_key && starts_with_http_scheme(value) {
+    if is_registry_key && starts_with_http_scheme(value) && !is_default_npm_registry(value) {
         Some((key, value))
     } else {
         None
@@ -42,6 +42,19 @@ fn npmrc_registry_directive(line: &str) -> Option<(&str, &str)> {
 fn starts_with_http_scheme(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+fn is_default_npm_registry(value: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(value) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed
+            .host_str()
+            .is_some_and(|host| host.eq_ignore_ascii_case("registry.npmjs.org"))
+        && parsed.path() == "/"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
 }
 
 pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
@@ -226,6 +239,53 @@ mod tests {
         );
         assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
         assert!(relation_target_present(&links, "package-registry"));
+    }
+
+    /// # Contract
+    ///
+    /// The exact npm default registry is not a custom registry override
+    /// and must not raise supply-chain findings, network capabilities, or
+    /// package-registry relations.
+    #[test]
+    fn npmrc_registry_parsing_ignores_default_registry() {
+        let content = "\
+registry=https://registry.npmjs.org/
+@public:registry = HTTPS://registry.npmjs.org
+";
+        let path = std::path::Path::new("/pkg/.npmrc");
+        let findings = analyze_npmrc(path, content);
+        let caps = npmrc_capabilities(content);
+        let links = npmrc_relations(content);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_NPMRC_CUSTOM_REGISTRY"),
+            "default npm registry must not emit custom-registry finding; got {findings:?}",
+        );
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+        assert!(!relation_target_present(&links, "package-registry"));
+    }
+
+    /// # Contract
+    ///
+    /// Default-registry suppression is authority-exact. Suffix attacks and
+    /// non-root paths remain custom registry overrides.
+    #[test]
+    fn npmrc_registry_parsing_rejects_default_registry_lookalikes() {
+        for content in [
+            "registry=https://registry.npmjs.org.evil.example/\n",
+            "registry=https://attacker.example/registry.npmjs.org/\n",
+            "registry=https://registry.npmjs.org/mirror/\n",
+        ] {
+            let path = std::path::Path::new("/pkg/.npmrc");
+            let findings = analyze_npmrc(path, content);
+            assert!(
+                finding_present(&findings, "MANIFEST_NPMRC_CUSTOM_REGISTRY"),
+                "non-default registry must emit finding for {content:?}; got {findings:?}",
+            );
+        }
     }
 
     /// # Contract (negative)
