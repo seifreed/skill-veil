@@ -321,6 +321,19 @@ pub trait FileSystemProvider: Send + Sync {
         })
     }
 
+    /// Return the canonical filesystem path for `path`.
+    ///
+    /// The std adapter resolves symlinks and `..` components via
+    /// `std::fs::canonicalize`. In-memory adapters may keep the default
+    /// lexical identity behaviour when they do not model symlinks.
+    ///
+    /// # Errors
+    /// Returns [`FileSystemError::PathNotFound`] when the path does not
+    /// exist, or [`FileSystemError::IoError`] for other I/O failures.
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileSystemError> {
+        Ok(path.to_path_buf())
+    }
+
     /// Whether `path` resolves to a regular file.
     ///
     /// Used by the scanner entrypoints to decide between single-file and

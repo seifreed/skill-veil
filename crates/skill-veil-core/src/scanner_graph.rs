@@ -6,6 +6,7 @@
 
 use crate::artifact_graph::{ArtifactCapabilityFact, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
+use crate::path_safety::path_resolves_within_base;
 use crate::ports::FileSystemProvider;
 use crate::services::{ArtifactOrchestratorService, FileDiscoveryService};
 use crate::SkillDocument;
@@ -85,7 +86,15 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
         }
     }
 
+    let referenced_base_dir = doc.path.parent().unwrap_or_else(|| Path::new("."));
     for referenced_file in &doc.referenced_files {
+        if !path_resolves_within_base(fs_provider, referenced_file, referenced_base_dir) {
+            tracing::warn!(
+                "skipping graph node for referenced artifact outside package root after symlink resolution: {}",
+                referenced_file.display()
+            );
+            continue;
+        }
         let referenced_path = referenced_file.display().to_string();
         graph.add_node_with_capabilities(
             referenced_path.clone(),

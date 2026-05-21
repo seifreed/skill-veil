@@ -34,6 +34,7 @@ use crate::artifact_graph::ArtifactGraph;
 use crate::findings::{
     deduplicate_findings, ArtifactKind, Finding, FindingSummary, MatchTarget, PackageVerdictReport,
 };
+use crate::path_safety::path_resolves_within_base;
 use crate::policy::{
     AppliedPolicyOverride, PolicyAudit, SuppressionSummary, POLICY_AUDIT_PRECEDENCE,
 };
@@ -165,8 +166,17 @@ fn collect_supporting_artifact_paths<F: FileSystemProvider, P: MarkdownParser>(
 ) -> Vec<PathBuf> {
     let mut artifacts = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    let fs = scanner.file_discovery().fs_provider();
+    let base_dir = doc.path.parent().unwrap_or_else(|| Path::new("."));
 
     for referenced in &doc.referenced_files {
+        if !path_resolves_within_base(fs, referenced, base_dir) {
+            tracing::warn!(
+                "skipping referenced artifact outside package root after symlink resolution: {}",
+                referenced.display()
+            );
+            continue;
+        }
         if seen.insert(referenced.clone()) {
             artifacts.push(referenced.clone());
         }
