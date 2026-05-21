@@ -256,8 +256,16 @@ struct TurnOutcome {
 
 struct FollowupOutcome {
     turn: TurnOutcome,
+    #[cfg(test)]
     files: Vec<(PathBuf, String)>,
     prompt_chars_added: usize,
+}
+
+struct FollowupRequest {
+    files: Vec<(PathBuf, String)>,
+    prompt: LlmPrompt,
+    prompt_chars_added: usize,
+    budget: usize,
 }
 
 /// Run the LLM enrichment pipeline for a single scan result.
@@ -279,9 +287,10 @@ struct FollowupOutcome {
 ///   prevent an LLM-driven DoS.
 /// - **Cache key derivation:** Turn-1-only results are stored under
 ///   `cache_key_t1` so a future scan with the same manifest reuses them
-///   directly. Turn-2 results derive a key that incorporates digests of the
-///   fetched files, so a different fileset (e.g. an edited script) does not
-///   get served the stale verdict for the full `CACHE_TTL_DAYS`.
+///   directly. Turn-2 results derive a key from the rendered follow-up
+///   prompt plus digests of the requested files, so budget-driven prompt
+///   changes and edited scripts do not reuse stale verdicts for the full
+///   `CACHE_TTL_DAYS`.
 fn enrich_one(
     provider: &dyn LlmProvider,
     provider_name: &str,
@@ -326,56 +335,34 @@ fn enrich_one(
         mut excerpt,
     } = execute_manifest_turn(provider, &manifest_prompt);
     let mut turns_used: u8 = 1;
-    let mut followup_files: Vec<(PathBuf, String)> = Vec::new();
+    let mut turn2_cache_path: Option<PathBuf> = None;
 
     if let Some(v1) = verdict.as_ref().filter(|_| matches!(status, LlmStatus::Ok)) {
-        if !v1.insufficient_context.is_empty() {
-            // Check turn-2 cache before calling the provider again.
-            // Pre-fix the turn-2 cache key was computed only *after* the
-            // follow-up turn executed, so re-scans always re-prompted.
-            let requested = requested_manifest_paths(&v1.insufficient_context, &manifest);
-            if !requested.is_empty() {
-                let lookup: BTreeMap<String, String> = bundle
-                    .supporting
-                    .iter()
-                    .map(|(p, c)| (p.display().to_string(), c.clone()))
-                    .collect();
-                let followup_files: Vec<(PathBuf, String)> = requested
-                    .into_iter()
-                    .filter_map(|p| lookup.get(&p).map(|c| (PathBuf::from(&p), c.clone())))
-                    .collect();
-                if !followup_files.is_empty() {
-                    let t2_key = compute_cache_key_with_followup(
-                        provider_name,
-                        model_name,
-                        &sampling_fp,
-                        &manifest_prompt,
-                        &followup_files,
-                    );
-                    let t2_path = opts.cache_root.join(format!("{t2_key}.json"));
-                    if let Some(fresh) = load_fresh(&t2_path, Duration::days(CACHE_TTL_DAYS))? {
-                        return Ok(LlmPackageResult {
-                            cached: true,
-                            ..fresh
-                        });
-                    }
-                }
+        if let Some(request) =
+            prepare_followup_request(scan_res, bundle, &manifest, v1, opts.max_prompt_chars)
+        {
+            let t2_key = compute_cache_key_with_followup(
+                provider_name,
+                model_name,
+                &sampling_fp,
+                &request.prompt,
+                &request.files,
+            );
+            let t2_path = opts.cache_root.join(format!("{t2_key}.json"));
+            if let Some(fresh) = load_fresh(&t2_path, Duration::days(CACHE_TTL_DAYS))? {
+                return Ok(LlmPackageResult {
+                    cached: true,
+                    ..fresh
+                });
             }
-        }
-        if let Some(outcome) = execute_followup_turn(
-            provider,
-            scan_res,
-            bundle,
-            &manifest,
-            v1,
-            opts.max_prompt_chars,
-        ) {
+
+            let outcome = execute_followup_request(provider, request);
             status = outcome.turn.status;
             verdict = outcome.turn.verdict;
             excerpt = outcome.turn.excerpt;
             turns_used = 2;
-            followup_files = outcome.files;
             prompt_chars += outcome.prompt_chars_added;
+            turn2_cache_path = Some(t2_path);
         }
     }
 
@@ -392,14 +379,7 @@ fn enrich_one(
     };
 
     let cache_path = if turns_used == 2 {
-        let key = compute_cache_key_with_followup(
-            provider_name,
-            model_name,
-            &sampling_fp,
-            &manifest_prompt,
-            &followup_files,
-        );
-        opts.cache_root.join(format!("{key}.json"))
+        turn2_cache_path.expect("turn-2 cache path must be prepared before executing follow-up")
     } else {
         cache_path_t1
     };
@@ -454,6 +434,7 @@ fn execute_manifest_turn(provider: &dyn LlmProvider, prompt: &LlmPrompt) -> Turn
 /// turn-2 prompt and prevent an LLM-driven DoS. The exact serialised prompt
 /// size is checked before the provider call because the estimator cannot
 /// account perfectly for TOON/JSON escaping and fixed system-prompt overhead.
+#[cfg(test)]
 fn execute_followup_turn(
     provider: &dyn LlmProvider,
     scan_res: &ScanResult,
@@ -462,6 +443,18 @@ fn execute_followup_turn(
     turn1_verdict: &LlmVerdict,
     max_prompt_chars: usize,
 ) -> Option<FollowupOutcome> {
+    let request =
+        prepare_followup_request(scan_res, bundle, manifest, turn1_verdict, max_prompt_chars)?;
+    Some(execute_followup_request(provider, request))
+}
+
+fn prepare_followup_request(
+    scan_res: &ScanResult,
+    bundle: &PreparedBundle<'_>,
+    manifest: &[ManifestEntry],
+    turn1_verdict: &LlmVerdict,
+    max_prompt_chars: usize,
+) -> Option<FollowupRequest> {
     if turn1_verdict.insufficient_context.is_empty() {
         return None;
     }
@@ -509,30 +502,44 @@ fn execute_followup_turn(
     let followup_prompt =
         build_followup_prompt(&followup_input, &requested_with_contents, max_prompt_chars);
     let prompt_chars_added = followup_prompt.user_json.len() + followup_prompt.system.len();
-    if prompt_chars_added > max_prompt_chars {
-        return Some(FollowupOutcome {
+    Some(FollowupRequest {
+        files: requested_with_contents,
+        prompt: followup_prompt,
+        prompt_chars_added,
+        budget: max_prompt_chars,
+    })
+}
+
+fn execute_followup_request(
+    provider: &dyn LlmProvider,
+    request: FollowupRequest,
+) -> FollowupOutcome {
+    if request.prompt_chars_added > request.budget {
+        return FollowupOutcome {
             turn: TurnOutcome {
                 status: LlmStatus::BundleTooLarge {
-                    user_json_chars: prompt_chars_added,
-                    budget: max_prompt_chars,
+                    user_json_chars: request.prompt_chars_added,
+                    budget: request.budget,
                 },
                 verdict: None,
                 excerpt: None,
             },
-            files: requested_with_contents,
-            prompt_chars_added,
-        });
+            #[cfg(test)]
+            files: request.files,
+            prompt_chars_added: request.prompt_chars_added,
+        };
     }
-    let (status, verdict, excerpt) = call_provider(provider, &followup_prompt);
-    Some(FollowupOutcome {
+    let (status, verdict, excerpt) = call_provider(provider, &request.prompt);
+    FollowupOutcome {
         turn: TurnOutcome {
             status,
             verdict,
             excerpt,
         },
-        files: requested_with_contents,
-        prompt_chars_added,
-    })
+        #[cfg(test)]
+        files: request.files,
+        prompt_chars_added: request.prompt_chars_added,
+    }
 }
 
 /// Maximum characters retained from an LLM provider response when storing
@@ -573,6 +580,56 @@ mod tests {
 
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    struct AlternatingFollowupProvider {
+        calls: AtomicUsize,
+        requested_path: &'static str,
+    }
+
+    impl AlternatingFollowupProvider {
+        fn new(requested_path: &'static str) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                requested_path,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl LlmProvider for AlternatingFollowupProvider {
+        fn analyze(&self, _prompt: &LlmPrompt) -> Result<LlmRawResponse, LlmError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let content = if call.is_multiple_of(2) {
+                serde_json::json!({
+                    "verdict": "suspicious",
+                    "confidence": 0.5,
+                    "analysis": "needs context",
+                    "key_signals": [],
+                    "agreement_with_scanner": "partial",
+                    "insufficient_context": [self.requested_path],
+                })
+                .to_string()
+            } else {
+                VALID_VERDICT_JSON.to_string()
+            };
+            Ok(LlmRawResponse { content })
+        }
+
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        fn model(&self) -> &str {
+            "test-model"
+        }
+
+        fn sampling_fingerprint(&self) -> String {
+            "test-sampling".to_string()
         }
     }
 
@@ -791,5 +848,63 @@ mod tests {
             requested_paths,
             vec![PathBuf::from(first_path), PathBuf::from(second_path)]
         );
+    }
+
+    /// Contract: turn-2 cache keys are derived from the rendered follow-up
+    /// prompt, not the turn-1 manifest prompt. The same requested file set
+    /// can render differently under different budgets (full file included
+    /// vs dropped), and those runs must not share a cached verdict.
+    #[test]
+    fn followup_cache_key_respects_budget_dependent_prompt() {
+        let script_path = "scripts/context.py";
+        let provider = AlternatingFollowupProvider::new(script_path);
+        let scan_res = minimal_scan_result();
+        let script = "print('line')\n".repeat(20_000);
+        let cache_root = tempfile::tempdir().unwrap();
+        let bundle = PreparedBundle {
+            primary_content: "# Skill\n",
+            supporting: vec![(PathBuf::from(script_path), script)],
+        };
+
+        let large_opts = LlmEnrichOptions {
+            cache_root: cache_root.path().to_path_buf(),
+            max_prompt_chars: 500_000,
+            provider_override: None,
+        };
+        let large = enrich_one(
+            &provider,
+            "test",
+            "test-model",
+            &large_opts,
+            &scan_res,
+            &bundle,
+        )
+        .unwrap();
+        assert_eq!(provider.calls(), 2);
+        assert_eq!(large.turns_used, 2);
+        assert!(!large.cached);
+
+        let small_opts = LlmEnrichOptions {
+            cache_root: cache_root.path().to_path_buf(),
+            max_prompt_chars: 10_000,
+            provider_override: None,
+        };
+        let small = enrich_one(
+            &provider,
+            "test",
+            "test-model",
+            &small_opts,
+            &scan_res,
+            &bundle,
+        )
+        .unwrap();
+
+        assert_eq!(
+            provider.calls(),
+            4,
+            "second budget variant must execute its own follow-up turn, not reuse the large-budget cache entry"
+        );
+        assert_eq!(small.turns_used, 2);
+        assert!(!small.cached);
     }
 }

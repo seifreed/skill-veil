@@ -80,8 +80,11 @@ pub(crate) fn compute_cache_key(
 /// fetched fileset B), masking changes in those files for the full
 /// `CACHE_TTL_DAYS`.
 ///
-/// Files are sorted by path to produce a deterministic hash regardless of
-/// the order the LLM listed them.
+/// `prompt` MUST be the rendered turn-2 prompt, not the turn-1 manifest
+/// prompt. The rendered prompt captures budget-dependent drops, while the
+/// file digests keep same-prompt file edits from sharing a key. Files are
+/// sorted by path to produce a deterministic hash regardless of the order
+/// the LLM listed them.
 pub(crate) fn compute_cache_key_with_followup(
     provider: &str,
     model: &str,
