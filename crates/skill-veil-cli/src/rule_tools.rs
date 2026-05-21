@@ -95,13 +95,7 @@ fn read_rule_text_file_with_cap(path: &Path, cap: u64) -> Result<String> {
 }
 
 fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<String> {
-    let path_meta = std::fs::symlink_metadata(path)?;
-    if !path_meta.is_file() || path_meta.file_type().is_symlink() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("refusing to read non-regular rule file {}", path.display()),
-        ));
-    }
+    let path_meta = regular_rule_file_metadata(path)?;
 
     let file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
@@ -139,6 +133,23 @@ fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<String> {
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
+fn regular_rule_file_metadata(path: &Path) -> io::Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read non-regular rule file {}", path.display()),
+        ));
+    }
+    if !has_single_hardlink(&meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read {}: multiple hard links", path.display()),
+        ));
+    }
+    Ok(meta)
+}
+
 #[cfg(unix)]
 fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -150,8 +161,31 @@ fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
     true
 }
 
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
+}
+
 fn is_rule_yaml_file(entry: &walkdir::DirEntry) -> bool {
-    entry.file_type().is_file() && has_yaml_extension(entry.path())
+    if !entry.file_type().is_file() || !has_yaml_extension(entry.path()) {
+        return false;
+    }
+    match regular_rule_file_metadata(entry.path()) {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::warn!(
+                "rules: skipping non-regular YAML entry {}: {err}",
+                entry.path().display()
+            );
+            false
+        }
+    }
 }
 
 fn has_yaml_extension(path: &Path) -> bool {
@@ -597,6 +631,29 @@ mod tests {
 
     /// # Contract
     ///
+    /// Rule-pack text reads MUST reject hardlinked YAML files. A hardlink
+    /// inside a rules directory can point at an inode outside that tree
+    /// while passing symlink and lexical path checks.
+    #[cfg(unix)]
+    #[test]
+    fn read_rule_text_file_rejects_hardlinked_text() {
+        let dir = TempDir::new().unwrap();
+        let rules_dir = dir.path().join("rules");
+        std::fs::create_dir(&rules_dir).unwrap();
+        let outside = dir.path().join("outside.yaml");
+        let linked = rules_dir.join("rules.yaml");
+        std::fs::write(&outside, "rules: []\n").unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let err = read_rule_text_file_with_cap(&linked, 1024).unwrap_err();
+        let kind = err.downcast_ref::<io::Error>().map(|err| err.kind());
+
+        assert_eq!(kind, Some(io::ErrorKind::InvalidInput));
+        assert!(format!("{err:#}").contains("multiple hard links"));
+    }
+
+    /// # Contract
+    ///
     /// Directory validation only loads YAML entries that are regular
     /// files. Symlinked YAML entries are outside the rule-pack contract.
     #[cfg(unix)]
@@ -617,6 +674,34 @@ mod tests {
         assert_eq!(report.total_rules, 1);
         assert_eq!(report.pack_files, 1);
         assert!(report.valid);
+    }
+
+    /// # Contract
+    ///
+    /// Directory validation and pack-info summaries MUST skip hardlinked
+    /// YAML entries for the same reason they skip symlinked entries: the
+    /// file is not owned by the rule-pack tree being inspected.
+    #[cfg(unix)]
+    #[test]
+    fn rule_directory_commands_skip_hardlinked_yaml_entries() {
+        let dir = TempDir::new().unwrap();
+        let rules_dir = dir.path().join("rules");
+        std::fs::create_dir(&rules_dir).unwrap();
+        let real_rules = rules_dir.join("rules.yaml");
+        let outside = dir.path().join("outside.yaml");
+        let linked = rules_dir.join("linked.yaml");
+        std::fs::write(&real_rules, valid_rule_pack("REAL_RULE", "real")).unwrap();
+        std::fs::write(&outside, valid_rule_pack("LINKED_RULE", "linked")).unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let report = validate_rules_directory(&rules_dir).unwrap();
+        let info = build_rule_pack_info(&rules_dir).unwrap();
+
+        assert_eq!(report.total_rules, 1);
+        assert_eq!(report.pack_files, 1);
+        assert!(report.valid);
+        assert_eq!(info.total_rules, 1);
+        assert_eq!(info.pack_files, 1);
     }
 
     /// # Contract
