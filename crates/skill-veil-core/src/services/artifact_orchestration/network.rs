@@ -43,6 +43,9 @@ pub(crate) fn is_common_lockfile_source(url: &str) -> bool {
         // it produced a `LOCKFILE_PACKAGE_REMOTE_TARBALL` finding for
         // every dependency.
         "npm.pkg.github.com",
+        "pypi.org",
+        "pypi.python.org",
+        "files.pythonhosted.org",
     ]
     .iter()
     .any(|host| host_matches_url(host, url))

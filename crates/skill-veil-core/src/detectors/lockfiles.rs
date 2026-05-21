@@ -37,6 +37,15 @@ pub(crate) fn analyze_package_lock(path: &Path, content: &str) -> Vec<Finding> {
     )
 }
 
+pub(crate) fn analyze_pipfile_lock(path: &Path, content: &str) -> Vec<Finding> {
+    lockfile_findings_for_sources(
+        path,
+        "LOCKFILE_PIPFILE_REMOTE_SOURCE",
+        "Pipfile.lock references remote dependency sources",
+        pipfile_lock_sources(content),
+    )
+}
+
 pub(crate) fn analyze_cargo_lock(path: &Path, content: &str) -> Vec<Finding> {
     let Some(git_sources) = cargo_lock_git_sources(content) else {
         return analyze_lockfile(
@@ -317,6 +326,38 @@ fn collect_remote_urls_for_json_key(value: &Value, key: &str, urls: &mut Vec<Str
         Value::Array(values) => {
             for entry in values {
                 collect_remote_urls_for_json_key(entry, key, urls);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn pipfile_lock_sources(content: &str) -> Vec<String> {
+    let Ok(json) = serde_json::from_str::<Value>(content) else {
+        return Vec::new();
+    };
+    let mut sources = Vec::new();
+    collect_remote_sources_for_json_keys(&json, &["url", "git"], &mut sources);
+    sources
+}
+
+fn collect_remote_sources_for_json_keys(value: &Value, keys: &[&str], sources: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (entry_key, entry_value) in map {
+                if keys.contains(&entry_key.as_str()) {
+                    if let Some(text) = entry_value.as_str() {
+                        if let Some(source) = remote_dependency_source_match_value(text) {
+                            sources.push(source);
+                        }
+                    }
+                }
+                collect_remote_sources_for_json_keys(entry_value, keys, sources);
+            }
+        }
+        Value::Array(values) => {
+            for entry in values {
+                collect_remote_sources_for_json_keys(entry, keys, sources);
             }
         }
         _ => {}
@@ -690,6 +731,121 @@ packages:
 }"#;
 
         let findings = analyze_package_lock(Path::new("package-lock.json"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    /// # Contract
+    ///
+    /// Pipfile.lock JSON source entries with non-default indexes are
+    /// remote dependency sources.
+    #[test]
+    fn analyze_pipfile_lock_detects_nonstandard_index_source() {
+        let content = r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "internal",
+        "url": "https://packages.attacker.example/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {}
+}"#;
+
+        let findings = analyze_pipfile_lock(Path::new("Pipfile.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_PIPFILE_REMOTE_SOURCE"]);
+        assert_eq!(
+            findings[0].match_value,
+            "https://packages.attacker.example/simple"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// The default PyPI index is a common lockfile source and must not
+    /// emit the Pipfile remote-source finding.
+    #[test]
+    fn analyze_pipfile_lock_skips_default_pypi_source() {
+        let content = r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "pypi",
+        "url": "https://pypi.org/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {}
+}"#;
+
+        let findings = analyze_pipfile_lock(Path::new("Pipfile.lock"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    /// # Contract
+    ///
+    /// Pipfile.lock package entries can pin Git dependencies through SSH
+    /// remotes; those are remote dependency sources even though they are
+    /// not HTTP URLs.
+    #[test]
+    fn analyze_pipfile_lock_detects_git_ssh_package_source() {
+        let content = r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "pypi",
+        "url": "https://pypi.org/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {
+    "pkg": {
+      "git": "ssh://git@github.com/example/pkg.git",
+      "ref": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}"#;
+
+        let findings = analyze_pipfile_lock(Path::new("Pipfile.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_PIPFILE_REMOTE_SOURCE"]);
+        assert_eq!(
+            findings[0].match_value,
+            "ssh://git@github.com/example/pkg.git"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Local file-backed Pipfile Git sources are not remote dependency
+    /// sources and must not emit the remote-source lockfile finding.
+    #[test]
+    fn analyze_pipfile_lock_skips_local_git_package_source() {
+        let content = r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "pypi",
+        "url": "https://pypi.org/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {
+    "pkg": {
+      "git": "file:///tmp/pkg",
+      "ref": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}"#;
+
+        let findings = analyze_pipfile_lock(Path::new("Pipfile.lock"), content);
 
         assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }

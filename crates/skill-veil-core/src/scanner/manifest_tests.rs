@@ -807,6 +807,44 @@ resolved_reference = "0123456789abcdef0123456789abcdef01234567"
 }
 
 #[test]
+fn test_scan_package_flags_pipfile_lock_remote_source() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let pipfile_lock = dir.path().join("Pipfile.lock");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &pipfile_lock,
+        r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "internal",
+        "url": "https://packages.attacker.example/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {}
+}"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let lock_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path == pipfile_lock)
+        .unwrap();
+
+    assert!(lock_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "LOCKFILE_PIPFILE_REMOTE_SOURCE"));
+}
+
+#[test]
 fn test_scan_package_links_only_expected_lockfile_for_package_manager() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

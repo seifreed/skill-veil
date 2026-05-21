@@ -64,7 +64,8 @@ pub(super) fn analyze(
             lockfiles::analyze_package_lock(path, content)
         }
         "cargo.lock" => lockfiles::analyze_cargo_lock(path, content),
-        "poetry.lock" | "pipfile.lock" => lockfiles::analyze_poetry_lock(path, content),
+        "poetry.lock" => lockfiles::analyze_poetry_lock(path, content),
+        "pipfile.lock" => lockfiles::analyze_pipfile_lock(path, content),
         "uv.lock" => lockfiles::analyze_uv_lock(path, content),
         "yarn.lock" => lockfiles::analyze_yarn_lock(path, content),
         "pnpm-lock.yaml" => lockfiles::analyze_pnpm_lock(path, content),
