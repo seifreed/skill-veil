@@ -3,6 +3,7 @@ use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystem
 use crate::analyzer::SkillDocument;
 use crate::findings::Severity;
 use crate::rules::default_external_rule_dirs;
+use std::path::Path;
 use std::sync::Arc;
 
 /// Build an empty `RuleEngine` wired to the production `RegexPatternMatcher`
@@ -635,6 +636,25 @@ fn make_rule_with_id(id: &str) -> Rule {
     }
 }
 
+fn write_duplicate_overlay_pack(dir: &Path, id: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    let yaml = format!(
+        r#"schema_version: skill-veil.dev/rules/v1alpha1
+rules:
+  - id: {id}
+    category: generic
+    severity: low
+    when: !regex
+      pattern: "placeholder-that-matches-nothing-unique-xyzzy"
+    action: log
+    reason: "duplicate overlay fixture"
+    enabled: true
+    tags: []
+"#
+    );
+    std::fs::write(dir.join("duplicate.yaml"), yaml).unwrap();
+}
+
 /// Contract: strict mode is the **default** as of round-5 hardening.
 /// A duplicate user rule MUST surface as `RuleError::DuplicateUserRule`
 /// at load time so override-pack authors can see the collision instead
@@ -663,6 +683,58 @@ fn explicit_lenient_mode_skips_duplicate_user_rule_silently() {
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
     assert_eq!(engine.rule_count(), 1);
+}
+
+/// Contract: strict runtime-overlay loading MUST reject duplicate IDs
+/// against the embedded rule set. This pins `--strict-rules` semantics
+/// for `$SKILL_VEIL_RULES_DIR` and the installed cache overlay, not only
+/// explicit `--rules-dir` loads.
+#[test]
+fn strict_runtime_overlay_loading_rejects_duplicate_builtin_rule() {
+    let tmp = tempfile::tempdir().unwrap();
+    let overlay_dir = tmp.path().join("official");
+    write_duplicate_overlay_pack(&overlay_dir, "SKILL_REMOTE_EXEC_CURL_BASH");
+    let fs = StdFileSystemProvider::new();
+
+    let err = match RuleEngine::with_defaults_and_matcher_runtime_strict(
+        Arc::new(RegexPatternMatcher::new()),
+        &fs,
+        &[overlay_dir],
+        true,
+    ) {
+        Ok(_) => panic!("strict runtime overlay loading must reject duplicate built-in IDs"),
+        Err(err) => err,
+    };
+
+    match err {
+        RuleError::DuplicateUserRule { id, .. } => {
+            assert_eq!(id, "SKILL_REMOTE_EXEC_CURL_BASH");
+        }
+        other => panic!("expected DuplicateUserRule, got {other:?}"),
+    }
+}
+
+/// Contract: the default constructor keeps runtime overlays lenient so
+/// local dev copies of the embedded packs can coexist with the binary's
+/// compiled-in snapshot.
+#[test]
+fn default_runtime_overlay_loading_skips_duplicate_builtin_rule() {
+    let tmp = tempfile::tempdir().unwrap();
+    let overlay_dir = tmp.path().join("official");
+    write_duplicate_overlay_pack(&overlay_dir, "SKILL_REMOTE_EXEC_CURL_BASH");
+    let fs = StdFileSystemProvider::new();
+
+    let engine = RuleEngine::with_defaults_and_matcher(
+        Arc::new(RegexPatternMatcher::new()),
+        &fs,
+        &[overlay_dir],
+    )
+    .expect("default runtime overlay loading must keep duplicate overlays lenient");
+
+    assert!(engine
+        .rules()
+        .iter()
+        .any(|rule| rule.id == "SKILL_REMOTE_EXEC_CURL_BASH"));
 }
 
 /// Contract: a rule pack YAML that omits the `shield` field on its rules

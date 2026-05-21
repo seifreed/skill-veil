@@ -48,14 +48,15 @@ fn build_engine_and_policy<F: FileSystemProvider>(
     options: &ScanOptions,
 ) -> Result<EngineAndPolicy, ScanError> {
     let runtime_overlay_dirs = default_external_rule_dirs();
-    let mut engine = RuleEngine::with_defaults_and_matcher(
+    let mut engine = RuleEngine::with_defaults_and_matcher_runtime_strict(
         Arc::new(RegexPatternMatcher::new()),
         fs,
         &runtime_overlay_dirs,
+        options.strict_rules,
     )?;
-    // Strict mode is only meaningful for external rule packs; built-ins
-    // already fail-fast on internal duplicates. Enable before loading the
-    // user-supplied rules_dir so collisions there are promoted to errors.
+    // Built-ins already fail fast on internal duplicates. Keep the
+    // operator-selected duplicate-ID policy in force for explicit
+    // rules_dir loads after the automatic runtime overlays.
     engine.set_strict_mode(options.strict_rules);
     if let Some(ref rules_dir) = options.rules_dir {
         engine.load_from_dir(fs, rules_dir)?;

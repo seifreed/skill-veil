@@ -359,9 +359,35 @@ impl<M: PatternMatcher> RuleEngine<M> {
         runtime_overlay_fs: &F,
         runtime_overlay_dirs: &[std::path::PathBuf],
     ) -> Result<Self, RuleError> {
+        Self::with_defaults_and_matcher_runtime_strict(
+            matcher,
+            runtime_overlay_fs,
+            runtime_overlay_dirs,
+            false,
+        )
+    }
+
+    /// Create a rule engine with built-in rules plus runtime overlays,
+    /// choosing whether duplicate IDs in those overlays are hard errors.
+    #[must_use = "RuleEngine::with_defaults_and_matcher_runtime_strict() returns a Result that should be used"]
+    pub fn with_defaults_and_matcher_runtime_strict<F: FileSystemProvider>(
+        matcher: Arc<M>,
+        runtime_overlay_fs: &F,
+        runtime_overlay_dirs: &[std::path::PathBuf],
+        strict_runtime_overlays: bool,
+    ) -> Result<Self, RuleError> {
         let mut engine = Self::with_matcher(matcher);
         engine.load_builtin_rules()?;
-        engine.load_runtime_default_rules(runtime_overlay_fs, runtime_overlay_dirs)?;
+        let initial_strict_mode = engine.strict_mode;
+        engine.load_runtime_default_rules(
+            runtime_overlay_fs,
+            runtime_overlay_dirs,
+            strict_runtime_overlays,
+        )?;
+        debug_assert_eq!(
+            engine.strict_mode, initial_strict_mode,
+            "runtime overlay loading must preserve the caller's strict-mode state"
+        );
         Ok(engine)
     }
 
@@ -537,34 +563,39 @@ impl<M: PatternMatcher> RuleEngine<M> {
     /// canonical list (`default_external_rule_dirs()`) regardless of
     /// whether the overlay is present in the current working directory.
     ///
-    /// # Why strict mode is forced off
+    /// # Strictness contract
     ///
-    /// The runtime overlay is a *development* copy of the embedded packs
-    /// at `crates/skill-veil-core/resources/official/`. When the binary
-    /// runs from the repo root (CI, `cargo run`, local dev) the overlay
-    /// paths happen to resolve and re-introduce IDs already loaded from
-    /// the embedded packs. Strict mode would surface those overlaps as
-    /// `DuplicateUserRule` and abort startup. The intent of the overlay
-    /// is "skip duplicates; the embedded canonical version wins", so we
-    /// run this stage with strict mode forced off and restore the
-    /// caller's preference afterwards. Callers passing `--rules-dir` go
-    /// through `load_from_dir` directly and keep whatever strict setting
-    /// `set_strict_mode` last applied.
+    /// Normal scans load default overlays leniently so a repo-local
+    /// `./rules/official/` copy of the embedded packs does not abort
+    /// startup. Strict scans pass `strict_runtime_overlays = true`, which
+    /// makes `$SKILL_VEIL_RULES_DIR`, the installed cache overlay, and the
+    /// legacy dev fallback obey the same duplicate-ID policy as `--rules-dir`.
     fn load_runtime_default_rules<F: FileSystemProvider>(
         &mut self,
         fs: &F,
         dirs: &[std::path::PathBuf],
+        strict_runtime_overlays: bool,
     ) -> Result<bool, RuleError> {
-        self.with_strict_mode(false, |engine| {
-            let mut loaded = false;
-            for dir in dirs {
-                if fs.exists(dir) {
-                    engine.load_from_dir(fs, dir)?;
-                    loaded = true;
-                }
+        if strict_runtime_overlays {
+            self.load_existing_runtime_dirs(fs, dirs)
+        } else {
+            self.with_strict_mode(false, |engine| engine.load_existing_runtime_dirs(fs, dirs))
+        }
+    }
+
+    fn load_existing_runtime_dirs<F: FileSystemProvider>(
+        &mut self,
+        fs: &F,
+        dirs: &[std::path::PathBuf],
+    ) -> Result<bool, RuleError> {
+        let mut loaded = false;
+        for dir in dirs {
+            if fs.exists(dir) {
+                self.load_from_dir(fs, dir)?;
+                loaded = true;
             }
-            Ok(loaded)
-        })
+        }
+        Ok(loaded)
     }
 
     /// Run `f` with `self.strict_mode` temporarily set to `temporary`,
