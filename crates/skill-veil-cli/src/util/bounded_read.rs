@@ -12,13 +12,7 @@ pub(crate) fn read_operator_text_file(path: &Path) -> Result<String> {
 }
 
 pub(crate) fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<String> {
-    let path_meta = std::fs::symlink_metadata(path)?;
-    if !path_meta.is_file() || path_meta.file_type().is_symlink() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("refusing to read non-regular text file {}", path.display()),
-        ));
-    }
+    let path_meta = regular_text_file_metadata(path)?;
 
     let file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
@@ -54,6 +48,34 @@ pub(crate) fn read_text_file_with_cap(path: &Path, cap: u64) -> io::Result<Strin
         ));
     }
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+}
+
+fn regular_text_file_metadata(path: &Path) -> io::Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read non-regular text file {}", path.display()),
+        ));
+    }
+    if !has_single_hardlink(&meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read {}: multiple hard links", path.display()),
+        ));
+    }
+    Ok(meta)
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -138,5 +160,27 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(format!("{err:#}").contains("non-regular text file"));
+    }
+
+    /// # Contract
+    ///
+    /// Operator text reads MUST reject hardlinked files. A hardlink in an
+    /// otherwise trusted config or policy directory can point at an inode
+    /// created elsewhere, so path-based symlink checks are not enough.
+    #[cfg(unix)]
+    #[test]
+    fn read_text_file_with_cap_rejects_hardlinked_text() {
+        let dir = TempDir::new().unwrap();
+        let trusted_dir = dir.path().join("trusted");
+        std::fs::create_dir(&trusted_dir).unwrap();
+        let outside = dir.path().join("outside.json");
+        let linked = trusted_dir.join("report.json");
+        std::fs::write(&outside, "{\"secret\":true}\n").unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let err = read_text_file_with_cap(&linked, 1024).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(format!("{err:#}").contains("multiple hard links"));
     }
 }
