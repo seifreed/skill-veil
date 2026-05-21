@@ -197,6 +197,7 @@ fn test_powershell_iex_rejects_alias_substrings() {
     for content in [
         "# Install\n```powershell\nconfirm(https://evil.com/script.ps1) | iex\n```",
         "# Install\n```powershell\nkiwr https://evil.com/script.ps1 | iex\n```",
+        "# Install\n```powershell\nInvoke-WebRequest https://example.com/index.html | iexplore.exe\n```",
     ] {
         let doc = parse_test_doc(content);
         let findings = engine.evaluate(&doc);

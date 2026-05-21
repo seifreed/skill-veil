@@ -121,7 +121,7 @@ rules:
     severity: critical
     confidence: 0.90
     when: !regex
-      pattern: "(?is)(requests\\.get\\(|urllib\\.request\\.urlopen\\(|fetch\\(|\\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b).{0,220}(exec\\(|eval\\(|child_process\\.(exec|spawn)|Invoke-Expression|iex)"
+      pattern: "(?is)(requests\\.get\\(|urllib\\.request\\.urlopen\\(|fetch\\(|\\b(?:Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b).{0,220}(exec\\(|eval\\(|child_process\\.(exec|spawn)|\\b(?:Invoke-Expression|iex)\\b)"
     action: block
     reason: "Artifact combines remote fetch with direct execution in Python, Node, or PowerShell"
     shield:
