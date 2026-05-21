@@ -498,14 +498,33 @@ fn read_bytes_with_cap(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
 
 fn regular_index_file_metadata(path: &Path) -> io::Result<Metadata> {
     let meta = std::fs::symlink_metadata(path)?;
-    if meta.is_file() && !meta.file_type().is_symlink() {
-        Ok(meta)
-    } else {
-        Err(io::Error::new(
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("refusing to read {}: not a regular file", path.display()),
-        ))
+        ));
     }
+    if !has_single_hardlink(&meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read {}: file has multiple hard links",
+                path.display()
+            ),
+        ));
+    }
+    Ok(meta)
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -589,6 +608,28 @@ mod tests {
         let err = load_index_with_cap(dir.path(), 1024).unwrap_err();
 
         assert!(format!("{err:#}").contains("not a regular file"));
+    }
+
+    /// # Contract
+    ///
+    /// PromptIntel corpus index loading accepts only files with a single
+    /// directory entry. A hardlinked `_index.json` is rejected instead of
+    /// parsing an inode whose provenance is outside the corpus path.
+    #[cfg(unix)]
+    #[test]
+    fn load_index_rejects_hardlinked_index() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("outside-index.json");
+        let expected: BTreeMap<String, IndexEntry> =
+            [("entry-1".to_string(), index_entry("prompts/entry-1.md"))]
+                .into_iter()
+                .collect();
+        std::fs::write(&target, serde_json::to_vec(&expected).unwrap()).unwrap();
+        std::fs::hard_link(&target, dir.path().join("_index.json")).unwrap();
+
+        let err = load_index_with_cap(dir.path(), 1024).unwrap_err();
+
+        assert!(format!("{err:#}").contains("multiple hard links"));
     }
 
     /// Contract: `BucketCounts::detection_rate_pct` MUST return `0.0`
