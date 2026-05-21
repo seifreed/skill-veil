@@ -87,7 +87,16 @@ pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
         let left_ok = before.is_none()
             || matches!(
                 before,
-                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+                Some(b' ')
+                    | Some(b'\t')
+                    | Some(b'|')
+                    | Some(b';')
+                    | Some(b'&')
+                    | Some(b'/')
+                    | Some(b'(')
+                    | Some(b'"')
+                    | Some(b'\'')
+                    | Some(b'`')
             );
         let after = line.get(token_end..).unwrap_or("");
         let right_ok = after.is_empty()
@@ -285,6 +294,8 @@ mod tests {
             "/usr/bin/tee\t/etc/profile",
             "tee"
         ));
+        assert!(line_contains_command_token("exec('curl\t$url')", "curl"));
+        assert!(line_contains_command_token("spawn(`wget\t$url`)", "wget"));
     }
 
     /// # Contract (negative)

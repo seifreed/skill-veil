@@ -215,6 +215,22 @@ fn test_scan_skill_file_escalates_tab_separated_node_download_exec() {
         .expect("node child_process downloader must emit SCRIPT_NODE_PROCESS_EXEC");
     assert_eq!(finding.severity, Severity::Medium);
     assert_eq!(finding.recommended_action, RecommendedAction::Block);
+
+    let script_node = result
+        .artifact_graph
+        .nodes
+        .iter()
+        .find(|node| node.path.ends_with("bootstrap.js"))
+        .expect("referenced node script must be present in graph");
+    assert!(script_node
+        .capabilities
+        .iter()
+        .any(|fact| fact.capability == ArtifactCapability::NetworkAccess));
+    assert!(result.artifact_graph.edges.iter().any(|edge| {
+        edge.from.ends_with("bootstrap.js")
+            && edge.to == "remote-resource"
+            && matches!(edge.relation, ArtifactRelation::Downloads)
+    }));
 }
 
 #[test]

