@@ -11,6 +11,8 @@
 //! from recorded provider votes; this is the shared domain shape
 //! (mirrors the on-disk `residual-fn-consensus.jsonl` rollup).
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use strum_macros::Display;
 
@@ -42,9 +44,12 @@ pub enum ConsensusClass {
     Split,
 }
 
-/// Per-package cross-provider discrepancy. `benign_votes` /
-/// `non_benign_votes` count usable (non-error) votes; `error_votes`
-/// counts providers that returned nothing usable.
+/// Per-package cross-provider discrepancy.
+///
+/// # Identity contract
+/// Provider identity is `provider.trim().to_ascii_lowercase()`.
+/// Duplicate records from one provider count once; conflicting
+/// duplicate verdicts count as one ambiguous error vote.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConsensusDiscrepancy {
     pub votes: Vec<ProviderVote>,
@@ -58,16 +63,38 @@ impl ConsensusDiscrepancy {
     /// / returned an unparseable verdict.
     #[must_use]
     pub fn from_votes(votes: Vec<ProviderVote>, error_votes: usize) -> Self {
-        let benign_votes = votes
-            .iter()
-            .filter(|v| v.verdict == Verdict::Benign)
-            .count();
-        let non_benign_votes = votes.len() - benign_votes;
+        let mut provider_verdicts: BTreeMap<String, Option<Verdict>> = BTreeMap::new();
+        for vote in &votes {
+            provider_verdicts
+                .entry(normalized_provider_key(&vote.provider))
+                .and_modify(|existing| {
+                    if *existing != Some(vote.verdict) {
+                        *existing = None;
+                    }
+                })
+                .or_insert(Some(vote.verdict));
+        }
+
+        let mut benign_votes = 0;
+        let mut non_benign_votes = 0;
+        let mut ambiguous_votes = 0;
+        for verdict in provider_verdicts.values() {
+            match verdict {
+                Some(Verdict::Benign) => benign_votes += 1,
+                Some(_) => non_benign_votes += 1,
+                None => ambiguous_votes += 1,
+            }
+        }
+        debug_assert_eq!(
+            benign_votes + non_benign_votes + ambiguous_votes,
+            provider_verdicts.len(),
+            "consensus provider buckets must cover every normalized provider",
+        );
         Self {
             votes,
             benign_votes,
             non_benign_votes,
-            error_votes,
+            error_votes: error_votes + ambiguous_votes,
         }
     }
 
@@ -109,6 +136,10 @@ impl ConsensusDiscrepancy {
         }
         ConsensusClass::Split
     }
+}
+
+fn normalized_provider_key(provider: &str) -> String {
+    provider.trim().to_ascii_lowercase()
 }
 
 #[cfg(test)]
@@ -156,6 +187,63 @@ mod tests {
         assert!(!d.is_single_provider_benign_flip());
         assert_eq!(d.classification(), ConsensusClass::LlmFp);
         assert_eq!(d.flipped_provider(), None);
+    }
+
+    /// Contract: duplicate rows from one provider count once; a
+    /// single benign provider plus one duplicated non-benign provider
+    /// is not the two-provider disagreement shape.
+    #[test]
+    fn duplicate_non_benign_provider_does_not_create_flip() {
+        let d = ConsensusDiscrepancy::from_votes(
+            vec![
+                vote("openai", Verdict::Benign),
+                vote("grok", Verdict::Malicious),
+                vote(" Grok ", Verdict::Malicious),
+            ],
+            0,
+        );
+        assert_eq!(d.benign_votes, 1);
+        assert_eq!(d.non_benign_votes, 1);
+        assert!(!d.is_single_provider_benign_flip());
+        assert_eq!(d.classification(), ConsensusClass::Split);
+    }
+
+    /// Contract: duplicate benign rows from one provider cannot form
+    /// the validated majority-benign class.
+    #[test]
+    fn duplicate_benign_provider_does_not_create_llm_fp() {
+        let d = ConsensusDiscrepancy::from_votes(
+            vec![
+                vote("openai", Verdict::Malicious),
+                vote("grok", Verdict::Benign),
+                vote(" Grok ", Verdict::Benign),
+            ],
+            0,
+        );
+        assert_eq!(d.benign_votes, 1);
+        assert_eq!(d.non_benign_votes, 1);
+        assert_eq!(d.classification(), ConsensusClass::Split);
+    }
+
+    /// Contract: conflicting duplicate rows from one provider are
+    /// ambiguous and mask the round instead of contributing either a
+    /// benign or non-benign vote.
+    #[test]
+    fn conflicting_duplicate_provider_votes_are_ambiguous() {
+        let d = ConsensusDiscrepancy::from_votes(
+            vec![
+                vote("openai", Verdict::Benign),
+                vote(" OpenAI ", Verdict::Malicious),
+                vote("grok", Verdict::Malicious),
+                vote("ollama-cloud", Verdict::Malicious),
+            ],
+            0,
+        );
+        assert_eq!(d.benign_votes, 0);
+        assert_eq!(d.non_benign_votes, 2);
+        assert_eq!(d.error_votes, 1);
+        assert!(!d.is_single_provider_benign_flip());
+        assert_eq!(d.classification(), ConsensusClass::Split);
     }
 
     /// Contract (negative): an error vote masks the picture →
