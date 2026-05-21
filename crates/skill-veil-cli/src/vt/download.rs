@@ -237,6 +237,12 @@ fn existing_cache_metadata(path: &Path) -> Result<Option<Metadata>> {
         Ok(meta) if meta.file_type().is_symlink() => {
             anyhow::bail!("refusing to use symlinked VT cache path {}", path.display())
         }
+        Ok(meta) if meta.is_file() && !has_single_hardlink(&meta) => {
+            anyhow::bail!(
+                "refusing to use hardlinked VT cache path {}",
+                path.display()
+            )
+        }
         Ok(meta) if meta.is_file() => Ok(Some(meta)),
         Ok(_) => anyhow::bail!("refusing to use non-file VT cache path {}", path.display()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -339,6 +345,17 @@ fn sha256_file_with_cap(mut file: File, max_bytes: u64) -> std::io::Result<Optio
         "sample cache verifier must reject streams over the cap"
     );
     Ok(Some(format!("{:x}", hasher.finalize())))
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -546,6 +563,27 @@ mod tests {
         let err = sample_cache_hit(&link, &"a".repeat(64)).unwrap_err();
 
         assert!(format!("{err:#}").contains("symlinked VT cache path"));
+    }
+
+    /// # Contract
+    ///
+    /// Cache-hit probes reject hardlinked sample paths instead of
+    /// treating another directory entry for an external inode as a
+    /// trusted cached download.
+    #[cfg(unix)]
+    #[test]
+    fn sample_cache_hit_rejects_hardlinked_cache_path() {
+        let dir = TempDir::new().expect("tempdir");
+        let body = b"sample";
+        let expected = sha256_hex(body);
+        let outside = dir.path().join("outside.bin");
+        let link = dir.path().join(&expected);
+        std::fs::write(&outside, body).unwrap();
+        std::fs::hard_link(&outside, &link).unwrap();
+
+        let err = sample_cache_hit(&link, &expected).unwrap_err();
+
+        assert!(format!("{err:#}").contains("hardlinked VT cache path"));
     }
 
     /// # Contract
