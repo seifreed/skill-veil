@@ -1,6 +1,7 @@
 use crate::config::{resolve_llm_provider_override, UnifiedConfig};
 use crate::llm::providers::build_provider;
 use crate::text_output::{format_results, TextOutputOptions};
+use crate::util::output_file::write_output_file_atomic;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use crate::{
     cli_args::{ColorChoiceArg, PolicyProfileArg, ScanArgs, ScanPresetArg, SeverityArg},
@@ -370,7 +371,7 @@ pub(crate) fn run_scan(
     let output_content = format_results(&scan_result.results, args.format, text_options)?;
 
     if let Some(output_path) = args.output {
-        std::fs::write(&output_path, &output_content).context("Failed to write output file")?;
+        write_scan_output(&output_path, &output_content)?;
         if !quiet {
             eprintln!("Output written to: {}", terminal_path(&output_path));
         }
@@ -513,6 +514,11 @@ fn terminal_text(value: &str) -> String {
     sanitise_for_terminal(value)
 }
 
+fn write_scan_output(output_path: &Path, output_content: &str) -> Result<()> {
+    write_output_file_atomic(output_path, output_content.as_bytes())
+        .context("Failed to write output file")
+}
+
 fn terminal_path(path: &Path) -> String {
     terminal_text(&path.display().to_string())
 }
@@ -523,6 +529,7 @@ mod tests {
     use crate::cli_args::{Cli, Commands};
     use clap::Parser;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn terminal_path_removes_scan_warning_control_sequences() {
@@ -531,6 +538,29 @@ mod tests {
 
         assert!(!cleaned.contains('\x1b'));
         assert!(cleaned.contains("pkg?[2J"));
+    }
+
+    /// # Contract
+    ///
+    /// `scan --output` MUST replace a symlink at the final report path
+    /// without writing through to the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn write_scan_output_replaces_symlink_without_touching_target() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("outside.json");
+        let output = dir.path().join("scan.json");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, &output).unwrap();
+
+        write_scan_output(&output, "{\"scan\":true}\n").unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
+        assert!(!std::fs::symlink_metadata(&output)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read(&output).unwrap(), b"{\"scan\":true}\n");
     }
 
     fn preset_args(preset: Option<&str>) -> crate::cli_args::ScanArgs {
