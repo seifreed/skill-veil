@@ -195,7 +195,7 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
         "pnpm-lock.yaml",
     ];
 
-    fs_provider
+    let mut siblings = fs_provider
         .list_files(parent, "*", false)
         .unwrap_or_else(|e| {
             tracing::warn!(
@@ -240,7 +240,13 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
                     )
                 )
         })
-        .collect()
+        .collect::<Vec<_>>();
+    siblings.sort();
+    debug_assert!(
+        siblings.windows(2).all(|pair| pair[0] <= pair[1]),
+        "sibling artifact paths must be sorted"
+    );
+    siblings
 }
 
 /// Recover a SHA-256 package id from any ancestor directory name.
@@ -350,7 +356,7 @@ fn sibling_package_manifests<F: FileSystemProvider>(fs_provider: &F, path: &Path
         "pip.conf",
     ];
 
-    fs_provider
+    let mut manifests = fs_provider
         .list_files(path, "*", false)
         .unwrap_or_else(|e| {
             tracing::warn!(
@@ -365,7 +371,13 @@ fn sibling_package_manifests<F: FileSystemProvider>(fs_provider: &F, path: &Path
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| MANIFEST_NAMES.contains(&name.to_ascii_lowercase().as_str()))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    manifests.sort();
+    debug_assert!(
+        manifests.windows(2).all(|pair| pair[0] <= pair[1]),
+        "sibling package manifest paths must be sorted"
+    );
+    manifests
 }
 
 fn sibling_expected_lockfiles_for_manifest<F: FileSystemProvider>(
@@ -388,8 +400,67 @@ fn sibling_expected_lockfiles_for_manifest<F: FileSystemProvider>(
 
 #[cfg(test)]
 mod derive_package_id_tests {
-    use super::derive_package_id;
+    use super::{derive_package_id, sibling_files, sibling_package_manifests};
+    use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
     use std::path::PathBuf;
+
+    struct UnsortedSiblingFs {
+        listed: Vec<PathBuf>,
+    }
+
+    impl FileSystemProvider for UnsortedSiblingFs {
+        fn read_file_bytes(&self, path: &std::path::Path) -> Result<FileContent, FileSystemError> {
+            Err(FileSystemError::PathNotFound(path.to_path_buf()))
+        }
+
+        fn list_files(
+            &self,
+            _path: &std::path::Path,
+            pattern: &str,
+            _recursive: bool,
+        ) -> Result<Vec<PathBuf>, FileSystemError> {
+            if pattern == "*" {
+                Ok(self.listed.clone())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn exists(&self, _path: &std::path::Path) -> bool {
+            true
+        }
+    }
+
+    /// Contract: sibling artifact discovery sorts paths returned by the
+    /// filesystem provider before handing them to artifact analysis.
+    #[test]
+    fn sibling_files_sorts_unsorted_provider_paths() {
+        let first = PathBuf::from("/pkg/a.sh");
+        let second = PathBuf::from("/pkg/z.py");
+        let fs = UnsortedSiblingFs {
+            listed: vec![second.clone(), first.clone()],
+        };
+
+        let siblings = sibling_files(&fs, &PathBuf::from("/pkg/SKILL.md"));
+
+        assert_eq!(siblings, vec![first, second]);
+    }
+
+    /// Contract: sibling package manifest discovery sorts matching
+    /// paths so artifact graph node order does not depend on directory
+    /// traversal order.
+    #[test]
+    fn sibling_package_manifests_sorts_unsorted_provider_paths() {
+        let first = PathBuf::from("/pkg/package.json");
+        let second = PathBuf::from("/pkg/pyproject.toml");
+        let fs = UnsortedSiblingFs {
+            listed: vec![second.clone(), first.clone()],
+        };
+
+        let manifests = sibling_package_manifests(&fs, &PathBuf::from("/pkg"));
+
+        assert_eq!(manifests, vec![first, second]);
+    }
 
     #[test]
     fn accepts_lowercase_hex_64() {
