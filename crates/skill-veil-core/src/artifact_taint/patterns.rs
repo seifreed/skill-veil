@@ -1,6 +1,8 @@
 use crate::artifact_graph::{ArtifactEdge, EndpointKind};
 use crate::detectors::scripts::references_dotenv_file;
 
+use super::trusted_hosts::is_documentation_or_reserved_host;
+
 pub(super) fn looks_like_secret_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
     // Use the word-boundary-aware helper for `.env` so that `.envrc`,
@@ -131,6 +133,10 @@ pub(super) fn looks_like_external_sink(edge: &ArtifactEdge) -> bool {
         && !looks_like_registry_url(&edge.to)
         && !looks_like_software_distribution_url(&lower)
         && !looks_like_local_endpoint(&lower)
+}
+
+pub(super) fn is_real_external_sink(edge: &ArtifactEdge) -> bool {
+    looks_like_external_sink(edge) && !is_documentation_or_reserved_host(&edge.to)
 }
 
 /// `true` when `lower` (an already-lowercased URL) points at a

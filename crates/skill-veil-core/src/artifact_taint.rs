@@ -169,7 +169,7 @@ mod tests {
         // Child connects to external network
         graph.add_edge(
             "deploy.sh",
-            "https://attacker.example.com/exfil",
+            "https://attacker-controlled.io/exfil",
             ArtifactRelation::ConnectsTo,
         );
 
@@ -202,7 +202,7 @@ mod tests {
         graph.add_edge("skill.md", "deploy.sh", ArtifactRelation::References);
         graph.add_edge(
             "deploy.sh",
-            "https://attacker.example.com/exfil",
+            "https://attacker-controlled.io/exfil",
             ArtifactRelation::ConnectsTo,
         );
 
@@ -259,6 +259,55 @@ mod tests {
             finding.rule_id != "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"
                 && finding.rule_id != "ARTIFACT_TAINT_IDENTITY_TO_EXTERNAL_NETWORK"
         }));
+    }
+
+    /// # Contract
+    ///
+    /// Documentation and reserved URL hosts are not real external
+    /// network sinks for taint. Reading a secret next to a placeholder
+    /// URL must not emit secret-exfiltration taint.
+    #[test]
+    fn documentation_only_network_sink_does_not_trigger_secret_taint() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://example.com/api",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        assert!(
+            findings
+                .iter()
+                .all(|f| f.rule_id != "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"),
+            "documentation-only sinks must not emit secret taint; got {findings:?}",
+        );
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Removing documentation hosts from the sink predicate must not
+    /// weaken taint detection for real unreserved external endpoints.
+    #[test]
+    fn unreserved_network_sink_still_triggers_secret_taint() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://attacker-controlled.io/exfil",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"),
+            "real external sink must still emit secret taint; got {findings:?}",
+        );
     }
 
     /// Contract: when EVERY external sink for a tainted node resolves

@@ -1,9 +1,7 @@
 use super::patterns::{
-    looks_like_external_sink, looks_like_identity_target, looks_like_secret_target,
+    is_real_external_sink, looks_like_identity_target, looks_like_secret_target,
 };
-use super::trusted_hosts::{
-    host_matches_secret_owner, is_documentation_or_reserved_host, is_trusted_api_host,
-};
+use super::trusted_hosts::{host_matches_secret_owner, is_trusted_api_host};
 use super::{TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::{ArtifactCapability, ArtifactGraph, ArtifactRelation};
 use crate::findings::ArtifactKind;
@@ -138,16 +136,7 @@ pub(super) fn all_external_sinks_first_party_or_trusted(
         if !matches!(edge.relation, ArtifactRelation::ConnectsTo) {
             continue;
         }
-        if !looks_like_external_sink(edge) {
-            continue;
-        }
-        // Documentation / RFC2606-reserved / loopback hosts are not
-        // real exfil sinks — strip them before deciding whether the
-        // remaining real sinks are all trusted. Without this strip
-        // a single `https://example.com/...` reference in skill prose
-        // (or a `http://localhost:8080` self-talk URL) defeats the
-        // downgrade and the exfil rule fires at full strength.
-        if is_documentation_or_reserved_host(&edge.to) {
+        if !is_real_external_sink(edge) {
             continue;
         }
         saw_real_external = true;
@@ -163,7 +152,7 @@ pub(super) fn node_has_sink(graph: &ArtifactGraph, node_path: &str, sink: TaintS
         TaintSinkKind::ExternalNetwork => graph.edges.iter().any(|edge| {
             edge.from == node_path
                 && matches!(edge.relation, ArtifactRelation::ConnectsTo)
-                && looks_like_external_sink(edge)
+                && is_real_external_sink(edge)
         }),
         TaintSinkKind::Execution => {
             node_has_capability(graph, node_path, ArtifactCapability::ProcessExecution)

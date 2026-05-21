@@ -1,5 +1,5 @@
 use super::patterns::{
-    looks_like_external_sink, looks_like_identity_target, looks_like_registry_url,
+    is_real_external_sink, looks_like_identity_target, looks_like_registry_url,
     looks_like_secret_target,
 };
 use super::utils::node_has_capability;
@@ -72,7 +72,7 @@ pub(super) fn sink_summary(graph: &ArtifactGraph, node_path: &str, sink: TaintSi
             |edge| {
                 edge.from == node_path
                     && matches!(edge.relation, ArtifactRelation::ConnectsTo)
-                    && looks_like_external_sink(edge)
+                    && is_real_external_sink(edge)
             },
             "external_network",
         ),
