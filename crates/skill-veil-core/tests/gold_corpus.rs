@@ -4,11 +4,19 @@
 //! enforce metrics against ground truth. Unset — the CI default with
 //! no heavy curated dataset checked out — skips silently, mirroring
 //! the `nova_real_corpus` / `NOVA_RULES_DIR` precedent. The phase-1
-//! regression baseline (`regression_corpus.rs`) is intentionally NOT
-//! touched: the gold corpus is strictly additive.
+//! regression baseline (`regression_corpus.rs`) remains separate: the
+//! gold corpus is strictly additive.
 
-use skill_veil_core::{evaluate_gold_corpus, Scanner, StdFileSystemProvider};
+use skill_veil_core::{evaluate_gold_corpus, ScanOptions, Scanner, StdFileSystemProvider};
 use std::path::PathBuf;
+
+fn corpus_scanner() -> Scanner {
+    Scanner::with_std_adapters(ScanOptions {
+        honor_inline_suppressions: false,
+        ..Default::default()
+    })
+    .unwrap()
+}
 
 #[test]
 fn gold_corpus_meets_truth_baseline() {
@@ -19,7 +27,7 @@ fn gold_corpus_meets_truth_baseline() {
         );
         return;
     };
-    let scanner = Scanner::new().unwrap();
+    let scanner = corpus_scanner();
     let fs = StdFileSystemProvider::new();
     let evaluation =
         evaluate_gold_corpus(&fs, &scanner, &PathBuf::from(manifest)).expect("gold corpus");

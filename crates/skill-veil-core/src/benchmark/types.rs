@@ -159,6 +159,8 @@ pub enum BenchmarkError {
     Io(#[from] std::io::Error),
     #[error("failed to parse corpus manifest: {0}")]
     Yaml(#[from] serde_yaml::Error),
+    #[error("invalid corpus scanner options: {message}")]
+    InvalidScannerOptions { message: String },
     #[error("failed to scan sample {id} at {path}: {message}")]
     SampleScan {
         id: String,

@@ -1,9 +1,17 @@
-use skill_veil_core::{benchmark::evaluate_corpus, Scanner, StdFileSystemProvider};
+use skill_veil_core::{benchmark::evaluate_corpus, ScanOptions, Scanner, StdFileSystemProvider};
 use std::path::Path;
+
+fn corpus_scanner() -> Scanner {
+    Scanner::with_std_adapters(ScanOptions {
+        honor_inline_suppressions: false,
+        ..Default::default()
+    })
+    .unwrap()
+}
 
 #[test]
 fn labeled_corpus_meets_phase1_baseline() {
-    let scanner = Scanner::new().unwrap();
+    let scanner = corpus_scanner();
     let fs = StdFileSystemProvider::new();
     let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")

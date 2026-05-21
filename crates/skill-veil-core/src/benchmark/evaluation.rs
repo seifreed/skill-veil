@@ -75,6 +75,16 @@ pub fn evaluate_manifest<F: FileSystemProvider>(
     manifest: CorpusManifest,
     root: &Path,
 ) -> Result<CorpusEvaluation, BenchmarkError> {
+    if scanner.honor_inline_suppressions() {
+        return Err(BenchmarkError::InvalidScannerOptions {
+            message: "corpus evaluation requires inline suppressions disabled".to_string(),
+        });
+    }
+    debug_assert!(
+        !scanner.honor_inline_suppressions(),
+        "corpus evaluation scanner must ignore inline suppressions"
+    );
+
     let mut expected = Vec::new();
     let mut actual = Vec::new();
     let mut samples = Vec::new();
@@ -443,14 +453,18 @@ fn finalize_coverage_buckets(buckets: BTreeMap<String, u32>) -> Vec<CoverageBuck
 #[cfg(test)]
 mod tests {
     use super::*;
-    // The `ScanOptions`/`ScanTargetMode` imports are only consumed by
-    // the unix-gated permission-denied test below. On Windows the
-    // bracketed `#[cfg(unix)]` block compiles to nothing, so unused-import
-    // would fire under `-D warnings`. Mirror the gate on those imports.
-    use crate::Scanner;
     #[cfg(unix)]
-    use crate::{ScanOptions, ScanTargetMode};
+    use crate::ScanTargetMode;
+    use crate::{ScanOptions, Scanner};
     use tempfile::tempdir;
+
+    fn corpus_scanner() -> Scanner {
+        Scanner::with_std_adapters(ScanOptions {
+            honor_inline_suppressions: false,
+            ..Default::default()
+        })
+        .unwrap()
+    }
 
     #[test]
     fn test_evaluate_corpus_fails_on_partial_package_scan_errors() {
@@ -480,6 +494,7 @@ mod tests {
 
             let scanner = Scanner::with_std_adapters(ScanOptions {
                 target_mode: ScanTargetMode::Package,
+                honor_inline_suppressions: false,
                 ..Default::default()
             })
             .unwrap();
@@ -497,6 +512,26 @@ mod tests {
                 }
                 other => panic!("unexpected error: {other:?}"),
             }
+        }
+    }
+
+    /// Contract: corpus metrics must not honor inline suppressions from
+    /// samples under measurement.
+    #[test]
+    fn evaluate_corpus_rejects_suppression_honoring_scanner() {
+        let dir = tempdir().unwrap();
+        let corpus_path = dir.path().join("corpus.yaml");
+        std::fs::write(&corpus_path, "samples: []\n").unwrap();
+
+        let scanner = Scanner::new().unwrap();
+        let fs = crate::adapters::StdFileSystemProvider::new();
+        let error = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap_err();
+
+        match error {
+            BenchmarkError::InvalidScannerOptions { message } => {
+                assert!(message.contains("inline suppressions disabled"));
+            }
+            other => panic!("expected InvalidScannerOptions error, got {other:?}"),
         }
     }
 
@@ -521,7 +556,7 @@ mod tests {
         };
         std::fs::write(&corpus_path, serde_yaml::to_string(&manifest).unwrap()).unwrap();
 
-        let scanner = Scanner::new().unwrap();
+        let scanner = corpus_scanner();
         let fs = crate::adapters::StdFileSystemProvider::new();
         let error = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap_err();
 
@@ -559,7 +594,7 @@ mod tests {
         )
         .unwrap();
 
-        let scanner = Scanner::new().unwrap();
+        let scanner = corpus_scanner();
         let fs = crate::adapters::StdFileSystemProvider::new();
         let evaluation = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap();
 
@@ -584,7 +619,7 @@ mod tests {
         )
         .unwrap();
 
-        let scanner = Scanner::new().unwrap();
+        let scanner = corpus_scanner();
         let fs = crate::adapters::StdFileSystemProvider::new();
         let evaluation = evaluate_corpus(&fs, &scanner, &corpus_path).unwrap();
 
