@@ -661,6 +661,53 @@ fn test_scan_package_emits_missing_lockfile_findings_and_graph_edges() {
 }
 
 #[test]
+fn test_scan_package_flags_cargo_lock_git_ssh_source() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let cargo_toml = dir.path().join("Cargo.toml");
+    let cargo_lock = dir.path().join("Cargo.lock");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &cargo_toml,
+        r#"[package]
+name = "skill-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pkg = "=0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &cargo_lock,
+        r#"
+version = 4
+
+[[package]]
+name = "pkg"
+version = "0.1.0"
+source = "git+ssh://git@github.com/example/pkg.git?rev=main#0123456789abcdef0123456789abcdef01234567"
+"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let lock_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path == cargo_lock)
+        .unwrap();
+
+    assert!(lock_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "LOCKFILE_CARGO_GIT_SOURCE"));
+}
+
+#[test]
 fn test_scan_package_links_only_expected_lockfile_for_package_manager() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
