@@ -9,6 +9,10 @@ use crate::policy::disposition::DispositionOverlay;
 use crate::policy::types::PolicyFile;
 use crate::policy::POLICY_SCHEMA_VERSION;
 
+fn normalized_rule_id(rule_id: &Option<String>) -> Option<String> {
+    rule_id.as_ref().map(|rule_id| rule_id.to_ascii_lowercase())
+}
+
 pub fn validate_policy(policy: &PolicyFile) -> Result<(), String> {
     if policy.schema_version != POLICY_SCHEMA_VERSION {
         return Err(format!(
@@ -33,7 +37,7 @@ pub fn validate_policy(policy: &PolicyFile) -> Result<(), String> {
         }
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}",
-            policy_override.rule_id,
+            normalized_rule_id(&policy_override.rule_id),
             policy_override.artifact_path,
             policy_override.context,
             policy_override.expires_at
@@ -73,7 +77,10 @@ pub fn validate_waivers(waivers: &WaiverFile) -> Result<(), String> {
         }
         let key = format!(
             "{:?}|{:?}|{:?}|{:?}",
-            waiver.rule_id, waiver.artifact_path, waiver.context, waiver.expires_at
+            normalized_rule_id(&waiver.rule_id),
+            waiver.artifact_path,
+            waiver.context,
+            waiver.expires_at
         );
         if !seen.insert(key) {
             return Err("Duplicate waiver entries detected".to_string());
@@ -183,6 +190,20 @@ mod validate_policy_tests {
         assert!(validate_policy(&policy).is_err());
     }
 
+    /// Contract: rule-id selectors compare case-insensitively at
+    /// runtime, so validation must treat case variants as the same
+    /// selector when detecting conflicts.
+    #[test]
+    fn validate_policy_rejects_conflicting_case_variant_rule_ids() {
+        let mut policy = empty_policy();
+        policy.overrides = vec![
+            ov(Some("a"), Some("RULE_A"), RecommendedAction::Block),
+            ov(Some("b"), Some("rule_a"), RecommendedAction::Log),
+        ];
+
+        assert!(validate_policy(&policy).is_err());
+    }
+
     /// Contract: different expiration windows may intentionally stage
     /// different actions for the same selectors.
     #[test]
@@ -248,6 +269,28 @@ mod validate_waivers_tests {
             waivers: vec![waiver_with_reason("upstream patch tracked in issue 42")],
         };
         assert!(validate_waivers(&waivers).is_ok());
+    }
+
+    /// Contract: waiver rule-id selectors compare case-insensitively at
+    /// runtime, so case-variant duplicate selectors must be rejected at
+    /// validation time.
+    #[test]
+    fn validate_waivers_rejects_case_variant_duplicate_rule_ids() {
+        let waivers = WaiverFile {
+            schema_version: POLICY_SCHEMA_VERSION.to_string(),
+            waivers: vec![
+                waiver_with_reason("accepted risk"),
+                WaiverEntry {
+                    rule_id: Some("rule_a".to_string()),
+                    artifact_path: None,
+                    context: None,
+                    reason: "accepted risk again".to_string(),
+                    expires_at: None,
+                },
+            ],
+        };
+
+        assert!(validate_waivers(&waivers).is_err());
     }
 }
 
