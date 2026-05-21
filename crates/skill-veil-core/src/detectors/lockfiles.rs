@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use serde_json::Value;
+
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
@@ -7,7 +11,6 @@ use crate::services::artifact_orchestration::network::{
     extract_http_urls, is_common_lockfile_source,
 };
 use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
-use std::path::Path;
 
 lazy_pattern!(RE_CARGO_GIT_SOURCE, r#"(?i)\bsource\s*=\s*"git\+"#);
 lazy_pattern!(RE_POETRY_URL_SOURCE, r#"(?i)\burl\s*=\s*"https?://"#);
@@ -114,18 +117,16 @@ fn analyze_lockfile(
     reason: &str,
 ) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
-    let pattern_matches = match &pattern {
-        LockfilePattern::JsonKey(key) => {
-            let lower_content = content.to_ascii_lowercase();
-            content.contains(key)
-                && (lower_content.contains("http://") || lower_content.contains("https://"))
+    let urls = match &pattern {
+        LockfilePattern::JsonKey(key) => remote_urls_for_json_key(content, key),
+        LockfilePattern::Regex(regex) => {
+            if regex.is_match(content) {
+                extract_http_urls(content)
+            } else {
+                Vec::new()
+            }
         }
-        LockfilePattern::Regex(regex) => regex.is_match(content),
     };
-    if !pattern_matches {
-        return Vec::new();
-    }
-    let urls = extract_http_urls(content);
     let suspicious_urls: Vec<_> = urls
         .into_iter()
         .filter(|url| !is_common_lockfile_source(url))
@@ -144,6 +145,36 @@ fn analyze_lockfile(
         .match_value(suspicious_urls[0].clone())
         .reason(format!("{reason} from a non-standard remote source"))
         .build()]
+}
+
+fn remote_urls_for_json_key(content: &str, key: &str) -> Vec<String> {
+    let Ok(json) = serde_json::from_str::<Value>(content) else {
+        return Vec::new();
+    };
+    let mut urls = Vec::new();
+    collect_remote_urls_for_json_key(&json, key, &mut urls);
+    urls
+}
+
+fn collect_remote_urls_for_json_key(value: &Value, key: &str, urls: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            for (entry_key, entry_value) in map {
+                if entry_key == key {
+                    if let Some(text) = entry_value.as_str() {
+                        urls.extend(extract_http_urls(text));
+                    }
+                }
+                collect_remote_urls_for_json_key(entry_value, key, urls);
+            }
+        }
+        Value::Array(values) => {
+            for entry in values {
+                collect_remote_urls_for_json_key(entry, key, urls);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +342,47 @@ packages:
 
             assert!(findings.is_empty(), "{path}: unexpected {findings:?}");
         }
+    }
+
+    /// # Contract
+    ///
+    /// `package-lock.json` analysis only considers the exact `resolved`
+    /// string value, not unrelated URL-bearing metadata in the same file.
+    #[test]
+    fn analyze_package_lock_ignores_unrelated_urls_when_resolved_is_local() {
+        let content = r#"{
+  "packages": {
+    "node_modules/pkg": {
+      "version": "1.0.0",
+      "resolved": "file:../vendor/pkg-1.0.0.tgz",
+      "homepage": "https://packages.attacker.example/pkg"
+    }
+  }
+}"#;
+
+        let findings = analyze_package_lock(Path::new("package-lock.json"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    /// # Contract
+    ///
+    /// `resolved` matching is key-exact. Substring keys such as
+    /// `unresolved` are not package source resolutions.
+    #[test]
+    fn analyze_package_lock_rejects_resolved_key_substrings() {
+        let content = r#"{
+  "packages": {
+    "node_modules/pkg": {
+      "version": "1.0.0",
+      "unresolved": "https://packages.attacker.example/pkg-1.0.0.tgz"
+    }
+  }
+}"#;
+
+        let findings = analyze_package_lock(Path::new("package-lock.json"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 
     /// # Contract
