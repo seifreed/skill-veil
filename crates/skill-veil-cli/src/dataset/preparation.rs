@@ -488,10 +488,21 @@ impl Drop for StagingGuard<'_> {
 /// even when the fallback loop errors midway.
 fn finalize_extraction(staging_dir: &Path, output_dir: &Path) -> Result<()> {
     let guard = StagingGuard::arm(staging_dir);
-    if fs::rename(staging_dir, output_dir).is_ok() {
-        // `rename` consumed the source; nothing left to clean.
-        guard.disarm();
-        return Ok(());
+    match fs::rename(staging_dir, output_dir) {
+        Ok(()) => {
+            guard.disarm();
+            return Ok(());
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::CrossesDevices => {}
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to rename {} to {}",
+                    staging_dir.display(),
+                    output_dir.display()
+                )
+            });
+        }
     }
     fs::create_dir_all(output_dir)
         .with_context(|| format!("Failed to create {}", output_dir.display()))?;
@@ -512,6 +523,10 @@ fn finalize_extraction(staging_dir: &Path, output_dir: &Path) -> Result<()> {
     }
     fs::remove_dir_all(staging_dir)
         .with_context(|| format!("Failed to remove {}", staging_dir.display()))?;
+    debug_assert!(
+        !staging_dir.exists(),
+        "cross-device extraction fallback must consume the staging directory"
+    );
     guard.disarm();
     Ok(())
 }
@@ -692,43 +707,39 @@ mod tests {
 
     /// # Contract
     ///
-    /// `finalize_extraction` MUST remove `staging_dir` even when the
-    /// per-entry fallback fails midway. Pre-fix the cleanup lived as a
-    /// trailing statement after the `for` loop; any inner `?` (cross-mount
-    /// rename failing partway, EACCES, etc.) bypassed it and left a stale
-    /// `.<pkg>.tmp/` on disk indefinitely. The `StagingGuard` now drops
-    /// the directory on every failure path.
+    /// `finalize_extraction` MUST NOT enter the per-entry fallback for
+    /// ordinary rename failures such as an already-existing output
+    /// directory. The fallback is only valid for `EXDEV`; using it for
+    /// `DirectoryNotEmpty` would merge a fresh extraction into stale
+    /// cache contents.
     #[test]
-    fn cross_mount_fallback_cleans_staging_on_inner_failure() {
+    fn finalize_extraction_rejects_non_cross_device_rename_failure() {
         let tmp = tempfile::tempdir().unwrap();
         let staging_dir = tmp.path().join(".pkg.tmp");
         let output_dir = tmp.path().join("out");
         std::fs::create_dir_all(&staging_dir).unwrap();
         std::fs::write(staging_dir.join("a.txt"), b"a").unwrap();
         std::fs::write(staging_dir.join("b.txt"), b"b").unwrap();
-
-        // Force the primary `fs::rename` path to fail by making `output_dir`
-        // an existing non-empty directory. On most platforms this still
-        // succeeds for `rename(dir, dir)` when target is empty but errors
-        // when the target dir contains entries. We pre-populate it to make
-        // the primary rename fail and steer execution into the fallback.
         std::fs::create_dir_all(&output_dir).unwrap();
         std::fs::write(output_dir.join("placeholder"), b"x").unwrap();
-        // Then sabotage the per-entry fallback: pre-create a read-only
-        // directory at the destination of `a.txt` so `fs::rename(source,
-        // destination)` fails inside the loop.
-        let conflict = output_dir.join("a.txt");
-        std::fs::create_dir_all(&conflict).unwrap();
-        std::fs::write(conflict.join("blocker"), b"blocker").unwrap();
 
         let result = finalize_extraction(&staging_dir, &output_dir);
+
         assert!(
             result.is_err(),
-            "fallback must propagate the inner rename failure"
+            "non-EXDEV rename failure must propagate instead of entering fallback"
         );
         assert!(
             !staging_dir.exists(),
-            "staging_dir must be removed by StagingGuard even on inner failure"
+            "staging_dir must be removed by StagingGuard on publish failure"
+        );
+        assert!(
+            !output_dir.join("a.txt").exists(),
+            "fallback must not merge staging entries into an existing output dir"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("placeholder")).unwrap(),
+            "x"
         );
     }
 
