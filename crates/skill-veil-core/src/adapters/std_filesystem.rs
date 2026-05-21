@@ -190,6 +190,9 @@ impl FileSystemProvider for StdFileSystemProvider {
                         let file_type = entry.file_type();
                         if file_type.is_file() && !file_type.is_symlink() {
                             let entry_path = entry.path();
+                            if !is_single_link_regular_file(entry_path) {
+                                continue;
+                            }
                             if let Some(filename_os) = entry_path.file_name() {
                                 let filename = lossy_filename_with_warning(filename_os, entry_path);
                                 if matcher.is_match(filename.as_ref()) {
@@ -242,6 +245,9 @@ impl FileSystemProvider for StdFileSystemProvider {
                 };
                 if file_type.is_file() && !file_type.is_symlink() {
                     let entry_path = entry.path();
+                    if !is_single_link_regular_file(&entry_path) {
+                        continue;
+                    }
                     if let Some(filename_os) = entry_path.file_name() {
                         let filename = lossy_filename_with_warning(filename_os, &entry_path);
                         if matcher.is_match(filename.as_ref()) {
@@ -275,7 +281,7 @@ impl FileSystemProvider for StdFileSystemProvider {
     }
 
     fn metadata(&self, path: &Path) -> Result<FileMeta, FileSystemError> {
-        let meta = std::fs::symlink_metadata(path).map_err(FileSystemError::IoError)?;
+        let meta = regular_file_metadata(path)?;
         Ok(FileMeta { len: meta.len() })
     }
 
@@ -290,7 +296,7 @@ impl FileSystemProvider for StdFileSystemProvider {
     /// the listing methods' `!file_type.is_symlink()` filter.
     fn is_file(&self, path: &Path) -> bool {
         match std::fs::symlink_metadata(path) {
-            Ok(meta) => meta.is_file() && !meta.is_symlink(),
+            Ok(meta) => meta.is_file() && !meta.is_symlink() && has_single_hardlink(&meta),
             Err(_) => false,
         }
     }
@@ -334,7 +340,10 @@ impl FileSystemProvider for StdFileSystemProvider {
             match result {
                 Ok(entry) => {
                     let file_type = entry.file_type();
-                    if file_type.is_file() && !file_type.is_symlink() {
+                    if file_type.is_file()
+                        && !file_type.is_symlink()
+                        && is_single_link_regular_file(entry.path())
+                    {
                         files.push(entry.into_path());
                     }
                 }
@@ -370,7 +379,24 @@ fn regular_file_metadata(path: &Path) -> Result<Metadata, FileSystemError> {
     if !meta.is_file() || meta.is_symlink() {
         return Err(FileSystemError::IoError(non_regular_file_error(path)));
     }
+    if !has_single_hardlink(&meta) {
+        return Err(FileSystemError::IoError(hardlinked_file_error(path, &meta)));
+    }
     Ok(meta)
+}
+
+fn is_single_link_regular_file(path: &Path) -> bool {
+    match regular_file_metadata(path) {
+        Ok(_) => true,
+        Err(err) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %err,
+                "skipping non-readable regular file entry"
+            );
+            false
+        }
+    }
 }
 
 fn validate_opened_regular_file(
@@ -400,6 +426,42 @@ fn non_regular_file_error(path: &Path) -> io::Error {
             path.display()
         ),
     )
+}
+
+#[cfg(unix)]
+fn hardlinked_file_error(path: &Path, meta: &Metadata) -> io::Error {
+    use std::os::unix::fs::MetadataExt;
+
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "refusing to read {}: regular file has multiple hard links ({})",
+            path.display(),
+            meta.nlink()
+        ),
+    )
+}
+
+#[cfg(not(unix))]
+fn hardlinked_file_error(path: &Path, _meta: &Metadata) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "refusing to read {}: regular file has multiple hard links",
+            path.display()
+        ),
+    )
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -459,6 +521,66 @@ mod tests {
             matches!(err, FileSystemError::IoError(ref io_err)
                 if io_err.kind() == std::io::ErrorKind::InvalidInput),
             "symlink must surface as InvalidInput IoError, got {err:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `read_file_bytes` MUST reject hardlinked files. A path inside an
+    /// untrusted package can be a second directory entry for an inode
+    /// outside that package; accepting it lets the scanner ingest bytes
+    /// that were never package-owned, even though symlink checks pass.
+    #[cfg(unix)]
+    #[test]
+    fn read_file_bytes_rejects_hardlinked_file() {
+        let dir = TempDir::new().unwrap();
+        let package = dir.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let outside = dir.path().join("outside.txt");
+        let linked = package.join("linked.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let err = fs
+            .read_file_bytes(&linked)
+            .expect_err("hardlinked file must be rejected");
+
+        assert!(
+            matches!(err, FileSystemError::IoError(ref io_err)
+                if io_err.kind() == std::io::ErrorKind::InvalidInput
+                    && io_err.to_string().contains("multiple hard links")),
+            "hardlink must surface as InvalidInput IoError naming the link count; got {err:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `metadata` and `is_file` MUST use the same hardlink policy as
+    /// `read_file_bytes`; callers use these methods as pre-read gates
+    /// during package discovery and scanner orchestration.
+    #[cfg(unix)]
+    #[test]
+    fn metadata_and_is_file_reject_hardlinked_file() {
+        let dir = TempDir::new().unwrap();
+        let package = dir.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let outside = dir.path().join("outside.txt");
+        let linked = package.join("linked.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        assert!(!fs.is_file(&linked));
+        let err = fs
+            .metadata(&linked)
+            .expect_err("hardlinked file metadata must be rejected");
+
+        assert!(
+            matches!(err, FileSystemError::IoError(ref io_err)
+                if io_err.kind() == std::io::ErrorKind::InvalidInput
+                    && io_err.to_string().contains("multiple hard links")),
+            "hardlink metadata must surface as InvalidInput IoError naming the link count; got {err:?}",
         );
     }
 
@@ -662,6 +784,56 @@ mod tests {
         let files = fs.walk_files(dir.path(), 0, &[]).unwrap();
 
         assert_eq!(files, vec![root_path, m_path, z_path]);
+    }
+
+    /// # Contract
+    ///
+    /// Listing APIs MUST NOT return hardlinked package entries. Returning
+    /// them would let callers that only enumerate paths hand an outside
+    /// inode to later analysis stages as if it belonged to the package.
+    #[cfg(unix)]
+    #[test]
+    fn list_files_skips_hardlinks_in_both_listing_modes() {
+        let dir = TempDir::new().unwrap();
+        let package = dir.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let real = package.join("real.json");
+        let linked = package.join("linked.json");
+        let outside = dir.path().join("outside.json");
+        std::fs::write(&real, b"{}").unwrap();
+        std::fs::write(&outside, b"{\"secret\":true}").unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let flat = fs.list_files(&package, "*.json", false).unwrap();
+        let recursive = fs.list_files(&package, "*.json", true).unwrap();
+
+        assert_eq!(flat, vec![real.clone()]);
+        assert_eq!(recursive, vec![real]);
+    }
+
+    /// # Contract
+    ///
+    /// `walk_files` shares the same hardlink exclusion as `list_files`;
+    /// package artifact discovery uses this path for recursive script,
+    /// manifest and lockfile discovery.
+    #[cfg(unix)]
+    #[test]
+    fn walk_files_skips_hardlinked_entries() {
+        let dir = TempDir::new().unwrap();
+        let package = dir.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let real = package.join("real.txt");
+        let linked = package.join("linked.txt");
+        let outside = dir.path().join("outside.txt");
+        std::fs::write(&real, b"ok").unwrap();
+        std::fs::write(&outside, b"secret").unwrap();
+        std::fs::hard_link(&outside, &linked).unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let files = fs.walk_files(&package, 0, &[]).unwrap();
+
+        assert_eq!(files, vec![real]);
     }
 
     /// # Contract

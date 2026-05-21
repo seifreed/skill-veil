@@ -309,7 +309,8 @@ pub trait FileSystemProvider: Send + Sync {
     /// explicit metadata) MUST override this method to avoid the default
     /// implementation, which reads the entire file via `read_file_bytes`
     /// just to obtain the length. The `StdFileSystemProvider` override uses
-    /// `std::fs::metadata` (a single stat syscall) instead.
+    /// direct filesystem metadata while preserving its non-symlink,
+    /// single-link regular file policy.
     ///
     /// # Errors
     /// Returns [`FileSystemError::PathNotFound`] when the path does not
