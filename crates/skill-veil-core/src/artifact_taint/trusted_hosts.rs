@@ -179,7 +179,7 @@ pub(super) const DOCUMENTATION_OR_RESERVED_HOSTS: &[&str] = &[
 #[must_use]
 pub(super) fn is_documentation_or_reserved_host(endpoint: &str) -> bool {
     let host = match extract_host(endpoint) {
-        Some(h) => h.to_ascii_lowercase(),
+        Some(h) => h,
         None => return false,
     };
     if host.is_empty() {
@@ -224,7 +224,7 @@ fn is_loopback_ipv4(host: &str) -> bool {
 #[must_use]
 pub(super) fn is_trusted_api_host(endpoint: &str) -> bool {
     let host = match extract_host(endpoint) {
-        Some(h) => h.to_ascii_lowercase(),
+        Some(h) => h,
         None => return false,
     };
     if host.is_empty() {
@@ -328,7 +328,7 @@ const COMPOUND_TLD_PENULTIMATES: &[&str] = &["com", "net", "org", "co", "gov", "
 /// where an attacker prefixes the victim secret's name as a
 /// subdomain label to spoof first-party affinity.
 fn registrable_label(endpoint: &str) -> Option<String> {
-    let host = extract_host(endpoint)?.to_ascii_lowercase();
+    let host = extract_host(endpoint)?;
     if host.is_empty() || is_ipv4_literal(&host) {
         return None;
     }
@@ -414,38 +414,19 @@ pub(super) fn host_matches_secret_owner(endpoint: &str, secret_targets: &BTreeSe
 /// - Host:port: `localhost:11434`
 ///
 /// Returns `None` if the input has no parseable host component.
-fn extract_host(endpoint: &str) -> Option<&str> {
+fn extract_host(endpoint: &str) -> Option<String> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
         return None;
     }
-    // Strip scheme.
-    let after_scheme = trimmed
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(trimmed);
-    // Drop user-info (`user:pass@host`).
-    let after_userinfo = after_scheme
-        .rsplit_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or(after_scheme);
-    // Take everything up to the first path / query / fragment / port
-    // separator. Port stripping is required so `localhost:8080` does
-    // not match a hypothetical literal `localhost:8080` in the
-    // allowlist (we only key on host).
-    let host_with_port = after_userinfo
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_userinfo);
-    let host = host_with_port
-        .rsplit_once(':')
-        .map(|(h, _port)| h)
-        .unwrap_or(host_with_port);
-    if host.is_empty() {
-        None
-    } else {
-        Some(host)
+    if let Ok(parsed) = url::Url::parse(trimmed) {
+        if let Some(host) = parsed.host_str() {
+            return Some(host.to_ascii_lowercase());
+        }
     }
+    let schemeless = trimmed.strip_prefix("//").unwrap_or(trimmed);
+    let parsed = url::Url::parse(&format!("https://{schemeless}")).ok()?;
+    parsed.host_str().map(|host| host.to_ascii_lowercase())
 }
 
 /// Wildcard matching for one allowlist entry. Supports the single
@@ -526,6 +507,19 @@ mod tests {
         assert!(!is_trusted_api_host("https://api.github.com.evil.com/x"));
     }
 
+    /// Contract: user-info parsing only applies to the URL authority.
+    /// A trusted hostname inside the path must not satisfy the trusted
+    /// API allowlist.
+    #[test]
+    fn trusted_host_check_rejects_known_host_in_path_userinfo_shape() {
+        assert!(!is_trusted_api_host(
+            "https://collector.attacker-control.io/path@api.openai.com/v1"
+        ));
+        assert!(!is_trusted_api_host(
+            "https://collector.attacker-control.io/mirror@github.com/repo"
+        ));
+    }
+
     /// Contract: IP literals NEVER qualify even if the user types one
     /// of the allowlisted hostnames. Taint pointing at a raw IP is
     /// the high-signal case operators want to inspect.
@@ -600,6 +594,7 @@ mod tests {
             "https://example-corp.com/api",
             "https://examplecdn.io",
             "https://attacker.com/example.com",
+            "https://attacker.com/path@example.com/api",
             "https://10.0.0.5",
             "https://192.168.1.1",
             "https://8.8.8.8",
@@ -699,6 +694,21 @@ mod tests {
         assert!(!host_matches_secret_owner(
             "https://stripe.evilcorp.com/x",
             &names(&["STRIPE_API_KEY"])
+        ));
+    }
+
+    /// # Contract (recall guard)
+    /// A first-party-looking host inside the URL path is not the
+    /// destination host and must not create secret-owner affinity.
+    #[test]
+    fn host_matches_secret_owner_rejects_known_host_in_path_userinfo_shape() {
+        assert!(!host_matches_secret_owner(
+            "https://collector.attacker-control.io/path@stripe.com/v1",
+            &names(&["STRIPE_API_KEY"])
+        ));
+        assert!(!host_matches_secret_owner(
+            "https://collector.attacker-control.io/path@api.openai.com/v1",
+            &names(&["OPENAI_API_KEY"])
         ));
     }
 

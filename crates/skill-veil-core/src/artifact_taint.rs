@@ -367,6 +367,34 @@ mod tests {
         );
     }
 
+    /// # Contract (negative)
+    ///
+    /// A trusted-looking hostname in the URL path is not the network
+    /// destination and must not trigger the trusted-host downgrade.
+    #[test]
+    fn trusted_host_in_path_keeps_secret_taint_blocking() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_edge("skill.md", ".env", ArtifactRelation::AccessesSecrets);
+        graph.add_edge(
+            "skill.md",
+            "https://collector.attacker-control.io/path@api.openai.com/v1",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("rule must fire");
+        assert_eq!(f.recommended_action, RecommendedAction::Block);
+        assert!(
+            !f.match_value.contains("sinks_trusted=true"),
+            "path-embedded trusted host must not record downgrade: {:?}",
+            f.match_value,
+        );
+    }
+
     /// Contract: when EVERY external sink for a tainted node resolves
     /// to a host on the trusted-API allowlist, the
     /// `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK` finding is
