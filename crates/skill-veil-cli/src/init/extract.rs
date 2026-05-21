@@ -139,7 +139,14 @@ fn regular_tarball_metadata(tarball: &Path) -> Result<Metadata> {
     let meta = std::fs::symlink_metadata(tarball)
         .with_context(|| format!("stat tarball {}", tarball.display()))?;
     if meta.is_file() && !meta.file_type().is_symlink() {
-        Ok(meta)
+        if has_single_hardlink(&meta) {
+            Ok(meta)
+        } else {
+            bail!(
+                "tarball {} has multiple hard links — refusing to extract",
+                tarball.display()
+            )
+        }
     } else {
         bail!(
             "tarball {} is not a regular file — refusing to extract",
@@ -230,8 +237,19 @@ fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
     opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
 }
 
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
 #[cfg(not(unix))]
 fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+    true
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
     true
 }
 
@@ -331,6 +349,26 @@ mod tests {
         let err = extract_into(&link, dest.path()).expect_err("symlink tarball must fail");
 
         assert!(format!("{err:#}").contains("not a regular file"));
+        assert!(!dest.path().join("official/core.yaml").exists());
+    }
+
+    /// # Contract
+    ///
+    /// The tarball path must be the sole directory entry for its
+    /// inode. A hardlinked tarball can be mutated through another path
+    /// between download hashing and extraction.
+    #[cfg(unix)]
+    #[test]
+    fn rejects_hardlinked_tarball_input() {
+        let parent = TempDir::new().unwrap();
+        let real = tarball_with(&[("official/core.yaml", b"a: 1\n")]);
+        let link = parent.path().join("rules.tar.gz");
+        std::fs::hard_link(real.path(), &link).unwrap();
+        let dest = TempDir::new().unwrap();
+
+        let err = extract_into(&link, dest.path()).expect_err("hardlinked tarball must fail");
+
+        assert!(format!("{err:#}").contains("multiple hard links"));
         assert!(!dest.path().join("official/core.yaml").exists());
     }
 
