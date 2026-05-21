@@ -213,6 +213,13 @@ fn regular_pointer_metadata(path: &Path) -> Option<Metadata> {
         );
         return None;
     }
+    if !has_single_hardlink(&meta) {
+        tracing::warn!(
+            "ignoring installed rules pointer {} (multiple hard links)",
+            path.display(),
+        );
+        return None;
+    }
     Some(meta)
 }
 
@@ -257,6 +264,17 @@ fn is_real_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
         .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -391,6 +409,25 @@ mod tests {
         let pointer_path = tmp.path().join(CURRENT_POINTER_FILENAME);
         std::fs::write(&target, r#"{"version":"v0.1.0"}"#).unwrap();
         std::os::unix::fs::symlink(&target, &pointer_path).unwrap();
+
+        let body = read_current_pointer_file(&pointer_path);
+
+        assert!(body.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// Runtime rule discovery ignores hardlinked installed pointers.
+    /// The active rule-pack pointer must be a cache-owned directory
+    /// entry, not another name for an inode created elsewhere.
+    #[cfg(unix)]
+    #[test]
+    fn current_pointer_read_rejects_hardlinked_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("target.json");
+        let pointer_path = tmp.path().join(CURRENT_POINTER_FILENAME);
+        std::fs::write(&target, r#"{"version":"v0.1.0"}"#).unwrap();
+        std::fs::hard_link(&target, &pointer_path).unwrap();
 
         let body = read_current_pointer_file(&pointer_path);
 
