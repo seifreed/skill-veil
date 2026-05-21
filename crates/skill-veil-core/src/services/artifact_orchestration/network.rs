@@ -53,10 +53,11 @@ pub(crate) fn is_common_lockfile_source(url: &str) -> bool {
 /// prevents substring false positives like `evil.registry.npmjs.org.attacker.com`
 /// from matching `registry.npmjs.org`.
 fn host_matches_url(host: &str, url: &str) -> bool {
-    url.contains(&format!("://{host}/"))
-        || url.contains(&format!("://{host}:"))
-        || url.contains(&format!("@{host}/"))
-        || url.contains(&format!("@{host}:"))
+    let lower_url = url.to_ascii_lowercase();
+    lower_url.contains(&format!("://{host}/"))
+        || lower_url.contains(&format!("://{host}:"))
+        || lower_url.contains(&format!("@{host}/"))
+        || lower_url.contains(&format!("@{host}:"))
 }
 
 #[cfg(test)]
@@ -95,6 +96,17 @@ mod tests {
     fn is_common_lockfile_source_allows_github_packages() {
         assert!(is_common_lockfile_source(
             "https://npm.pkg.github.com/@myorg/tool/-/tool-1.0.0.tgz"
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// URL host matching is case-insensitive. Registry lockfile entries
+    /// with uppercase host bytes must stay on the common-source path.
+    #[test]
+    fn is_common_lockfile_source_matches_case_insensitive_hosts() {
+        assert!(is_common_lockfile_source(
+            "https://REGISTRY.NPMJS.ORG/pkg/-/pkg-1.0.0.tgz"
         ));
     }
 
