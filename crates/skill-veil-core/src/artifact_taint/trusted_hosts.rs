@@ -414,19 +414,24 @@ pub(super) fn host_matches_secret_owner(endpoint: &str, secret_targets: &BTreeSe
 /// - Host:port: `localhost:11434`
 ///
 /// Returns `None` if the input has no parseable host component.
-fn extract_host(endpoint: &str) -> Option<String> {
+pub(super) fn parse_endpoint_url(endpoint: &str) -> Option<url::Url> {
     let trimmed = endpoint.trim();
     if trimmed.is_empty() {
         return None;
     }
     if let Ok(parsed) = url::Url::parse(trimmed) {
-        if let Some(host) = parsed.host_str() {
-            return Some(host.to_ascii_lowercase());
+        if parsed.host_str().is_some() {
+            return Some(parsed);
         }
     }
     let schemeless = trimmed.strip_prefix("//").unwrap_or(trimmed);
-    let parsed = url::Url::parse(&format!("https://{schemeless}")).ok()?;
-    parsed.host_str().map(|host| host.to_ascii_lowercase())
+    url::Url::parse(&format!("https://{schemeless}")).ok()
+}
+
+pub(super) fn extract_host(endpoint: &str) -> Option<String> {
+    parse_endpoint_url(endpoint)?
+        .host_str()
+        .map(|host| host.to_ascii_lowercase())
 }
 
 /// Wildcard matching for one allowlist entry. Supports the single

@@ -1,7 +1,7 @@
 use crate::artifact_graph::{ArtifactEdge, EndpointKind};
 use crate::detectors::scripts::references_dotenv_file;
 
-use super::trusted_hosts::is_documentation_or_reserved_host;
+use super::trusted_hosts::{extract_host, is_documentation_or_reserved_host, parse_endpoint_url};
 
 pub(super) fn looks_like_secret_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
@@ -205,54 +205,52 @@ pub(super) fn looks_like_software_distribution_url(lower: &str) -> bool {
     ARTIFACT_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
 }
 
-pub(super) fn looks_like_local_endpoint(lower: &str) -> bool {
-    lower.contains("localhost")
-        || lower.contains("127.0.0.1")
-        || looks_like_bind_all_address(lower)
-        || lower.contains("::1")
-        || lower.contains(".local/")
-        || lower.contains(".local:")
-        || lower.ends_with(".local")
-        || lower.contains(".internal/")
-        || lower.contains(".internal:")
-        || lower.ends_with(".internal")
+pub(super) fn looks_like_local_endpoint(endpoint: &str) -> bool {
+    let Some(host) = extract_host(endpoint) else {
+        return false;
+    };
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || is_loopback_ipv4(&host)
+        || host == "0.0.0.0"
+        || matches!(host.as_str(), "::1" | "[::1]")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
 }
 
-/// Check whether `text` contains `0.0.0.0` as a standalone IP address
-/// rather than as a substring of a longer dotted quad like `10.0.0.0`
-/// or `100.0.0.0`. A plain `contains("0.0.0.0")` matches those
-/// substrings, misclassifying public IPs as local endpoints and
-/// suppressing external-sink detection in taint analysis.
-fn looks_like_bind_all_address(text: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = text[start..].find("0.0.0.0") {
-        let abs = start + pos;
-        let before_ok = abs == 0 || !text.as_bytes()[abs - 1].is_ascii_digit();
-        let after = abs + "0.0.0.0".len();
-        let after_ok = after >= text.len() || !text.as_bytes()[after].is_ascii_digit();
-        if before_ok && after_ok {
-            return true;
-        }
-        start = abs + 1;
+fn is_loopback_ipv4(host: &str) -> bool {
+    if !host.starts_with("127.") {
+        return false;
     }
-    false
+    let mut octets = 0;
+    for part in host.split('.') {
+        if part.is_empty() || part.parse::<u8>().is_err() {
+            return false;
+        }
+        octets += 1;
+    }
+    octets == 4
 }
 
 pub(super) fn looks_like_registry_url(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    [
-        "registry.npmjs.org",
-        "registry.yarnpkg.com",
-        "files.pythonhosted.org",
-        "pypi.org/packages",
-        "crates.io/api",
-        "static.crates.io",
-        "index.crates.io",
-        "registry.hub.docker.com",
-        "ghcr.io",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    let Some(parsed) = parse_endpoint_url(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+        return false;
+    };
+    let path = parsed.path().to_ascii_lowercase();
+    matches!(
+        host.as_str(),
+        "registry.npmjs.org"
+            | "registry.yarnpkg.com"
+            | "files.pythonhosted.org"
+            | "static.crates.io"
+            | "index.crates.io"
+            | "registry.hub.docker.com"
+            | "ghcr.io"
+    ) || (host == "pypi.org" && path.starts_with("/packages"))
+        || (host == "crates.io" && path.starts_with("/api"))
 }
 
 #[cfg(test)]
@@ -370,6 +368,54 @@ mod tests {
         assert!(
             !looks_like_external_sink(&doc_path),
             "local URL with '/webhook-setup-guide' must NOT match the webhook pattern"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Local-endpoint classification is based on the URL authority,
+    /// not local-looking tokens embedded in a remote path.
+    #[test]
+    fn local_endpoint_matching_uses_authority_host() {
+        assert!(looks_like_local_endpoint("http://localhost:8080/health"));
+        assert!(looks_like_local_endpoint("http://127.5.5.5:5000"));
+        assert!(looks_like_local_endpoint("http://service.internal/status"));
+        assert!(!looks_like_local_endpoint(
+            "https://collector.attacker-control.io/localhost/collect"
+        ));
+        assert!(!looks_like_local_endpoint(
+            "https://collector.attacker-control.io/127.0.0.1/collect"
+        ));
+    }
+
+    /// # Contract
+    ///
+    /// Registry classification is based on the URL authority, not
+    /// registry-looking tokens embedded in a remote path.
+    #[test]
+    fn registry_matching_uses_authority_host() {
+        use crate::artifact_graph::{ArtifactEdge, ArtifactRelation};
+
+        assert!(looks_like_registry_url(
+            "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
+        ));
+        assert!(looks_like_registry_url("https://pypi.org/packages/pkg"));
+        assert!(!looks_like_registry_url(
+            "https://collector.attacker-control.io/registry.npmjs.org/collect"
+        ));
+        assert!(!looks_like_registry_url(
+            "https://collector.attacker-control.io/pypi.org/packages/pkg"
+        ));
+
+        let path_embedded_registry = ArtifactEdge {
+            from: "a".to_string(),
+            to: "https://collector.attacker-control.io/registry.npmjs.org/collect".to_string(),
+            relation: ArtifactRelation::ConnectsTo,
+            endpoint_kind: None,
+        };
+        assert!(
+            looks_like_external_sink(&path_embedded_registry),
+            "path-embedded registry host must remain an external sink"
         );
     }
 
