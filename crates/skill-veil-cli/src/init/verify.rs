@@ -219,11 +219,16 @@ fn hash_manifest_file_with_cap(path: &Path, cap: u64) -> Result<(u64, String)> {
 fn regular_manifest_file_metadata(path: &Path) -> Result<Metadata> {
     let meta = std::fs::symlink_metadata(path)
         .with_context(|| format!("stat manifest file {}", path.display()))?;
-    if meta.is_file() && !meta.file_type().is_symlink() {
-        Ok(meta)
-    } else {
+    if !meta.is_file() || meta.file_type().is_symlink() {
         bail!("refusing to hash {}: not a regular file", path.display())
     }
+    if !has_single_hardlink(&meta) {
+        bail!(
+            "refusing to hash {}: file has multiple hard links",
+            path.display()
+        )
+    }
+    Ok(meta)
 }
 
 fn manifest_entry_path(extracted_root: &Path, raw: &str) -> Result<PathBuf> {
@@ -278,6 +283,17 @@ fn walk_collect(root: &Path, dir: &Path, out: &mut BTreeSet<String>) -> Result<(
         }
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -464,6 +480,30 @@ mod tests {
             .expect_err("symlink manifest entry must fail");
 
         assert!(format!("{err:#}").contains("not a regular file"));
+    }
+
+    /// # Contract
+    ///
+    /// Manifest verification only hashes files owned by the extracted
+    /// tree. A hardlinked manifest entry is rejected instead of trusting
+    /// an inode that also has a directory entry outside the install root.
+    #[cfg(unix)]
+    #[test]
+    fn manifest_entry_hardlink_is_rejected() {
+        let dir = TempDir::new().unwrap();
+        let extracted = dir.path().join("extracted");
+        std::fs::create_dir(&extracted).unwrap();
+        let target = dir.path().join("target.yaml");
+        let link = extracted.join("official").join("core.yaml");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"rule: do_thing\n").unwrap();
+        std::fs::hard_link(&target, &link).unwrap();
+        let manifest = make_manifest(&[("official/core.yaml", b"rule: do_thing\n")]);
+
+        let err = verify_manifest_against_extracted(&manifest, &extracted)
+            .expect_err("hardlinked manifest entry must fail");
+
+        assert!(format!("{err:#}").contains("multiple hard links"));
     }
 
     /// Contract: an extra file in the extracted tarball that is NOT in
