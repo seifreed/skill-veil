@@ -57,12 +57,21 @@ pub(crate) fn analyze_cargo_lock(path: &Path, content: &str) -> Vec<Finding> {
 }
 
 pub(crate) fn analyze_poetry_lock(path: &Path, content: &str) -> Vec<Finding> {
-    analyze_lockfile(
+    let Some(sources) = poetry_lock_sources(content) else {
+        return analyze_lockfile(
+            path,
+            content,
+            "LOCKFILE_POETRY_URL_SOURCE",
+            LockfilePattern::Regex(&RE_POETRY_URL_SOURCE),
+            "poetry.lock references URL-based dependency sources",
+        );
+    };
+
+    lockfile_findings_for_sources(
         path,
-        content,
         "LOCKFILE_POETRY_URL_SOURCE",
-        LockfilePattern::Regex(&RE_POETRY_URL_SOURCE),
         "poetry.lock references URL-based dependency sources",
+        sources,
     )
 }
 
@@ -196,7 +205,32 @@ fn remote_cargo_git_source(source: &str) -> Option<String> {
     if !lower.starts_with(GIT_SOURCE_PREFIX) {
         return None;
     }
-    remote_git_source_match_value(trimmed)
+    remote_dependency_source_match_value(trimmed)
+}
+
+fn poetry_lock_sources(content: &str) -> Option<Vec<String>> {
+    let toml = content.parse::<TomlValue>().ok()?;
+    let packages = toml.get("package").and_then(TomlValue::as_array)?;
+    let mut saw_package_source = false;
+    let mut sources = Vec::new();
+    for package in packages {
+        let Some(source) = package.get("source") else {
+            continue;
+        };
+        saw_package_source = true;
+        if let Some(source_url) = poetry_source_url(source) {
+            sources.push(source_url);
+        }
+    }
+    saw_package_source.then_some(sources)
+}
+
+fn poetry_source_url(source: &TomlValue) -> Option<String> {
+    let table = source.as_table()?;
+    table
+        .get("url")
+        .and_then(TomlValue::as_str)
+        .and_then(remote_dependency_source_match_value)
 }
 
 fn uv_lock_git_sources(content: &str) -> Option<Vec<String>> {
@@ -216,11 +250,11 @@ fn uv_git_source(source: &TomlValue) -> Option<String> {
         TomlValue::Table(table) => table
             .get("git")
             .and_then(TomlValue::as_str)
-            .and_then(remote_git_source_match_value),
+            .and_then(remote_dependency_source_match_value),
         TomlValue::String(source) => {
             let lower = source.trim().to_ascii_lowercase();
             if lower.starts_with(GIT_SOURCE_PREFIX) {
-                remote_git_source_match_value(source)
+                remote_dependency_source_match_value(source)
             } else {
                 None
             }
@@ -229,7 +263,7 @@ fn uv_git_source(source: &TomlValue) -> Option<String> {
     }
 }
 
-fn remote_git_source_match_value(source: &str) -> Option<String> {
+fn remote_dependency_source_match_value(source: &str) -> Option<String> {
     let trimmed = source.trim();
     let lower = trimmed.to_ascii_lowercase();
     let transport = lower
@@ -464,6 +498,55 @@ source = { git = "file:///tmp/pkg.git#0123456789abcdef0123456789abcdef01234567" 
 "#;
 
         let findings = analyze_uv_lock(Path::new("uv.lock"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
+    }
+
+    /// # Contract
+    ///
+    /// Poetry source tables can pin Git dependencies through SSH remotes;
+    /// those are still remote dependency sources even though they are not
+    /// HTTP URLs.
+    #[test]
+    fn analyze_poetry_lock_detects_git_ssh_source_table() {
+        let content = r#"
+[[package]]
+name = "pkg"
+version = "0.1.0"
+
+[package.source]
+type = "git"
+url = "ssh://git@github.com/example/pkg.git"
+reference = "main"
+resolved_reference = "0123456789abcdef0123456789abcdef01234567"
+"#;
+
+        let findings = analyze_poetry_lock(Path::new("poetry.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_POETRY_URL_SOURCE"]);
+        assert_eq!(
+            findings[0].match_value,
+            "ssh://git@github.com/example/pkg.git"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A local file-backed Poetry source table is not a remote dependency
+    /// source and must not emit the remote-source lockfile finding.
+    #[test]
+    fn analyze_poetry_lock_skips_local_file_source_table() {
+        let content = r#"
+[[package]]
+name = "pkg"
+version = "0.1.0"
+
+[package.source]
+type = "directory"
+url = "file:///tmp/pkg"
+"#;
+
+        let findings = analyze_poetry_lock(Path::new("poetry.lock"), content);
 
         assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }

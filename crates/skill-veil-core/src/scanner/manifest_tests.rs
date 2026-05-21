@@ -755,6 +755,58 @@ source = { git = "ssh://git@github.com/example/pkg.git#0123456789abcdef012345678
 }
 
 #[test]
+fn test_scan_package_flags_poetry_lock_git_ssh_source() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let pyproject = dir.path().join("pyproject.toml");
+    let poetry_lock = dir.path().join("poetry.lock");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &pyproject,
+        r#"[tool.poetry]
+name = "skill-fixture"
+version = "0.1.0"
+description = ""
+authors = []
+
+[tool.poetry.dependencies]
+python = ">=3.11,<4.0"
+pkg = "0.1.0"
+"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &poetry_lock,
+        r#"
+[[package]]
+name = "pkg"
+version = "0.1.0"
+
+[package.source]
+type = "git"
+url = "ssh://git@github.com/example/pkg.git"
+reference = "main"
+resolved_reference = "0123456789abcdef0123456789abcdef01234567"
+"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let lock_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path == poetry_lock)
+        .unwrap();
+
+    assert!(lock_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "LOCKFILE_POETRY_URL_SOURCE"));
+}
+
+#[test]
 fn test_scan_package_links_only_expected_lockfile_for_package_manager() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
