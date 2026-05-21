@@ -162,10 +162,11 @@ const fn env_path_separator() -> char {
 /// Returns `None` if no init has run, the pointer is unreadable, or
 /// the version directory does not exist on disk.
 fn current_install_overlay() -> Option<PathBuf> {
-    let install_root = dirs::cache_dir()?.join("skill-veil").join("rules");
+    let cache_root = dirs::cache_dir()?.join("skill-veil");
+    let install_root = cache_root.join("rules");
     let pointer_path = install_root.join(CURRENT_POINTER_FILENAME);
     let body = read_current_pointer_file(&pointer_path)?;
-    current_install_overlay_from_pointer(&install_root, &body)
+    current_install_overlay_from_pointer(&cache_root, &install_root, &body)
 }
 
 fn read_current_pointer_file(path: &Path) -> Option<String> {
@@ -215,10 +216,17 @@ fn regular_pointer_metadata(path: &Path) -> Option<Metadata> {
     Some(meta)
 }
 
-fn current_install_overlay_from_pointer(install_root: &Path, body: &str) -> Option<PathBuf> {
+fn current_install_overlay_from_pointer(
+    cache_root: &Path,
+    install_root: &Path,
+    body: &str,
+) -> Option<PathBuf> {
     let pointer: serde_json::Value = serde_json::from_str(body).ok()?;
     let version = pointer.get("version")?.as_str()?;
     if !is_safe_release_version(version) {
+        return None;
+    }
+    if !is_real_dir(cache_root) {
         return None;
     }
     if !is_real_dir(install_root) {
@@ -314,13 +322,14 @@ mod tests {
     #[test]
     fn current_install_overlay_rejects_path_like_version() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let install_root = tmp.path().join("rules");
+        let cache_root = tmp.path().join("skill-veil");
+        let install_root = cache_root.join("rules");
         let official = install_root.join("v0.1.0").join("official");
         std::fs::create_dir_all(&official).unwrap();
 
         let good = r#"{"version":"v0.1.0"}"#;
         assert_eq!(
-            current_install_overlay_from_pointer(&install_root, good),
+            current_install_overlay_from_pointer(&cache_root, &install_root, good),
             Some(official)
         );
 
@@ -331,7 +340,7 @@ mod tests {
             r#"{"version":"0.1.0"}"#,
         ] {
             assert!(
-                current_install_overlay_from_pointer(&install_root, bad).is_none(),
+                current_install_overlay_from_pointer(&cache_root, &install_root, bad).is_none(),
                 "{bad} must not produce an overlay path"
             );
         }
@@ -390,13 +399,38 @@ mod tests {
 
     /// # Contract
     ///
+    /// Runtime rule discovery ignores a symlinked `skill-veil` cache
+    /// root. The cache pointer can only activate rule overlays from the
+    /// real cache tree owned by this process.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_overlay_rejects_symlinked_cache_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside-cache");
+        let cache_root = tmp.path().join("skill-veil");
+        let install_root = cache_root.join("rules");
+        let official = outside.join("rules").join("v0.1.0").join("official");
+        std::fs::create_dir_all(&official).unwrap();
+        std::os::unix::fs::symlink(&outside, &cache_root).unwrap();
+
+        assert!(current_install_overlay_from_pointer(
+            &cache_root,
+            &install_root,
+            r#"{"version":"v0.1.0"}"#
+        )
+        .is_none());
+    }
+
+    /// # Contract
+    ///
     /// Runtime rule discovery loads only real install directories. A
     /// symlinked version directory or `official` directory is ignored.
     #[cfg(unix)]
     #[test]
     fn current_install_overlay_rejects_symlinked_install_dirs() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let install_root = tmp.path().join("rules");
+        let cache_root = tmp.path().join("skill-veil");
+        let install_root = cache_root.join("rules");
         let outside = tmp.path().join("outside");
         let version_dir = install_root.join("v0.1.0");
         let official = version_dir.join("official");
@@ -404,18 +438,22 @@ mod tests {
         std::fs::create_dir_all(&version_dir).unwrap();
         std::os::unix::fs::symlink(&outside, &official).unwrap();
 
-        assert!(
-            current_install_overlay_from_pointer(&install_root, r#"{"version":"v0.1.0"}"#)
-                .is_none()
-        );
+        assert!(current_install_overlay_from_pointer(
+            &cache_root,
+            &install_root,
+            r#"{"version":"v0.1.0"}"#
+        )
+        .is_none());
 
         std::fs::remove_file(&official).unwrap();
         std::fs::remove_dir(&version_dir).unwrap();
         std::os::unix::fs::symlink(&outside, &version_dir).unwrap();
 
-        assert!(
-            current_install_overlay_from_pointer(&install_root, r#"{"version":"v0.1.0"}"#)
-                .is_none()
-        );
+        assert!(current_install_overlay_from_pointer(
+            &cache_root,
+            &install_root,
+            r#"{"version":"v0.1.0"}"#
+        )
+        .is_none());
     }
 }
