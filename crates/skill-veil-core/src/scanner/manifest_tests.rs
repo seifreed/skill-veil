@@ -394,6 +394,29 @@ plugin = { git = "https://github.com/example/plugin.git", tag = "v1.0.0" }
 }
 
 #[test]
+fn test_scan_package_flags_untagged_dockerfile_base_image() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let dockerfile_path = dir.path().join("Dockerfile");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nBuild the image.\n").unwrap();
+    std::fs::write(&dockerfile_path, "FROM alpine\nRUN echo ok\n").unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let dockerfile_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path.ends_with("Dockerfile"))
+        .unwrap();
+
+    assert!(dockerfile_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "MANIFEST_DOCKER_LATEST_TAG"));
+}
+
+#[test]
 fn test_scan_package_detects_makefile_and_config_manifest_findings() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

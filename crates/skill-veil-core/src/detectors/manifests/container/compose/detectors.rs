@@ -14,6 +14,8 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
+use super::super::image_uses_mutable_latest;
+
 /// Maximum YAML content size accepted by [`parse_compose_yaml`]. Beyond
 /// this limit, the parse is rejected outright — deeply nested adversarial
 /// YAML can cause stack overflow in `serde_yaml::from_str`, and legitimate
@@ -88,18 +90,6 @@ pub(super) fn parse_failure_finding(artifact_path: &str, err: &str) -> Finding {
     .build()
 }
 
-/// Check whether `image` uses the mutable `:latest` tag rather than a
-/// specific tag that merely contains `:latest` as a prefix (e.g.
-/// `:latest-alpine`, `:latest-rc`). A plain `ends_with(":latest")`
-/// misclassifies these specific tags.
-fn is_latest_tag(image: &str) -> bool {
-    let Some(colon_pos) = image.rfind(':') else {
-        return false;
-    };
-    let tag = &image[colon_pos + 1..];
-    tag == "latest"
-}
-
 pub(super) fn detect_latest_image_tag(
     service_name: &str,
     mapping: &serde_yaml::Mapping,
@@ -108,10 +98,7 @@ pub(super) fn detect_latest_image_tag(
     let image = mapping
         .get(serde_yaml::Value::String("image".to_string()))
         .and_then(serde_yaml::Value::as_str)?;
-    // Use boundary-aware matching so that `:latest-alpine` and `:latest-rc`
-    // (valid, specific tags) are not misclassified as the mutable `:latest`.
-    // The Dockerfile detector already applies this check; keep compose aligned.
-    if !is_latest_tag(image) {
+    if !image_uses_mutable_latest(image) {
         return None;
     }
     Some(

@@ -10,6 +10,8 @@ use std::path::Path;
 
 use crate::services::artifact_orchestration::manifests::strip_inline_hash_comment;
 
+use super::image_uses_mutable_latest;
+
 /// Tokens that, when present in a lowercased Dockerfile line, indicate the
 /// build pulls something from the network at image-build time.
 ///
@@ -37,8 +39,7 @@ pub(crate) fn analyze_dockerfile(path: &Path, content: &str) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     for line in content.lines().map(str::trim) {
-        let lower_line = line.to_ascii_lowercase();
-        if lower_line.starts_with("from ") && is_latest_tag(&lower_line) {
+        if dockerfile_from_image(line).is_some_and(image_uses_mutable_latest) {
             findings.push(
                 Finding::builder("MANIFEST_DOCKER_LATEST_TAG", ThreatCategory::SupplyChain)
                     .severity(Severity::Low)
@@ -118,9 +119,9 @@ pub(crate) fn dockerfile_relations(content: &str) -> Vec<ArtifactLink> {
     for line in content.lines().map(str::trim) {
         let code = strip_inline_hash_comment(line);
         let lower = code.to_ascii_lowercase();
-        if lower.starts_with("from ") {
+        if let Some(image) = dockerfile_from_image(code) {
             links.push(ArtifactLink {
-                target: code[5..].trim().to_string(),
+                target: image.to_string(),
                 relation: ArtifactRelation::Loads,
             });
         }
@@ -150,18 +151,13 @@ fn is_remote_add_instruction(lower_line: &str) -> bool {
         && (lower_line.contains("http://") || lower_line.contains("https://"))
 }
 
-/// Check that `:latest` is a tag boundary, not a substring like
-/// `:latest-alpine` or `:latest-rc`. After `:latest`, the next character
-/// must be whitespace, end-of-string, or a comment (`#`).
-fn is_latest_tag(lower_line: &str) -> bool {
-    lower_line.contains(":latest")
-        && lower_line.split(":latest").any(|after| {
-            after.is_empty()
-                || after.starts_with(' ')
-                || after.starts_with('\t')
-                || after.starts_with('#')
-                || after.starts_with('\n')
-        })
+fn dockerfile_from_image(line: &str) -> Option<&str> {
+    let mut tokens = line.split_whitespace();
+    let instruction = tokens.next()?;
+    if !instruction.eq_ignore_ascii_case("from") {
+        return None;
+    }
+    tokens.find(|token| !token.starts_with("--"))
 }
 
 /// Match a network-download token with word-boundary awareness.
@@ -219,6 +215,55 @@ mod tests {
 
     fn capability_present(caps: &[ArtifactCapabilityFact], target: ArtifactCapability) -> bool {
         caps.iter().any(|fact| fact.capability == target)
+    }
+
+    fn finding_present(findings: &[Finding], rule_id: &str) -> bool {
+        findings.iter().any(|finding| finding.rule_id == rule_id)
+    }
+
+    /// Contract: an untagged Dockerfile base image resolves to mutable
+    /// `latest` and must raise the same finding as `:latest`.
+    #[test]
+    fn analyze_dockerfile_flags_untagged_base_image() {
+        let content = "FROM --platform=linux/amd64 alpine AS base\n";
+        let findings = analyze_dockerfile(std::path::Path::new("/pkg/Dockerfile"), content);
+
+        assert!(
+            finding_present(&findings, "MANIFEST_DOCKER_LATEST_TAG"),
+            "untagged FROM image must fire latest-tag finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: `scratch` and digest-pinned images do not resolve through
+    /// the mutable latest tag.
+    #[test]
+    fn analyze_dockerfile_keeps_scratch_and_digest_pins_clean() {
+        for content in [
+            "FROM scratch\n",
+            "FROM alpine@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+            "FROM alpine:latest@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        ] {
+            let findings = analyze_dockerfile(std::path::Path::new("/pkg/Dockerfile"), content);
+            assert!(
+                !finding_present(&findings, "MANIFEST_DOCKER_LATEST_TAG"),
+                "{content:?} must not fire latest-tag finding; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: relation inference records the actual base image token,
+    /// not Dockerfile `FROM` flags or stage aliases.
+    #[test]
+    fn dockerfile_relations_extracts_from_image_token() {
+        let content = "FROM --platform=linux/amd64 alpine:3.19 AS base\n";
+        let links = dockerfile_relations(content);
+
+        assert!(
+            links.iter().any(|link| {
+                matches!(link.relation, ArtifactRelation::Loads) && link.target == "alpine:3.19"
+            }),
+            "FROM relation must point at the image token; got {links:?}",
+        );
     }
 
     /// Contract: an inline `# ... curl ...` comment in a Dockerfile must

@@ -534,6 +534,34 @@ mod tests {
         );
     }
 
+    /// Contract: an untagged compose image resolves to mutable `latest`
+    /// and must raise the same finding as `:latest`.
+    #[test]
+    fn analyze_docker_compose_flags_untagged_image_as_latest() {
+        let yaml = "services:\n  app:\n    image: nginx\n";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+
+        assert!(
+            finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_LATEST_TAG"),
+            "untagged compose image must fire latest-tag finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: digest-pinned compose images are immutable even when the
+    /// reference includes `:latest`.
+    #[test]
+    fn analyze_docker_compose_keeps_digest_pinned_image_clean() {
+        let yaml = "services:\n  app:\n    image: nginx:latest@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_LATEST_TAG"),
+            "digest-pinned compose image must not fire latest-tag finding; got {findings:?}",
+        );
+    }
+
     /// Contract: the long-syntax bind mount MUST raise
     /// `MANIFEST_DOCKER_COMPOSE_HOST_MOUNT` when its `source` is the
     /// docker socket. Pre-fix `detect_host_volumes` filtered with
