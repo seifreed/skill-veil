@@ -287,10 +287,33 @@ fn remote_dependency_source_match_value(source: &str) -> Option<String> {
     {
         return extract_http_urls(trimmed).into_iter().next();
     }
+    if is_scp_like_git_source(transport) {
+        return Some(trimmed.to_string());
+    }
     REMOTE_NON_HTTP_GIT_SOURCE_PREFIXES
         .iter()
         .any(|prefix| transport.starts_with(prefix))
         .then(|| trimmed.to_string())
+}
+
+fn is_scp_like_git_source(value: &str) -> bool {
+    let Some((user_host, remote_path)) = value.split_once(':') else {
+        return false;
+    };
+    if user_host.contains('/') || remote_path.trim().is_empty() {
+        return false;
+    }
+    let Some((user, host)) = user_host.split_once('@') else {
+        return false;
+    };
+    !user.is_empty()
+        && !host.is_empty()
+        && user.bytes().all(is_scp_user_host_byte)
+        && host.bytes().all(is_scp_user_host_byte)
+}
+
+fn is_scp_user_host_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
 }
 
 fn lockfile_mentions_remote_source(content: &str) -> bool {
@@ -819,6 +842,65 @@ packages:
             findings[0].match_value,
             "ssh://git@github.com/example/pkg.git"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Pipfile.lock package entries can also use SCP-like Git SSH
+    /// syntax, which is remote even though it has no URL scheme.
+    #[test]
+    fn analyze_pipfile_lock_detects_scp_like_git_package_source() {
+        let content = r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "pypi",
+        "url": "https://pypi.org/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {
+    "pkg": {
+      "git": "git@github.com:example/pkg.git",
+      "ref": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}"#;
+
+        let findings = analyze_pipfile_lock(Path::new("Pipfile.lock"), content);
+
+        assert_eq!(rule_ids(&findings), vec!["LOCKFILE_PIPFILE_REMOTE_SOURCE"]);
+        assert_eq!(findings[0].match_value, "git@github.com:example/pkg.git");
+    }
+
+    /// # Contract (negative)
+    ///
+    /// SCP-like Git source detection requires the remote path separator;
+    /// an `@` alone in a Git field is not enough to infer a remote source.
+    #[test]
+    fn analyze_pipfile_lock_rejects_git_value_without_scp_path() {
+        let content = r#"{
+  "_meta": {
+    "sources": [
+      {
+        "name": "pypi",
+        "url": "https://pypi.org/simple",
+        "verify_ssl": true
+      }
+    ]
+  },
+  "default": {
+    "pkg": {
+      "git": "git@github.com",
+      "ref": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}"#;
+
+        let findings = analyze_pipfile_lock(Path::new("Pipfile.lock"), content);
+
+        assert!(findings.is_empty(), "unexpected findings: {findings:?}");
     }
 
     /// # Contract (negative)
