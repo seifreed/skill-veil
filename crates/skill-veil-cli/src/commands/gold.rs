@@ -103,16 +103,20 @@ fn llm_consensus(votes: &[ProviderVoteRecord]) -> Option<SampleLabel> {
         ("benign", SampleLabel::Benign),
         ("suspicious", SampleLabel::Suspicious),
     ] {
-        let distinct: BTreeSet<&str> = votes
+        let distinct: BTreeSet<String> = votes
             .iter()
             .filter(|v| v.verdict.trim().eq_ignore_ascii_case(needle))
-            .map(|v| v.provider.as_str())
+            .map(|v| normalized_provider_key(&v.provider))
             .collect();
         if distinct.len() >= 2 {
             return Some(label);
         }
     }
     None
+}
+
+fn normalized_provider_key(provider: &str) -> String {
+    provider.trim().to_ascii_lowercase()
 }
 
 fn output_parent(path: &Path) -> &Path {
@@ -468,6 +472,11 @@ mod tests {
             llm_consensus(&[vote("grok", "benign"), vote("grok", "benign")]),
             None,
             "duplicate single-provider votes must not form consensus"
+        );
+        assert_eq!(
+            llm_consensus(&[vote("grok", "benign"), vote(" Grok ", "benign")]),
+            None,
+            "case/whitespace variants of one provider must not form consensus"
         );
         assert_eq!(
             llm_consensus(&[
