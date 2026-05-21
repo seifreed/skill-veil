@@ -39,7 +39,11 @@ pub(crate) fn build_manifest_prompt(
     // before small config files (.env, mcp.json, requirements.txt). Tiny
     // configs frequently carry the highest-signal evidence (exfil URLs,
     // credential paths) per byte, so they must survive truncation.
-    manifest.sort_by_key(|a| a.size_bytes);
+    manifest.sort_by(|a, b| {
+        a.size_bytes
+            .cmp(&b.size_bytes)
+            .then_with(|| a.path.cmp(&b.path))
+    });
     let mut kept: Vec<ManifestEntry> = manifest.clone();
     while estimated_manifest_size(
         input.primary_content,
@@ -105,7 +109,7 @@ pub(crate) fn build_followup_prompt(
 
     // Ascending sort → pop() drops largest first when over budget.
     let mut files: Vec<(PathBuf, String)> = requested_files.to_vec();
-    files.sort_by_key(|a| a.1.len());
+    files.sort_by(|a, b| a.1.len().cmp(&b.1.len()).then_with(|| a.0.cmp(&b.0)));
 
     let mut dropped: Vec<String> = Vec::new();
     while estimate_followup_size(
@@ -321,6 +325,69 @@ mod tests {
                 || prompt.user_json.contains("\"findings_truncated_count\":5"),
             "expected truncated count of 5; got fragment: {}",
             &prompt.user_json[..prompt.user_json.len().min(500)],
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Manifest entries are ordered by size first and path second. The
+    /// path tie-break keeps same-size supporting files from inheriting
+    /// caller order, which would otherwise change the rendered prompt
+    /// and prompt-addressed cache key for equivalent bundles.
+    #[test]
+    fn manifest_prompt_orders_equal_size_artifacts_by_path() {
+        let input = SkillBundleInput {
+            primary_path: Path::new("/tmp/SKILL.md"),
+            primary_content: "primary",
+            supporting: vec![
+                (PathBuf::from("b.py"), "bb".to_string()),
+                (PathBuf::from("c.py"), "c".to_string()),
+                (PathBuf::from("a.py"), "aa".to_string()),
+            ],
+            our_verdict: Verdict::Benign,
+            our_risk_score: 0,
+            our_findings: &[],
+            extracted_iocs: &sample_iocs(),
+        };
+
+        let (_prompt, manifest) = build_manifest_prompt(input, 10_000);
+
+        let paths: Vec<_> = manifest.iter().map(|entry| entry.path.as_str()).collect();
+        assert_eq!(paths, vec!["c.py", "a.py", "b.py"]);
+    }
+
+    /// # Contract
+    ///
+    /// Follow-up requested files use the same size-first, path-second
+    /// order as the manifest builder. Equal-size requested files must
+    /// render deterministically even if the request list arrives in a
+    /// different order.
+    #[test]
+    fn followup_prompt_orders_equal_size_requested_files_by_path() {
+        let input = SkillBundleInput {
+            primary_path: Path::new("/tmp/SKILL.md"),
+            primary_content: "primary",
+            supporting: Vec::new(),
+            our_verdict: Verdict::Benign,
+            our_risk_score: 0,
+            our_findings: &[],
+            extracted_iocs: &sample_iocs(),
+        };
+        let requested = vec![
+            (PathBuf::from("b.py"), "bb".to_string()),
+            (PathBuf::from("c.py"), "c".to_string()),
+            (PathBuf::from("a.py"), "aa".to_string()),
+        ];
+
+        let prompt = build_followup_prompt(&input, &requested, 10_000);
+        let c_pos = prompt.user_json.find("c.py").expect("c.py in prompt");
+        let a_pos = prompt.user_json.find("a.py").expect("a.py in prompt");
+        let b_pos = prompt.user_json.find("b.py").expect("b.py in prompt");
+
+        assert!(
+            c_pos < a_pos && a_pos < b_pos,
+            "expected size-first then path order; prompt was: {}",
+            prompt.user_json
         );
     }
 
