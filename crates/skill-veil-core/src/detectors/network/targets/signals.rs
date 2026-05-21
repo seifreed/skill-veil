@@ -1,9 +1,14 @@
 use crate::detectors::network::patterns::{
     RE_INTERNAL_ACTION, RE_LOCAL_CONTROL_PLANE, RE_LOCAL_DEV_REFERENCE, RE_SSRF_FETCH_LINE,
 };
+use crate::detectors::patterns::line_contains_command_token;
+
+use super::classify::contains_internal_network_target;
+
+const POWERSHELL_FETCH_ALIASES: &[&str] = &["iwr", "irm"];
 
 pub(crate) fn contains_internal_network_action(content: &str) -> bool {
-    RE_INTERNAL_ACTION.is_match(content)
+    RE_INTERNAL_ACTION.is_match(content) || content.lines().any(line_contains_alias_internal_fetch)
 }
 
 pub(crate) fn looks_like_local_dev_reference(content: &str) -> bool {
@@ -17,7 +22,15 @@ pub(crate) fn looks_like_local_control_plane_reference(content: &str) -> bool {
 pub(crate) fn contains_ssrf_like_fetch_line(content: &str) -> bool {
     content
         .lines()
-        .any(|line| RE_SSRF_FETCH_LINE.is_match(line))
+        .any(|line| RE_SSRF_FETCH_LINE.is_match(line) || line_contains_alias_internal_fetch(line))
+}
+
+fn line_contains_alias_internal_fetch(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    POWERSHELL_FETCH_ALIASES
+        .iter()
+        .any(|token| line_contains_command_token(&lower, token))
+        && contains_internal_network_target(line).is_some()
 }
 
 #[cfg(test)]
@@ -98,6 +111,51 @@ mod tests {
             assert!(
                 contains_ssrf_like_fetch_line(sample),
                 "SSRF-like fetch must match localhost/loopback target: {sample:?}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// PowerShell fetch aliases are fetch-shaped internal-network actions.
+    /// `iwr` and `irm` can reach the same SSRF/metadata targets as
+    /// `Invoke-WebRequest` and `Invoke-RestMethod`.
+    #[test]
+    fn detect_internal_actions_and_ssrf_fetches_cover_powershell_aliases() {
+        for sample in [
+            "iwr http://169.254.169.254/latest/meta-data/",
+            "irm('http://service.internal/token')",
+            "IWR http://127.0.0.1/admin",
+        ] {
+            assert!(
+                contains_internal_network_action(sample),
+                "PowerShell alias must count as internal-network action: {sample:?}",
+            );
+            assert!(
+                contains_ssrf_like_fetch_line(sample),
+                "PowerShell alias must count as SSRF-like fetch: {sample:?}",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Short PowerShell alias matching is token-aware. Lookalike command
+    /// names containing `iwr` or `irm` are not fetch primitives.
+    #[test]
+    fn detect_internal_actions_and_ssrf_fetches_reject_alias_substrings() {
+        for sample in [
+            "kiwr http://169.254.169.254/latest/meta-data/",
+            "confirm('http://service.internal/token')",
+            "firmware_check http://127.0.0.1/admin",
+        ] {
+            assert!(
+                !contains_internal_network_action(sample),
+                "lookalike alias must not count as internal-network action: {sample:?}",
+            );
+            assert!(
+                !contains_ssrf_like_fetch_line(sample),
+                "lookalike alias must not count as SSRF-like fetch: {sample:?}",
             );
         }
     }

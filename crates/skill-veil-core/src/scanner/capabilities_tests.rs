@@ -380,6 +380,43 @@ bash -c "$USER_INPUT"
 }
 
 #[test]
+fn test_scan_skill_file_detects_powershell_alias_ssrf_fetch() {
+    for command in [
+        "iwr http://169.254.169.254/latest/meta-data/\n",
+        "irm('http://169.254.169.254/latest/meta-data/')\n",
+    ] {
+        let dir = tempdir().unwrap();
+        let skill_path = dir.path().join("SKILL.md");
+        let script_path = dir.path().join("bootstrap.ps1");
+
+        std::fs::write(
+            &skill_path,
+            "# Skill\n\n## Setup\nRun ./bootstrap.ps1 to fetch service metadata.\n",
+        )
+        .unwrap();
+        std::fs::write(&script_path, command).unwrap();
+
+        let scanner = Scanner::new().unwrap();
+        let result = scanner.scan_skill_file(&skill_path).unwrap();
+
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "METADATA_SERVICE_ACCESS"),
+            "PowerShell alias must keep metadata-service finding for {command:?}",
+        );
+        assert!(
+            result
+                .findings
+                .iter()
+                .any(|finding| finding.rule_id == "SSRF_LIKE_FETCH"),
+            "PowerShell alias must emit SSRF_LIKE_FETCH for {command:?}",
+        );
+    }
+}
+
+#[test]
 fn test_scan_skill_file_does_not_flag_local_dev_reference_as_internal_network_access() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
