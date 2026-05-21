@@ -49,15 +49,11 @@ fn label_of(arg: GoldLabelArg) -> SampleLabel {
 /// Benign). `None` when the report carries no usable signal.
 fn sample_label_from_vt(report: &CachedReport) -> Option<SampleLabel> {
     if let Some(ai) = report.attributes.primary_ai_verdict() {
-        let v = ai.verdict.to_ascii_lowercase();
-        if v.contains("malicious") {
-            return Some(SampleLabel::Malicious);
-        }
-        if v.contains("suspicious") {
-            return Some(SampleLabel::Suspicious);
-        }
-        if v.contains("benign") {
-            return Some(SampleLabel::Benign);
+        match ai.verdict.trim().to_ascii_lowercase().as_str() {
+            "malicious" => return Some(SampleLabel::Malicious),
+            "suspicious" => return Some(SampleLabel::Suspicious),
+            "benign" | "harmless" => return Some(SampleLabel::Benign),
+            _ => {}
         }
     }
     let stats = report.attributes.last_analysis_stats.as_ref()?;
@@ -515,6 +511,24 @@ mod tests {
         let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"crowdsourced_ai_results":[{"source":"Code Insight","verdict":"benign"}]}}"#;
         let r: CachedReport = serde_json::from_str(json).unwrap();
         assert_eq!(sample_label_from_vt(&r), Some(SampleLabel::Benign));
+
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"crowdsourced_ai_results":[{"source":"Code Insight","verdict":" harmless "}]}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), Some(SampleLabel::Benign));
+    }
+
+    /// Contract: Code Insight labels must be exact normalized verdict
+    /// values, not substring matches. Free-form strings such as
+    /// "not malicious" are not ground-truth labels.
+    #[test]
+    fn vt_label_rejects_verdict_substring_matches() {
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"crowdsourced_ai_results":[{"source":"Code Insight","verdict":"not malicious"}]}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), None);
+
+        let json = r#"{"sha256":"x","fetched_at":"t","attributes":{"crowdsourced_ai_results":[{"source":"Code Insight","verdict":"unsuspicious"}]}}"#;
+        let r: CachedReport = serde_json::from_str(json).unwrap();
+        assert_eq!(sample_label_from_vt(&r), None);
     }
 
     /// Contract: with no AI verdict, `last_analysis_stats` is the
