@@ -135,7 +135,7 @@ pub(super) fn validate_provider_base_url(
 ) -> Result<()> {
     let parsed = url::Url::parse(raw).map_err(|err| {
         anyhow!(
-            "[llm.providers.{}].base_url is not a valid URL ({raw:?}): {err}",
+            "[llm.providers.{}].base_url is not a valid URL: {err}",
             kind.as_str(),
         )
     })?;
@@ -147,21 +147,34 @@ pub(super) fn validate_provider_base_url(
             kind.as_str(),
         ));
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(anyhow!(
+            "[llm.providers.{}].base_url must not include embedded credentials; \
+             put provider tokens in api_key or the documented environment variables",
+            kind.as_str(),
+        ));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(anyhow!(
+            "[llm.providers.{}].base_url must not include query or fragment components; \
+             configure only scheme, host, optional port, and path",
+            kind.as_str(),
+        ));
+    }
 
     let is_local_provider = matches!(kind, LlmProviderKind::Ollama | LlmProviderKind::LmStudio);
     if sends_api_key && scheme == "http" && !host_is_loopback(&parsed) {
         return Err(anyhow!(
             "[llm.providers.{}].base_url must use https when an api_key is configured; \
              plain http with credentials is only allowed to loopback hosts \
-             (localhost / 127.0.0.1 / ::1). Got: {raw}",
+             (localhost / 127.0.0.1 / ::1).",
             kind.as_str(),
         ));
     }
     if !is_local_provider && scheme == "http" && !host_is_loopback(&parsed) {
         return Err(anyhow!(
             "[llm.providers.{}].base_url must use https for remote providers; \
-             plain http is only allowed to loopback hosts (localhost / 127.0.0.1 / ::1). \
-             Got: {raw}",
+             plain http is only allowed to loopback hosts (localhost / 127.0.0.1 / ::1).",
             kind.as_str(),
         ));
     }

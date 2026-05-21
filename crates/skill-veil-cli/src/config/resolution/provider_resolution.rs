@@ -471,6 +471,59 @@ model = "gpt-4o-mini"
 
     /// # Contract
     ///
+    /// `base_url` MUST NOT accept embedded credentials. Provider tokens
+    /// belong in `api_key` or environment variables where debug/error
+    /// redaction contracts can cover them.
+    #[test]
+    fn resolve_llm_rejects_base_url_with_embedded_credentials() {
+        let unified = config_with_provider_url(
+            "anthropic",
+            Some("https://user:secret-token@api.anthropic.com/v1"),
+        );
+
+        let err = resolve_llm(Some(&unified)).expect_err("base_url with userinfo MUST be rejected");
+        let msg = format!("{err:#}");
+
+        assert!(
+            msg.contains("embedded credentials"),
+            "error must explain that URL credentials are rejected; got: {msg}"
+        );
+        assert!(
+            !msg.contains("secret-token"),
+            "error must not echo embedded URL credentials; got: {msg}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `base_url` MUST NOT carry query or fragment components. The value
+    /// is an API root, not a request template; tokens or routing state in
+    /// those components would bypass the normal credential-redaction path.
+    #[test]
+    fn resolve_llm_rejects_base_url_with_query_or_fragment() {
+        for raw in [
+            "https://api.anthropic.com/v1?token=secret-token",
+            "https://api.anthropic.com/v1#secret-token",
+        ] {
+            let unified = config_with_provider_url("anthropic", Some(raw));
+
+            let err = resolve_llm(Some(&unified))
+                .expect_err("base_url with query or fragment MUST be rejected");
+            let msg = format!("{err:#}");
+
+            assert!(
+                msg.contains("query or fragment"),
+                "error must explain that query/fragment components are rejected; got: {msg}"
+            );
+            assert!(
+                !msg.contains("secret-token"),
+                "error must not echo query or fragment contents; got: {msg}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
     /// Remote (cloud) providers MUST require `https://` for non-loopback
     /// hosts. Pre-fix a tampered `~/.skill-veil.toml` could redirect the
     /// Anthropic provider at `http://attacker.example/v1/messages` and
