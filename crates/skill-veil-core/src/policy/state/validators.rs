@@ -31,22 +31,15 @@ pub fn validate_policy(policy: &PolicyFile) -> Result<(), String> {
         if policy_override.reason.trim().is_empty() {
             return Err("Policy overrides must define a non-empty reason".to_string());
         }
-        // Dedup key intentionally EXCLUDES `id`: that field is human
-        // bookkeeping, not a semantic selector. Two overrides with the same
-        // selectors + action but different ids are functionally duplicate;
-        // `match_override`'s `max_by_key` would pick one arbitrarily, masking
-        // the policy conflict. Keep `expires_at` in the key — different
-        // expirations represent intentional time-bounded overrides.
         let key = format!(
-            "{:?}|{:?}|{:?}|{:?}|{:?}",
+            "{:?}|{:?}|{:?}|{:?}",
             policy_override.rule_id,
             policy_override.artifact_path,
             policy_override.context,
-            policy_override.expires_at,
-            policy_override.action
+            policy_override.expires_at
         );
         if !seen.insert(key) {
-            return Err("Duplicate policy override entries detected".to_string());
+            return Err("Conflicting policy override entries detected".to_string());
         }
     }
 
@@ -124,6 +117,8 @@ pub fn validate_disposition_overlay(_overlay: &DispositionOverlay) -> Result<(),
 #[cfg(test)]
 mod validate_policy_tests {
     use super::*;
+    use chrono::{DateTime, Utc};
+
     use crate::findings::RecommendedAction;
     use crate::policy::types::PolicyOverride;
     use crate::policy::POLICY_SCHEMA_VERSION;
@@ -138,6 +133,12 @@ mod validate_policy_tests {
             expires_at: None,
             reason: "test reason".to_string(),
         }
+    }
+
+    fn utc(timestamp: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(timestamp)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     fn empty_policy() -> PolicyFile {
@@ -167,16 +168,32 @@ mod validate_policy_tests {
         );
     }
 
-    /// Different actions for the same selectors are NOT duplicates
-    /// (intentional: a policy could differentiate `Log` vs `Block` by
-    /// expiration window).
+    /// Contract: identical selectors and expiration windows with different
+    /// actions are conflicting overrides, not an ordered fallback. Runtime
+    /// matching has no stable reason to prefer `Log` over `Block` except
+    /// file order, so validation must reject the ambiguity.
     #[test]
-    fn validate_policy_accepts_different_actions_for_same_selectors() {
+    fn validate_policy_rejects_conflicting_actions_for_same_selectors() {
         let mut policy = empty_policy();
         policy.overrides = vec![
             ov(Some("a"), Some("RULE_A"), RecommendedAction::Block),
             ov(Some("b"), Some("RULE_A"), RecommendedAction::Log),
         ];
+
+        assert!(validate_policy(&policy).is_err());
+    }
+
+    /// Contract: different expiration windows may intentionally stage
+    /// different actions for the same selectors.
+    #[test]
+    fn validate_policy_accepts_different_actions_for_different_expirations() {
+        let mut first = ov(Some("a"), Some("RULE_A"), RecommendedAction::Block);
+        first.expires_at = Some(utc("2030-01-01T00:00:00Z"));
+        let mut second = ov(Some("b"), Some("RULE_A"), RecommendedAction::Log);
+        second.expires_at = Some(utc("2030-02-01T00:00:00Z"));
+
+        let mut policy = empty_policy();
+        policy.overrides = vec![first, second];
         assert!(validate_policy(&policy).is_ok());
     }
 }
