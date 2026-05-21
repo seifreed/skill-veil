@@ -78,6 +78,9 @@ fn vt_label_for(dir: &Path, sha: &str) -> Option<SampleLabel> {
     let path = dir.join(format!("{sha}.json"));
     let text = read_operator_text_file(&path).ok()?;
     let report: CachedReport = serde_json::from_str(&text).ok()?;
+    if report.sha256.to_ascii_lowercase() != sha {
+        return None;
+    }
     sample_label_from_vt(&report)
 }
 
@@ -392,6 +395,22 @@ mod tests {
         let json = r#"{"sha256":"x","fetched_at":"t","attributes":{}}"#;
         let r: CachedReport = serde_json::from_str(json).unwrap();
         assert_eq!(sample_label_from_vt(&r), None);
+    }
+
+    /// Contract: `<sha>.json` must carry the same payload `sha256`.
+    /// A poisoned VT report cache file must not label a gold sample
+    /// using a report fetched for a different sample.
+    #[test]
+    fn vt_label_for_rejects_payload_sha_mismatch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let requested = "a".repeat(64);
+        let payload = "b".repeat(64);
+        let report = format!(
+            r#"{{"sha256":"{payload}","fetched_at":"t","attributes":{{"crowdsourced_ai_results":[{{"source":"Code Insight","verdict":"malicious"}}]}}}}"#
+        );
+        std::fs::write(tmp.path().join(format!("{requested}.json")), report).unwrap();
+
+        assert_eq!(vt_label_for(tmp.path(), &requested), None);
     }
 
     /// Contract: a VT label that disagrees with the LLM consensus
