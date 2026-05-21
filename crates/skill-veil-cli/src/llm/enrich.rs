@@ -38,6 +38,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use skill_veil_core::{PackageScanResult, ScanResult};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -187,6 +188,34 @@ pub(crate) fn enrich_scan_result(
 
 const MAX_REQUESTED_PATHS: usize = 10;
 
+fn requested_manifest_paths(
+    insufficient_context: &[String],
+    manifest: &[ManifestEntry],
+) -> Vec<String> {
+    let manifest_paths: BTreeSet<&str> = manifest.iter().map(|m| m.path.as_str()).collect();
+    let mut seen = BTreeSet::new();
+    let mut requested = Vec::new();
+    for path in insufficient_context {
+        if requested.len() >= MAX_REQUESTED_PATHS {
+            break;
+        }
+        if manifest_paths.contains(path.as_str()) && seen.insert(path.as_str()) {
+            requested.push(path.clone());
+        }
+    }
+    let unique_count = requested.iter().collect::<BTreeSet<_>>().len();
+    debug_assert_eq!(
+        requested.len(),
+        unique_count,
+        "follow-up path requests must be deduplicated before prompting"
+    );
+    debug_assert!(
+        requested.len() <= MAX_REQUESTED_PATHS,
+        "follow-up path requests must respect the path cap"
+    );
+    requested
+}
+
 /// Build a provider response → (status, verdict, excerpt). Shared across
 /// both turns.
 fn call_provider(
@@ -304,17 +333,9 @@ fn enrich_one(
             // Check turn-2 cache before calling the provider again.
             // Pre-fix the turn-2 cache key was computed only *after* the
             // follow-up turn executed, so re-scans always re-prompted.
-            let manifest_paths: std::collections::BTreeSet<&str> =
-                manifest.iter().map(|m| m.path.as_str()).collect();
-            let requested: Vec<String> = v1
-                .insufficient_context
-                .iter()
-                .filter(|p| manifest_paths.contains(p.as_str()))
-                .take(MAX_REQUESTED_PATHS)
-                .cloned()
-                .collect();
+            let requested = requested_manifest_paths(&v1.insufficient_context, &manifest);
             if !requested.is_empty() {
-                let lookup: std::collections::BTreeMap<String, String> = bundle
+                let lookup: BTreeMap<String, String> = bundle
                     .supporting
                     .iter()
                     .map(|(p, c)| (p.display().to_string(), c.clone()))
@@ -444,19 +465,11 @@ fn execute_followup_turn(
     if turn1_verdict.insufficient_context.is_empty() {
         return None;
     }
-    let manifest_paths: std::collections::BTreeSet<&str> =
-        manifest.iter().map(|m| m.path.as_str()).collect();
-    let requested: Vec<String> = turn1_verdict
-        .insufficient_context
-        .iter()
-        .filter(|p| manifest_paths.contains(p.as_str()))
-        .take(MAX_REQUESTED_PATHS)
-        .cloned()
-        .collect();
+    let requested = requested_manifest_paths(&turn1_verdict.insufficient_context, manifest);
     if requested.is_empty() {
         return None;
     }
-    let lookup: std::collections::BTreeMap<String, String> = bundle
+    let lookup: BTreeMap<String, String> = bundle
         .supporting
         .iter()
         .map(|(p, c)| (p.display().to_string(), c.clone()))
@@ -735,5 +748,48 @@ mod tests {
         assert!(matches!(outcome.turn.status, LlmStatus::Ok));
         assert!(outcome.turn.verdict.is_some());
         assert!(outcome.prompt_chars_added <= 50_000);
+    }
+
+    /// Contract: duplicate `insufficient_context` paths do not consume
+    /// the follow-up path budget or crowd out later unique paths.
+    #[test]
+    fn followup_turn_deduplicates_requested_paths_before_cap() {
+        let provider = RecordingProvider::new(VALID_VERDICT_JSON);
+        let scan_res = minimal_scan_result();
+        let first_path = "scripts/first.py";
+        let second_path = "scripts/second.py";
+        let mut insufficient_context = vec![first_path.to_string(); MAX_REQUESTED_PATHS];
+        insufficient_context.push(second_path.to_string());
+        let bundle = PreparedBundle {
+            primary_content: "# Skill\n",
+            supporting: vec![
+                (PathBuf::from(first_path), "print('first')".to_string()),
+                (PathBuf::from(second_path), "print('second')".to_string()),
+            ],
+        };
+        let manifest = vec![
+            manifest_entry(first_path, "print('first')"),
+            manifest_entry(second_path, "print('second')"),
+        ];
+        let verdict = LlmVerdict {
+            verdict: "suspicious".to_string(),
+            confidence: 0.5,
+            analysis: "needs context".to_string(),
+            key_signals: Vec::new(),
+            agreement_with_scanner: Some("partial".to_string()),
+            insufficient_context,
+        };
+
+        let outcome =
+            execute_followup_turn(&provider, &scan_res, &bundle, &manifest, &verdict, 50_000)
+                .unwrap();
+
+        assert_eq!(provider.calls(), 1);
+        let requested_paths: Vec<PathBuf> =
+            outcome.files.iter().map(|(path, _)| path.clone()).collect();
+        assert_eq!(
+            requested_paths,
+            vec![PathBuf::from(first_path), PathBuf::from(second_path)]
+        );
     }
 }
