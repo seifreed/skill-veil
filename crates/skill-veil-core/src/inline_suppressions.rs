@@ -39,6 +39,10 @@ lazy_pattern!(
 /// guards the contract even if the regex is later relaxed.
 const MAX_SUPPRESSION_REASON_CHARS: usize = 500;
 
+fn capped_suppression_reason(reason: &str) -> String {
+    reason.chars().take(MAX_SUPPRESSION_REASON_CHARS).collect()
+}
+
 lazy_pattern!(
     INLINE_SUPPRESSION_REGEX,
     // Mirrors the `skill-veil:\s*` whitespace fix in
@@ -120,13 +124,9 @@ fn add_suppressions_from_capture(
     // doc-comment on `MAX_SUPPRESSION_REASON_CHARS` explains the contract;
     // belt-and-braces here ensures the limit holds even if the regex is
     // later relaxed during a routine refactor.
-    let reason = capture.get(3).map(|m| {
-        m.matched_text
-            .trim()
-            .chars()
-            .take(MAX_SUPPRESSION_REASON_CHARS)
-            .collect::<String>()
-    });
+    let reason = capture
+        .get(3)
+        .map(|m| capped_suppression_reason(m.matched_text.trim()));
     // Standalone comments (on their own line) with "ignore" target the next significant
     // line — a standalone `<!-- ignore RULE -->` acts like `ignore-next-line`.
     // Standalone nosem/nosemgrep on their own line are no-ops (matching semgrep semantics:
@@ -249,7 +249,7 @@ fn parse_json_suppression_object(
     let reason = object
         .get("reason")
         .and_then(|value| value.as_str())
-        .map(ToString::to_string);
+        .map(capped_suppression_reason);
     let expires_at = match object.get("expires_at") {
         Some(value) => {
             let Some(value) = value.as_str() else {
@@ -555,6 +555,33 @@ mod tests {
         let suppressions = collect_json_suppressions(&path, content);
         assert_eq!(suppressions.len(), 1);
         assert!(suppressions[0].expires_at.is_some());
+    }
+
+    /// Contract: JSON suppression reasons share the same cap as comment
+    /// suppression reasons, because both flow into `SuppressionRecord`
+    /// and downstream serialized reports.
+    #[test]
+    fn json_suppression_reason_is_capped_at_max_chars() {
+        let path = std::path::PathBuf::from("/tmp/skill.json");
+        let huge = "A".repeat(MAX_SUPPRESSION_REASON_CHARS * 20);
+        let content = format!(
+            r#"{{
+                "x-skill-veil-ignore": {{
+                    "rule_id": "RULE_A",
+                    "reason": "{huge}"
+                }}
+            }}"#
+        );
+
+        let suppressions = collect_json_suppressions(&path, &content);
+        assert_eq!(suppressions.len(), 1);
+        let reason = suppressions[0].reason.as_deref().expect("reason captured");
+        assert!(
+            reason.chars().count() <= MAX_SUPPRESSION_REASON_CHARS,
+            "JSON reason MUST be capped at {} chars; got {}",
+            MAX_SUPPRESSION_REASON_CHARS,
+            reason.chars().count()
+        );
     }
 
     #[test]
