@@ -15,6 +15,12 @@ use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestrator
 use super::NPM_INSTALL_HOOKS;
 
 const INSTALL_HOOK_NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+const INSTALL_HOOK_EXEC_COMMAND_ARGS: &[(&str, &str)] = &[
+    ("bash", "-c"),
+    ("sh", "-c"),
+    ("python", "-c"),
+    ("node", "-e"),
+];
 
 pub(crate) fn analyze_package_json(
     service: &ArtifactOrchestratorService,
@@ -190,9 +196,14 @@ pub(crate) fn package_json_capabilities(content: &str) -> Vec<ArtifactCapability
 fn package_json_install_hook_is_risky(command: &str) -> bool {
     let lower_command = command.to_ascii_lowercase();
     package_json_install_hook_has_network(command)
-        || ["powershell", "bash -c", "sh -c", "python -c", "node -e"]
-            .iter()
-            .any(|needle| lower_command.contains(needle))
+        || lower_command
+            .lines()
+            .any(|line| command_token_with_boundary(line, "powershell"))
+        || lower_command.lines().any(|line| {
+            INSTALL_HOOK_EXEC_COMMAND_ARGS
+                .iter()
+                .any(|(command, arg)| command_token_followed_by_arg(line, command, arg))
+        })
 }
 
 fn package_json_install_hook_has_network(command: &str) -> bool {
@@ -233,6 +244,18 @@ fn command_token_with_boundary(line: &str, token: &str) -> bool {
             return true;
         }
         start = token_end;
+    }
+    false
+}
+
+fn command_token_followed_by_arg(line: &str, command: &str, arg: &str) -> bool {
+    let mut tokens =
+        line.split(|c: char| c.is_ascii_whitespace() || matches!(c, '|' | ';' | '&' | '('));
+    while let Some(token) = tokens.next() {
+        let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
+        if basename == command {
+            return tokens.any(|candidate| candidate.trim_end_matches([';', '|', '&', ')']) == arg);
+        }
     }
     false
 }
@@ -677,6 +700,73 @@ mod tests {
             install_hook_finding.recommended_action,
             RecommendedAction::RequireApproval,
         );
+    }
+
+    /// # Contract
+    ///
+    /// Interpreter install hooks with tab-separated flags are risky execution
+    /// hooks, the same as their space-separated forms.
+    #[test]
+    fn analyze_package_json_marks_tab_separated_exec_hook_risky() {
+        for command in [
+            "bash\t-c ./install.sh",
+            "sh\t-c ./install.sh",
+            "python\t-c 'import os'",
+            "node\t-e 'require(\"./install\")'",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
+            let path = std::path::Path::new("/pkg/package.json");
+            let service = ArtifactOrchestratorService::new();
+            let findings = analyze_package_json(&service, path, &manifest, &[]);
+
+            let install_hook_finding = findings
+                .iter()
+                .find(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+                .expect("postinstall hook must raise an install-hook finding");
+            assert_eq!(
+                install_hook_finding.severity,
+                Severity::Medium,
+                "{command:?} must be a risky install hook",
+            );
+            assert_eq!(
+                install_hook_finding.recommended_action,
+                RecommendedAction::RequireApproval,
+                "{command:?} must require approval",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Interpreter install-hook risk matching is command-token aware.
+    #[test]
+    fn analyze_package_json_rejects_exec_hook_command_substrings() {
+        for command in [
+            "rebash\t-c ./install.sh",
+            "wash\t-c ./install.sh",
+            "mypython\t-c 'import os'",
+            "denode\t-e 'require(\"./install\")'",
+        ] {
+            let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
+            let path = std::path::Path::new("/pkg/package.json");
+            let service = ArtifactOrchestratorService::new();
+            let findings = analyze_package_json(&service, path, &manifest, &[]);
+
+            let install_hook_finding = findings
+                .iter()
+                .find(|f| f.rule_id == "MANIFEST_PACKAGE_JSON_INSTALL_HOOK")
+                .expect("postinstall hook must raise an install-hook finding");
+            assert_eq!(
+                install_hook_finding.severity,
+                Severity::Low,
+                "{command:?} must remain a plain install hook",
+            );
+            assert_eq!(
+                install_hook_finding.recommended_action,
+                RecommendedAction::Log,
+                "{command:?} must not require approval",
+            );
+        }
     }
 
     /// Contract: a `bin` field that is whitespace-only is a no-op for npm
