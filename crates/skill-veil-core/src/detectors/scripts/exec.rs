@@ -334,13 +334,25 @@ pub(crate) fn detect_powershell_dynamic_exec(
     ]
 }
 
+fn line_invokes_chmod_exec_bit(line: &str) -> bool {
+    let mut tokens =
+        line.split(|c: char| c.is_ascii_whitespace() || matches!(c, '|' | ';' | '&' | '('));
+    while let Some(token) = tokens.next() {
+        let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
+        if basename == "chmod" {
+            return tokens.any(|arg| arg.trim_end_matches([';', '|', '&', ')']) == "+x");
+        }
+    }
+    false
+}
+
 pub(crate) fn detect_shell_side_effects(
     content_lower: &str,
     language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
     if !matches!(language, "sh" | "bash" | "zsh" | "ksh" | "fish")
-        || !(content_lower.contains("chmod +x")
+        || !(content_lower.lines().any(line_invokes_chmod_exec_bit)
             || content_lower
                 .lines()
                 .any(|line| line_contains_command_token(line, "nohup"))
@@ -697,6 +709,30 @@ mod tests {
                 "{lang}: detect_shell_side_effects must fire on chmod +x; got {findings:?}",
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// `chmod +x` is still an install side effect when the command and mode
+    /// are separated by a tab.
+    #[test]
+    fn detect_shell_side_effects_accepts_tab_separated_chmod_exec_bit() {
+        let content = "chmod\t+x ./payload\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_shell_side_effects(&lower, "sh", "/tmp/install.sh");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "SCRIPT_SHELL_INSTALL_SIDE_EFFECT");
+    }
+
+    /// # Contract (negative)
+    ///
+    /// `chmod +x` matching is command-token aware.
+    #[test]
+    fn detect_shell_side_effects_rejects_chmod_substrings() {
+        let content = "mychmod\t+x ./payload\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_shell_side_effects(&lower, "sh", "/tmp/install.sh");
+        assert!(findings.is_empty());
     }
 
     /// # Contract
