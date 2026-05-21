@@ -27,6 +27,7 @@ pub(crate) fn default_dataset_scan_options() -> ScanOptions {
     ScanOptions {
         recursive: true,
         target_mode: ScanTargetMode::Package,
+        honor_inline_suppressions: false,
         ..Default::default()
     }
 }
@@ -356,4 +357,19 @@ pub(crate) fn run_scan_dataset(
 
     let any_failed = dataset_results.iter().any(|result| result.should_fail);
     Ok(any_failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// # Contract
+    ///
+    /// Internal corpus cross-checks use default dataset options and must
+    /// measure scanner detections, not suppression directives embedded in
+    /// third-party samples.
+    #[test]
+    fn default_dataset_scan_options_disable_inline_suppressions() {
+        assert!(!default_dataset_scan_options().honor_inline_suppressions);
+    }
 }
