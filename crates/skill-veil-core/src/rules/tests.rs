@@ -2,8 +2,11 @@ use super::*;
 use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
 use crate::analyzer::SkillDocument;
 use crate::findings::Severity;
+use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
 use crate::rules::default_external_rule_dirs;
+use std::collections::HashMap;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Build an empty `RuleEngine` wired to the production `RegexPatternMatcher`
@@ -655,6 +658,45 @@ rules:
     std::fs::write(dir.join("duplicate.yaml"), yaml).unwrap();
 }
 
+struct ReversedRulePackFs {
+    files: HashMap<PathBuf, String>,
+}
+
+impl ReversedRulePackFs {
+    fn new(files: Vec<(PathBuf, String)>) -> Self {
+        Self {
+            files: files.into_iter().collect(),
+        }
+    }
+}
+
+impl FileSystemProvider for ReversedRulePackFs {
+    fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
+        self.files
+            .get(path)
+            .map(|content| FileContent::new(content.as_bytes().to_vec()))
+            .ok_or_else(|| FileSystemError::PathNotFound(path.to_path_buf()))
+    }
+
+    fn list_files(
+        &self,
+        _path: &Path,
+        pattern: &str,
+        _recursive: bool,
+    ) -> Result<Vec<PathBuf>, FileSystemError> {
+        if pattern != "*.yaml" {
+            return Ok(Vec::new());
+        }
+        let mut paths = self.files.keys().cloned().collect::<Vec<_>>();
+        paths.sort_by(|left, right| right.cmp(left));
+        Ok(paths)
+    }
+
+    fn exists(&self, path: &Path) -> bool {
+        path == Path::new("/rules") || self.files.contains_key(path)
+    }
+}
+
 /// Contract: strict mode is the **default** as of round-5 hardening.
 /// A duplicate user rule MUST surface as `RuleError::DuplicateUserRule`
 /// at load time so override-pack authors can see the collision instead
@@ -683,6 +725,71 @@ fn explicit_lenient_mode_skips_duplicate_user_rule_silently() {
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
     engine.add_rule(make_rule_with_id("TEST_DUP")).unwrap();
     assert_eq!(engine.rule_count(), 1);
+}
+
+/// Contract: directory rule packs load in sorted path order before
+/// duplicate-id resolution. Non-strict duplicate handling keeps the
+/// first definition, so filesystem traversal order must not decide
+/// which rule body wins.
+#[test]
+fn load_from_dir_loads_rule_packs_in_sorted_path_order() {
+    let first_path = PathBuf::from("/rules/001-first.yaml");
+    let second_path = PathBuf::from("/rules/999-second.yaml");
+    let fs = ReversedRulePackFs::new(vec![
+        (
+            first_path,
+            r#"schema_version: skill-veil.dev/rules/v1alpha1
+rules:
+  - id: TEST_SORTED_DUPLICATE
+    category: generic
+    severity: low
+    when: !regex
+      pattern: "alpha-precedence"
+    action: log
+    reason: "lexicographically first"
+    enabled: true
+    tags: []
+"#
+            .to_string(),
+        ),
+        (
+            second_path,
+            r#"schema_version: skill-veil.dev/rules/v1alpha1
+rules:
+  - id: TEST_SORTED_DUPLICATE
+    category: generic
+    severity: low
+    when: !regex
+      pattern: "zeta-precedence"
+    action: log
+    reason: "lexicographically second"
+    enabled: true
+    tags: []
+"#
+            .to_string(),
+        ),
+    ]);
+    let mut engine = empty_engine();
+    engine.set_strict_mode(false);
+    engine.set_checksum_policy(ChecksumPolicy::Lenient);
+
+    engine.load_from_dir(&fs, "/rules").unwrap();
+
+    let loaded_rules = engine.rules();
+    assert_eq!(loaded_rules.len(), 1);
+    assert_eq!(loaded_rules[0].reason, "lexicographically first");
+
+    let alpha_doc = parse_test_doc("# Skill\n\nalpha-precedence\n");
+    assert!(engine
+        .evaluate(&alpha_doc)
+        .iter()
+        .any(|finding| finding.rule_id == "TEST_SORTED_DUPLICATE"));
+
+    let zeta_doc = parse_test_doc("# Skill\n\nzeta-precedence\n");
+    assert!(!engine
+        .evaluate(&zeta_doc)
+        .iter()
+        .any(|finding| finding.rule_id == "TEST_SORTED_DUPLICATE"));
 }
 
 /// Contract: strict runtime-overlay loading MUST reject duplicate IDs

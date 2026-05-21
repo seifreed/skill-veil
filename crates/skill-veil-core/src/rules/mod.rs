@@ -411,13 +411,18 @@ impl<M: PatternMatcher> RuleEngine<M> {
         self.rules_dir = Some(dir.to_path_buf());
 
         for pattern in &["*.yaml", "*.yml"] {
-            let paths = fs.list_files(dir, pattern, true).map_err(|err| match err {
+            let mut paths = fs.list_files(dir, pattern, true).map_err(|err| match err {
                 FileSystemError::IoError(io) => RuleError::IoError(io),
                 FileSystemError::PathNotFound(missing) => RuleError::IoError(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     format!("path not found: {}", missing.display()),
                 )),
             })?;
+            paths.sort();
+            debug_assert!(
+                paths.windows(2).all(|pair| pair[0] <= pair[1]),
+                "rule pack paths must load in deterministic sorted order"
+            );
             for path in paths {
                 self.load_rules_file(fs, &path)?;
             }
