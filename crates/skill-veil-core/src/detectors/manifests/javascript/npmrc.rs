@@ -26,6 +26,24 @@ fn redact_npmrc_auth_token(line: &str) -> String {
     )
 }
 
+fn npmrc_registry_directive(line: &str) -> Option<(&str, &str)> {
+    let (key, value) = line.split_once('=')?;
+    let key = key.trim();
+    let value = value.trim();
+    let key_lower = key.to_ascii_lowercase();
+    let is_registry_key = key_lower == "registry" || key_lower.ends_with(":registry");
+    if is_registry_key && starts_with_http_scheme(value) {
+        Some((key, value))
+    } else {
+        None
+    }
+}
+
+fn starts_with_http_scheme(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings: Vec<_> = npmrc_code_lines(content)
@@ -48,8 +66,7 @@ pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
         })
         .collect();
 
-    if npmrc_code_lines(content).any(|line| line.to_ascii_lowercase().starts_with("registry=http"))
-    {
+    if npmrc_code_lines(content).any(|line| npmrc_registry_directive(line).is_some()) {
         findings.push(
             Finding::builder(
                 "MANIFEST_NPMRC_CUSTOM_REGISTRY",
@@ -79,7 +96,7 @@ pub(crate) fn npmrc_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
         if !has_token && lower.contains("_authtoken=") {
             has_token = true;
         }
-        if !has_registry && lower.starts_with("registry=http") {
+        if !has_registry && npmrc_registry_directive(line).is_some() {
             has_registry = true;
         }
     }
@@ -106,7 +123,7 @@ pub(crate) fn npmrc_relations(content: &str) -> Vec<ArtifactLink> {
         if !has_token && lower.contains("_authtoken=") {
             has_token = true;
         }
-        if !has_registry && lower.starts_with("registry=http") {
+        if !has_registry && npmrc_registry_directive(line).is_some() {
             has_registry = true;
         }
     }
@@ -135,6 +152,10 @@ mod tests {
 
     fn finding_present(findings: &[Finding], rule_id: &str) -> bool {
         findings.iter().any(|finding| finding.rule_id == rule_id)
+    }
+
+    fn relation_target_present(links: &[ArtifactLink], target: &str) -> bool {
+        links.iter().any(|link| link.target == target)
     }
 
     /// Contract: a `;`-prefixed `.npmrc` line is a full-line INI comment
@@ -184,6 +205,54 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].match_value, "_authToken=<redacted>");
         assert!(!findings[0].match_value.contains("secret123"));
+    }
+
+    /// # Contract
+    ///
+    /// Scoped npm registry directives with normal INI spacing are real
+    /// custom registries and must raise the same finding, capability,
+    /// and relation as the unscoped `registry=` form.
+    #[test]
+    fn npmrc_detects_scoped_registry_with_spacing() {
+        let content = "@internal:registry = HTTPS://npm.pkg.github.com\n";
+        let path = std::path::Path::new("/pkg/.npmrc");
+        let findings = analyze_npmrc(path, content);
+        let caps = npmrc_capabilities(content);
+        let links = npmrc_relations(content);
+
+        assert!(
+            finding_present(&findings, "MANIFEST_NPMRC_CUSTOM_REGISTRY"),
+            "scoped registry directive must emit finding; got {findings:?}",
+        );
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(relation_target_present(&links, "package-registry"));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Registry parsing is key-aware. Lookalike keys and non-HTTP
+    /// scheme lookalikes must not raise custom-registry signals.
+    #[test]
+    fn npmrc_registry_parsing_rejects_lookalike_keys_and_schemes() {
+        let content = "\
+notregistry=https://attacker.example
+registry-path=https://attacker.example
+@internal:registry=HTXP://attacker.example
+";
+        let path = std::path::Path::new("/pkg/.npmrc");
+        let findings = analyze_npmrc(path, content);
+        let caps = npmrc_capabilities(content);
+        let links = npmrc_relations(content);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_NPMRC_CUSTOM_REGISTRY"),
+            "lookalike registry lines must not emit finding; got {findings:?}",
+        );
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+        assert!(!relation_target_present(&links, "package-registry"));
     }
 
     /// # Contract
