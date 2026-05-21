@@ -6,7 +6,7 @@
 //! the rule wanted that we couldn't service. The result feeds the
 //! scanner pipeline like any other finding source.
 
-use super::condition::EvalContext;
+use super::condition::{EvalContext, Section, SkippedPatternRefs};
 use super::evaluators::{KeywordEvaluator, LlmEvaluator, Outcome, SemanticEvaluator};
 use super::model::{NovaMatch, NovaRule, SkippedCapability};
 use std::collections::BTreeMap;
@@ -30,6 +30,7 @@ where
     let mut semantic_hits = BTreeMap::new();
     let mut llm_hits = BTreeMap::new();
     let mut skipped: Vec<SkippedCapability> = Vec::new();
+    let mut skipped_refs = SkippedPatternRefs::default();
 
     for (var, pattern) in &rule.keywords {
         let outcome = keyword_eval.eval(var, pattern, body);
@@ -41,6 +42,9 @@ where
         if matches!(outcome, Outcome::Skipped) && !skipped.contains(&SkippedCapability::Semantics) {
             skipped.push(SkippedCapability::Semantics);
         }
+        if matches!(outcome, Outcome::Skipped) {
+            skipped_refs.insert(Section::Semantics, var);
+        }
         ctx.semantics.insert(var.clone(), outcome.fired());
         semantic_hits.insert(var.clone(), outcome.fired());
     }
@@ -49,11 +53,14 @@ where
         if matches!(outcome, Outcome::Skipped) && !skipped.contains(&SkippedCapability::Llm) {
             skipped.push(SkippedCapability::Llm);
         }
+        if matches!(outcome, Outcome::Skipped) {
+            skipped_refs.insert(Section::Llm, var);
+        }
         ctx.llm.insert(var.clone(), outcome.fired());
         llm_hits.insert(var.clone(), outcome.fired());
     }
 
-    let matched = rule.condition.eval(&ctx)?;
+    let matched = rule.condition.eval_with_skips(&ctx, &skipped_refs)?;
 
     Ok(NovaMatch {
         rule_name: rule.name.clone(),
@@ -219,17 +226,12 @@ mod tests {
             .contains(&SkippedCapability::Semantics));
     }
 
-    /// Contract (negative direction): a MIS-authored rule whose only
-    /// term is a negated semantic pattern (`not semantics.$vendor`)
-    /// DOES fire when semantics is skipped — `Skipped → false`, so
-    /// `not false == true`. This documents exactly why a negated
-    /// semantic term MUST be gated by a positive one (the test
-    /// above): without the gate the Skipped collapse inverts into a
-    /// fire-on-no-evidence. A NOVA rule author relying on `not
-    /// semantics.*` alone is the failure mode the two-sided shape
-    /// guards against.
+    /// Contract: a negated semantic term must not invert skipped
+    /// evidence into a match. `Skipped` is unknown evidence that
+    /// collapses to no match at the rule boundary, including under
+    /// `not`.
     #[test]
-    fn negation_only_semantics_rule_misfires_when_skipped() {
+    fn negation_only_semantics_rule_stays_inert_when_skipped() {
         let body = r#"
             rule NegationOnly {
                 semantics:
@@ -240,9 +242,8 @@ mod tests {
         "#;
         let m = evaluate(body, "anything at all");
         assert!(
-            m.matched,
-            "negation-only semantic rule fires under Skip (Skipped→false→not false=true) \
-             — this is WHY a positive gate term is mandatory",
+            !m.matched,
+            "negation-only semantic rule must not fire under skipped evidence",
         );
         assert!(m
             .skipped_capabilities

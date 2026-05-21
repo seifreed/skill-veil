@@ -28,7 +28,7 @@
 //! `2 of keywords.*` or `all of semantics.$prefix*`.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 
@@ -155,13 +155,116 @@ impl EvalContext {
     }
 }
 
+#[derive(Debug, Default, Clone)]
+pub(crate) struct SkippedPatternRefs {
+    semantics: BTreeSet<String>,
+    llm: BTreeSet<String>,
+}
+
+impl SkippedPatternRefs {
+    pub(crate) fn insert(&mut self, section: Section, var: &str) {
+        match section {
+            Section::Keywords => {}
+            Section::Semantics => {
+                self.semantics.insert(var.to_string());
+            }
+            Section::Llm => {
+                self.llm.insert(var.to_string());
+            }
+        }
+    }
+
+    fn contains(&self, section: Section, var: &str) -> bool {
+        match section {
+            Section::Keywords => false,
+            Section::Semantics => self.semantics.contains(var),
+            Section::Llm => self.llm.contains(var),
+        }
+    }
+
+    fn has_any(&self, section: Section) -> bool {
+        match section {
+            Section::Keywords => false,
+            Section::Semantics => !self.semantics.is_empty(),
+            Section::Llm => !self.llm.is_empty(),
+        }
+    }
+
+    fn has_prefix(&self, section: Section, prefix: &str) -> bool {
+        match section {
+            Section::Keywords => false,
+            Section::Semantics => self.semantics.iter().any(|name| name.starts_with(prefix)),
+            Section::Llm => self.llm.iter().any(|name| name.starts_with(prefix)),
+        }
+    }
+
+    fn is_consistent_with(&self, ctx: &EvalContext) -> bool {
+        self.semantics
+            .iter()
+            .all(|name| ctx.semantics.contains_key(name))
+            && self.llm.iter().all(|name| ctx.llm.contains_key(name))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TruthValue {
+    True,
+    False,
+    Unknown,
+}
+
+impl TruthValue {
+    fn from_bool(value: bool) -> Self {
+        if value {
+            Self::True
+        } else {
+            Self::False
+        }
+    }
+
+    fn is_true(self) -> bool {
+        self == Self::True
+    }
+
+    fn not(self) -> Self {
+        match self {
+            Self::True => Self::False,
+            Self::False => Self::True,
+            Self::Unknown => Self::Unknown,
+        }
+    }
+}
+
 impl ConditionExpr {
     /// Evaluate this expression against the resolved per-pattern hits.
     pub fn eval(&self, ctx: &EvalContext) -> Result<bool, EvalError> {
+        Ok(self
+            .eval_truth(ctx, &SkippedPatternRefs::default())?
+            .is_true())
+    }
+
+    pub(crate) fn eval_with_skips(
+        &self,
+        ctx: &EvalContext,
+        skipped: &SkippedPatternRefs,
+    ) -> Result<bool, EvalError> {
+        debug_assert!(
+            skipped.is_consistent_with(ctx),
+            "skipped NOVA evidence refs must be present in EvalContext"
+        );
+        Ok(self.eval_truth(ctx, skipped)?.is_true())
+    }
+
+    fn eval_truth(
+        &self,
+        ctx: &EvalContext,
+        skipped: &SkippedPatternRefs,
+    ) -> Result<TruthValue, EvalError> {
         match self {
-            Self::Literal(b) => Ok(*b),
+            Self::Literal(b) => Ok(TruthValue::from_bool(*b)),
             Self::Reference { section, var } => match ctx.section(*section).get(var) {
-                Some(b) => Ok(*b),
+                Some(_) if skipped.contains(*section, var) => Ok(TruthValue::Unknown),
+                Some(b) => Ok(TruthValue::from_bool(*b)),
                 None => Err(EvalError::UnknownReference {
                     section: *section,
                     var: var.clone(),
@@ -169,38 +272,74 @@ impl ConditionExpr {
             },
             Self::Wildcard { section } => {
                 let map = ctx.section(*section);
-                Ok(map.values().any(|b| *b))
+                if map.values().any(|b| *b) {
+                    Ok(TruthValue::True)
+                } else if skipped.has_any(*section) {
+                    Ok(TruthValue::Unknown)
+                } else {
+                    Ok(TruthValue::False)
+                }
             }
             Self::PrefixWildcard { section, prefix } => {
                 let map = ctx.section(*section);
-                Ok(map
+                if map
                     .iter()
-                    .any(|(name, hit)| *hit && name.starts_with(prefix)))
+                    .any(|(name, hit)| *hit && name.starts_with(prefix))
+                {
+                    Ok(TruthValue::True)
+                } else if skipped.has_prefix(*section, prefix) {
+                    Ok(TruthValue::Unknown)
+                } else {
+                    Ok(TruthValue::False)
+                }
             }
-            Self::Not(inner) => Ok(!inner.eval(ctx)?),
+            Self::Not(inner) => Ok(inner.eval_truth(ctx, skipped)?.not()),
             Self::And(items) => {
+                let mut unknown = false;
                 for item in items {
-                    if !item.eval(ctx)? {
-                        return Ok(false);
+                    match item.eval_truth(ctx, skipped)? {
+                        TruthValue::False => return Ok(TruthValue::False),
+                        TruthValue::Unknown => unknown = true,
+                        TruthValue::True => {}
                     }
                 }
-                Ok(true)
+                if unknown {
+                    Ok(TruthValue::Unknown)
+                } else {
+                    Ok(TruthValue::True)
+                }
             }
             Self::Or(items) => {
+                let mut unknown = false;
                 for item in items {
-                    if item.eval(ctx)? {
-                        return Ok(true);
+                    match item.eval_truth(ctx, skipped)? {
+                        TruthValue::True => return Ok(TruthValue::True),
+                        TruthValue::Unknown => unknown = true,
+                        TruthValue::False => {}
                     }
                 }
-                Ok(false)
+                if unknown {
+                    Ok(TruthValue::Unknown)
+                } else {
+                    Ok(TruthValue::False)
+                }
             }
             Self::Quantified { quantifier, target } => {
-                let hits = collect_target_hits(target, ctx)?;
-                let count = hits.iter().filter(|b| **b).count() as u32;
+                let hits = collect_target_hits(target, ctx, skipped)?;
+                let count = hits.iter().filter(|b| **b == TruthValue::True).count() as u32;
+                let unknowns = hits.iter().filter(|b| **b == TruthValue::Unknown).count() as u32;
                 Ok(match quantifier {
-                    Quantifier::Any => count >= 1,
-                    Quantifier::All => !hits.is_empty() && count == hits.len() as u32,
-                    Quantifier::AtLeast(n) => count >= *n,
+                    Quantifier::Any if count >= 1 => TruthValue::True,
+                    Quantifier::Any if unknowns > 0 => TruthValue::Unknown,
+                    Quantifier::Any => TruthValue::False,
+                    Quantifier::All if hits.is_empty() => TruthValue::False,
+                    Quantifier::All if hits.contains(&TruthValue::False) => TruthValue::False,
+                    Quantifier::All if unknowns > 0 => TruthValue::Unknown,
+                    Quantifier::All => TruthValue::True,
+                    Quantifier::AtLeast(0) => TruthValue::True,
+                    Quantifier::AtLeast(n) if count >= *n => TruthValue::True,
+                    Quantifier::AtLeast(n) if count + unknowns >= *n => TruthValue::Unknown,
+                    Quantifier::AtLeast(_) => TruthValue::False,
                 })
             }
         }
@@ -210,17 +349,32 @@ impl ConditionExpr {
 fn collect_target_hits(
     target: &QuantifierTarget,
     ctx: &EvalContext,
-) -> Result<Vec<bool>, EvalError> {
+    skipped: &SkippedPatternRefs,
+) -> Result<Vec<TruthValue>, EvalError> {
     match target {
         QuantifierTarget::SectionWildcard(section) => {
-            Ok(ctx.section(*section).values().copied().collect())
+            let mut hits = ctx
+                .section(*section)
+                .iter()
+                .map(|(name, hit)| {
+                    if skipped.contains(*section, name) {
+                        TruthValue::Unknown
+                    } else {
+                        TruthValue::from_bool(*hit)
+                    }
+                })
+                .collect::<Vec<_>>();
+            if hits.is_empty() && skipped.has_any(*section) {
+                hits.push(TruthValue::Unknown);
+            }
+            Ok(hits)
         }
         QuantifierTarget::Inner(expr) => match expr.as_ref() {
             // The NOVA Python parser flattens commas inside
             // `any of (...)` into an Or node; we follow the same
             // convention. Each Or child contributes one boolean.
-            ConditionExpr::Or(items) => items.iter().map(|i| i.eval(ctx)).collect(),
-            other => Ok(vec![other.eval(ctx)?]),
+            ConditionExpr::Or(items) => items.iter().map(|i| i.eval_truth(ctx, skipped)).collect(),
+            other => Ok(vec![other.eval_truth(ctx, skipped)?]),
         },
     }
 }
