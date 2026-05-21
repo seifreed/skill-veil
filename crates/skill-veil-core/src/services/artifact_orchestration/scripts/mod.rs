@@ -1,7 +1,9 @@
 use super::manifests::strip_inline_hash_comment;
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
-use crate::detectors::patterns::{line_invokes_shell_or_interpreter, RE_SHELL_SOURCE};
+use crate::detectors::patterns::{
+    line_invokes_powershell_expression_alias, line_invokes_shell_or_interpreter, RE_SHELL_SOURCE,
+};
 use crate::detectors::scripts::{
     detect_deferred_execution, detect_file_secret_to_network_flow, detect_injection_patterns,
     detect_node_process_exec, detect_node_secret_fs_access, detect_powershell_dynamic_exec,
@@ -183,8 +185,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("spawn(")
         || lower.contains("exec(")
         || lower.contains("start-process")
-        || lower.contains("iex ")
-        || lower.contains("iex(")
+        || lower.lines().any(line_invokes_powershell_expression_alias)
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::ProcessExecution,
@@ -308,7 +309,7 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     // Mirror `script_capabilities`: every pattern that declares
     // `ProcessExecution` MUST also produce an `Executes` edge here.
     // Pre-fix `script_relations` omitted `exec(`, `os.system(`, `spawn(`,
-    // and `iex `, so a script calling `os.system("curl " + secret)`
+    // and the `iex` alias, so a script calling `os.system("curl " + secret)`
     // declared ProcessExecution but had no Executes edge — composite
     // capabilities and taint chains silently lost the link.
     if lower.lines().any(line_invokes_shell_or_interpreter)
@@ -318,8 +319,7 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         || lower.contains("exec(")
         || lower.contains("spawn(")
         || lower.contains("child_process")
-        || lower.contains("iex ")
-        || lower.contains("iex(")
+        || lower.lines().any(line_invokes_powershell_expression_alias)
     {
         links.push(ArtifactLink {
             target: "process".to_string(),
@@ -550,6 +550,36 @@ mod tests {
             .iter()
             .any(|c| c.capability == ArtifactCapability::ProcessExecution));
         assert!(relation_target_present(&links, "process"));
+    }
+
+    /// # Contract
+    ///
+    /// Tabs are valid separators after PowerShell's `IEX` alias. Capability
+    /// and relation enrichment must agree on that command form.
+    #[test]
+    fn iex_tab_flips_both_capability_and_relation() {
+        let content = "iex\t$payload\n";
+        let caps = script_capabilities(content);
+        let links = script_relations(content);
+        assert!(caps
+            .iter()
+            .any(|c| c.capability == ArtifactCapability::ProcessExecution));
+        assert!(relation_target_present(&links, "process"));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// PowerShell `IEX` alias matching is token-aware. Longer identifiers
+    /// containing the same bytes do not imply process execution.
+    #[test]
+    fn iex_substring_does_not_flip_capability_or_relation() {
+        let content = "prefixiex\t$payload\n";
+        let caps = script_capabilities(content);
+        let links = script_relations(content);
+        assert!(!caps
+            .iter()
+            .any(|c| c.capability == ArtifactCapability::ProcessExecution));
+        assert!(!relation_target_present(&links, "process"));
     }
 
     /// # Contract

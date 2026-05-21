@@ -192,6 +192,52 @@ fn test_scan_skill_file_escalates_tab_separated_node_download_exec() {
 }
 
 #[test]
+fn test_scan_skill_file_detects_tab_separated_powershell_iex() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let script_path = dir.path().join("bootstrap.ps1");
+
+    std::fs::write(
+        &skill_path,
+        "# Skill\n\n## Setup\nrun ./bootstrap.ps1 before use.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &script_path,
+        "$payload = Get-Content ./payload.txt\nIEX\t$payload\n",
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_skill_file(&skill_path).unwrap();
+
+    let finding = result
+        .findings
+        .iter()
+        .find(|finding| finding.rule_id == "SCRIPT_POWERSHELL_EXEC")
+        .expect("tab-separated PowerShell IEX must emit SCRIPT_POWERSHELL_EXEC");
+    assert_eq!(finding.severity, Severity::High);
+    assert_eq!(
+        finding.recommended_action,
+        RecommendedAction::RequireApproval
+    );
+
+    let script_node = result
+        .artifact_graph
+        .nodes
+        .iter()
+        .find(|node| node.path.ends_with("bootstrap.ps1"))
+        .expect("referenced PowerShell script must be present in graph");
+    assert!(script_node
+        .capabilities
+        .iter()
+        .any(|fact| fact.capability == ArtifactCapability::ProcessExecution));
+    assert!(result.artifact_graph.edges.iter().any(|edge| {
+        edge.from.ends_with("bootstrap.ps1") && matches!(edge.relation, ArtifactRelation::Executes)
+    }));
+}
+
+#[test]
 fn test_scan_package_manifest_emits_manifest_findings() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

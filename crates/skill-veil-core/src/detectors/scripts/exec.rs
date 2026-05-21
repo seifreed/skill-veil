@@ -5,6 +5,8 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
+use crate::detectors::patterns::line_invokes_powershell_expression_alias;
+
 use super::match_helpers::original_match_str;
 use super::patterns::{
     NODE_INJECTION_PATTERNS, POWERSHELL_INJECTION_PATTERNS, PYTHON_INJECTION_PATTERNS,
@@ -306,8 +308,9 @@ pub(crate) fn detect_powershell_dynamic_exec(
     if !matches!(language, "ps1" | "psm1" | "psd1")
         || !(content_lower.contains("start-process")
             || content_lower.contains("invoke-expression")
-            || content_lower.contains("iex ")
-            || content_lower.contains("iex("))
+            || content_lower
+                .lines()
+                .any(line_invokes_powershell_expression_alias))
     {
         return Vec::new();
     }
@@ -495,6 +498,35 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].severity, Severity::Low);
         assert_eq!(findings[0].recommended_action, RecommendedAction::Log);
+    }
+
+    /// # Contract
+    ///
+    /// PowerShell `IEX` alias execution is dynamic execution even when the
+    /// alias is separated from its argument by a tab.
+    #[test]
+    fn detect_powershell_dynamic_exec_accepts_tab_separated_iex_alias() {
+        let content = "IEX\t$payload\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_powershell_dynamic_exec(&lower, "ps1", "/tmp/bootstrap.ps1");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(
+            findings[0].recommended_action,
+            RecommendedAction::RequireApproval
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// PowerShell `IEX` alias matching is token-aware. Longer command names
+    /// containing `iex` must not fire dynamic execution by themselves.
+    #[test]
+    fn detect_powershell_dynamic_exec_rejects_iex_substrings() {
+        let content = "prefixiex\t$payload\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_powershell_dynamic_exec(&lower, "ps1", "/tmp/bootstrap.ps1");
+        assert!(findings.is_empty());
     }
 
     /// Contract: when `child_process` + `https://` appear inside a
