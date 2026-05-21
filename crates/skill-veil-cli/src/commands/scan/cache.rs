@@ -48,9 +48,14 @@ pub(super) fn cache_base_dir_from_user_cache(
     user_cache: Option<PathBuf>,
 ) -> Result<PathBuf> {
     if let Some(dir) = override_dir {
-        // Validate the override does not place the cache inside the
-        // scanned package (see the invariant doc-comment above).
-        if let (Ok(dir_canon), Ok(scan_canon)) = (dir.canonicalize(), scan_path.canonicalize()) {
+        if existing_path_is_symlink(dir) {
+            tracing::warn!(
+                "--cache-dir {} is a symlink; using default cache location.",
+                dir.display(),
+            );
+        } else if let (Ok(dir_canon), Ok(scan_canon)) =
+            (dir.canonicalize(), scan_path.canonicalize())
+        {
             let scan_root = scan_containment_root(&scan_canon);
             if dir_canon.starts_with(scan_root) {
                 tracing::warn!(
@@ -78,11 +83,34 @@ pub(super) fn cache_base_dir_from_user_cache(
         }
     }
     if let Some(user_cache) = user_cache {
-        return Ok(user_cache.join(CACHE_NAMESPACE));
+        return default_cache_base_dir(&user_cache);
     }
     Err(anyhow!(
         "could not determine user cache directory; pass --cache-dir outside the scan path"
     ))
+}
+
+fn default_cache_base_dir(user_cache: &Path) -> Result<PathBuf> {
+    let base = user_cache.join(CACHE_NAMESPACE);
+    reject_existing_symlink(&base)?;
+    Ok(base)
+}
+
+fn existing_path_is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+fn reject_existing_symlink(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            Err(anyhow!("{} is a symlink", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 fn scan_containment_root(scan_canon: &Path) -> &Path {
@@ -236,6 +264,64 @@ mod tests {
             result.starts_with(&override_dir),
             "cache override outside scan-file parent MUST be accepted; got {result:?}",
         );
+    }
+
+    /// # Contract
+    ///
+    /// A symlinked `--cache-dir` override is rejected even when its
+    /// canonical target is outside the scanned package. Cache roots must
+    /// be real directories before enrichment writes under them.
+    #[cfg(unix)]
+    #[test]
+    fn cache_base_dir_rejects_symlinked_override_when_canonicalize_succeeds() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        let outside = tmp.path().join("outside-cache");
+        let override_dir = tmp.path().join("cache-link");
+        let user_cache = tmp.path().join("user-cache");
+        std::fs::create_dir_all(&scan_path).expect("seed scan dir");
+        std::fs::create_dir_all(&outside).expect("seed outside cache");
+        std::os::unix::fs::symlink(&outside, &override_dir).expect("seed symlinked override");
+
+        let result = cache_base_dir_from_user_cache(
+            Some(&override_dir),
+            &scan_path,
+            Some(user_cache.clone()),
+        )
+        .expect("fall back to user cache");
+
+        assert!(
+            result.starts_with(&user_cache),
+            "symlinked cache override MUST fall back to user cache; got {result:?}",
+        );
+        assert!(
+            !result.starts_with(&override_dir),
+            "symlinked cache override MUST NOT be accepted; got {result:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// The default `<user-cache>/skill-veil` namespace must not be a
+    /// symlink. There is no safer fallback once the default cache root is
+    /// itself redirected.
+    #[cfg(unix)]
+    #[test]
+    fn cache_base_dir_rejects_symlinked_default_namespace() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let scan_path = tmp.path().join("scan-target");
+        let user_cache = tmp.path().join("user-cache");
+        let outside = tmp.path().join("outside-cache");
+        let namespace = user_cache.join(CACHE_NAMESPACE);
+        std::fs::create_dir_all(&scan_path).expect("seed scan dir");
+        std::fs::create_dir_all(&user_cache).expect("seed user cache");
+        std::fs::create_dir_all(&outside).expect("seed outside cache");
+        std::os::unix::fs::symlink(&outside, &namespace).expect("seed namespace symlink");
+
+        let err = cache_base_dir_from_user_cache(None, &scan_path, Some(user_cache))
+            .expect_err("symlinked default namespace must be rejected");
+
+        assert!(format!("{err:#}").contains("symlink"));
     }
 
     /// # Contract
