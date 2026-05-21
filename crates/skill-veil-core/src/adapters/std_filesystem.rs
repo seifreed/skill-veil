@@ -252,6 +252,7 @@ impl FileSystemProvider for StdFileSystemProvider {
             }
         }
 
+        files.sort();
         Ok(files)
     }
 
@@ -353,6 +354,7 @@ impl FileSystemProvider for StdFileSystemProvider {
                 }
             }
         }
+        files.sort();
         Ok(files)
     }
 }
@@ -589,6 +591,77 @@ mod tests {
         let files = fs.list_files(dir.path(), "*.md", true).unwrap();
 
         assert_eq!(files.len(), 2);
+    }
+
+    /// # Contract
+    ///
+    /// The std adapter's non-recursive listing MUST return paths in a
+    /// stable lexical order. Filesystem directory iteration order is
+    /// platform- and filesystem-dependent; exposing it makes scan output
+    /// and downstream cache keys unstable for direct adapter callers.
+    #[test]
+    fn list_files_non_recursive_returns_sorted_paths() {
+        let dir = TempDir::new().unwrap();
+        let c_path = dir.path().join("c.md");
+        let a_path = dir.path().join("a.md");
+        let b_path = dir.path().join("b.md");
+        std::fs::write(&c_path, "").unwrap();
+        std::fs::write(&a_path, "").unwrap();
+        std::fs::write(&b_path, "").unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let files = fs.list_files(dir.path(), "*.md", false).unwrap();
+
+        assert_eq!(files, vec![a_path, b_path, c_path]);
+    }
+
+    /// # Contract
+    ///
+    /// Recursive `list_files` returns the same stable lexical order as
+    /// the non-recursive branch, including paths from nested directories.
+    #[test]
+    fn list_files_recursive_returns_sorted_paths() {
+        let dir = TempDir::new().unwrap();
+        let z_dir = dir.path().join("z");
+        let m_dir = dir.path().join("m");
+        std::fs::create_dir(&z_dir).unwrap();
+        std::fs::create_dir(&m_dir).unwrap();
+        let z_path = z_dir.join("z.md");
+        let root_path = dir.path().join("a.md");
+        let m_path = m_dir.join("m.md");
+        std::fs::write(&z_path, "").unwrap();
+        std::fs::write(&root_path, "").unwrap();
+        std::fs::write(&m_path, "").unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let files = fs.list_files(dir.path(), "*.md", true).unwrap();
+
+        assert_eq!(files, vec![root_path, m_path, z_path]);
+    }
+
+    /// # Contract
+    ///
+    /// `walk_files` also returns stable lexical order after applying
+    /// depth and skip filters. This keeps direct walk consumers from
+    /// inheriting `walkdir` / filesystem traversal order.
+    #[test]
+    fn walk_files_returns_sorted_paths() {
+        let dir = TempDir::new().unwrap();
+        let z_dir = dir.path().join("z");
+        let m_dir = dir.path().join("m");
+        std::fs::create_dir(&z_dir).unwrap();
+        std::fs::create_dir(&m_dir).unwrap();
+        let z_path = z_dir.join("z.txt");
+        let root_path = dir.path().join("a.txt");
+        let m_path = m_dir.join("m.txt");
+        std::fs::write(&z_path, "").unwrap();
+        std::fs::write(&root_path, "").unwrap();
+        std::fs::write(&m_path, "").unwrap();
+
+        let fs = StdFileSystemProvider::new();
+        let files = fs.walk_files(dir.path(), 0, &[]).unwrap();
+
+        assert_eq!(files, vec![root_path, m_path, z_path]);
     }
 
     /// # Contract
