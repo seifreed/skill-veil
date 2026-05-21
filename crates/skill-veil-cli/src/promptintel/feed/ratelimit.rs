@@ -118,8 +118,7 @@ impl RateLimitState {
     }
 
     pub(crate) fn save(&self, cache_root: &Path) -> Result<()> {
-        let dir = cache_root.join("promptintel-feed");
-        create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        prepare_rate_limit_cache_dir(cache_root)?;
         let path = state_path(cache_root);
         let bytes = serde_json::to_vec_pretty(self).context("serialising rate-limit state")?;
         crate::util::cache_io::write_cache_file_atomic(&path, &bytes)
@@ -255,6 +254,13 @@ fn state_path(cache_root: &Path) -> PathBuf {
     cache_root.join("promptintel-feed").join(RATELIMIT_FILENAME)
 }
 
+fn prepare_rate_limit_cache_dir(cache_root: &Path) -> Result<PathBuf> {
+    create_dir_secure(cache_root).with_context(|| format!("creating {}", cache_root.display()))?;
+    let dir = cache_root.join("promptintel-feed");
+    create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +289,25 @@ mod tests {
     fn unknown_endpoint_always_passes() {
         let state = RateLimitState::default();
         assert!(state.check_can_call("future/endpoint").is_ok());
+    }
+
+    /// # Contract
+    ///
+    /// Saving rate-limit state must reject a symlink supplied as the cache
+    /// root before creating `promptintel-feed` beneath the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_symlinked_cache_root() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("cache");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = RateLimitState::default().save(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
+        assert!(!outside.join("promptintel-feed").exists());
     }
 
     /// Contract: hitting exactly `hourly_cap` calls in a 1-hour

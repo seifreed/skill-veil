@@ -91,8 +91,7 @@ impl FeedStore {
     /// `.tmp` sibling and rename, so a crash mid-write never leaves a
     /// partial cache that the next load would treat as authoritative.
     pub(crate) fn save(cache_root: &Path, entries: &[FeedEntry]) -> Result<FeedMeta> {
-        let dir = feed_dir(cache_root);
-        create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
+        let dir = prepare_feed_cache_dir(cache_root)?;
 
         let feed_path = dir.join(FEED_FILENAME);
         let meta_path = dir.join(META_FILENAME);
@@ -211,6 +210,13 @@ fn feed_dir(cache_root: &Path) -> PathBuf {
     cache_root.join("promptintel-feed")
 }
 
+fn prepare_feed_cache_dir(cache_root: &Path) -> Result<PathBuf> {
+    create_dir_secure(cache_root).with_context(|| format!("creating {}", cache_root.display()))?;
+    let dir = feed_dir(cache_root);
+    create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    Ok(dir)
+}
+
 fn write_atomic(target: &Path, bytes: Vec<u8>) -> Result<()> {
     crate::util::cache_io::write_cache_file_atomic(target, &bytes)
         .with_context(|| format!("writing {}", target.display()))?;
@@ -291,6 +297,26 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    /// # Contract
+    ///
+    /// Feed cache writes must reject a symlink supplied as the cache root
+    /// before creating `promptintel-feed` beneath the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn save_rejects_symlinked_cache_root() {
+        let tmp = tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("cache");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let entries = vec![entry_with("a", vec![ioc(FeedIocKind::Hash, "DEAD")])];
+
+        let err = FeedStore::save(&link, &entries).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
+        assert!(!outside.join("promptintel-feed").exists());
     }
 
     /// A missing cache directory yields an empty store, NOT an error.

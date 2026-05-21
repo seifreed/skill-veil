@@ -35,9 +35,23 @@ use std::path::Path;
 /// inspected for over-broad permissions and surface a `tracing::warn!`
 /// so the user can re-key or chmod the cache.
 pub(crate) fn create_dir_secure(path: &Path) -> io::Result<()> {
+    reject_symlink_target(path)?;
     create_dir_secure_inner(path)?;
+    reject_symlink_target(path)?;
     warn_if_dir_world_readable(path);
     Ok(())
+}
+
+fn reject_symlink_target(path: &Path) -> io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is a symlink", path.display()),
+        )),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
 }
 
 #[cfg(unix)]
@@ -151,6 +165,26 @@ mod tests {
         create_dir_secure(&target).expect("second call must also succeed");
 
         assert!(target.exists());
+    }
+
+    /// # Contract
+    ///
+    /// `create_dir_secure` MUST reject a symlink supplied as the target
+    /// directory rather than treating the symlink target as trusted cache
+    /// storage.
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_secure_rejects_symlinked_target_dir() {
+        let parent = TempDir::new().expect("tempdir");
+        let outside = parent.path().join("outside");
+        let target = parent.path().join("cache");
+        std::fs::create_dir(&outside).expect("seed outside dir");
+        std::os::unix::fs::symlink(&outside, &target).expect("seed symlink");
+
+        let err = create_dir_secure(&target).expect_err("symlink target must be rejected");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("symlink"));
     }
 
     /// # Contract
