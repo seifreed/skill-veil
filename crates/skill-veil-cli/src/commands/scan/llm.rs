@@ -406,14 +406,30 @@ fn read_to_string_with_cap(path: &Path) -> io::Result<String> {
 
 fn regular_llm_input_metadata(path: &Path) -> io::Result<Metadata> {
     let meta = std::fs::symlink_metadata(path)?;
-    if meta.is_file() && !meta.file_type().is_symlink() {
-        Ok(meta)
-    } else {
-        Err(io::Error::new(
+    if !meta.is_file() || meta.file_type().is_symlink() {
+        return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("refusing to read {}: not a regular file", path.display()),
-        ))
+        ));
     }
+    if !has_single_hardlink(&meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to read {}: multiple hard links", path.display()),
+        ));
+    }
+    Ok(meta)
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -737,6 +753,29 @@ mod tests {
             .expect_err("symlinked primary must fail");
 
         assert!(format!("{err:#}").contains("not a regular file"));
+    }
+
+    /// # Contract
+    ///
+    /// LLM enrichment reads only single-link regular files. A hardlinked
+    /// path inside the scanned tree can alias a file outside the package
+    /// while still passing canonical path checks, so it is not safe to
+    /// upload to a remote provider.
+    #[cfg(unix)]
+    #[test]
+    fn read_primary_contents_for_paths_rejects_hardlinked_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside-secret.md");
+        let package = dir.path().join("pkg");
+        std::fs::create_dir_all(&package).unwrap();
+        let linked_primary = package.join("SKILL.md");
+        std::fs::write(&outside, "# secret").unwrap();
+        std::fs::hard_link(&outside, &linked_primary).unwrap();
+
+        let err = super::read_primary_contents_for_paths(std::iter::once(linked_primary.as_path()))
+            .expect_err("hardlinked primary must fail");
+
+        assert!(format!("{err:#}").contains("multiple hard links"));
     }
 
     use crate::llm::types::LlmVerdict;
