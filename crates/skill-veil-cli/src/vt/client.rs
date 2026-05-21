@@ -357,9 +357,9 @@ impl VtClient {
     }
 
     /// Download the raw file bytes to `dest`. `dest`'s parent must already
-    /// exist. Writes through a same-directory tempfile and renames on
-    /// success to avoid leaving half-written files when the connection
-    /// drops.
+    /// exist as a real directory. Writes through a same-directory tempfile
+    /// and renames on success to avoid leaving half-written files when the
+    /// connection drops.
     ///
     /// VT's `/files/{sha}/download` endpoint replies with HTTP 302 to a
     /// time-bounded, query-signed Google Storage URL. The storage host
@@ -466,6 +466,7 @@ impl VtClient {
                 format!("{} has no parent directory", dest.display()),
             ))
         })?;
+        Self::ensure_real_download_parent(parent)?;
         let result = (|| -> Result<(String, tempfile::NamedTempFile), VtError> {
             let mut out = tempfile::NamedTempFile::new_in(parent)?;
             let mut reader = response.into_reader();
@@ -501,6 +502,18 @@ impl VtClient {
                 actual,
             }),
             Err(err) => Err(err),
+        }
+    }
+
+    fn ensure_real_download_parent(parent: &Path) -> Result<(), VtError> {
+        let meta = std::fs::symlink_metadata(parent)?;
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            Ok(())
+        } else {
+            Err(VtError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{} is not a real download directory", parent.display()),
+            )))
         }
     }
 
@@ -1011,6 +1024,36 @@ mod download_integrity_tests {
             .file_type()
             .is_symlink());
         assert_eq!(std::fs::read(&dest).unwrap(), body);
+        let _ = server.join();
+    }
+
+    /// # Contract
+    ///
+    /// `stream_response_to` must reject a symlinked parent directory before
+    /// creating its temporary file. Otherwise a reused caller could redirect
+    /// verified malware samples outside the intended download root.
+    #[cfg(unix)]
+    #[test]
+    fn stream_response_to_rejects_symlinked_parent_dir() {
+        let body = b"verified bytes".to_vec();
+        let expected = sha256_hex(&body);
+        let tmpdir = tempfile::tempdir().expect("tempdir");
+        let outside = tmpdir.path().join("outside");
+        let parent = tmpdir.path().join("downloads");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &parent).unwrap();
+        let dest = parent.join("sample");
+
+        let (port_tx, port_rx) = std::sync::mpsc::channel();
+        let server = serve_once(port_tx, body);
+        let port = port_rx.recv().unwrap();
+        let response = fetch_response(port);
+
+        let err = VtClient::stream_response_to(&dest, response, &expected, MAX_DOWNLOAD_BYTES)
+            .expect_err("symlinked parent must be rejected");
+
+        assert!(format!("{err:#}").contains("not a real download directory"));
+        assert!(!outside.join("sample").exists());
         let _ = server.join();
     }
 
