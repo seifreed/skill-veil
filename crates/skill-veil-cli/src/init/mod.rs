@@ -81,8 +81,7 @@ pub(crate) fn run_init(
     validate_version_string(&version)?;
 
     let cache_root = resolve_cache_root(cache_root)?;
-    let install_root = cache_root.join("rules");
-    create_install_root(&install_root)?;
+    let install_root = prepare_install_root(&cache_root)?;
 
     let staging = tempfile::tempdir_in(&install_root)
         .with_context(|| format!("creating staging dir under {}", install_root.display()))?;
@@ -189,7 +188,13 @@ pub(crate) fn install_nova_pinned_to(install_root: &Path, sha: &str) -> Result<N
 /// completed for it) and the NOVA install (`Some` when an `init` /
 /// `rules update` has run NOVA download successfully).
 pub(crate) fn current_install(cache_root: Option<PathBuf>) -> Result<CombinedInstall> {
-    let install_root = resolve_cache_root(cache_root)?.join("rules");
+    let cache_root = resolve_cache_root(cache_root)?;
+    let Some(install_root) = install_root_for_read(&cache_root)? else {
+        return Ok(CombinedInstall {
+            skill_veil: None,
+            nova: None,
+        });
+    };
     let skill_veil = read_skill_veil_install(&install_root)?;
     let nova = read_nova_install(&install_root);
     Ok(CombinedInstall { skill_veil, nova })
@@ -393,6 +398,37 @@ fn create_install_root(install_root: &Path) -> Result<()> {
         .with_context(|| format!("creating install root {}", install_root.display()))
 }
 
+fn prepare_install_root(cache_root: &Path) -> Result<PathBuf> {
+    crate::util::secure_fs::create_dir_secure(cache_root)
+        .with_context(|| format!("creating cache root {}", cache_root.display()))?;
+    let install_root = cache_root.join("rules");
+    create_install_root(&install_root)?;
+    Ok(install_root)
+}
+
+fn install_root_for_read(cache_root: &Path) -> Result<Option<PathBuf>> {
+    if !real_dir_exists_for_read(cache_root)? {
+        return Ok(None);
+    }
+    let install_root = cache_root.join("rules");
+    if !real_dir_exists_for_read(&install_root)? {
+        return Ok(None);
+    }
+    Ok(Some(install_root))
+}
+
+fn real_dir_exists_for_read(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("{} is a symlink", path.display())
+        }
+        Ok(meta) if meta.is_dir() => Ok(true),
+        Ok(_) => anyhow::bail!("{} is not a directory", path.display()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
+    }
+}
+
 fn resolve_cache_root(override_dir: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(dir) = override_dir {
         return Ok(dir);
@@ -505,6 +541,60 @@ mod tests {
         let result = current_install(Some(tmp.path().to_path_buf())).unwrap();
         assert!(result.skill_veil.is_none());
         assert!(result.nova.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// A missing cache root is a clean "not installed" state for
+    /// read-only status checks. `rules status` and scan startup must not
+    /// create cache directories just to discover that no init has run.
+    #[test]
+    fn current_install_is_empty_when_cache_root_missing() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let missing = tmp.path().join("missing-cache");
+
+        let result = current_install(Some(missing)).unwrap();
+
+        assert!(result.skill_veil.is_none());
+        assert!(result.nova.is_none());
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    /// # Contract
+    ///
+    /// Read-only install discovery must reject a symlink supplied as the
+    /// cache root rather than loading rule pointers from the symlink
+    /// target.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_rejects_symlinked_cache_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("cache");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = current_install(Some(link)).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
+    }
+
+    /// # Contract
+    ///
+    /// Read-only install discovery must reject a symlinked `rules`
+    /// directory before looking for `current.json` or `nova-current.json`.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_rejects_symlinked_rules_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside-rules");
+        let link = tmp.path().join("rules");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf())).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
     }
 
     /// Contract: after `init` writes the pointer, the skill-veil
@@ -706,6 +796,25 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o700);
+    }
+
+    /// # Contract
+    ///
+    /// Install setup must reject a symlink supplied as the cache root
+    /// before creating `rules/` under the symlink target.
+    #[cfg(unix)]
+    #[test]
+    fn prepare_install_root_rejects_symlinked_cache_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let outside = tmp.path().join("outside");
+        let link = tmp.path().join("cache");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let err = prepare_install_root(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("symlink"));
+        assert!(!outside.join("rules").exists());
     }
 
     /// Contract: the skill-veil pointer version must be a release tag,
