@@ -94,4 +94,24 @@ mod tests {
             Some(WebhookExposure::AuthBypass)
         );
     }
+
+    /// # Contract
+    ///
+    /// Generic documentation words do not suppress a public webhook
+    /// endpoint. The optional-webhook suppression is only for specific
+    /// webhook documentation phrases.
+    #[test]
+    fn generic_doc_words_do_not_suppress_public_webhook_exposure() {
+        for content in [
+            "webhook listener public endpoint accept callbacks for details",
+            "webhook receiver public endpoint accept callbacks architecture notes",
+            "webhook listener public endpoint accept callbacks fallback path",
+        ] {
+            assert_eq!(
+                classify_webhook_exposure(content),
+                Some(WebhookExposure::PublicInboundEndpoint),
+                "must classify public webhook exposure: {content:?}",
+            );
+        }
+    }
 }

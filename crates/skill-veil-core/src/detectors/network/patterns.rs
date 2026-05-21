@@ -29,7 +29,7 @@ lazy_pattern!(
 );
 lazy_pattern!(
     pub(crate) RE_OPTIONAL_WEBHOOK_DOCS,
-    r"(?is)(alternative:\s*webhook|see\s+/docs/webhooks|for details|if your agent has a publicly reachable endpoint|optional webhook|want real-time push notifications|fallback|polling system|no exposed ip needed|architecture)"
+    r"(?is)(alternative:\s*webhook|see\s+/docs/webhooks|optional webhook|want real-time push notifications|polling system|no exposed ip needed)"
 );
 lazy_pattern!(
     pub(crate) RE_EXAMPLE_WEBHOOK,
