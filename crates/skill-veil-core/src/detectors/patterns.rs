@@ -298,6 +298,7 @@ mod tests {
         assert!(line_contains_command_token("exec('curl\t$url')", "curl"));
         assert!(line_contains_command_token("spawn(`wget\t$url`)", "wget"));
         assert!(line_contains_command_token("iwr($url) | iex", "iwr"));
+        assert!(line_contains_command_token("irm($url) | iex", "irm"));
     }
 
     /// # Contract (negative)
@@ -313,6 +314,7 @@ mod tests {
         ));
         assert!(!line_contains_command_token("bobcat\t/etc/passwd", "cat"));
         assert!(!line_contains_command_token("kiwr($url) | iex", "iwr"));
+        assert!(!line_contains_command_token("confirm($url) | iex", "irm"));
     }
 
     /// # Contract

