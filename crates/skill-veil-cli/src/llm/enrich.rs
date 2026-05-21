@@ -240,7 +240,9 @@ struct FollowupOutcome {
 ///   budget, the function returns a `BundleTooLarge` status WITHOUT calling
 ///   the provider — server-side concatenation of system + user is what the
 ///   model tokenises, so user-only counting underestimates by ~1650 chars on
-///   every call, enough to overflow tight local-provider budgets.
+///   every call, enough to overflow tight local-provider budgets. The same
+///   exact guard applies to the follow-up turn after full-file context is
+///   serialised.
 /// - **Two-turn invariant:** at most one follow-up turn is executed. Turn 2
 ///   is gated on (a) Turn 1 returning `Ok`, (b) the LLM listing
 ///   `insufficient_context` paths, and (c) those paths intersecting the
@@ -423,12 +425,14 @@ fn execute_manifest_turn(provider: &dyn LlmProvider, prompt: &LlmPrompt) -> Turn
 
 /// Conditionally run turn 2 when the LLM listed `insufficient_context`
 /// paths. Returns `None` when no follow-up is warranted (verdict listed
-/// no paths, none intersected the manifest, or every requested path was
-/// dropped during budget truncation), letting the orchestrator skip
-/// without re-implementing the gating logic.
+/// no paths, none intersected the manifest, or no requested path content is
+/// available), letting the orchestrator skip without re-implementing the
+/// gating logic.
 ///
 /// The fetched fileset is capped at `MAX_REQUESTED_PATHS` to bound the
-/// turn-2 prompt and prevent an LLM-driven DoS.
+/// turn-2 prompt and prevent an LLM-driven DoS. The exact serialised prompt
+/// size is checked before the provider call because the estimator cannot
+/// account perfectly for TOON/JSON escaping and fixed system-prompt overhead.
 fn execute_followup_turn(
     provider: &dyn LlmProvider,
     scan_res: &ScanResult,
@@ -492,6 +496,20 @@ fn execute_followup_turn(
     let followup_prompt =
         build_followup_prompt(&followup_input, &requested_with_contents, max_prompt_chars);
     let prompt_chars_added = followup_prompt.user_json.len() + followup_prompt.system.len();
+    if prompt_chars_added > max_prompt_chars {
+        return Some(FollowupOutcome {
+            turn: TurnOutcome {
+                status: LlmStatus::BundleTooLarge {
+                    user_json_chars: prompt_chars_added,
+                    budget: max_prompt_chars,
+                },
+                verdict: None,
+                excerpt: None,
+            },
+            files: requested_with_contents,
+            prompt_chars_added,
+        });
+    }
     let (status, verdict, excerpt) = call_provider(provider, &followup_prompt);
     Some(FollowupOutcome {
         turn: TurnOutcome {
@@ -515,7 +533,130 @@ fn trim_excerpt(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use skill_veil_core::{
+        AgentExtensionKind, ArtifactClassification, ArtifactGraph, ArtifactIdentitySource,
+        ArtifactKind, ArtifactMetadata, BlastRadiusSummary, DeduplicationSummary, ExtractedIocs,
+        FindingSummary, HygieneSummary, PackageHealth, PackageVerdictReport, PolicyAudit,
+        ScanResult, StructuralValidity, SuppressionSummary, Verdict,
+    };
+
+    use super::super::types::LlmRawResponse;
     use super::*;
+
+    struct RecordingProvider {
+        calls: AtomicUsize,
+        response: &'static str,
+    }
+
+    impl RecordingProvider {
+        fn new(response: &'static str) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                response,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl LlmProvider for RecordingProvider {
+        fn analyze(&self, _prompt: &LlmPrompt) -> Result<LlmRawResponse, LlmError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(LlmRawResponse {
+                content: self.response.to_string(),
+            })
+        }
+
+        fn name(&self) -> &'static str {
+            "test"
+        }
+
+        fn model(&self) -> &str {
+            "test-model"
+        }
+
+        fn sampling_fingerprint(&self) -> String {
+            "test-sampling".to_string()
+        }
+    }
+
+    fn minimal_scan_result() -> ScanResult {
+        let summary = FindingSummary::from_findings(&[]);
+        ScanResult {
+            metadata: ArtifactMetadata {
+                path: PathBuf::from("SKILL.md"),
+                name: "SKILL.md".to_string(),
+                extension_kind: AgentExtensionKind::Skill,
+                classification: ArtifactClassification::ConfirmedSkill,
+                package_id: None,
+                identity_source: ArtifactIdentitySource::ExplicitName,
+                structural_validity: StructuralValidity::Confirmed,
+                heuristic_score: 0,
+                primary_artifact_kind: ArtifactKind::SkillDocument,
+            },
+            findings: Vec::new(),
+            suppressed_findings: Vec::new(),
+            primary_findings: Vec::new(),
+            supporting_findings: Vec::new(),
+            summary: summary.clone(),
+            primary_summary: summary.clone(),
+            supporting_summary: summary,
+            verdict: Verdict::Benign,
+            verdict_report: PackageVerdictReport {
+                verdict: Verdict::Benign,
+                package_health: PackageHealth::Healthy,
+                hygiene_summary: HygieneSummary::default(),
+                declared_permissions: Vec::new(),
+                effective_capabilities: Vec::new(),
+                blast_radius_summary: BlastRadiusSummary::default(),
+                verdict_reasons: Vec::new(),
+                root_cause_groups: Vec::new(),
+                top_risk_drivers: Vec::new(),
+                calibration_notes: Vec::new(),
+                calibration_risk_adjustment: 0,
+            },
+            deduplication_summary: DeduplicationSummary::default(),
+            artifact_graph: ArtifactGraph::new(),
+            profile: None,
+            policy: None,
+            suppression_summary: SuppressionSummary::default(),
+            policy_audit: PolicyAudit::default(),
+            should_fail: false,
+            extracted_iocs: ExtractedIocs::default(),
+        }
+    }
+
+    fn manifest_entry(path: &str, content: &str) -> ManifestEntry {
+        ManifestEntry {
+            path: path.to_string(),
+            size_bytes: content.len(),
+            preview: content.to_string(),
+        }
+    }
+
+    fn requesting_verdict(path: &str) -> LlmVerdict {
+        LlmVerdict {
+            verdict: "suspicious".to_string(),
+            confidence: 0.5,
+            analysis: "needs context".to_string(),
+            key_signals: Vec::new(),
+            agreement_with_scanner: Some("partial".to_string()),
+            insufficient_context: vec![path.to_string()],
+        }
+    }
+
+    const VALID_VERDICT_JSON: &str = r#"{
+        "verdict":"benign",
+        "confidence":0.8,
+        "analysis":"full context is safe",
+        "key_signals":[],
+        "agreement_with_scanner":"agree",
+        "insufficient_context":[]
+    }"#;
 
     /// Compile-time witness: `enrich_scan_result` takes `&PackageScanResult`
     /// (shared reference), matching the VT contract. If someone changes it to
@@ -543,5 +684,56 @@ mod tests {
         let e = LlmEnrichment::default();
         let _copy = e.clone();
         let _json = serde_json::to_string(&e).unwrap();
+    }
+
+    /// Contract: turn 2 rejects prompts whose exact SYSTEM + USER size exceeds
+    /// the configured budget and does not call the provider.
+    #[test]
+    fn followup_turn_rejects_prompt_over_budget_without_provider_call() {
+        let provider = RecordingProvider::new(VALID_VERDICT_JSON);
+        let scan_res = minimal_scan_result();
+        let script_path = "scripts/context.py";
+        let script = "print('context')";
+        let bundle = PreparedBundle {
+            primary_content: "# Skill\n",
+            supporting: vec![(PathBuf::from(script_path), script.to_string())],
+        };
+        let manifest = vec![manifest_entry(script_path, script)];
+        let verdict = requesting_verdict(script_path);
+
+        let outcome =
+            execute_followup_turn(&provider, &scan_res, &bundle, &manifest, &verdict, 1).unwrap();
+
+        assert_eq!(provider.calls(), 0);
+        assert!(matches!(
+            outcome.turn.status,
+            LlmStatus::BundleTooLarge { budget: 1, .. }
+        ));
+        assert!(outcome.prompt_chars_added > 1);
+    }
+
+    /// Contract: turn 2 calls the provider once when the exact prompt size
+    /// fits the configured budget.
+    #[test]
+    fn followup_turn_calls_provider_when_prompt_fits_budget() {
+        let provider = RecordingProvider::new(VALID_VERDICT_JSON);
+        let scan_res = minimal_scan_result();
+        let script_path = "scripts/context.py";
+        let script = "print('context')";
+        let bundle = PreparedBundle {
+            primary_content: "# Skill\n",
+            supporting: vec![(PathBuf::from(script_path), script.to_string())],
+        };
+        let manifest = vec![manifest_entry(script_path, script)];
+        let verdict = requesting_verdict(script_path);
+
+        let outcome =
+            execute_followup_turn(&provider, &scan_res, &bundle, &manifest, &verdict, 50_000)
+                .unwrap();
+
+        assert_eq!(provider.calls(), 1);
+        assert!(matches!(outcome.turn.status, LlmStatus::Ok));
+        assert!(outcome.turn.verdict.is_some());
+        assert!(outcome.prompt_chars_added <= 50_000);
     }
 }
