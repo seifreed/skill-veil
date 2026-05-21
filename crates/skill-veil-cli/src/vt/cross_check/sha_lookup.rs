@@ -169,11 +169,27 @@ fn compute_file_sha256_with_cap(path: &Path, cap: u64) -> Result<String> {
 fn regular_hash_file_metadata(path: &Path) -> Result<Metadata> {
     let meta = std::fs::symlink_metadata(path)
         .with_context(|| format!("stat hash file {}", path.display()))?;
-    if meta.is_file() && !meta.file_type().is_symlink() {
-        Ok(meta)
-    } else {
+    if !meta.is_file() || meta.file_type().is_symlink() {
         anyhow::bail!("refusing to hash {}: not a regular file", path.display())
     }
+    if !has_single_hardlink(&meta) {
+        anyhow::bail!(
+            "refusing to hash {}: file has multiple hard links",
+            path.display()
+        )
+    }
+    Ok(meta)
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -292,6 +308,25 @@ mod tests {
         let err = compute_file_sha256(&link).expect_err("symlink must be rejected");
 
         assert!(format!("{err:#}").contains("not a regular file"));
+    }
+
+    /// # Contract
+    ///
+    /// File-hash fallback accepts only files with a single directory
+    /// entry. A hardlinked artifact is rejected instead of hashing an
+    /// inode whose provenance is outside the corpus path.
+    #[cfg(unix)]
+    #[test]
+    fn compute_file_sha256_rejects_hardlinked_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target.bin");
+        let link = dir.path().join("artifact.bin");
+        std::fs::write(&target, b"hello").unwrap();
+        std::fs::hard_link(&target, &link).unwrap();
+
+        let err = compute_file_sha256(&link).expect_err("hardlink must be rejected");
+
+        assert!(format!("{err:#}").contains("multiple hard links"));
     }
 
     /// # Contract
