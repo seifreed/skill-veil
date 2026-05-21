@@ -254,6 +254,9 @@ fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
         }
         return out;
     }
+    if regular_dir_metadata(target).is_err() {
+        return out;
+    }
     for entry in walkdir::WalkDir::new(target)
         .into_iter()
         .filter_map(Result::ok)
@@ -313,6 +316,21 @@ fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
         return Err(non_regular_file_error(path));
     }
     Ok(meta)
+}
+
+fn regular_dir_metadata(path: &Path) -> io::Result<Metadata> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.is_dir() && !meta.is_symlink() {
+        Ok(meta)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to walk {}: path is not a real directory",
+                path.display()
+            ),
+        ))
+    }
 }
 
 fn validate_opened_regular_file(
@@ -411,6 +429,25 @@ mod tests {
         let link = tmp.path().join("SKILL.md");
         std::fs::write(&outside, "# Outside\nkeyword").unwrap();
         std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let bodies = collect_scan_bodies(&link);
+
+        assert!(bodies.is_empty());
+    }
+
+    /// # Contract
+    ///
+    /// NOVA scan body collection MUST reject a direct symlink directory
+    /// target. `walkdir` can traverse a symlink supplied as its root even
+    /// with link-following disabled for descendants.
+    #[cfg(unix)]
+    #[test]
+    fn collect_scan_bodies_rejects_symlink_target_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("pkg");
+        std::fs::write(outside.path().join("outside.md"), "# Outside\nkeyword").unwrap();
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
 
         let bodies = collect_scan_bodies(&link);
 
