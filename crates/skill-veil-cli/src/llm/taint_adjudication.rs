@@ -185,16 +185,35 @@ pub(crate) fn parse_provider_verdict(raw: &str) -> Option<Verdict> {
 /// from one provider cannot inflate the count.
 #[must_use]
 pub(crate) fn provider_consensus_benign(provider_verdicts: &[(String, Verdict)]) -> bool {
-    let benign: BTreeSet<String> = provider_verdicts
-        .iter()
-        .filter(|(_, v)| *v == Verdict::Benign)
-        .map(|(p, _)| normalized_provider_key(p))
-        .collect();
-    benign.len() >= 2
+    provider_consensus_for(provider_verdicts, Verdict::Benign)
 }
 
 fn normalized_provider_key(provider: &str) -> String {
     provider.trim().to_ascii_lowercase()
+}
+
+fn provider_consensus_for(provider_verdicts: &[(String, Verdict)], target: Verdict) -> bool {
+    let mut by_provider: BTreeMap<String, Option<Verdict>> = BTreeMap::new();
+    for (provider, verdict) in provider_verdicts {
+        by_provider
+            .entry(normalized_provider_key(provider))
+            .and_modify(|existing| {
+                if *existing != Some(*verdict) {
+                    *existing = None;
+                }
+            })
+            .or_insert(Some(*verdict));
+    }
+    debug_assert!(
+        by_provider.len() <= provider_verdicts.len(),
+        "normalized provider buckets cannot outnumber raw votes",
+    );
+
+    by_provider
+        .values()
+        .filter(|verdict| **verdict == Some(target))
+        .count()
+        >= 2
 }
 
 /// Pure reconciliation. Returns the verdict to use for the appended
@@ -269,12 +288,7 @@ pub(crate) fn result_upgrade_eligible(r: &ScanResult) -> bool {
 /// so it can never drive an upgrade.
 #[must_use]
 pub(crate) fn provider_consensus_malicious(provider_verdicts: &[(String, Verdict)]) -> bool {
-    let malicious: BTreeSet<String> = provider_verdicts
-        .iter()
-        .filter(|(_, v)| *v == Verdict::Malicious)
-        .map(|(p, _)| normalized_provider_key(p))
-        .collect();
-    malicious.len() >= 2
+    provider_consensus_for(provider_verdicts, Verdict::Malicious)
 }
 
 /// Pure reconciliation for the FN upgrade. Returns `Malicious` iff ALL
@@ -778,6 +792,11 @@ mod tests {
             ("grok".into(), Verdict::Benign),
             (" Grok ".into(), Verdict::Benign),
         ]));
+        assert!(!provider_consensus_benign(&[
+            ("openai".into(), Verdict::Benign),
+            (" OpenAI ".into(), Verdict::Malicious),
+            ("grok".into(), Verdict::Benign),
+        ]));
         assert!(provider_consensus_benign(&[
             ("openai".into(), Verdict::Benign),
             ("grok".into(), Verdict::Benign),
@@ -945,6 +964,11 @@ mod tests {
         assert!(!provider_consensus_malicious(&[
             ("grok".into(), Verdict::Malicious),
             (" Grok ".into(), Verdict::Malicious),
+        ]));
+        assert!(!provider_consensus_malicious(&[
+            ("openai".into(), Verdict::Malicious),
+            (" OpenAI ".into(), Verdict::Benign),
+            ("grok".into(), Verdict::Malicious),
         ]));
         assert!(provider_consensus_malicious(&[
             ("openai".into(), Verdict::Malicious),

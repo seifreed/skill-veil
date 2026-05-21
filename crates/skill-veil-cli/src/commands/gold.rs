@@ -7,7 +7,7 @@
 //! resulting manifest is scored by the identical pipeline as the
 //! regression corpus via `evaluate_gold_corpus`.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
@@ -96,23 +96,44 @@ fn validate_sample_sha(sha: &str) -> Result<()> {
 /// ≥2 DISTINCT providers agreeing on the same label is the consensus;
 /// otherwise `None` (no consensus → the sample is disputed and needs
 /// a human). Distinctness is keyed on provider name so a single
-/// provider cannot manufacture consensus.
+/// provider cannot manufacture consensus; conflicting duplicate rows
+/// from one provider are ambiguous and do not count for any label.
 fn llm_consensus(votes: &[ProviderVoteRecord]) -> Option<SampleLabel> {
-    for (needle, label) in [
-        ("malicious", SampleLabel::Malicious),
-        ("benign", SampleLabel::Benign),
-        ("suspicious", SampleLabel::Suspicious),
-    ] {
-        let distinct: BTreeSet<String> = votes
-            .iter()
-            .filter(|v| v.verdict.trim().eq_ignore_ascii_case(needle))
-            .map(|v| normalized_provider_key(&v.provider))
-            .collect();
-        if distinct.len() >= 2 {
-            return Some(label);
-        }
+    let mut by_provider: BTreeMap<String, Option<SampleLabel>> = BTreeMap::new();
+    for vote in votes {
+        let Some(label) = sample_label_from_llm_verdict(&vote.verdict) else {
+            continue;
+        };
+        by_provider
+            .entry(normalized_provider_key(&vote.provider))
+            .and_modify(|existing| {
+                if *existing != Some(label) {
+                    *existing = None;
+                }
+            })
+            .or_insert(Some(label));
     }
-    None
+    debug_assert!(
+        by_provider.len() <= votes.len(),
+        "normalized provider buckets cannot outnumber raw votes",
+    );
+
+    [
+        SampleLabel::Malicious,
+        SampleLabel::Benign,
+        SampleLabel::Suspicious,
+    ]
+    .into_iter()
+    .find(|&label| by_provider.values().filter(|v| **v == Some(label)).count() >= 2)
+}
+
+fn sample_label_from_llm_verdict(raw: &str) -> Option<SampleLabel> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "malicious" => Some(SampleLabel::Malicious),
+        "benign" => Some(SampleLabel::Benign),
+        "suspicious" => Some(SampleLabel::Suspicious),
+        _ => None,
+    }
 }
 
 fn normalized_provider_key(provider: &str) -> String {
@@ -477,6 +498,15 @@ mod tests {
             llm_consensus(&[vote("grok", "benign"), vote(" Grok ", "benign")]),
             None,
             "case/whitespace variants of one provider must not form consensus"
+        );
+        assert_eq!(
+            llm_consensus(&[
+                vote("openai", "malicious"),
+                vote(" OpenAI ", "benign"),
+                vote("grok", "malicious"),
+            ]),
+            None,
+            "conflicting duplicate provider votes must not support consensus"
         );
         assert_eq!(
             llm_consensus(&[
