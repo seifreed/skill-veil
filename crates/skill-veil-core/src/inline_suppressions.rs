@@ -250,20 +250,25 @@ fn parse_json_suppression_object(
         .get("reason")
         .and_then(|value| value.as_str())
         .map(ToString::to_string);
-    let expires_at = object
-        .get("expires_at")
-        .and_then(|value| value.as_str())
-        .and_then(|value| {
-            value
-                .parse::<DateTime<Utc>>()
-                .inspect_err(|e| {
+    let expires_at = match object.get("expires_at") {
+        Some(value) => {
+            let Some(value) = value.as_str() else {
+                tracing::warn!("suppression: non-string expires_at for rule {rule_id}");
+                return None;
+            };
+            match value.parse::<DateTime<Utc>>() {
+                Ok(expires_at) => Some(expires_at),
+                Err(e) => {
                     tracing::warn!(
                         "suppression: malformed expires_at timestamp '{value}' for rule \
                          {rule_id}: {e}"
                     );
-                })
-                .ok()
-        });
+                    return None;
+                }
+            }
+        }
+        None => None,
+    };
     Some(InlineSuppression {
         path: artifact_path.to_string(),
         rule_id,
@@ -516,6 +521,40 @@ mod tests {
             "standalone reason MUST round-trip; got {:?}",
             suppressions[0].reason,
         );
+    }
+
+    /// Contract: a JSON suppression with a malformed `expires_at` value
+    /// is invalid. Treating the malformed timestamp as `None` would turn
+    /// a time-bound suppression into a permanent one.
+    #[test]
+    fn json_suppression_rejects_malformed_expires_at() {
+        let path = std::path::PathBuf::from("/tmp/skill.json");
+        let content = r#"{
+            "x-skill-veil-ignore": {
+                "rule_id": "RULE_A",
+                "expires_at": "not-a-timestamp"
+            }
+        }"#;
+
+        let suppressions = collect_json_suppressions(&path, content);
+        assert!(suppressions.is_empty());
+    }
+
+    /// Contract: a well-formed JSON `expires_at` timestamp is retained
+    /// so normal time-bound suppression entries still work.
+    #[test]
+    fn json_suppression_accepts_valid_expires_at() {
+        let path = std::path::PathBuf::from("/tmp/skill.json");
+        let content = r#"{
+            "x-skill-veil-ignore": {
+                "rule_id": "RULE_A",
+                "expires_at": "2030-01-01T00:00:00Z"
+            }
+        }"#;
+
+        let suppressions = collect_json_suppressions(&path, content);
+        assert_eq!(suppressions.len(), 1);
+        assert!(suppressions[0].expires_at.is_some());
     }
 
     #[test]
