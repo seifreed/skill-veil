@@ -229,8 +229,11 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         &artifact_path,
         &primary_content,
     );
-    let (raw_findings, suppressed_findings) =
-        collect_and_apply_suppressions(scanner, raw_findings, path, &doc, &primary_content);
+    let (raw_findings, suppressed_findings) = if scanner.honor_inline_suppressions() {
+        collect_and_apply_suppressions(scanner, raw_findings, path, &doc, &primary_content)
+    } else {
+        (raw_findings, Vec::new())
+    };
     let (findings, deduplication_summary) = deduplicate_findings(raw_findings);
     let inline_suppressed = suppressed_findings.len();
 

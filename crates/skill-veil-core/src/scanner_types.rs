@@ -64,6 +64,15 @@ pub struct ScanOptions {
     /// to catch pack-authoring mistakes early. Default: false (warn only).
     #[serde(default)]
     pub strict_rules: bool,
+    /// Apply inline `skill-veil: ignore` / `nosem` suppressions found in
+    /// scanned files. Disable for adversarial benchmark corpora whose prompt
+    /// bodies are not trusted operator-authored source.
+    #[serde(default = "default_honor_inline_suppressions")]
+    pub honor_inline_suppressions: bool,
+}
+
+fn default_honor_inline_suppressions() -> bool {
+    true
 }
 
 impl Default for ScanOptions {
@@ -82,6 +91,7 @@ impl Default for ScanOptions {
             recursive: true,
             target_mode: ScanTargetMode::Auto,
             strict_rules: false,
+            honor_inline_suppressions: true,
         }
     }
 }

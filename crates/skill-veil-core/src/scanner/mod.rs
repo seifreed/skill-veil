@@ -77,6 +77,7 @@ pub struct Scanner<
     file_discovery: FileDiscoveryService<F>,
     filter_service: ScanFilterService,
     parser: P,
+    honor_inline_suppressions: bool,
 }
 
 /// Scanner using the default standard-library filesystem and Pulldown Markdown adapters.
@@ -91,6 +92,7 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
 
     #[must_use = "Scanner::with_std_adapters() returns a Result that should be used"]
     pub fn with_std_adapters(options: ScanOptions) -> Result<Self, ScanError> {
+        let honor_inline_suppressions = options.honor_inline_suppressions;
         // One `StdFileSystemProvider` shared between rule loading and file
         // discovery: the TOCTOU rationale in `scanner_execution.rs` requires
         // existence checks and reads to go through the same provider, and
@@ -113,6 +115,7 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
                 disposition,
             ),
             parser: PulldownMarkdownParser::new(),
+            honor_inline_suppressions,
         })
     }
 }
@@ -124,6 +127,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         fs_provider: F,
         parser: P,
     ) -> Result<Self, ScanError> {
+        let honor_inline_suppressions = options.honor_inline_suppressions;
         let (engine, baseline, waivers, policy, disposition) =
             build_engine_and_policy(&fs_provider, &options)?;
         Ok(Self {
@@ -138,6 +142,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
                 disposition,
             ),
             parser,
+            honor_inline_suppressions,
         })
     }
 
@@ -159,6 +164,10 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
 
     pub(crate) fn parser(&self) -> &P {
         &self.parser
+    }
+
+    pub(crate) fn honor_inline_suppressions(&self) -> bool {
+        self.honor_inline_suppressions
     }
 
     pub(crate) fn build_artifact_graph(&self, doc: &SkillDocument) -> ArtifactGraph {
