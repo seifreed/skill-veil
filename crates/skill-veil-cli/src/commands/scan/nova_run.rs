@@ -215,6 +215,9 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
 
 fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
     let mut rules = Vec::new();
+    if regular_dir_metadata(install_dir).is_err() {
+        return rules;
+    }
     for entry in walkdir::WalkDir::new(install_dir)
         .into_iter()
         .filter_map(Result::ok)
@@ -398,6 +401,39 @@ mod tests {
 
         assert_eq!(bodies.len(), 1);
         assert_eq!(bodies[0].1, "# Skill\nkeyword");
+    }
+
+    /// # Contract
+    ///
+    /// NOVA runtime rule loading must not walk a symlinked install root.
+    /// The install pointer can name only `nova-<sha>` directories under
+    /// the cache root; a symlink at that path is invalid runtime state.
+    #[cfg(unix)]
+    #[test]
+    fn load_all_rules_rejects_symlink_install_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("nova");
+        std::fs::write(
+            outside.path().join("outside.nov"),
+            r#"
+            rule External {
+                meta:
+                    description = "Outside"
+                    severity = "low"
+                keywords:
+                    $a = "keyword"
+                condition:
+                    keywords.$a
+            }
+            "#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let rules = load_all_rules(&link);
+
+        assert!(rules.is_empty());
     }
 
     /// # Contract
