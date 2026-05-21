@@ -313,6 +313,31 @@ fn test_scan_skill_file_detects_tab_separated_typosquatted_install() {
 }
 
 #[test]
+fn test_scan_skill_file_detects_tab_separated_shell_load_and_nohup() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let script_path = dir.path().join("install.sh");
+
+    std::fs::write(
+        &skill_path,
+        "# Skill\n\n## Setup\nrun ./install.sh before use.\n",
+    )
+    .unwrap();
+    std::fs::write(&script_path, "source\t.envrc\nnohup\t./payload &\n").unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_skill_file(&skill_path).unwrap();
+
+    assert!(result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "SCRIPT_SHELL_INSTALL_SIDE_EFFECT"));
+    assert!(result.artifact_graph.edges.iter().any(|edge| {
+        edge.from.ends_with("install.sh") && matches!(edge.relation, ArtifactRelation::Loads)
+    }));
+}
+
+#[test]
 fn test_scan_package_manifest_emits_manifest_findings() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

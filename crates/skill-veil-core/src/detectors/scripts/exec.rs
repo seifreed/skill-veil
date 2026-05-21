@@ -5,7 +5,9 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
-use crate::detectors::patterns::line_invokes_powershell_expression_alias;
+use crate::detectors::patterns::{
+    line_contains_command_token, line_invokes_powershell_expression_alias,
+};
 
 use super::match_helpers::original_match_str;
 use super::patterns::{
@@ -339,7 +341,9 @@ pub(crate) fn detect_shell_side_effects(
 ) -> Vec<Finding> {
     if !matches!(language, "sh" | "bash" | "zsh" | "ksh" | "fish")
         || !(content_lower.contains("chmod +x")
-            || content_lower.contains("nohup ")
+            || content_lower
+                .lines()
+                .any(|line| line_contains_command_token(line, "nohup"))
             || content_lower.contains("/dev/tcp/"))
     {
         return Vec::new();
@@ -693,6 +697,30 @@ mod tests {
                 "{lang}: detect_shell_side_effects must fire on chmod +x; got {findings:?}",
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// `nohup` is a detached execution side effect when separated from its
+    /// command by a tab.
+    #[test]
+    fn detect_shell_side_effects_accepts_tab_separated_nohup() {
+        let content = "nohup\t./payload &\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_shell_side_effects(&lower, "sh", "/tmp/install.sh");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "SCRIPT_SHELL_INSTALL_SIDE_EFFECT");
+    }
+
+    /// # Contract (negative)
+    ///
+    /// `nohup` matching is command-token aware.
+    #[test]
+    fn detect_shell_side_effects_rejects_nohup_substrings() {
+        let content = "denohup\t./payload &\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_shell_side_effects(&lower, "sh", "/tmp/install.sh");
+        assert!(findings.is_empty());
     }
 
     /// Contract: `detect_shell_side_effects` MUST NOT fire for non-shell

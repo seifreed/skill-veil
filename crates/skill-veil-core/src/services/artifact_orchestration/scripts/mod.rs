@@ -327,9 +327,13 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
             relation: ArtifactRelation::Executes,
         });
     }
-    if lower.contains("import ")
+    if lower
+        .lines()
+        .any(|line| line_contains_command_token(line, "import"))
         || lower.contains("require(")
-        || lower.contains("source ")
+        || lower
+            .lines()
+            .any(|line| line_contains_command_token(line, "source"))
         || RE_SHELL_SOURCE.is_match(&lower)
     {
         links.push(ArtifactLink {
@@ -551,6 +555,39 @@ mod tests {
         let content = "echo \"please finish setup\"\n";
         let links = script_relations(content);
         assert!(!relation_target_present(&links, "process"));
+    }
+
+    /// # Contract
+    ///
+    /// Load-command matching accepts tabs between command names and their
+    /// module or file argument.
+    #[test]
+    fn script_relations_accepts_tab_separated_load_commands() {
+        for content in ["import\tos\n", "source\t.envrc\n"] {
+            let links = script_relations(content);
+            assert!(
+                links
+                    .iter()
+                    .any(|link| matches!(link.relation, ArtifactRelation::Loads)),
+                "{content:?} must produce a Loads edge; got {links:?}"
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Load-command matching rejects lookalike command names.
+    #[test]
+    fn script_relations_rejects_load_command_substrings() {
+        for content in ["important\tos\n", "resource\t.envrc\n"] {
+            let links = script_relations(content);
+            assert!(
+                !links
+                    .iter()
+                    .any(|link| matches!(link.relation, ArtifactRelation::Loads)),
+                "{content:?} must not produce a Loads edge; got {links:?}"
+            );
+        }
     }
 
     /// Contract: a script invoking `iex $cmd` (PowerShell alias for
