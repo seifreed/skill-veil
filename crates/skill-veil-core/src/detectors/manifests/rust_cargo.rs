@@ -1,10 +1,15 @@
+use std::path::{Path, PathBuf};
+
+use toml::{Table as TomlTable, Value as TomlValue};
+
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 use crate::services::artifact_orchestration::ArtifactOrchestratorService;
-use std::path::{Path, PathBuf};
-use toml::Value as TomlValue;
+
+const CARGO_DEPENDENCY_SECTIONS: &[&str] =
+    &["dependencies", "dev-dependencies", "build-dependencies"];
 
 pub(crate) fn analyze_cargo_toml(
     service: &ArtifactOrchestratorService,
@@ -28,13 +33,11 @@ pub(crate) fn analyze_cargo_toml(
     );
 
     if !has_lockfile {
-        if let Some(dependencies) = toml.get("dependencies").and_then(TomlValue::as_table) {
-            findings.extend(
-                dependencies.iter().filter_map(|(name, dep)| {
-                    cargo_unpinned_dep_finding(name, dep, &artifact_path)
-                }),
-            );
-        }
+        visit_cargo_dependency_tables(&toml, |section, dependencies| {
+            findings.extend(dependencies.iter().filter_map(|(name, dep)| {
+                cargo_unpinned_dep_finding(section, name, dep, &artifact_path)
+            }));
+        });
     }
 
     findings.extend(service.missing_lockfile_findings(
@@ -53,13 +56,6 @@ pub(crate) fn cargo_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
         return Vec::new();
     };
 
-    let mut dep_names = Vec::new();
-    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
-        if let Some(deps) = toml.get(section).and_then(TomlValue::as_table) {
-            dep_names.extend(deps.keys().map(String::as_str));
-        }
-    }
-
     let network_crates = [
         "reqwest",
         "hyper",
@@ -72,19 +68,21 @@ pub(crate) fn cargo_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
     let exec_crates = ["nix", "command-fds", "duct"];
     let mut capabilities = Vec::new();
 
-    for dep in &dep_names {
-        let name = dep.to_ascii_lowercase();
-        if network_crates.iter().any(|d| name == *d) {
-            capabilities.push(ArtifactOrchestratorService::observed_capability(
-                ArtifactCapability::NetworkAccess,
-            ));
+    visit_cargo_dependency_tables(&toml, |_section, dependencies| {
+        for dep in dependencies.keys() {
+            let name = dep.to_ascii_lowercase();
+            if network_crates.iter().any(|d| name == *d) {
+                capabilities.push(ArtifactOrchestratorService::observed_capability(
+                    ArtifactCapability::NetworkAccess,
+                ));
+            }
+            if exec_crates.iter().any(|d| name == *d) {
+                capabilities.push(ArtifactOrchestratorService::observed_capability(
+                    ArtifactCapability::ProcessExecution,
+                ));
+            }
         }
-        if exec_crates.iter().any(|d| name == *d) {
-            capabilities.push(ArtifactOrchestratorService::observed_capability(
-                ArtifactCapability::ProcessExecution,
-            ));
-        }
-    }
+    });
     // `dedup_by_key` only collapses adjacent runs; crates emit interleaved
     // capabilities (e.g. reqwest, nix, hyper, duct), so sort first.
     capabilities.sort_by_key(|c| c.capability);
@@ -92,7 +90,43 @@ pub(crate) fn cargo_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
     capabilities
 }
 
-fn cargo_unpinned_dep_finding(name: &str, dep: &TomlValue, artifact_path: &str) -> Option<Finding> {
+fn visit_cargo_dependency_tables(toml: &TomlValue, mut visit: impl FnMut(&str, &TomlTable)) {
+    for section in CARGO_DEPENDENCY_SECTIONS {
+        if let Some(dependencies) = toml.get(*section).and_then(TomlValue::as_table) {
+            visit(section, dependencies);
+        }
+    }
+
+    if let Some(workspace_dependencies) = toml
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(TomlValue::as_table)
+    {
+        visit("workspace.dependencies", workspace_dependencies);
+    }
+
+    if let Some(targets) = toml.get("target").and_then(TomlValue::as_table) {
+        for (target, target_value) in targets {
+            let Some(target_table) = target_value.as_table() else {
+                continue;
+            };
+            for section in CARGO_DEPENDENCY_SECTIONS {
+                if let Some(dependencies) = target_table.get(*section).and_then(TomlValue::as_table)
+                {
+                    let target_section = format!("target.{target}.{section}");
+                    visit(&target_section, dependencies);
+                }
+            }
+        }
+    }
+}
+
+fn cargo_unpinned_dep_finding(
+    section: &str,
+    name: &str,
+    dep: &TomlValue,
+    artifact_path: &str,
+) -> Option<Finding> {
     let version = match dep {
         TomlValue::String(v) => Some(v.as_str()),
         TomlValue::Table(t) => t.get("version").and_then(TomlValue::as_str),
@@ -113,10 +147,17 @@ fn cargo_unpinned_dep_finding(name: &str, dep: &TomlValue, artifact_path: &str) 
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.to_string(),
             })
-            .match_value(format!("{name} = {version}"))
+            .match_value(cargo_dependency_match_value(section, name, version))
             .reason("Cargo dependency is not strictly pinned")
             .build(),
     )
+}
+
+fn cargo_dependency_match_value(section: &str, name: &str, version: &str) -> String {
+    if section == "dependencies" {
+        return format!("{name} = {version}");
+    }
+    format!("{section}.{name} = {version}")
 }
 
 /// A `Cargo.toml` whose body fails to parse is suspicious on its own:
@@ -198,6 +239,14 @@ duct = "0.13"
         findings.iter().any(|f| f.rule_id == rule_id)
     }
 
+    fn unpinned_match_values(findings: &[Finding]) -> Vec<&str> {
+        findings
+            .iter()
+            .filter(|finding| finding.rule_id == "MANIFEST_CARGO_UNPINNED_DEP")
+            .map(|finding| finding.match_value.as_str())
+            .collect()
+    }
+
     /// # Contract
     ///
     /// Invalid `Cargo.toml` must produce an explicit parse-failure
@@ -259,6 +308,115 @@ serde = "1.0.0"
         assert!(
             finding_present(&findings, "MANIFEST_CARGO_UNPINNED_DEP"),
             "bare-version dep must fire MANIFEST_CARGO_UNPINNED_DEP; got {findings:?}",
+        );
+    }
+
+    /// Contract: every Cargo dependency table that can affect the build
+    /// must share the same no-lockfile pinning policy as top-level
+    /// `[dependencies]`.
+    #[test]
+    fn test_analyze_cargo_toml_flags_all_unlocked_dependency_tables() {
+        let service = ArtifactOrchestratorService::new();
+        let content = r#"
+[package]
+name = "x"
+version = "0.1.0"
+
+[dependencies]
+serde = "1.0.0"
+
+[dev-dependencies]
+assert_cmd = "2.0.0"
+
+[build-dependencies]
+cc = "1.0.0"
+
+[workspace.dependencies]
+reqwest = "0.12.0"
+
+[target.'cfg(unix)'.dependencies]
+nix = "0.27.0"
+"#;
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &[]);
+        let values = unpinned_match_values(&findings);
+
+        assert!(
+            values.contains(&"serde = 1.0.0"),
+            "top-level dependencies must fire; got {findings:?}",
+        );
+        assert!(
+            values.contains(&"dev-dependencies.assert_cmd = 2.0.0"),
+            "dev-dependencies must fire; got {findings:?}",
+        );
+        assert!(
+            values.contains(&"build-dependencies.cc = 1.0.0"),
+            "build-dependencies must fire; got {findings:?}",
+        );
+        assert!(
+            values.contains(&"workspace.dependencies.reqwest = 0.12.0"),
+            "workspace dependencies must fire; got {findings:?}",
+        );
+        assert!(
+            values.contains(&"target.cfg(unix).dependencies.nix = 0.27.0"),
+            "target dependencies must fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: a present `Cargo.lock` pins resolution for every Cargo
+    /// dependency table, not just top-level `[dependencies]`.
+    #[test]
+    fn test_analyze_cargo_toml_suppresses_all_unpinned_tables_when_lockfile_exists() {
+        let service = ArtifactOrchestratorService::new();
+        let content = r#"
+[package]
+name = "x"
+version = "0.1.0"
+
+[dev-dependencies]
+assert_cmd = "2.0.0"
+
+[build-dependencies]
+cc = "1.0.0"
+
+[target.'cfg(unix)'.dependencies]
+nix = "0.27.0"
+"#;
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &["Cargo.lock".into()]);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_CARGO_UNPINNED_DEP"),
+            "Cargo.lock must suppress unpinned findings for every table; got {findings:?}",
+        );
+    }
+
+    /// Contract: capability inference must traverse the same Cargo
+    /// dependency tables as the unpinned detector.
+    #[test]
+    fn test_cargo_toml_capabilities_include_workspace_and_target_dependencies() {
+        let content = r#"
+[package]
+name = "x"
+version = "0.1.0"
+
+[workspace.dependencies]
+reqwest = "0.12.0"
+
+[target.'cfg(unix)'.dependencies]
+duct = "0.13.0"
+"#;
+        let caps = cargo_toml_capabilities(content);
+
+        assert!(
+            caps.iter()
+                .any(|fact| fact.capability == ArtifactCapability::NetworkAccess),
+            "workspace reqwest must flip NetworkAccess; got {caps:?}",
+        );
+        assert!(
+            caps.iter()
+                .any(|fact| fact.capability == ArtifactCapability::ProcessExecution),
+            "target duct must flip ProcessExecution; got {caps:?}",
         );
     }
 

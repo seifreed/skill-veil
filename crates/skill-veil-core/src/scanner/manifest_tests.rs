@@ -327,6 +327,39 @@ requests = "^2.31.0"
 }
 
 #[test]
+fn test_scan_package_flags_cargo_build_dependency_unpinned() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let cargo_path = dir.path().join("Cargo.toml");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &cargo_path,
+        r#"[package]
+name = "skill-helper"
+version = "0.1.0"
+
+[build-dependencies]
+cc = "1.0.0"
+"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let cargo_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path.ends_with("Cargo.toml"))
+        .unwrap();
+
+    assert!(cargo_result.findings.iter().any(|finding| {
+        finding.rule_id == "MANIFEST_CARGO_UNPINNED_DEP"
+            && finding.match_value == "build-dependencies.cc = 1.0.0"
+    }));
+}
+
+#[test]
 fn test_scan_package_detects_makefile_and_config_manifest_findings() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
