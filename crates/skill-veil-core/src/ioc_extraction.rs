@@ -191,7 +191,8 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
         true
     }
 
-    for m in URL_PATTERN.find_matches(text) {
+    let url_matches = URL_PATTERN.find_matches(text);
+    for m in &url_matches {
         let raw = m.matched_text.as_str();
         let trimmed = raw.trim_end_matches([',', '.', ';', ':', ')', ']', '}', '!', '?']);
         if !try_insert_bounded(&mut urls, trimmed.to_string(), "url") {
@@ -209,7 +210,11 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
         }
     }
 
-    for m in HOST_MENTION_PATTERN.find_matches(text) {
+    let mut host_mention_text = text.to_string();
+    for m in url_matches {
+        host_mention_text.replace_range(m.start..m.end, &" ".repeat(m.end - m.start));
+    }
+    for m in HOST_MENTION_PATTERN.find_matches(&host_mention_text) {
         let host = m.matched_text.to_ascii_lowercase();
         if !is_noise_domain(&host) && !try_insert_bounded(&mut domains, host, "domain") {
             break;
@@ -248,26 +253,10 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
 }
 
 fn extract_host_from_url(url: &str) -> Option<String> {
-    let after_scheme = url.split_once("://").map(|(_, rest)| rest)?;
-    let no_userinfo = after_scheme
-        .split_once('@')
-        .map_or(after_scheme, |(_, h)| h);
-    let end = no_userinfo
-        .find(['/', '?', '#'])
-        .unwrap_or(no_userinfo.len());
-    let host_port = &no_userinfo[..end];
-    // Strip port (for IPv6 hosts the port comes after `]`). We return just
-    // the host component, lowercased.
-    let host = if host_port.starts_with('[') {
-        host_port
-            .split(']')
-            .next()
-            .map(|s| s.trim_start_matches('['))
-    } else {
-        host_port.split(':').next()
-    };
-    host.map(|h| h.to_ascii_lowercase())
-        .filter(|h| !h.is_empty())
+    url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
+        .filter(|host| !host.is_empty())
 }
 
 fn is_noise_domain(domain: &str) -> bool {
@@ -395,6 +384,21 @@ mod tests {
             .urls
             .contains(&"HTTPS://evil.example.com/payload.sh".to_string()));
         assert!(iocs.domains.contains(&"evil.example.com".to_string()));
+    }
+
+    /// # Contract
+    ///
+    /// URL domain IOCs come from the URL authority. A hostname-shaped
+    /// token after a path `@` is path data, not the destination host.
+    #[test]
+    fn extracts_url_domain_from_authority_not_path_userinfo_shape() {
+        let iocs =
+            extract_from_text("curl https://collector.attacker-control.io/path@api.openai.com/v1");
+
+        assert!(iocs
+            .domains
+            .contains(&"collector.attacker-control.io".to_string()));
+        assert!(!iocs.domains.contains(&"api.openai.com".to_string()));
     }
 
     /// # Contract (negative)
