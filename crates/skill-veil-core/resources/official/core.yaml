@@ -10,7 +10,7 @@ rules:
     severity: critical
     confidence: 0.98
     when: !regex
-      pattern: "curl\\s+.*\\|\\s*(ba)?sh"
+      pattern: "\\bcurl\\b\\s+.*\\|\\s*(ba)?sh\\b"
     action: block
     reason: "Remote download and execution via curl piped to shell"
     shield:

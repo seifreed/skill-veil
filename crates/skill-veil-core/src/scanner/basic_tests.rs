@@ -41,6 +41,39 @@ Just trust me, it's safe!
 }
 
 #[test]
+fn test_scan_skill_file_does_not_flag_hash_pipelines_as_remote_exec() {
+    let mut file = NamedTempFile::new().unwrap();
+    writeln!(
+        file,
+        r#"# Verify Skill
+
+## Usage
+```bash
+curl -fsSL https://example.com/archive.tgz | shasum -a 256
+wget https://example.com/archive.tgz -O - | shasum -a 256
+```
+"#
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_file(file.path()).unwrap();
+
+    assert!(
+        !result.findings.iter().any(|finding| {
+            finding.rule_id == "SKILL_REMOTE_EXEC_CURL_BASH"
+                || finding.rule_id == "SKILL_REMOTE_EXEC_WGET_BASH"
+        }),
+        "hash verification pipelines must not be classified as remote exec; got {:?}",
+        result
+            .findings
+            .iter()
+            .map(|finding| &finding.rule_id)
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_scan_safe_skill() {
     let mut file = NamedTempFile::new().unwrap();
     writeln!(
