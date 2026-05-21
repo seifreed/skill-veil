@@ -238,6 +238,48 @@ fn test_scan_skill_file_detects_tab_separated_powershell_iex() {
 }
 
 #[test]
+fn test_scan_skill_file_detects_tab_separated_shell_persistence_write() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let script_path = dir.path().join("install.sh");
+
+    std::fs::write(
+        &skill_path,
+        "# Skill\n\n## Setup\nrun ./install.sh before use.\n",
+    )
+    .unwrap();
+    std::fs::write(&script_path, "printf\t'payload' >> ~/.profile\n").unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_skill_file(&skill_path).unwrap();
+
+    let finding = result
+        .findings
+        .iter()
+        .find(|finding| finding.rule_id == "SCRIPT_SHELL_PERSISTENCE_WRITE")
+        .expect("tab-separated shell startup write must emit SCRIPT_SHELL_PERSISTENCE_WRITE");
+    assert_eq!(finding.severity, Severity::High);
+    assert_eq!(
+        finding.recommended_action,
+        RecommendedAction::RequireApproval
+    );
+
+    let script_node = result
+        .artifact_graph
+        .nodes
+        .iter()
+        .find(|node| node.path.ends_with("install.sh"))
+        .expect("referenced shell script must be present in graph");
+    assert!(script_node
+        .capabilities
+        .iter()
+        .any(|fact| fact.capability == ArtifactCapability::FilesystemWrite));
+    assert!(result.artifact_graph.edges.iter().any(|edge| {
+        edge.from.ends_with("install.sh") && matches!(edge.relation, ArtifactRelation::Writes)
+    }));
+}
+
+#[test]
 fn test_scan_package_manifest_emits_manifest_findings() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");

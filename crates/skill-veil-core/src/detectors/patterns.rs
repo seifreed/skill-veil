@@ -74,6 +74,38 @@ pub(crate) fn line_invokes_shell_or_interpreter(line: &str) -> bool {
     })
 }
 
+pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
+    let mut start = 0;
+    while let Some(pos) = line[start..].find(token) {
+        let abs_pos = start + pos;
+        let token_end = abs_pos + token.len();
+        let before = if abs_pos > 0 {
+            line.as_bytes().get(abs_pos - 1)
+        } else {
+            None
+        };
+        let left_ok = before.is_none()
+            || matches!(
+                before,
+                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
+            );
+        let after = line.get(token_end..).unwrap_or("");
+        let right_ok = after.is_empty()
+            || after.starts_with(' ')
+            || after.starts_with('\t')
+            || after.starts_with('|')
+            || after.starts_with(';')
+            || after.starts_with('&')
+            || after.starts_with('>')
+            || after.starts_with('<');
+        if left_ok && right_ok {
+            return true;
+        }
+        start = token_end;
+    }
+    false
+}
+
 pub(crate) fn line_invokes_powershell_expression_alias(line: &str) -> bool {
     let line_lower = line.to_ascii_lowercase();
     let line = line_lower.as_str();
@@ -239,6 +271,34 @@ mod tests {
             line_invokes_shell_or_interpreter("/usr/bin/python.eXE -c x"),
             "mixed-case .eXE must be stripped and detected"
         );
+    }
+
+    /// # Contract
+    ///
+    /// Command-token matching accepts shell separators that are valid between
+    /// a command name and its argument or pipeline neighbor.
+    #[test]
+    fn line_contains_command_token_accepts_tabs_and_operators() {
+        assert!(line_contains_command_token("curl\t$url", "curl"));
+        assert!(line_contains_command_token("curl|bash", "curl"));
+        assert!(line_contains_command_token(
+            "/usr/bin/tee\t/etc/profile",
+            "tee"
+        ));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Command-token matching rejects lookalike words that merely contain the
+    /// command bytes.
+    #[test]
+    fn line_contains_command_token_rejects_substrings() {
+        assert!(!line_contains_command_token("mycurl\t$url", "curl"));
+        assert!(!line_contains_command_token(
+            "guarantee\t/etc/profile",
+            "tee"
+        ));
+        assert!(!line_contains_command_token("bobcat\t/etc/passwd", "cat"));
     }
 
     /// # Contract

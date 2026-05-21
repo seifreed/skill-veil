@@ -2,7 +2,8 @@ use super::manifests::strip_inline_hash_comment;
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::detectors::patterns::{
-    line_invokes_powershell_expression_alias, line_invokes_shell_or_interpreter, RE_SHELL_SOURCE,
+    line_contains_command_token, line_invokes_powershell_expression_alias,
+    line_invokes_shell_or_interpreter, RE_SHELL_SOURCE,
 };
 use crate::detectors::scripts::{
     detect_deferred_execution, detect_file_secret_to_network_flow, detect_injection_patterns,
@@ -222,7 +223,9 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
     }
 
     if lower.contains("writefilesync(")
-        || lower.contains("tee ")
+        || lower
+            .lines()
+            .any(|line| line_contains_command_token(line, "tee"))
         || contains_shell_append_redirect(&lower)
         || lower.contains("> /etc/")
         || lower.contains("set-content")
@@ -356,8 +359,12 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
     }
     if lower.contains("open(")
         || lower.contains("readfilesync(")
-        || lower.contains("cat ")
-        || lower.contains("rg ")
+        || lower
+            .lines()
+            .any(|line| line_contains_command_token(line, "cat"))
+        || lower
+            .lines()
+            .any(|line| line_contains_command_token(line, "rg"))
     {
         links.push(ArtifactLink {
             target: "filesystem".to_string(),
@@ -365,7 +372,9 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         });
     }
     if lower.contains("writefilesync(")
-        || lower.contains("tee ")
+        || lower
+            .lines()
+            .any(|line| line_contains_command_token(line, "tee"))
         || contains_shell_append_redirect(&lower)
         || lower.contains("> /etc/")
         || lower.contains("set-content")
@@ -399,38 +408,6 @@ fn line_contains_download_command(line: &str) -> bool {
     SCRIPT_DOWNLOAD_COMMAND_TOKENS
         .iter()
         .any(|token| line_contains_command_token(line, token))
-}
-
-fn line_contains_command_token(line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        let left_ok = before.is_none()
-            || matches!(
-                before,
-                Some(b' ') | Some(b'\t') | Some(b'|') | Some(b';') | Some(b'&') | Some(b'/')
-            );
-        let after = line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
 }
 
 #[cfg(test)]
@@ -623,6 +600,49 @@ mod tests {
                 "lookalike command must not raise Downloads edge for {content:?}; got {links:?}",
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// Filesystem command matching accepts tabs between command names and
+    /// their arguments.
+    #[test]
+    fn filesystem_command_matching_accepts_tabs() {
+        let write_caps = script_capabilities("tee\t/etc/profile\n");
+        assert!(capability_present(
+            &write_caps,
+            ArtifactCapability::FilesystemWrite
+        ));
+        let write_links = script_relations("tee\t/etc/profile\n");
+        assert!(write_links
+            .iter()
+            .any(|link| matches!(link.relation, ArtifactRelation::Writes)));
+
+        for content in ["cat\t/etc/passwd\n", "rg\tSECRET ./src\n"] {
+            let links = script_relations(content);
+            assert!(
+                links
+                    .iter()
+                    .any(|link| matches!(link.relation, ArtifactRelation::Reads)),
+                "{content:?} must produce a filesystem Reads edge; got {links:?}"
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Filesystem command matching rejects lookalike command names.
+    #[test]
+    fn filesystem_command_matching_rejects_substrings() {
+        let write_caps = script_capabilities("guarantee\t/etc/profile\n");
+        assert!(!capability_present(
+            &write_caps,
+            ArtifactCapability::FilesystemWrite
+        ));
+        let links = script_relations("bobcat\t/etc/passwd\n");
+        assert!(!links
+            .iter()
+            .any(|link| matches!(link.relation, ArtifactRelation::Reads)));
     }
 
     /// Contract: an inline `#` comment in a shell script MUST be

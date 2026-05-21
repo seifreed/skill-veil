@@ -5,8 +5,12 @@ use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
 
+use crate::detectors::patterns::line_contains_command_token;
+
 use super::match_helpers::original_match_str;
 use super::patterns::DEFERRED_PATTERNS;
+
+const SHELL_PERSISTENCE_WRITE_TOKENS: &[&str] = &["echo", "printf", "cat", "tee"];
 
 pub(crate) fn detect_deferred_execution(
     lower: &str,
@@ -77,21 +81,7 @@ pub(crate) fn detect_shell_persistence_write(
 ) -> Vec<Finding> {
     if !matches!(language, "sh" | "bash" | "zsh" | "ksh" | "fish")
         || !(content_lower.contains("> /etc/")
-            || content_lower.contains("tee /etc/")
-            || content_lower.lines().any(|line| {
-                let has_dotfile_append = line.contains(">> ~/.");
-                if !has_dotfile_append {
-                    return false;
-                }
-                // Accept common write verbs that precede `>> ~/.`:
-                // echo, printf, cat, tee -a. Pre-fix only `echo `
-                // was accepted, so `printf >> ~/.bashrc`, `cat x >> ~/.zshrc`,
-                // and `tee -a ~/.profile` all escaped detection.
-                line.contains("echo ")
-                    || line.contains("printf ")
-                    || line.contains("cat ")
-                    || line.contains("tee ")
-            }))
+            || content_lower.lines().any(is_shell_persistence_write_line))
     {
         return Vec::new();
     }
@@ -112,6 +102,22 @@ pub(crate) fn detect_shell_persistence_write(
     .match_value("shell persistence write")
     .reason("Shell script writes to startup or system configuration paths")
     .build()]
+}
+
+fn is_shell_persistence_write_line(line: &str) -> bool {
+    line_invokes_tee_to_startup_target(line)
+        || (line.contains(">> ~/.")
+            && SHELL_PERSISTENCE_WRITE_TOKENS
+                .iter()
+                .any(|token| line_contains_command_token(line, token)))
+}
+
+fn line_invokes_tee_to_startup_target(line: &str) -> bool {
+    line_contains_command_token(line, "tee")
+        && line.split_whitespace().any(|token| {
+            let target = token.trim_matches(['"', '\'']);
+            target.starts_with("/etc/") || target.starts_with("~/.")
+        })
 }
 
 #[cfg(test)]
@@ -148,6 +154,52 @@ mod tests {
                 !findings.is_empty(),
                 "{lang}: detect_powershell_persistence must fire on Register-ScheduledTask; got {findings:?}",
             );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// Shell startup writes are detected when the write command is separated
+    /// from its first argument by a tab.
+    #[test]
+    fn detect_shell_persistence_write_accepts_tab_separated_dotfile_write() {
+        let content = "printf\t'payload' >> ~/.profile\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_shell_persistence_write(&lower, "sh", "/tmp/install.sh");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(
+            findings[0].recommended_action,
+            RecommendedAction::RequireApproval
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `tee` writes to startup targets are persistence writes even when the
+    /// target is separated by a tab or by an option.
+    #[test]
+    fn detect_shell_persistence_write_accepts_tee_startup_targets() {
+        for content in ["tee\t/etc/profile\n", "tee -a ~/.profile\n"] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_shell_persistence_write(&lower, "bash", "/tmp/install.sh");
+            assert_eq!(findings.len(), 1, "{content:?} must be detected");
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Shell persistence write command matching is token-aware. Lookalike
+    /// command names do not make a startup-file write by themselves.
+    #[test]
+    fn detect_shell_persistence_write_rejects_command_substrings() {
+        for content in [
+            "myprintf\t'payload' >> ~/.profile\n",
+            "guarantee\t/etc/profile\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_shell_persistence_write(&lower, "sh", "/tmp/install.sh");
+            assert!(findings.is_empty(), "{content:?} must not be detected");
         }
     }
 }
