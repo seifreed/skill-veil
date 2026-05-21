@@ -26,9 +26,8 @@ pub(crate) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
         // the `#`-only stripper here, not the INI variant.
         .map(|line| strip_inline_hash_comment(line).trim())
         .filter(|line| !line.is_empty())
-        .filter(|line| !line.starts_with("-r ") && !line.starts_with("--requirement"))
+        .filter(|line| !is_requirements_directive(line))
         .filter(|line| !is_direct_url_requirement(line))
-        .filter(|line| !line.starts_with("-c ") && !line.starts_with("--"))
         // `==` and `~=` are pinning operators; `!=` is exclusion
         // (`requests!=2.0` means "any version except 2.0") and is NOT a
         // pin — pre-fix it was lumped in here, so deps that combined an
@@ -99,6 +98,15 @@ fn is_direct_url_requirement(line: &str) -> bool {
     has_python_vcs_prefix(line)
         || starts_with_ignore_ascii_case(line, "http://")
         || starts_with_ignore_ascii_case(line, "https://")
+}
+
+fn is_requirements_directive(line: &str) -> bool {
+    let Some(first_token) = line.split_whitespace().next() else {
+        return false;
+    };
+    matches!(first_token, "-r" | "-c")
+        || starts_with_ignore_ascii_case(first_token, "--requirement")
+        || first_token.starts_with("--")
 }
 
 #[cfg(test)]
@@ -184,6 +192,37 @@ mod tests {
             finding_present(&findings, "MANIFEST_REQUIREMENTS_UNPINNED_DEP"),
             "`!=` exclusion is not a pin and MUST fire MANIFEST_REQUIREMENTS_UNPINNED_DEP; \
              got {findings:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `-r` include directives and `-c` constraint directives are pip
+    /// options, not dependency specs. Requirements syntax permits any shell
+    /// whitespace after the option token, including tabs.
+    #[test]
+    fn analyze_requirements_txt_skips_tab_separated_include_and_constraint_directives() {
+        let content = "-r\tbase.txt\n-c\tconstraints.txt\n";
+        let path = std::path::Path::new("/pkg/requirements.txt");
+        let findings = analyze_requirements_txt(path, content);
+        assert!(
+            !finding_present(&findings, "MANIFEST_REQUIREMENTS_UNPINNED_DEP"),
+            "tab-separated include/constraint directives must not fire unpinned-dep finding; got {findings:?}",
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Directive filtering must not swallow ordinary unpinned dependency
+    /// names.
+    #[test]
+    fn analyze_requirements_txt_directive_filter_keeps_unpinned_dependency() {
+        let content = "requests\n";
+        let path = std::path::Path::new("/pkg/requirements.txt");
+        let findings = analyze_requirements_txt(path, content);
+        assert!(
+            finding_present(&findings, "MANIFEST_REQUIREMENTS_UNPINNED_DEP"),
+            "ordinary unpinned dependency must still fire; got {findings:?}",
         );
     }
 

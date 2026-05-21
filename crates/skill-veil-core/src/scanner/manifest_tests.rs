@@ -459,6 +459,29 @@ fn test_scan_package_flags_unpinned_httpx_requirement() {
 }
 
 #[test]
+fn test_scan_package_skips_tab_separated_requirements_directives() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let requirements_path = dir.path().join("requirements.txt");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(&requirements_path, "-r\tbase.txt\n-c\tconstraints.txt\n").unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let requirements_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path == requirements_path)
+        .unwrap();
+
+    assert!(!requirements_result
+        .findings
+        .iter()
+        .any(|finding| finding.rule_id == "MANIFEST_REQUIREMENTS_UNPINNED_DEP"));
+}
+
+#[test]
 fn test_scan_auto_directory_uses_package_pipeline() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
