@@ -21,9 +21,8 @@ use crate::promptintel::feed::{
     sync::{self as feed_sync, SyncMode},
 };
 use crate::promptintel::types::ReportDraft;
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::{bounded_read::read_text_file_with_cap, terminal_safe::sanitise_for_terminal};
 use anyhow::{Context, Result};
-use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const MAX_PROMPTINTEL_REPORT_DRAFT_BYTES: u64 = 1024 * 1024;
@@ -352,41 +351,10 @@ fn read_report_draft(path: &Path) -> Result<ReportDraft> {
 }
 
 fn read_report_draft_with_cap(path: &Path, cap: u64) -> Result<ReportDraft> {
-    let raw = read_to_string_with_cap(path, cap)
+    let raw = read_text_file_with_cap(path, cap)
         .with_context(|| format!("reading report draft {}", path.display()))?;
     serde_json::from_str(&raw)
         .with_context(|| format!("parsing report draft as JSON: {}", path.display()))
-}
-
-fn read_to_string_with_cap(path: &Path, cap: u64) -> io::Result<String> {
-    let file = std::fs::File::open(path)?;
-    let meta = file.metadata()?;
-    if meta.len() > cap {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "refusing to read {}: size {} exceeds limit {}",
-                path.display(),
-                meta.len(),
-                cap
-            ),
-        ));
-    }
-
-    let mut bytes = Vec::with_capacity(usize::try_from(meta.len().min(cap)).unwrap_or(0));
-    let mut limited = file.take(cap.saturating_add(1));
-    limited.read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > cap {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "refusing to read {}: size exceeds limit {}",
-                path.display(),
-                cap
-            ),
-        ));
-    }
-    String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
 fn terminal_field(value: &str) -> String {
@@ -546,5 +514,33 @@ mod tests {
         let err = read_report_draft_with_cap(&path, 8).unwrap_err();
 
         assert!(format!("{err:#}").contains("exceeds limit"));
+    }
+
+    /// # Contract
+    ///
+    /// PromptIntel report draft reads MUST reject symlink entries instead
+    /// of parsing the link target as a report draft.
+    #[cfg(unix)]
+    #[test]
+    fn report_draft_read_rejects_symlinked_json() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.json");
+        let link = dir.path().join("draft.json");
+        std::fs::write(
+            &target,
+            r#"{
+                "category": "prompt",
+                "severity": "low",
+                "confidence": 0.8,
+                "fingerprint": "fp-1",
+                "title": "Valid draft"
+            }"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = read_report_draft_with_cap(&link, 1024).unwrap_err();
+
+        assert!(format!("{err:#}").contains("non-regular text file"));
     }
 }

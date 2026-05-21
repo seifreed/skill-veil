@@ -6,9 +6,10 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::Read;
 
 use serde::Deserialize;
+
+use crate::util::bounded_read::read_text_file_with_cap;
 
 const MAX_CONFIG_FILE_BYTES: u64 = 1024 * 1024;
 const REDACTED_SECRET: &str = "<redacted>";
@@ -47,17 +48,7 @@ pub(super) fn read_file_if_exists(path: &std::path::Path) -> Option<String> {
 }
 
 fn read_config_file_bounded(path: &std::path::Path) -> std::io::Result<String> {
-    let file = std::fs::File::open(path)?;
-    let mut body = String::new();
-    file.take(MAX_CONFIG_FILE_BYTES.saturating_add(1))
-        .read_to_string(&mut body)?;
-    if body.len() as u64 > MAX_CONFIG_FILE_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("config file exceeds {MAX_CONFIG_FILE_BYTES} byte limit; refusing to load"),
-        ));
-    }
-    Ok(body)
+    read_text_file_with_cap(path, MAX_CONFIG_FILE_BYTES)
 }
 
 fn redacted_secret(value: &Option<String>) -> Option<&'static str> {
@@ -353,6 +344,25 @@ request_timeout_secs = 60
         let err = read_config_file_bounded(&path).expect_err("oversized config must fail");
 
         assert!(err.to_string().contains("exceeds"));
+    }
+
+    /// # Contract
+    ///
+    /// Unified config reads MUST reject symlink entries instead of
+    /// ingesting the link target as credential-bearing configuration.
+    #[cfg(unix)]
+    #[test]
+    fn read_config_file_bounded_rejects_symlinked_config() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("target.toml");
+        let link = tmp.path().join("config.toml");
+        std::fs::write(&target, "apikey = \"x\"").expect("seed target");
+        std::os::unix::fs::symlink(&target, &link).expect("seed symlink");
+
+        let err = read_config_file_bounded(&link).expect_err("symlinked config must fail");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("non-regular text file"));
     }
 
     /// # Contract

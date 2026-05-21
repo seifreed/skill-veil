@@ -336,4 +336,22 @@ mod tests {
 
         assert!(format!("{err:#}").contains("exceeds limit"));
     }
+
+    /// # Contract
+    ///
+    /// The legacy VT config reader MUST reject symlink entries instead of
+    /// ingesting the link target as credential-bearing TOML.
+    #[cfg(unix)]
+    #[test]
+    fn legacy_config_read_rejects_symlinked_toml() {
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("target.toml");
+        let link = dir.path().join(CONFIG_FILE_NAME);
+        std::fs::write(&target, r#"apikey = "abc123""#).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = read_legacy_config_file(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("non-regular text file"));
+    }
 }
