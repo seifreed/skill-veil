@@ -8,7 +8,7 @@
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
-use std::fs::{File, Metadata};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use tar::{Archive, EntryType};
@@ -126,8 +126,23 @@ pub(crate) fn extract_into(tarball: &Path, dest_dir: &Path) -> Result<()> {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating parent dir {}", parent.display()))?;
         }
-        let mut out = std::fs::File::create(&final_path)
-            .with_context(|| format!("creating {}", final_path.display()))?;
+        let mut out = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&final_path)
+        {
+            Ok(out) => out,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                bail!(
+                    "tarball entry `{}` already exists in extraction output; refusing to \
+                     overwrite it",
+                    raw_path.display()
+                )
+            }
+            Err(err) => {
+                return Err(err).with_context(|| format!("creating {}", final_path.display()));
+            }
+        };
         std::io::copy(&mut entry, &mut out)
             .with_context(|| format!("writing {}", final_path.display()))?;
     }
@@ -310,6 +325,24 @@ mod tests {
         let err = extract_into(tar.path(), dest.path()).expect_err("non-empty dest must fail");
 
         assert!(format!("{err:#}").contains("not empty"));
+    }
+
+    /// # Contract
+    ///
+    /// A tarball path may be written at most once. Duplicate entries
+    /// make archive interpretation ambiguous and must not overwrite a
+    /// previously extracted file.
+    #[test]
+    fn rejects_duplicate_regular_file_entry() {
+        let dest = TempDir::new().unwrap();
+        let tar = tarball_with(&[
+            ("official/core.yaml", b"first\n"),
+            ("official/core.yaml", b"second\n"),
+        ]);
+
+        let err = extract_into(tar.path(), dest.path()).expect_err("duplicate entry must fail");
+
+        assert!(format!("{err:#}").contains("already exists"));
     }
 
     /// # Contract
