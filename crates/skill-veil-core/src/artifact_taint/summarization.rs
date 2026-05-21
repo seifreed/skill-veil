@@ -2,14 +2,15 @@ use super::patterns::{
     is_real_external_sink, looks_like_identity_target, looks_like_registry_url,
     looks_like_secret_target,
 };
+use super::trusted_hosts::is_documentation_or_reserved_host;
 use super::utils::node_has_capability;
 use super::{TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::{
     ArtifactCapability, ArtifactEdge, ArtifactGraph, ArtifactRelation, EndpointKind,
 };
 
-/// Identify a `Downloads` edge that represents an EXTERNAL (non-registry)
-/// fetch and should be treated as a `RemoteDownload` taint source.
+/// Identify a `Downloads` edge that represents a real external fetch and
+/// should be treated as a `RemoteDownload` taint source.
 ///
 /// # Filter consistency contract
 ///
@@ -25,6 +26,7 @@ pub(super) fn is_external_download_edge(edge: &ArtifactEdge) -> bool {
     matches!(edge.relation, ArtifactRelation::Downloads)
         && edge.endpoint_kind != Some(EndpointKind::Registry)
         && !looks_like_registry_url(&edge.to)
+        && !is_documentation_or_reserved_host(&edge.to)
 }
 
 pub(super) fn source_summary(
@@ -155,7 +157,7 @@ mod tests {
     use crate::artifact_graph::{ArtifactEdge, ArtifactNode};
     use crate::findings::ArtifactKind;
 
-    fn graph_with_two_download_edges() -> ArtifactGraph {
+    fn graph_with_download_edges() -> ArtifactGraph {
         let mut g = ArtifactGraph::new();
         g.nodes.push(ArtifactNode {
             path: "node_a".to_string(),
@@ -173,7 +175,13 @@ mod tests {
         // Second: actually-malicious external download.
         g.edges.push(ArtifactEdge {
             from: "node_a".to_string(),
-            to: "https://attacker.example/payload.sh".to_string(),
+            to: "https://attacker-controlled.io/payload.sh".to_string(),
+            relation: ArtifactRelation::Downloads,
+            endpoint_kind: None,
+        });
+        g.edges.push(ArtifactEdge {
+            from: "node_a".to_string(),
+            to: "https://example.com/payload.sh".to_string(),
             relation: ArtifactRelation::Downloads,
             endpoint_kind: None,
         });
@@ -186,20 +194,22 @@ mod tests {
     /// though it is the malicious second edge that triggered the finding.
     #[test]
     fn source_summary_skips_registry_endpoint_when_choosing_match_value() {
-        let graph = graph_with_two_download_edges();
+        let graph = graph_with_download_edges();
         let summary = source_summary(&graph, "node_a", TaintSourceKind::RemoteDownload);
         assert_eq!(
-            summary, "https://attacker.example/payload.sh",
-            "RemoteDownload summary must use the external (non-registry) edge"
+            summary, "https://attacker-controlled.io/payload.sh",
+            "RemoteDownload summary must use the real external edge"
         );
     }
 
     #[test]
-    fn is_external_download_edge_filters_registry_endpoint() {
-        let graph = graph_with_two_download_edges();
+    fn is_external_download_edge_filters_registry_and_documentation_endpoints() {
+        let graph = graph_with_download_edges();
         let registry = &graph.edges[0];
         let external = &graph.edges[1];
+        let documentation = &graph.edges[2];
         assert!(!is_external_download_edge(registry));
         assert!(is_external_download_edge(external));
+        assert!(!is_external_download_edge(documentation));
     }
 }

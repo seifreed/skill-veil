@@ -140,6 +140,63 @@ mod tests {
             .all(|finding| finding.rule_id != "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"));
     }
 
+    /// # Contract
+    ///
+    /// Documentation and reserved URL hosts are not real remote-download
+    /// sources for taint. A placeholder download URL next to execution
+    /// must not emit download-to-execution taint.
+    #[test]
+    fn taint_ignores_documentation_download_to_exec() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("package.json", ArtifactKind::PackageManifest);
+        graph.add_edge(
+            "package.json",
+            "https://example.com/pkg/install.sh",
+            ArtifactRelation::Downloads,
+        );
+        graph.add_edge(
+            "package.json",
+            "node install.js",
+            ArtifactRelation::Executes,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.rule_id != "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"),
+            "documentation-only downloads must not emit execution taint; got {findings:?}",
+        );
+    }
+
+    /// # Contract (positive)
+    ///
+    /// Filtering documentation downloads must not weaken detection for
+    /// real unreserved downloads that are followed by execution.
+    #[test]
+    fn taint_flags_unreserved_download_to_exec() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("package.json", ArtifactKind::PackageManifest);
+        graph.add_edge(
+            "package.json",
+            "https://attacker-controlled.io/pkg/install.sh",
+            ArtifactRelation::Downloads,
+        );
+        graph.add_edge(
+            "package.json",
+            "node install.js",
+            ArtifactRelation::Executes,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule_id == "ARTIFACT_TAINT_DOWNLOAD_TO_EXECUTION"),
+            "real download plus execution must emit taint; got {findings:?}",
+        );
+    }
+
     #[test]
     fn taint_flags_transient_identity_to_network() {
         let mut graph = ArtifactGraph::new();
