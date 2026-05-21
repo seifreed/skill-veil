@@ -127,14 +127,7 @@ fn cargo_unpinned_dep_finding(
     dep: &TomlValue,
     artifact_path: &str,
 ) -> Option<Finding> {
-    let version = match dep {
-        TomlValue::String(v) => Some(v.as_str()),
-        TomlValue::Table(t) => t.get("version").and_then(TomlValue::as_str),
-        _ => None,
-    }?;
-    if is_strict_cargo_pin(version) {
-        return None;
-    }
+    let match_value = cargo_unpinned_dep_match_value(section, name, dep)?;
     Some(
         Finding::builder("MANIFEST_CARGO_UNPINNED_DEP", ThreatCategory::SupplyChain)
             .severity(Severity::Low)
@@ -147,17 +140,54 @@ fn cargo_unpinned_dep_finding(
             .matched_on(MatchTarget::ReferencedFile {
                 path: artifact_path.to_string(),
             })
-            .match_value(cargo_dependency_match_value(section, name, version))
+            .match_value(match_value)
             .reason("Cargo dependency is not strictly pinned")
             .build(),
     )
 }
 
-fn cargo_dependency_match_value(section: &str, name: &str, version: &str) -> String {
-    if section == "dependencies" {
-        return format!("{name} = {version}");
+fn cargo_unpinned_dep_match_value(section: &str, name: &str, dep: &TomlValue) -> Option<String> {
+    match dep {
+        TomlValue::String(version) => (!is_strict_cargo_pin(version))
+            .then(|| cargo_dependency_match_value(section, name, version)),
+        TomlValue::Table(table) => {
+            if let Some(git_source) = unpinned_git_source(table) {
+                return Some(cargo_dependency_match_value(section, name, &git_source));
+            }
+            let version = table.get("version").and_then(TomlValue::as_str)?;
+            (!is_strict_cargo_pin(version))
+                .then(|| cargo_dependency_match_value(section, name, version))
+        }
+        _ => None,
     }
-    format!("{section}.{name} = {version}")
+}
+
+fn unpinned_git_source(table: &TomlTable) -> Option<String> {
+    let git = non_empty_toml_str(table, "git")?;
+    if non_empty_toml_str(table, "rev").is_some() {
+        return None;
+    }
+    let mut source = format!("git:{git}");
+    if let Some(branch) = non_empty_toml_str(table, "branch") {
+        source.push_str("#branch=");
+        source.push_str(branch);
+    } else if let Some(tag) = non_empty_toml_str(table, "tag") {
+        source.push_str("#tag=");
+        source.push_str(tag);
+    }
+    Some(source)
+}
+
+fn non_empty_toml_str<'a>(table: &'a TomlTable, key: &str) -> Option<&'a str> {
+    let value = table.get(key).and_then(TomlValue::as_str)?.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn cargo_dependency_match_value(section: &str, name: &str, spec: &str) -> String {
+    if section == "dependencies" {
+        return format!("{name} = {spec}");
+    }
+    format!("{section}.{name} = {spec}")
 }
 
 /// A `Cargo.toml` whose body fails to parse is suspicious on its own:
@@ -360,6 +390,74 @@ nix = "0.27.0"
         assert!(
             values.contains(&"target.cfg(unix).dependencies.nix = 0.27.0"),
             "target dependencies must fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: git dependencies are strictly pinned only when the
+    /// manifest names an exact `rev`; branch, tag, and default-branch
+    /// sources can move without changing `Cargo.toml`.
+    #[test]
+    fn test_analyze_cargo_toml_flags_git_dependency_without_rev() {
+        let service = ArtifactOrchestratorService::new();
+        let content = r#"
+[package]
+name = "x"
+version = "0.1.0"
+
+[dependencies]
+plugin = { git = "https://github.com/example/plugin.git", branch = "main" }
+"#;
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &[]);
+        let values = unpinned_match_values(&findings);
+
+        assert!(
+            values.contains(&"plugin = git:https://github.com/example/plugin.git#branch=main"),
+            "git dependency without rev must fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: a git dependency with an explicit `rev` is pinned to one
+    /// commit and must not raise the unpinned-dependency finding.
+    #[test]
+    fn test_analyze_cargo_toml_keeps_git_rev_dependency_clean() {
+        let service = ArtifactOrchestratorService::new();
+        let content = r#"
+[package]
+name = "x"
+version = "0.1.0"
+
+[dependencies]
+plugin = { git = "https://github.com/example/plugin.git", rev = "0123456789abcdef0123456789abcdef01234567" }
+"#;
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &[]);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_CARGO_UNPINNED_DEP"),
+            "git dependency with rev must not fire unpinned-dep finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: local path dependencies without a registry/git source do
+    /// not represent floating remote resolution on their own.
+    #[test]
+    fn test_analyze_cargo_toml_keeps_path_dependency_without_version_clean() {
+        let service = ArtifactOrchestratorService::new();
+        let content = r#"
+[package]
+name = "x"
+version = "0.1.0"
+
+[dependencies]
+local_helper = { path = "../local-helper" }
+"#;
+        let path = std::path::Path::new("/pkg/Cargo.toml");
+        let findings = analyze_cargo_toml(&service, path, content, &[]);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_CARGO_UNPINNED_DEP"),
+            "local path dependency without version must stay clean; got {findings:?}",
         );
     }
 
