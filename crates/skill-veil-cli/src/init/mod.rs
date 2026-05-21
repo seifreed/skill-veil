@@ -241,6 +241,15 @@ fn read_file_to_string_with_cap(path: &Path, cap: u64) -> io::Result<String> {
             ),
         ));
     }
+    if !has_single_hardlink(&path_meta) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "refusing to read install pointer {}: file has multiple hard links",
+                path.display()
+            ),
+        ));
+    }
 
     let file = std::fs::File::open(path)?;
     let meta = file.metadata()?;
@@ -402,6 +411,17 @@ pub(super) fn is_missing_path(path: &Path) -> Result<bool> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
         Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
     }
+}
+
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
 }
 
 #[cfg(unix)]
@@ -741,6 +761,29 @@ mod tests {
         let err = read_install_pointer_file(&link).unwrap_err();
 
         assert!(format!("{err:#}").contains("non-regular install pointer"));
+    }
+
+    /// # Contract
+    ///
+    /// Installed rule-pack pointer reads only accept files with a
+    /// single directory entry. A hardlinked pointer is rejected instead
+    /// of reading an inode whose provenance is outside the install root.
+    #[cfg(unix)]
+    #[test]
+    fn install_pointer_read_rejects_hardlinked_json() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real = tmp.path().join("real-current.json");
+        let link = tmp.path().join(CURRENT_POINTER_FILENAME);
+        std::fs::write(
+            &real,
+            br#"{"version":"v0.1.0","trusted_key_id":"skill-veil-rules-2026"}"#,
+        )
+        .unwrap();
+        std::fs::hard_link(&real, &link).unwrap();
+
+        let err = read_install_pointer_file(&link).unwrap_err();
+
+        assert!(format!("{err:#}").contains("multiple hard links"));
     }
 
     /// # Contract
