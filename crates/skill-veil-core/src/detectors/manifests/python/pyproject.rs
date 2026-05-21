@@ -34,24 +34,30 @@ pub(crate) fn analyze_pyproject_toml(
         .and_then(TomlValue::as_array)
     {
         for dependency in dependencies.iter().filter_map(TomlValue::as_str) {
-            if !(dependency.contains("==") || dependency.contains("~=") || dependency.contains("@"))
-            {
-                findings.push(
-                    Finding::builder(
-                        "MANIFEST_PYPROJECT_UNPINNED_DEP",
-                        ThreatCategory::SupplyChain,
-                    )
-                    .severity(Severity::Low)
-                    .action(RecommendedAction::Log)
-                    .evidence_kind(EvidenceKind::Context)
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.clone(),
-                    })
-                    .match_value(dependency)
-                    .reason("pyproject dependency is not strictly pinned")
-                    .build(),
-                );
+            if is_unpinned_pep621_dependency(dependency) {
+                findings.push(pyproject_unpinned_dep_finding(
+                    &artifact_path,
+                    dependency.to_string(),
+                ));
+            }
+        }
+    }
+
+    if let Some(dependencies) = toml
+        .get("tool")
+        .and_then(|tool| tool.get("poetry"))
+        .and_then(|poetry| poetry.get("dependencies"))
+        .and_then(TomlValue::as_table)
+    {
+        for (name, spec) in dependencies {
+            if name.eq_ignore_ascii_case("python") {
+                continue;
+            }
+            if is_unpinned_poetry_dependency(spec) {
+                findings.push(pyproject_unpinned_dep_finding(
+                    &artifact_path,
+                    poetry_dependency_match_value(name, spec),
+                ));
             }
         }
     }
@@ -68,6 +74,109 @@ pub(crate) fn analyze_pyproject_toml(
     }
 
     findings
+}
+
+fn pyproject_unpinned_dep_finding(artifact_path: &str, match_value: String) -> Finding {
+    Finding::builder(
+        "MANIFEST_PYPROJECT_UNPINNED_DEP",
+        ThreatCategory::SupplyChain,
+    )
+    .severity(Severity::Low)
+    .action(RecommendedAction::Log)
+    .evidence_kind(EvidenceKind::Context)
+    .artifact(
+        ArtifactKind::PackageManifest,
+        Some(artifact_path.to_string()),
+    )
+    .matched_on(MatchTarget::ReferencedFile {
+        path: artifact_path.to_string(),
+    })
+    .match_value(match_value)
+    .reason("pyproject dependency is not strictly pinned")
+    .build()
+}
+
+fn is_unpinned_pep621_dependency(dependency: &str) -> bool {
+    !(dependency.contains("==") || dependency.contains("~=") || dependency.contains("@"))
+}
+
+fn is_unpinned_poetry_dependency(spec: &TomlValue) -> bool {
+    if let Some(version) = spec.as_str() {
+        return is_unpinned_poetry_version(version);
+    }
+    spec.get("version")
+        .and_then(TomlValue::as_str)
+        .is_some_and(is_unpinned_poetry_version)
+}
+
+fn is_unpinned_poetry_version(version: &str) -> bool {
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if matches!(lower.as_str(), "*" | "latest") {
+        return true;
+    }
+    if trimmed.starts_with(['^', '~', '>', '<', '!']) {
+        return true;
+    }
+    if trimmed.contains('*') || trimmed.contains(',') || trimmed.contains("||") {
+        return true;
+    }
+    !is_exact_poetry_version_pin(trimmed)
+}
+
+fn is_exact_poetry_version_pin(version: &str) -> bool {
+    let version = version.strip_prefix("==").unwrap_or(version);
+    let (without_build, build) = split_once_optional(version, '+');
+    if build.is_some_and(|value| !is_valid_pep440ish_identifier_list(value)) {
+        return false;
+    }
+    let (core, suffix) = split_once_optional(without_build, '-');
+    if suffix.is_some_and(|value| !is_valid_pep440ish_identifier_list(value)) {
+        return false;
+    }
+    let mut parts = core.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let Some(patch) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && [major, minor, patch]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn split_once_optional(value: &str, delimiter: char) -> (&str, Option<&str>) {
+    value
+        .split_once(delimiter)
+        .map_or((value, None), |(left, right)| (left, Some(right)))
+}
+
+fn is_valid_pep440ish_identifier_list(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+fn poetry_dependency_match_value(name: &str, spec: &TomlValue) -> String {
+    if let Some(version) = spec.as_str() {
+        return format!("{name}@{version}");
+    }
+    if let Some(version) = spec.get("version").and_then(TomlValue::as_str) {
+        return format!("{name}@{version}");
+    }
+    name.to_string()
 }
 
 pub(crate) fn pyproject_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
@@ -217,6 +326,61 @@ dependencies = ["requests==2.31.0"]
         assert!(
             !finding_present(&findings, "MANIFEST_PYPROJECT_PARSE_FAILURE"),
             "valid TOML must not produce a parse-failure finding; got {findings:?}",
+        );
+    }
+
+    /// Contract: Poetry dependency tables are part of the pyproject
+    /// dependency surface. Floating Poetry constraints must raise the
+    /// same unpinned-dependency finding as PEP 621 dependencies.
+    #[test]
+    fn analyze_pyproject_flags_poetry_unpinned_dependencies() {
+        let content = r#"[tool.poetry.dependencies]
+python = "^3.11"
+requests = "^2.31.0"
+httpx = { version = ">=0.27" }
+"#;
+        let path = std::path::Path::new("/pkg/pyproject.toml");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_pyproject_toml(&service, path, content, &[]);
+
+        assert!(
+            findings.iter().any(|finding| {
+                finding.rule_id == "MANIFEST_PYPROJECT_UNPINNED_DEP"
+                    && finding.match_value == "requests@^2.31.0"
+            }),
+            "Poetry caret constraint must fire; got {findings:?}",
+        );
+        assert!(
+            findings.iter().any(|finding| {
+                finding.rule_id == "MANIFEST_PYPROJECT_UNPINNED_DEP"
+                    && finding.match_value == "httpx@>=0.27"
+            }),
+            "Poetry table version constraint must fire; got {findings:?}",
+        );
+        assert!(
+            findings
+                .iter()
+                .all(|finding| finding.match_value != "python@^3.11"),
+            "the Python interpreter constraint is not a package dependency; got {findings:?}",
+        );
+    }
+
+    /// Contract: exact Poetry versions are already pinned and must stay
+    /// clean.
+    #[test]
+    fn analyze_pyproject_keeps_exact_poetry_versions_clean() {
+        let content = r#"[tool.poetry.dependencies]
+python = "^3.11"
+requests = "2.31.0"
+httpx = { version = "0.27.0" }
+"#;
+        let path = std::path::Path::new("/pkg/pyproject.toml");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_pyproject_toml(&service, path, content, &[]);
+
+        assert!(
+            !finding_present(&findings, "MANIFEST_PYPROJECT_UNPINNED_DEP"),
+            "exact Poetry versions must not fire; got {findings:?}",
         );
     }
 

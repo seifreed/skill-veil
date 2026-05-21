@@ -297,6 +297,36 @@ dependencies = ["requests>=2.0", "pytest"]
 }
 
 #[test]
+fn test_scan_package_flags_poetry_unpinned_dependency() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let pyproject_path = dir.path().join("pyproject.toml");
+
+    std::fs::write(&skill_path, "# Skill\n\n## Setup\nInstall dependencies.\n").unwrap();
+    std::fs::write(
+        &pyproject_path,
+        r#"[tool.poetry.dependencies]
+python = "^3.11"
+requests = "^2.31.0"
+"#,
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+    let pyproject_result = pkg_result
+        .results
+        .iter()
+        .find(|result| result.metadata.path.ends_with("pyproject.toml"))
+        .unwrap();
+
+    assert!(pyproject_result.findings.iter().any(|finding| {
+        finding.rule_id == "MANIFEST_PYPROJECT_UNPINNED_DEP"
+            && finding.match_value == "requests@^2.31.0"
+    }));
+}
+
+#[test]
 fn test_scan_package_detects_makefile_and_config_manifest_findings() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
