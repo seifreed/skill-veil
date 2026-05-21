@@ -102,6 +102,7 @@ pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
         let right_ok = after.is_empty()
             || after.starts_with(' ')
             || after.starts_with('\t')
+            || after.starts_with('(')
             || after.starts_with('|')
             || after.starts_with(';')
             || after.starts_with('&')
@@ -296,6 +297,7 @@ mod tests {
         ));
         assert!(line_contains_command_token("exec('curl\t$url')", "curl"));
         assert!(line_contains_command_token("spawn(`wget\t$url`)", "wget"));
+        assert!(line_contains_command_token("iwr($url) | iex", "iwr"));
     }
 
     /// # Contract (negative)
@@ -310,6 +312,7 @@ mod tests {
             "tee"
         ));
         assert!(!line_contains_command_token("bobcat\t/etc/passwd", "cat"));
+        assert!(!line_contains_command_token("kiwr($url) | iex", "iwr"));
     }
 
     /// # Contract

