@@ -13,6 +13,7 @@
 //!   (env-only, no flag — this is power-user territory).
 
 use anyhow::Result;
+use std::fs::Metadata;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -103,6 +104,9 @@ fn recently_checked(marker: &Path, ttl: Duration) -> bool {
         return false;
     };
     if !meta.is_file() || meta.file_type().is_symlink() {
+        return false;
+    }
+    if !has_single_hardlink(&meta) {
         return false;
     }
     let Ok(modified) = meta.modified() else {
@@ -211,6 +215,17 @@ fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
 }
 
+#[cfg(unix)]
+fn has_single_hardlink(meta: &Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() == 1
+}
+
+#[cfg(not(unix))]
+fn has_single_hardlink(_meta: &Metadata) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,6 +306,25 @@ mod tests {
         std::os::unix::fs::symlink(&target, &marker).unwrap();
 
         assert!(!recently_checked(&marker, Duration::from_secs(60 * 60)));
+    }
+
+    /// # Contract
+    ///
+    /// A hardlinked update-check marker is not authoritative cache
+    /// state. Only a marker owned by its cache path may suppress the
+    /// network update probe.
+    #[cfg(unix)]
+    #[test]
+    fn hardlinked_marker_is_not_recent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target-marker");
+        let marker = dir.path().join(MARKER_FILENAME);
+        std::fs::write(&target, b"recent").unwrap();
+        std::fs::hard_link(&target, &marker).unwrap();
+
+        let is_recent = recently_checked(&marker, Duration::from_secs(60 * 60));
+
+        assert!(!is_recent);
     }
 
     /// # Contract
