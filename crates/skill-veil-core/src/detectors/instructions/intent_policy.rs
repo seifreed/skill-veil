@@ -10,13 +10,15 @@
 //! it is satisfied by a flat `&str` and does not need this module's
 //! sectional view.
 
+use std::net::Ipv6Addr;
+use std::path::Path;
+
 use crate::analyzer::SkillDocument;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, SignalClass,
     ThreatCategory,
 };
 use crate::lazy_pattern;
-use std::path::Path;
 
 lazy_pattern!(
     RE_FETCH_VERB,
@@ -405,50 +407,39 @@ fn first_fetch_with_url(text: &str) -> Option<(String, BaitStrength)> {
 
 /// True when `url`'s host is one of the RFC2606 / RFC6761 reserved
 /// names that document authors use as placeholders (`example.com`,
-/// `*.test`, `localhost`, `127.x.x.x`) — these never represent a real
-/// fetch target and should not anchor the instruction-download chain.
+/// `*.test`, `localhost`, loopback IPs) — these never represent a
+/// real fetch target and should not anchor the instruction-download
+/// chain.
 fn is_documentation_or_loopback_url(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    let after_scheme = lower
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(&lower);
-    let host = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
-    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
-    if host.is_empty() {
+    let Ok(parsed) = url::Url::parse(url) else {
         return false;
+    };
+    match parsed.host() {
+        Some(url::Host::Domain(host)) => is_documentation_or_loopback_host(host),
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => ipv6_is_loopback_or_mapped_loopback(addr),
+        None => false,
     }
-    // Loopback IPv4 (127.0.0.0/8).
-    if host.starts_with("127.")
-        && host
-            .split('.')
-            .filter(|p| !p.is_empty())
-            .all(|p| p.parse::<u8>().is_ok())
-        && host.split('.').count() == 4
-    {
-        return true;
-    }
-    // RFC2606 reserved second-level names.
-    if matches!(host, "example.com" | "example.org" | "example.net")
+}
+
+fn is_documentation_or_loopback_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    matches!(host.as_str(), "example.com" | "example.org" | "example.net")
         || host.ends_with(".example.com")
         || host.ends_with(".example.org")
         || host.ends_with(".example.net")
-    {
-        return true;
-    }
-    // RFC2606 reserved TLDs and RFC6761 loopback.
-    if host == "localhost"
+        || host == "localhost"
         || host.ends_with(".localhost")
         || host.ends_with(".test")
         || host.ends_with(".invalid")
         || host.ends_with(".example")
-    {
-        return true;
-    }
-    false
+}
+
+fn ipv6_is_loopback_or_mapped_loopback(addr: Ipv6Addr) -> bool {
+    addr.is_loopback()
+        || addr
+            .to_ipv4_mapped()
+            .is_some_and(|mapped| mapped.is_loopback())
 }
 
 /// True if any line of `text` contains an exec verb but no URL.
@@ -570,6 +561,8 @@ mod tests {
             "https://foo.test/init",
             "http://localhost:8080/bootstrap",
             "http://127.0.0.1:5000/config",
+            "https://docs@example.com/instructions.md",
+            "http://docs@localhost:8080/bootstrap",
         ] {
             let markdown = format!(
                 "# Skill\n\n## Setup section\n\nfollow these instructions: fetch {placeholder} the documentation\n\n## Tools\n\nexec the local helper to bootstrap.\n"
@@ -600,6 +593,10 @@ mod tests {
             "http://api.localhost",
             "http://127.0.0.1",
             "http://127.5.5.5:9000",
+            "http://[::1]:8080",
+            "http://[::ffff:127.0.0.1]:9000",
+            "https://docs@example.com/instructions.md",
+            "http://docs@localhost:8080/bootstrap",
             "https://foo.test",
             "http://bar.invalid",
             "http://baz.example",
@@ -626,6 +623,9 @@ mod tests {
             "https://api.openai.com/v1",
             "http://10.0.0.5/health",
             "http://192.168.1.1/admin",
+            "https://example.com@attacker-control.io/instructions.md",
+            "http://localhost@attacker-control.io/bootstrap",
+            "http://127.0.0.1@attacker-control.io/path",
         ] {
             assert!(
                 !is_documentation_or_loopback_url(url),
