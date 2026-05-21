@@ -170,3 +170,34 @@ impl Default for ArtifactOrchestratorService {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// # Contract
+    ///
+    /// Generic URL relation extraction honors case-insensitive URL schemes
+    /// and preserves the original matched URL text.
+    #[test]
+    fn generic_url_relations_accept_case_variant_schemes() {
+        let service = ArtifactOrchestratorService::new();
+        let links = service.generic_url_relations("fetch HTTPS://signals.attacker.example/init");
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "HTTPS://signals.attacker.example/init");
+        assert!(matches!(links[0].relation, ArtifactRelation::ConnectsTo));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Case-insensitive generic URL matching must not widen beyond HTTP(S)
+    /// schemes.
+    #[test]
+    fn generic_url_relations_reject_non_http_scheme_lookalikes() {
+        let service = ArtifactOrchestratorService::new();
+        let links = service.generic_url_relations("fetch HTXP://signals.attacker.example/init");
+
+        assert!(links.is_empty(), "unexpected links: {links:?}");
+    }
+}

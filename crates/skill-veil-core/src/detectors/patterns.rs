@@ -26,7 +26,7 @@ lazy_pattern!(
 );
 lazy_pattern!(pub(crate) RE_QUOTED_TOOL_NAME, r#""([A-Za-z0-9._:-]{2,})""#);
 lazy_pattern!(pub(crate) RE_MCP_TOOLS_ARRAY, r#"(?is)"tools"\s*:\s*\[([^\]]+)\]"#);
-lazy_pattern!(pub(crate) RE_GENERIC_URL, r#"https?://[^\s"']+"#);
+lazy_pattern!(pub(crate) RE_GENERIC_URL, r#"(?i)https?://[^\s"']+"#);
 lazy_pattern!(pub(crate) RE_SHELL_SOURCE, r"(?m)^\s*\.\s+\S");
 
 /// Whether `line` invokes a shell or interpreter as a command — `bash`, `sh`,
