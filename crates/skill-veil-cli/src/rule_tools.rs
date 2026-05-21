@@ -160,6 +160,12 @@ fn has_yaml_extension(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
 pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationReport> {
     let mut issues = Vec::new();
     let mut total_rules = 0_usize;
@@ -169,68 +175,75 @@ pub fn validate_rules_directory(rules_dir: &Path) -> Result<RulesValidationRepor
     let mut pack_names = BTreeSet::new();
     let mut pack_kinds = BTreeSet::new();
 
-    for entry in walkdir::WalkDir::new(rules_dir)
-        .into_iter()
-        .filter_map(|e| match e {
-            Ok(e) => Some(e),
-            Err(err) => {
-                tracing::warn!("rules validate: skipping directory entry: {err}");
-                None
-            }
-        })
-        .filter(is_rule_yaml_file)
-    {
-        pack_files += 1;
-        let path = entry.path();
-        let content = read_rule_text_file(path)?;
-        let parsed = parse_rule_source(&content)
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        let mut metadata_issues = Vec::new();
+    if is_real_dir(rules_dir) {
+        for entry in walkdir::WalkDir::new(rules_dir)
+            .into_iter()
+            .filter_map(|e| match e {
+                Ok(e) => Some(e),
+                Err(err) => {
+                    tracing::warn!("rules validate: skipping directory entry: {err}");
+                    None
+                }
+            })
+            .filter(is_rule_yaml_file)
+        {
+            pack_files += 1;
+            let path = entry.path();
+            let content = read_rule_text_file(path)?;
+            let parsed = parse_rule_source(&content)
+                .with_context(|| format!("Failed to parse {}", path.display()))?;
+            let mut metadata_issues = Vec::new();
 
-        let rules = match parsed {
-            ParsedRuleSource::RulePack(pack) => {
-                schema_versions.insert(pack.schema_version);
-                collect_pack_metadata(
-                    &pack.metadata,
-                    &mut pack_names,
-                    &mut pack_kinds,
-                    &mut metadata_issues,
-                    path,
-                );
-                pack.rules
-            }
-            ParsedRuleSource::IocFeed(feed) => {
-                schema_versions.insert(feed.schema_version);
-                collect_pack_metadata(
-                    &feed.metadata,
-                    &mut pack_names,
-                    &mut pack_kinds,
-                    &mut metadata_issues,
-                    path,
-                );
-                parse_rules_file(&content)?
-            }
-            ParsedRuleSource::PlainRules(rules) => rules,
-        };
+            let rules = match parsed {
+                ParsedRuleSource::RulePack(pack) => {
+                    schema_versions.insert(pack.schema_version);
+                    collect_pack_metadata(
+                        &pack.metadata,
+                        &mut pack_names,
+                        &mut pack_kinds,
+                        &mut metadata_issues,
+                        path,
+                    );
+                    pack.rules
+                }
+                ParsedRuleSource::IocFeed(feed) => {
+                    schema_versions.insert(feed.schema_version);
+                    collect_pack_metadata(
+                        &feed.metadata,
+                        &mut pack_names,
+                        &mut pack_kinds,
+                        &mut metadata_issues,
+                        path,
+                    );
+                    parse_rules_file(&content)?
+                }
+                ParsedRuleSource::PlainRules(rules) => rules,
+            };
 
-        issues.extend(metadata_issues);
-        total_rules += rules.len();
+            issues.extend(metadata_issues);
+            total_rules += rules.len();
 
-        for rule in &rules {
-            *seen.entry(rule.id.clone()).or_insert(0) += 1;
-            if !(0.0..=1.0).contains(&rule.confidence) {
-                issues.push(format!(
-                    "Rule {} has invalid confidence {}",
-                    rule.id, rule.confidence
-                ));
-            }
-            if rule.reason.trim().is_empty() {
-                issues.push(format!("Rule {} has an empty reason", rule.id));
-            }
-            if rule.tags.iter().any(|tag| tag.trim().is_empty()) {
-                issues.push(format!("Rule {} contains empty tags", rule.id));
+            for rule in &rules {
+                *seen.entry(rule.id.clone()).or_insert(0) += 1;
+                if !(0.0..=1.0).contains(&rule.confidence) {
+                    issues.push(format!(
+                        "Rule {} has invalid confidence {}",
+                        rule.id, rule.confidence
+                    ));
+                }
+                if rule.reason.trim().is_empty() {
+                    issues.push(format!("Rule {} has an empty reason", rule.id));
+                }
+                if rule.tags.iter().any(|tag| tag.trim().is_empty()) {
+                    issues.push(format!("Rule {} contains empty tags", rule.id));
+                }
             }
         }
+    } else {
+        issues.push(format!(
+            "Rules directory {} is not a real directory",
+            rules_dir.display()
+        ));
     }
 
     if total_rules == 0 {
@@ -269,61 +282,63 @@ pub fn build_rule_pack_info(rules_dir: &Path) -> Result<RulePackInfo> {
     let mut pack_names = BTreeSet::new();
     let mut pack_kinds = BTreeSet::new();
 
-    for entry in walkdir::WalkDir::new(rules_dir)
-        .into_iter()
-        .filter_map(|e| match e {
-            Ok(e) => Some(e),
-            Err(err) => {
-                tracing::warn!("rule-pack info: skipping directory entry: {err}");
-                None
-            }
-        })
-        .filter(is_rule_yaml_file)
-    {
-        pack_files += 1;
-        let path = entry.path();
-        let content = read_rule_text_file(path)?;
-        let parsed = parse_rule_source(&content)
-            .with_context(|| format!("Failed to parse {}", path.display()))?;
-        let mut metadata_issues = Vec::new();
+    if is_real_dir(rules_dir) {
+        for entry in walkdir::WalkDir::new(rules_dir)
+            .into_iter()
+            .filter_map(|e| match e {
+                Ok(e) => Some(e),
+                Err(err) => {
+                    tracing::warn!("rule-pack info: skipping directory entry: {err}");
+                    None
+                }
+            })
+            .filter(is_rule_yaml_file)
+        {
+            pack_files += 1;
+            let path = entry.path();
+            let content = read_rule_text_file(path)?;
+            let parsed = parse_rule_source(&content)
+                .with_context(|| format!("Failed to parse {}", path.display()))?;
+            let mut metadata_issues = Vec::new();
 
-        let rules = match parsed {
-            ParsedRuleSource::RulePack(pack) => {
-                schema_versions.insert(pack.schema_version);
-                collect_pack_metadata(
-                    &pack.metadata,
-                    &mut pack_names,
-                    &mut pack_kinds,
-                    &mut metadata_issues,
-                    path,
-                );
-                pack.rules
-            }
-            ParsedRuleSource::IocFeed(feed) => {
-                schema_versions.insert(feed.schema_version);
-                collect_pack_metadata(
-                    &feed.metadata,
-                    &mut pack_names,
-                    &mut pack_kinds,
-                    &mut metadata_issues,
-                    path,
-                );
-                parse_rules_file(&content)?
-            }
-            ParsedRuleSource::PlainRules(rules) => rules,
-        };
+            let rules = match parsed {
+                ParsedRuleSource::RulePack(pack) => {
+                    schema_versions.insert(pack.schema_version);
+                    collect_pack_metadata(
+                        &pack.metadata,
+                        &mut pack_names,
+                        &mut pack_kinds,
+                        &mut metadata_issues,
+                        path,
+                    );
+                    pack.rules
+                }
+                ParsedRuleSource::IocFeed(feed) => {
+                    schema_versions.insert(feed.schema_version);
+                    collect_pack_metadata(
+                        &feed.metadata,
+                        &mut pack_names,
+                        &mut pack_kinds,
+                        &mut metadata_issues,
+                        path,
+                    );
+                    parse_rules_file(&content)?
+                }
+                ParsedRuleSource::PlainRules(rules) => rules,
+            };
 
-        total_rules += rules.len();
-        for rule in &rules {
-            if rule.enabled {
-                enabled_rules += 1;
-            } else {
-                disabled_rules += 1;
-            }
-            *by_severity.entry(rule.severity.to_string()).or_insert(0) += 1;
-            *by_category.entry(rule.category.to_string()).or_insert(0) += 1;
-            for tag in &rule.tags {
-                tags.insert(tag.clone());
+            total_rules += rules.len();
+            for rule in &rules {
+                if rule.enabled {
+                    enabled_rules += 1;
+                } else {
+                    disabled_rules += 1;
+                }
+                *by_severity.entry(rule.severity.to_string()).or_insert(0) += 1;
+                *by_category.entry(rule.category.to_string()).or_insert(0) += 1;
+                for tag in &rule.tags {
+                    tags.insert(tag.clone());
+                }
             }
         }
     }
@@ -602,6 +617,62 @@ mod tests {
         assert_eq!(report.total_rules, 1);
         assert_eq!(report.pack_files, 1);
         assert!(report.valid);
+    }
+
+    /// # Contract
+    ///
+    /// Directory validation must not walk a symlink supplied as the rules
+    /// root. A symlinked root can point outside the intended rule-pack
+    /// directory while still presenting YAML files to `WalkDir`.
+    #[cfg(unix)]
+    #[test]
+    fn validate_rules_directory_rejects_symlinked_root() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let link = dir.path().join("rules");
+        std::fs::write(
+            outside.path().join("outside.yaml"),
+            valid_rule_pack("OUTSIDE_RULE", "outside"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let report = validate_rules_directory(&link).unwrap();
+
+        assert_eq!(report.total_rules, 0);
+        assert_eq!(report.pack_files, 0);
+        assert!(!report.valid);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.contains("not a real directory")),
+            "expected real-directory issue, got {:?}",
+            report.issues
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Pack-info summaries must not walk a symlink supplied as the rules
+    /// root.
+    #[cfg(unix)]
+    #[test]
+    fn build_rule_pack_info_rejects_symlinked_root() {
+        let dir = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let link = dir.path().join("rules");
+        std::fs::write(
+            outside.path().join("outside.yaml"),
+            valid_rule_pack("OUTSIDE_RULE", "outside"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+
+        let info = build_rule_pack_info(&link).unwrap();
+
+        assert_eq!(info.total_rules, 0);
+        assert_eq!(info.pack_files, 0);
     }
 
     #[cfg(unix)]
