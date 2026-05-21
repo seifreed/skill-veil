@@ -78,7 +78,13 @@ impl YaraEngine {
     ) -> Result<(), YaraError> {
         let dir = dir.as_ref();
         for pattern in &["*.yar", "*.yara"] {
-            for path in fs.list_files(dir, pattern, true)? {
+            let mut paths = fs.list_files(dir, pattern, true)?;
+            paths.sort();
+            debug_assert!(
+                paths.windows(2).all(|pair| pair[0] <= pair[1]),
+                "YARA rule paths must load in deterministic sorted order"
+            );
+            for path in paths {
                 self.load_rules_file(fs, &path)?;
             }
         }
@@ -177,6 +183,8 @@ fn metadata_value(rule: &yara_x::Rule<'_, '_>, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
+    use std::collections::HashMap;
     use std::io::Write;
 
     #[test]
@@ -209,5 +217,68 @@ rule TEST_REMOTE_EXEC {{
         assert_eq!(findings[0].rule_id, "TEST_REMOTE_EXEC");
         assert_eq!(findings[0].category, ThreatCategory::RemoteExec);
         assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    struct ReversedYaraFs {
+        files: HashMap<PathBuf, String>,
+    }
+
+    impl ReversedYaraFs {
+        fn new(files: Vec<(PathBuf, String)>) -> Self {
+            Self {
+                files: files.into_iter().collect(),
+            }
+        }
+    }
+
+    impl FileSystemProvider for ReversedYaraFs {
+        fn read_file_bytes(&self, path: &Path) -> Result<FileContent, FileSystemError> {
+            self.files
+                .get(path)
+                .map(|content| FileContent::new(content.as_bytes().to_vec()))
+                .ok_or_else(|| FileSystemError::PathNotFound(path.to_path_buf()))
+        }
+
+        fn list_files(
+            &self,
+            _path: &Path,
+            pattern: &str,
+            _recursive: bool,
+        ) -> Result<Vec<PathBuf>, FileSystemError> {
+            if pattern != "*.yar" {
+                return Ok(Vec::new());
+            }
+            let mut paths = self.files.keys().cloned().collect::<Vec<_>>();
+            paths.sort_by(|left, right| right.cmp(left));
+            Ok(paths)
+        }
+
+        fn exists(&self, path: &Path) -> bool {
+            path == Path::new("/yara") || self.files.contains_key(path)
+        }
+    }
+
+    /// Contract: directory YARA rules load in sorted path order so
+    /// compilation and later diagnostics do not depend on filesystem
+    /// traversal order.
+    #[test]
+    fn load_rules_dir_loads_yara_paths_in_sorted_order() {
+        let first_path = PathBuf::from("/yara/001-first.yar");
+        let second_path = PathBuf::from("/yara/999-second.yar");
+        let fs = ReversedYaraFs::new(vec![
+            (
+                first_path.clone(),
+                "rule FIRST { condition: true }\n".to_string(),
+            ),
+            (
+                second_path.clone(),
+                "rule SECOND { condition: true }\n".to_string(),
+            ),
+        ]);
+
+        let mut engine = YaraEngine::new().unwrap();
+        engine.load_rules_dir(&fs, "/yara").unwrap();
+
+        assert_eq!(engine.loaded_paths, vec![first_path, second_path]);
     }
 }
