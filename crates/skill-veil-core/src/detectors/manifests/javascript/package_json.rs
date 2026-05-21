@@ -188,46 +188,61 @@ pub(crate) fn package_json_capabilities(content: &str) -> Vec<ArtifactCapability
 }
 
 /// Whether a `package.json` dependency version specifier is anything
-/// other than a strictly-pinned exact version.
+/// other than a strictly-pinned exact SemVer version.
 ///
-/// npm treats the empty string `""` and the bare wildcard `"*"` as "any
-/// version" (the SemVer `Any` set), and ranges starting with `^`, `~`,
-/// `>`, `<`, or `=` (other than the `=x.y.z` exact pin) all resolve to a
-/// floating set at install time. `"latest"` and `"*"` are explicit
-/// dist-tags for the most recent publish. Multi-version ranges (`||`,
-/// `-`) and hyphen ranges are also unpinned. Non-semver protocols
-/// (`git+`, `git://`, `file:`, `link:`, `http://`, `https://`) bypass
-/// the registry's integrity checks entirely and pin only by URL —
-/// which an attacker can mutate post-install — so they count as
-/// unpinned for hygiene purposes.
-///
-/// Pre-fix the check covered only `^`, `~`, `"latest"`, `"*"`, missing
-/// every other shape above. The most attacker-relevant gaps were the
-/// empty string (npm resolves `""` to `*`) and the URL protocols (which
-/// fetch from arbitrary endpoints with no version pinning at all).
+/// npm accepts ranges, arbitrary dist-tags, URL/protocol sources, aliases,
+/// workspace references, and repository shorthands. Those all resolve to a
+/// floating or externally mutable source at install time, so the only
+/// non-unpinned shapes are exact SemVer pins such as `1.2.3`,
+/// `1.2.3-alpha.1`, `1.2.3+build.1`, and `=1.2.3`.
 fn is_unpinned_npm_version(version: &str) -> bool {
     let trimmed = version.trim();
     if trimmed.is_empty() {
         return true;
     }
-    if trimmed == "latest" || trimmed == "*" {
-        return true;
+    !is_exact_npm_version_pin(trimmed)
+}
+
+fn is_exact_npm_version_pin(version: &str) -> bool {
+    let version = version.strip_prefix('=').unwrap_or(version);
+    let (without_build, build) = split_once_optional(version, '+');
+    if build.is_some_and(|value| !is_valid_semver_identifier_list(value)) {
+        return false;
     }
-    if matches!(trimmed.as_bytes().first(), Some(b'^' | b'~' | b'>' | b'<')) {
-        return true;
+    let (core, prerelease) = split_once_optional(without_build, '-');
+    if prerelease.is_some_and(|value| !is_valid_semver_identifier_list(value)) {
+        return false;
     }
-    if trimmed.contains("||") || trimmed.contains(" - ") {
-        return true;
-    }
-    const UNPINNED_PROTOCOLS: &[&str] =
-        &["git+", "git://", "file:", "link:", "http://", "https://"];
-    if UNPINNED_PROTOCOLS
-        .iter()
-        .any(|proto| trimmed.starts_with(proto))
-    {
-        return true;
-    }
-    false
+    let mut parts = core.split('.');
+    let Some(major) = parts.next() else {
+        return false;
+    };
+    let Some(minor) = parts.next() else {
+        return false;
+    };
+    let Some(patch) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && [major, minor, patch]
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn split_once_optional(value: &str, delimiter: char) -> (&str, Option<&str>) {
+    value
+        .split_once(delimiter)
+        .map_or((value, None), |(left, right)| (left, Some(right)))
+}
+
+fn is_valid_semver_identifier_list(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
 }
 
 /// A `package.json` whose body fails to parse is suspicious on its own:
@@ -526,18 +541,17 @@ mod tests {
     }
 
     /// Contract: `is_unpinned_npm_version` MUST classify every npm
-    /// version specifier that resolves to a floating set as unpinned.
-    /// Pre-fix the check covered only `^`, `~`, `"latest"`, `"*"`,
-    /// missing the empty string (npm resolves `""` to `*`), comparator
-    /// ranges (`>=1.0`), multi-range OR (`1.0 || 2.0`), hyphen ranges
-    /// (`1.0 - 2.0`), and non-registry protocols (`git+`, `file:`,
-    /// `link:`, `http(s)://`) which an attacker can mutate post-install.
+    /// version specifier that resolves to a floating set or mutable
+    /// external source as unpinned.
     #[test]
     fn is_unpinned_npm_version_classifies_all_floating_shapes() {
         let unpinned = [
             "",
             "*",
             "latest",
+            "next",
+            "beta",
+            "canary",
             "^1.0.0",
             "~1.0.0",
             ">=1.0.0",
@@ -546,11 +560,15 @@ mod tests {
             "1.0.0 || 2.0.0",
             "1.0.0 - 2.0.0",
             "git+https://github.com/x/y.git",
+            "Git+HTTPS://github.com/x/y.git",
             "git://github.com/x/y.git",
             "file:../local/pkg",
             "link:../sibling",
             "http://example.com/pkg.tgz",
             "https://example.com/pkg.tgz",
+            "workspace:*",
+            "npm:lodash@4.17.21",
+            "github:user/repo",
         ];
         for spec in unpinned {
             assert!(
@@ -565,13 +583,48 @@ mod tests {
     /// the helper does not accidentally start flagging real pins.
     #[test]
     fn is_unpinned_npm_version_does_not_classify_exact_pins() {
-        let pinned = ["1.0.0", "1.2.3", "0.0.1-alpha.1", "=1.0.0"];
+        let pinned = [
+            "1.0.0",
+            "1.2.3",
+            "0.0.1-alpha.1",
+            "1.2.3+build.1",
+            "1.2.3-beta.1+build.5",
+            "=1.0.0",
+        ];
         for spec in pinned {
             assert!(
                 !is_unpinned_npm_version(spec),
                 "{spec:?} must NOT classify as unpinned",
             );
         }
+    }
+
+    /// Contract: arbitrary npm dist-tags are not exact version pins and
+    /// MUST raise `MANIFEST_PACKAGE_JSON_UNPINNED_DEP`.
+    #[test]
+    fn analyze_package_json_flags_dist_tag_as_unpinned() {
+        let manifest = r#"{"name":"x","dependencies":{"react":"next"}}"#;
+        let path = std::path::Path::new("/pkg/package.json");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_package_json(&service, path, manifest, &[]);
+        assert!(
+            finding_present(&findings, "MANIFEST_PACKAGE_JSON_UNPINNED_DEP"),
+            "dist-tag dependency must fire UNPINNED_DEP; got {findings:?}",
+        );
+    }
+
+    /// Contract: exact SemVer pins still suppress
+    /// `MANIFEST_PACKAGE_JSON_UNPINNED_DEP`.
+    #[test]
+    fn analyze_package_json_keeps_exact_semver_pin_clean() {
+        let manifest = r#"{"name":"x","dependencies":{"react":"18.2.0"}}"#;
+        let path = std::path::Path::new("/pkg/package.json");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_package_json(&service, path, manifest, &[]);
+        assert!(
+            !finding_present(&findings, "MANIFEST_PACKAGE_JSON_UNPINNED_DEP"),
+            "exact SemVer pin must not fire UNPINNED_DEP; got {findings:?}",
+        );
     }
 
     /// Contract: an empty version string in `dependencies` MUST raise

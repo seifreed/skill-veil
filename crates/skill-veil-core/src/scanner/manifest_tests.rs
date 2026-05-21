@@ -144,7 +144,8 @@ fn test_scan_package_manifest_emits_manifest_findings() {
         &package_json,
         r#"{
   "dependencies": {
-    "chalk": "^5.0.0"
+    "chalk": "5.0.0",
+    "react": "next"
   },
   "scripts": {
     "postinstall": "node bootstrap.js"
@@ -164,6 +165,7 @@ fn test_scan_package_manifest_emits_manifest_findings() {
     assert!(manifest_result.findings.iter().any(|finding| {
         finding.rule_id == "MANIFEST_PACKAGE_JSON_UNPINNED_DEP"
             && finding.artifact_kind == ArtifactKind::PackageManifest
+            && finding.match_value == "react@next"
     }));
     assert!(manifest_result
         .findings
