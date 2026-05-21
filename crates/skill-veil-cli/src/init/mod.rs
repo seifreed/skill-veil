@@ -213,6 +213,7 @@ fn read_skill_veil_install(install_root: &Path) -> Result<Option<CurrentInstall>
     validate_trusted_key_id(&pointer.trusted_key_id)
         .with_context(|| format!("validating trusted_key_id in {}", pointer_path.display()))?;
     let install_dir = install_root.join(&pointer.version);
+    ensure_real_install_dir(&install_dir)?;
     Ok(Some(CurrentInstall {
         version: pointer.version,
         trusted_key_id: pointer.trusted_key_id,
@@ -281,6 +282,7 @@ fn read_nova_install(install_root: &Path) -> Result<Option<NovaInstallSnapshot>>
         return Ok(None);
     };
     let install_dir = install_root.join(format!("nova-{}", pointer.commit_sha));
+    ensure_real_install_dir(&install_dir)?;
     Ok(Some(NovaInstallSnapshot {
         commit_sha: pointer.commit_sha,
         tarball_sha256: pointer.tarball_sha256,
@@ -373,6 +375,20 @@ fn ensure_real_dir(path: &Path) -> Result<()> {
         Ok(())
     } else {
         anyhow::bail!("{} is not a real directory", path.display())
+    }
+}
+
+fn ensure_real_install_dir(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("{} is a symlink", path.display())
+        }
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => anyhow::bail!("{} is not an installed rules directory", path.display()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            anyhow::bail!("{} is missing", path.display())
+        }
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
     }
 }
 
@@ -607,7 +623,9 @@ mod tests {
     fn write_and_read_skill_veil_pointer_round_trip() {
         let tmp = tempfile::TempDir::new().unwrap();
         let install_root = tmp.path().join("rules");
+        let version_dir = install_root.join("v0.1.0");
         std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir_all(&version_dir).unwrap();
         write_current_pointer(&install_root, "v0.1.0", "skill-veil-rules-2026").unwrap();
         let install = current_install(Some(tmp.path().to_path_buf())).unwrap();
         let sv = install
@@ -615,10 +633,50 @@ mod tests {
             .expect("skill-veil pointer must be readable after write");
         assert_eq!(sv.version, "v0.1.0");
         assert_eq!(sv.trusted_key_id, "skill-veil-rules-2026");
-        assert_eq!(sv.install_dir, install_root.join("v0.1.0"));
+        assert_eq!(sv.install_dir, version_dir);
         // NOVA side is independent — must remain absent until its
         // own pointer is written.
         assert!(install.nova.is_none());
+    }
+
+    /// # Contract
+    ///
+    /// `current_install` must reject a pointer whose version directory is
+    /// missing. A dangling pointer is corrupted install state, not a
+    /// completed rule-pack install.
+    #[test]
+    fn current_install_rejects_missing_skill_veil_version_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        std::fs::create_dir_all(&install_root).unwrap();
+        write_current_pointer(&install_root, "v0.1.0", "skill-veil-rules-2026").unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("missing version directory must be rejected");
+
+        assert!(format!("{err:#}").contains("missing"));
+    }
+
+    /// # Contract
+    ///
+    /// `current_install` must reject a symlinked skill-veil-rules version
+    /// directory rather than reporting it as an installed trusted pack.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_rejects_symlinked_skill_veil_version_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let outside = tmp.path().join("outside-version");
+        let version_dir = install_root.join("v0.1.0");
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &version_dir).unwrap();
+        write_current_pointer(&install_root, "v0.1.0", "skill-veil-rules-2026").unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("symlinked version directory must be rejected");
+
+        assert!(format!("{err:#}").contains("symlink"));
     }
 
     /// # Contract
@@ -734,7 +792,9 @@ mod tests {
         use super::nova::{write_pointer, NovaInstallPointer};
         let tmp = tempfile::TempDir::new().unwrap();
         let install_root = tmp.path().join("rules");
+        let nova_dir = install_root.join("nova-9249cf49dce2b30550bc23d00a36ec64d42932d0");
         std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir_all(&nova_dir).unwrap();
         let pointer = NovaInstallPointer {
             commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
             tarball_sha256: "0".repeat(64),
@@ -746,6 +806,34 @@ mod tests {
         let nova = install.nova.expect("NOVA pointer must round-trip");
         assert_eq!(nova.commit_sha, pointer.commit_sha);
         assert_eq!(nova.file_count, 16);
+    }
+
+    /// # Contract
+    ///
+    /// `current_install` must reject a symlinked NOVA install directory
+    /// rather than reporting it as the installed community rule pack.
+    #[cfg(unix)]
+    #[test]
+    fn current_install_rejects_symlinked_nova_install_dir() {
+        use super::nova::{write_pointer, NovaInstallPointer};
+        let tmp = tempfile::TempDir::new().unwrap();
+        let install_root = tmp.path().join("rules");
+        let outside = tmp.path().join("outside-nova");
+        let nova_dir = install_root.join("nova-9249cf49dce2b30550bc23d00a36ec64d42932d0");
+        std::fs::create_dir_all(&install_root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, &nova_dir).unwrap();
+        let pointer = NovaInstallPointer {
+            commit_sha: "9249cf49dce2b30550bc23d00a36ec64d42932d0".into(),
+            tarball_sha256: "0".repeat(64),
+            file_count: 16,
+        };
+        write_pointer(&install_root, &pointer).unwrap();
+
+        let err = current_install(Some(tmp.path().to_path_buf()))
+            .expect_err("symlinked NOVA install directory must be rejected");
+
+        assert!(format!("{err:#}").contains("symlink"));
     }
 
     /// # Contract
