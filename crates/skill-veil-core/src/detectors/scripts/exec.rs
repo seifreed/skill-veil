@@ -16,6 +16,10 @@ use super::patterns::{
 };
 
 const NODE_RISKY_NETWORK_COMMAND_TOKENS: &[&str] = &["curl", "wget", "invoke-webrequest", "iwr"];
+const NODE_RISKY_SHELL_COMMAND_TOKENS: &[&str] = &[
+    "bash", "bash.exe", "sh", "sh.exe", "dash", "dash.exe", "zsh", "zsh.exe", "ksh", "ksh.exe",
+    "fish", "fish.exe", "csh", "csh.exe", "tcsh", "tcsh.exe", "pwsh", "pwsh.exe",
+];
 
 /// Returns `true` for paths whose conventional purpose is build /
 /// linter / test configuration. These files commonly use
@@ -137,21 +141,13 @@ pub(crate) fn detect_node_process_exec(
             })
         })
         .or_else(|| {
-            // Shell interpreter tokens require word-boundary matching to
-            // avoid substring false positives (e.g. `flash`, `crash`, `push`
-            // all end in `sh` + space). Reuse the same basename logic as
-            // `line_invokes_shell_or_interpreter` for consistency.
-            static SHELL_NAMES: &[&str] = &[
-                "bash", "sh", "dash", "zsh", "ksh", "fish", "csh", "tcsh", "pwsh",
-            ];
             content_lower.lines().find_map(|line| {
-                line.split_whitespace().find_map(|token| {
-                    let basename = token.rsplit(['/', '\\']).next().unwrap_or(token);
-                    let mut lower = basename.to_ascii_lowercase();
-                    if lower.ends_with(".exe") {
-                        lower.truncate(lower.len() - 4);
+                NODE_RISKY_SHELL_COMMAND_TOKENS.iter().find_map(|&token| {
+                    if command_token_with_boundary(line, token) {
+                        Some(token.strip_suffix(".exe").unwrap_or(token))
+                    } else {
+                        None
                     }
-                    SHELL_NAMES.iter().find(|&&name| name == lower).copied()
                 })
             })
         });
@@ -225,6 +221,7 @@ fn command_token_with_boundary(line: &str, token: &str) -> bool {
                     | Some(b';')
                     | Some(b'&')
                     | Some(b'/')
+                    | Some(b'(')
                     | Some(b'\'')
                     | Some(b'"')
                     | Some(b'`')
@@ -500,6 +497,24 @@ mod tests {
         assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
     }
 
+    /// # Contract
+    ///
+    /// Quoted shell interpreters inside Node process execution are risky
+    /// even when no literal URL or downloader command appears in the file.
+    #[test]
+    fn detect_node_process_exec_escalates_for_quoted_shell_invocation() {
+        for content in [
+            "const { exec } = require('child_process');\nexec('bash\t-c \"$PAYLOAD\"');\n",
+            "const { spawn } = require('child_process');\nspawn('/bin/sh\t-c \"$PAYLOAD\"');\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+            assert_eq!(findings.len(), 1, "{content:?} must emit one finding");
+            assert_eq!(findings[0].severity, Severity::Medium);
+            assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+        }
+    }
+
     /// # Contract (negative)
     ///
     /// Risky downloader matching inside Node process execution is
@@ -507,13 +522,16 @@ mod tests {
     /// local subprocess finding.
     #[test]
     fn detect_node_process_exec_rejects_download_command_substrings() {
-        let content = "const { exec } = require('child_process');\n\
-                       exec('mycurl\t$PAYLOAD_URL');\n";
-        let lower = content.to_ascii_lowercase();
-        let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
-        assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].severity, Severity::Low);
-        assert_eq!(findings[0].recommended_action, RecommendedAction::Log);
+        for content in [
+            "const { exec } = require('child_process');\nexec('mycurl\t$PAYLOAD_URL');\n",
+            "const { exec } = require('child_process');\nexec('mybash\t-c \"$PAYLOAD\"');\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+            assert_eq!(findings.len(), 1, "{content:?} must emit one finding");
+            assert_eq!(findings[0].severity, Severity::Low);
+            assert_eq!(findings[0].recommended_action, RecommendedAction::Log);
+        }
     }
 
     /// # Contract

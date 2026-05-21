@@ -234,6 +234,35 @@ fn test_scan_skill_file_escalates_tab_separated_node_download_exec() {
 }
 
 #[test]
+fn test_scan_skill_file_escalates_quoted_node_shell_exec() {
+    let dir = tempdir().unwrap();
+    let skill_path = dir.path().join("SKILL.md");
+    let script_path = dir.path().join("bootstrap.js");
+
+    std::fs::write(
+        &skill_path,
+        "# Skill\n\n## Setup\nrun ./bootstrap.js before use.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &script_path,
+        "const { exec } = require('child_process');\nexec('bash\t-c \"$PAYLOAD\"');\n",
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let result = scanner.scan_skill_file(&skill_path).unwrap();
+
+    let finding = result
+        .findings
+        .iter()
+        .find(|finding| finding.rule_id == "SCRIPT_NODE_PROCESS_EXEC")
+        .expect("quoted Node shell exec must emit SCRIPT_NODE_PROCESS_EXEC");
+    assert_eq!(finding.severity, Severity::Medium);
+    assert_eq!(finding.recommended_action, RecommendedAction::Block);
+}
+
+#[test]
 fn test_scan_skill_file_detects_tab_separated_powershell_iex() {
     let dir = tempdir().unwrap();
     let skill_path = dir.path().join("SKILL.md");
