@@ -35,23 +35,40 @@ use std::path::Path;
 /// inspected for over-broad permissions and surface a `tracing::warn!`
 /// so the user can re-key or chmod the cache.
 pub(crate) fn create_dir_secure(path: &Path) -> io::Result<()> {
-    reject_symlink_target(path)?;
+    reject_symlink_components(path)?;
     create_dir_secure_inner(path)?;
-    reject_symlink_target(path)?;
+    reject_symlink_components(path)?;
     warn_if_dir_world_readable(path);
     Ok(())
 }
 
-fn reject_symlink_target(path: &Path) -> io::Result<()> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{} is a symlink", path.display()),
-        )),
-        Ok(_) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
+fn reject_symlink_components(path: &Path) -> io::Result<()> {
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match std::fs::symlink_metadata(ancestor) {
+            Ok(meta) if meta.file_type().is_symlink() && !is_platform_root_alias(ancestor) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "{} contains symlink component {}",
+                        path.display(),
+                        ancestor.display()
+                    ),
+                ));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
     }
+    Ok(())
+}
+
+fn is_platform_root_alias(path: &Path) -> bool {
+    path.parent()
+        .is_some_and(|parent| parent.has_root() && parent.parent().is_none())
 }
 
 #[cfg(unix)]
@@ -185,6 +202,49 @@ mod tests {
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(err.to_string().contains("symlink"));
+    }
+
+    /// # Contract
+    ///
+    /// `create_dir_secure` MUST reject a symlink in any existing
+    /// ancestor component before creating missing cache/state
+    /// directories beneath it.
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_secure_rejects_symlinked_intermediate_dir() {
+        let parent = TempDir::new().expect("tempdir");
+        let outside = parent.path().join("outside");
+        let link = parent.path().join("cache-link");
+        let target = link.join("nested").join("cache");
+        std::fs::create_dir(&outside).expect("seed outside dir");
+        std::os::unix::fs::symlink(&outside, &link).expect("seed symlink");
+
+        let err = create_dir_secure(&target).expect_err("symlinked ancestor must be rejected");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("symlink"));
+        assert!(
+            !outside.join("nested").exists(),
+            "rejected symlink ancestor must not receive created children"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Real ancestor directories remain valid: `create_dir_secure`
+    /// creates the missing descendant tree under them and preserves the
+    /// existing ancestors as directories.
+    #[test]
+    fn create_dir_secure_accepts_real_intermediate_dirs() {
+        let parent = TempDir::new().expect("tempdir");
+        let real_parent = parent.path().join("real-parent");
+        let target = real_parent.join("nested").join("cache");
+        std::fs::create_dir(&real_parent).expect("seed real parent");
+
+        create_dir_secure(&target).expect("real ancestors must be accepted");
+
+        assert!(target.is_dir());
+        assert!(real_parent.is_dir());
     }
 
     /// # Contract
