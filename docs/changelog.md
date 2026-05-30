@@ -7,6 +7,30 @@ release process is formalized.
 
 ## [Unreleased]
 
+### Added
+
+**SkillSpector-parity detectors (native)**
+- Unicode deception pass across all artifacts: zero-width/invisible
+  characters (`UNICODE_INVISIBLE_CHARS`), bidirectional overrides /
+  Trojan Source (`UNICODE_BIDI_OVERRIDE`), tag-block ASCII smuggling
+  (`UNICODE_TAG_BLOCK`), and Latin↔Cyrillic/Greek homoglyph tokens
+  (`UNICODE_HOMOGLYPH_MIX`).
+- AST script analysis (default-on) for Python/JavaScript/TypeScript via
+  a tree-sitter adapter: dynamic eval, process spawning, dynamic imports,
+  indirect builtin access, and string→eval flows.
+- MCP manifest detector with least-privilege and tool-poisoning signals
+  (`MCP_WILDCARD_CAPABILITY`, `MCP_UNDERDECLARED_CAPABILITY`,
+  `MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION`, and the remote/auth/scope
+  `MCP_*` family).
+- OSV.dev CVE lookup (opt-in, advisory-only): `--osv` /
+  `SKILL_VEIL_OSV=1` / `[osv]` config, on-disk TTL cache with an offline
+  mode. Never changes the verdict.
+
+### Changed
+- Native detector rule IDs (`UNICODE_*`, `MCP_*`) are now a documented
+  public-compatibility surface, registered in `NATIVE_DETECTOR_RULE_IDS`
+  and pinned by a frozen-registry test plus an E2E fixture corpus.
+
 ## [0.2.0] - 2026-05-20
 
 This release expands skill-veil's threat coverage with a new community

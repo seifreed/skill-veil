@@ -98,6 +98,7 @@ pub use benchmark::{
     LabeledSample, RegressionMetrics, SampleEvaluation, SampleLabel, ThresholdRecommendation,
 };
 pub use dependency_inventory::{Ecosystem, ParsedDependency};
+pub use detectors::native_ids::NATIVE_DETECTOR_RULE_IDS;
 pub use findings::{
     artifact_scope_for_kind, signal_class_for, ActionTrigger, ArtifactKind, ArtifactScope,
     BlastRadiusLevel, BlastRadiusSummary, ConsensusClass, ConsensusDiscrepancy, DeclaredPermission,

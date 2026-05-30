@@ -37,11 +37,12 @@ enum DeceptionKind {
 
 impl DeceptionKind {
     fn rule_id(self) -> &'static str {
+        use crate::detectors::native_ids;
         match self {
-            DeceptionKind::InvisibleChars => "UNICODE_INVISIBLE_CHARS",
-            DeceptionKind::BidiOverride => "UNICODE_BIDI_OVERRIDE",
-            DeceptionKind::TagBlock => "UNICODE_TAG_BLOCK",
-            DeceptionKind::HomoglyphMix => "UNICODE_HOMOGLYPH_MIX",
+            DeceptionKind::InvisibleChars => native_ids::UNICODE_INVISIBLE_CHARS,
+            DeceptionKind::BidiOverride => native_ids::UNICODE_BIDI_OVERRIDE,
+            DeceptionKind::TagBlock => native_ids::UNICODE_TAG_BLOCK,
+            DeceptionKind::HomoglyphMix => native_ids::UNICODE_HOMOGLYPH_MIX,
         }
     }
 

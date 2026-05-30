@@ -16,6 +16,7 @@ pub(crate) mod instructions;
 pub(crate) mod lockfiles;
 pub(crate) mod manifests;
 pub(crate) mod mcp;
+pub mod native_ids;
 pub(crate) mod network;
 pub(crate) mod patterns;
 pub(crate) mod permissions;

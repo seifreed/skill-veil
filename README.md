@@ -55,6 +55,7 @@ malware engine.
 | **External Rule Packs** | Versioned `official` and `community` rule packs with fixtures and validation |
 | **Benchmarking** | Labeled corpus, confidence calibration, threshold tuning, and release history dashboard |
 | **VirusTotal Integration** | Bulk download, report caching, and cross-check between skill-veil verdicts and VT Code Insight |
+| **OSV.dev CVE Lookup** | Opt-in, advisory-only query of OSV.dev for known CVEs in a package's pinned dependencies; on-disk TTL cache with an offline mode; never changes the verdict |
 | **PromptIntel Integration** | Curated jailbreak corpus + agent-feed IOC enrichment + threat-intel report submission with persistent rate-limit tracker |
 | **LLM Enrichment** | Optional third scoring engine across Ollama, LM Studio, OpenAI, Anthropic, and Ollama Cloud |
 | **LLM Adjudication** | Gated, ≥2-of-3 consensus reconciliation: taint-FP `Malicious→Suspicious` downgrade and the symmetric FN `Suspicious→Malicious` upgrade; immutable core verdict; single-provider-flip prompt-injection signal; offline replay tooling (`adjudication-eval`) |
@@ -62,7 +63,7 @@ malware engine.
 | **Ground-Truth Corpus** | Curated gold corpus (3-LLM consensus + human review of disputes) scored by the same pipeline as the regression baseline |
 | **Native NOVA Semantics** | `semantics:` patterns run on-device by default via a local sentence-embedding model; opt out with `--no-nova-semantics` |
 | **Inline Suppressions** | `# skill-veil:ignore`, `nosem`, and `nosemgrep` markers with optional rule-id and reason |
-| **Unified Config** | Single `~/.skill-veil.toml` for VT, LLM, and PromptIntel providers; per-flag overrides on the CLI |
+| **Unified Config** | Single `~/.skill-veil.toml` for VT, LLM, PromptIntel, and OSV settings; per-flag overrides on the CLI |
 
 ### What It Detects
 
@@ -71,6 +72,12 @@ Behavior        Remote execution, install hooks, deferred execution, persistence
 Composite       Fake-dependency dropper, crypto wallet-drainer staging,
                 C2 beacon staging (k-of-n; each signal benign alone)
 Supply Chain    Unpinned dependencies, missing lockfiles, remote MCP endpoints
+Deception       Invisible/zero-width chars, bidi overrides (Trojan Source),
+                tag-block ASCII smuggling, Latin↔Cyrillic/Greek homoglyphs
+Script AST      Dynamic eval, process spawning, dynamic imports, indirect
+                builtin access (Python/JavaScript/TypeScript)
+MCP             Wildcard capability grants, under-declared least-privilege,
+                tool-description poisoning, remote/no-auth control planes
 Taint           Secret/identity access reaching an external network (source→sink)
 LLM Integrity   Single-provider benign flip vs ≥2 dissenters (prompt injection
                 against the adjudication path)
@@ -103,6 +110,9 @@ Skill-veil's rule pack targets that surface:
 | Remote instruction download | multi-section fetch + execute |
 | Agent neutralization | rewrites of agent config to invalid endpoints |
 | Hostile narrative | ransom protocols, coercive framings |
+| Unicode deception | invisible / bidi / tag-block / homoglyph tokens (`UNICODE_*`) |
+| Script behavior (AST) | dynamic `eval`, process spawn, dynamic import in Python/JS/TS |
+| MCP least-privilege | wildcard grants, under-declared capabilities, tool-description poisoning (`MCP_*`) |
 
 ### Benchmark on the VT-flagged corpus
 
@@ -340,6 +350,7 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--ci-summary` | Compact diff summary for CI |
 | `--fail-on <mode>` | CI diff failure mode (`new-active` or `new-blocking`) |
 | `--dashboard-output` | Write benchmark history dashboard |
+| `--osv` | Query OSV.dev for known CVEs in the package's pinned dependencies (opt-in, network; also via `SKILL_VEIL_OSV=1` or `[osv] enable = true`). Advisory only — never changes the verdict |
 | `--no-vt-enrich` | Skip VT enrichment even when `~/.skill-veil.toml` provides an apikey |
 | `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
 | `--no-promptintel-enrich` | Skip the offline PromptIntel feed-cache lookup |
@@ -426,6 +437,48 @@ skill-veil vt report deadbeef0123...0123
 
 # Compare skill-veil verdicts against VT Code Insight for a downloaded corpus.
 skill-veil vt cross-check --dir data --format markdown --only-mismatches
+```
+
+### OSV.dev CVE lookup
+
+skill-veil can cross-reference a package's **pinned** dependencies
+(exact-version entries in lockfiles and manifests) against
+[OSV.dev](https://osv.dev/) and list any known advisories. The lookup
+is **opt-in**, **keyless**, and **advisory-only**: it appends an
+informational block to the scan output and **never changes the
+skill-veil verdict** — mirroring the VirusTotal enrichment contract.
+
+```bash
+# Per-scan flag.
+skill-veil scan-package examples/manifest-package --osv
+
+# Or enable for every scan via env var.
+SKILL_VEIL_OSV=1 skill-veil scan-package examples/manifest-package
+```
+
+Results are cached on disk under `<cache>/osv/` keyed by a SHA-256 of
+the dependency tuple; the TTL defaults to 30 days. An offline mode
+serves only the cache and never touches the network. Configure it once
+in `~/.skill-veil.toml`:
+
+```toml
+[osv]
+enable = true          # opt in for every scan (default: false)
+cache_ttl_days = 30     # reuse cached advisories for this many days
+offline = false         # true = cache-only, no network (or SKILL_VEIL_OSV_OFFLINE=1)
+```
+
+The `--osv` flag and `SKILL_VEIL_OSV=1` override `enable`;
+`SKILL_VEIL_OSV_OFFLINE=1` overrides `offline`. Dependencies without an
+exact pinned version are skipped (and counted) since OSV needs a
+concrete version to match. Example output:
+
+```
+=== OSV.dev CVE Lookup (informational; does not affect skill-veil verdict) ===
+  queried 3 pinned dependencies (1 skipped: no exact version); 1 with advisories, 1 advisory total
+
+  requests@2.19.0 (PyPI): 1 advisory
+    - GHSA-x [CVE-2018-18074] CVSS_V3:7.5 — Credentials leak on redirect
 ```
 
 ### PromptIntel: jailbreak corpus, agent-feed enrichment, threat-intel reports

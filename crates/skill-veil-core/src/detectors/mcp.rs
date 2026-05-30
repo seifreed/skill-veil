@@ -1,4 +1,5 @@
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
+use crate::detectors::native_ids;
 use crate::detectors::network::webhook::classify_webhook_exposure;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
@@ -47,67 +48,79 @@ fn mcp_remote_endpoint_findings(
 
     if has_remote_endpoint {
         findings.push(
-            Finding::builder("MCP_REMOTE_SERVER_ENDPOINT", ThreatCategory::SupplyChain)
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Behavior)
-                .artifact(
-                    ArtifactKind::McpServerManifest,
-                    Some(artifact_path.to_string()),
-                )
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.to_string(),
-                })
-                .match_value("remote MCP endpoint")
-                .reason("MCP manifest references a remote server endpoint")
-                .build(),
+            Finding::builder(
+                native_ids::MCP_REMOTE_SERVER_ENDPOINT,
+                ThreatCategory::SupplyChain,
+            )
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .artifact(
+                ArtifactKind::McpServerManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("remote MCP endpoint")
+            .reason("MCP manifest references a remote server endpoint")
+            .build(),
         );
     }
 
     if has_exec_surface {
         findings.push(
-            Finding::builder("MCP_TOOLING_TRANSPORT_DECLARED", ThreatCategory::ToolAbuse)
-                .severity(Severity::Low)
-                .action(if has_remote_endpoint {
-                    RecommendedAction::RequireApproval
-                } else {
-                    RecommendedAction::Log
-                })
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(
-                    ArtifactKind::McpServerManifest,
-                    Some(artifact_path.to_string()),
-                )
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.to_string(),
-                })
-                .match_value("mcp transport")
-                .reason("MCP manifest declares transport or command execution behavior")
-                .build(),
+            Finding::builder(
+                native_ids::MCP_TOOLING_TRANSPORT_DECLARED,
+                ThreatCategory::ToolAbuse,
+            )
+            .severity(Severity::Low)
+            .action(if has_remote_endpoint {
+                RecommendedAction::RequireApproval
+            } else {
+                RecommendedAction::Log
+            })
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(
+                ArtifactKind::McpServerManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("mcp transport")
+            .reason("MCP manifest declares transport or command execution behavior")
+            .build(),
         );
     }
 
     if has_remote_endpoint && has_exec_surface {
         findings.push(
-            Finding::builder("MCP_REMOTE_EXEC_SURFACE", ThreatCategory::RemoteExec)
-                .severity(Severity::High)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Behavior)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.to_string()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.to_string(),
-                })
-                .match_value("remote endpoint with command transport")
-                .reason(
-                    "MCP manifest combines a remote endpoint with command or stdio execution semantics",
-                )
-                .build(),
+            Finding::builder(
+                native_ids::MCP_REMOTE_EXEC_SURFACE,
+                ThreatCategory::RemoteExec,
+            )
+            .severity(Severity::High)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .artifact(
+                ArtifactKind::McpServerManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("remote endpoint with command transport")
+            .reason(
+                "MCP manifest combines a remote endpoint with command or stdio execution semantics",
+            )
+            .build(),
         );
     }
 
     if has_remote_endpoint && artifact_orchestration.is_opaque_mcp_endpoint(content) {
         findings.push(
-            Finding::builder("MCP_OPAQUE_REMOTE_CONTROL_PLANE", ThreatCategory::ToolAbuse)
+            Finding::builder(native_ids::MCP_OPAQUE_REMOTE_CONTROL_PLANE, ThreatCategory::ToolAbuse)
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Context)
@@ -134,7 +147,7 @@ fn mcp_auth_findings(
 
     if has_remote_endpoint && artifact_orchestration.mcp_declares_no_auth(content) {
         findings.push(
-            Finding::builder("MCP_NO_AUTH_MODEL", ThreatCategory::ToolAbuse)
+            Finding::builder(native_ids::MCP_NO_AUTH_MODEL, ThreatCategory::ToolAbuse)
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Context)
@@ -155,7 +168,7 @@ fn mcp_auth_findings(
 
     if artifact_orchestration.mcp_declares_inline_secret(content) {
         findings.push(
-            Finding::builder("MCP_INLINE_AUTH_SECRET", ThreatCategory::CredentialExposure)
+            Finding::builder(native_ids::MCP_INLINE_AUTH_SECRET, ThreatCategory::CredentialExposure)
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
@@ -181,17 +194,25 @@ fn mcp_scope_and_tool_findings(
 
     if RE_IDENTITY_SCOPE.is_match(content) {
         findings.push(
-            Finding::builder("MCP_BROAD_IDENTITY_SCOPE", ThreatCategory::ScopeCreep)
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::McpServerManifest, Some(artifact_path.to_string()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.to_string(),
-                })
-                .match_value("oauth scope")
-                .reason("MCP manifest references identity or OAuth scopes that may exceed the task intent")
-                .build(),
+            Finding::builder(
+                native_ids::MCP_BROAD_IDENTITY_SCOPE,
+                ThreatCategory::ScopeCreep,
+            )
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(
+                ArtifactKind::McpServerManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value("oauth scope")
+            .reason(
+                "MCP manifest references identity or OAuth scopes that may exceed the task intent",
+            )
+            .build(),
         );
     }
 
@@ -200,24 +221,27 @@ fn mcp_scope_and_tool_findings(
         || mcp_tools.len() >= MCP_BROAD_TOOL_COUNT_THRESHOLD
     {
         findings.push(
-            Finding::builder("MCP_PERMISSIVE_TOOL_EXPOSURE", ThreatCategory::ToolAbuse)
-                .severity(Severity::High)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(
-                    ArtifactKind::McpServerManifest,
-                    Some(artifact_path.to_string()),
-                )
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.to_string(),
-                })
-                .match_value(if mcp_tools.is_empty() {
-                    "all tools".to_string()
-                } else {
-                    mcp_tools.join(", ")
-                })
-                .reason("MCP manifest exposes an unusually broad tool surface to the agent")
-                .build(),
+            Finding::builder(
+                native_ids::MCP_PERMISSIVE_TOOL_EXPOSURE,
+                ThreatCategory::ToolAbuse,
+            )
+            .severity(Severity::High)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(
+                ArtifactKind::McpServerManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value(if mcp_tools.is_empty() {
+                "all tools".to_string()
+            } else {
+                mcp_tools.join(", ")
+            })
+            .reason("MCP manifest exposes an unusually broad tool surface to the agent")
+            .build(),
         );
     }
 
@@ -233,7 +257,7 @@ fn mcp_least_privilege_and_poisoning_findings(content: &str, artifact_path: &str
 
     if RE_MCP_WILDCARD_CAPABILITY.is_match(content) {
         findings.push(
-            Finding::builder("MCP_WILDCARD_CAPABILITY", ThreatCategory::ScopeCreep)
+            Finding::builder(native_ids::MCP_WILDCARD_CAPABILITY, ThreatCategory::ScopeCreep)
                 .severity(Severity::High)
                 .action(RecommendedAction::RequireApproval)
                 .evidence_kind(EvidenceKind::Behavior)
@@ -253,7 +277,7 @@ fn mcp_least_privilege_and_poisoning_findings(content: &str, artifact_path: &str
     if RE_MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION.is_match(content) {
         findings.push(
             Finding::builder(
-                "MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION",
+                native_ids::MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION,
                 ThreatCategory::PersistentPromptTampering,
             )
             .severity(Severity::High)
@@ -367,7 +391,7 @@ fn mcp_underdeclared_capability(content: &str, artifact_path: &str) -> Option<Fi
     }
 
     Some(
-        Finding::builder("MCP_UNDERDECLARED_CAPABILITY", ThreatCategory::ScopeCreep)
+        Finding::builder(native_ids::MCP_UNDERDECLARED_CAPABILITY, ThreatCategory::ScopeCreep)
             .severity(Severity::Medium)
             .action(RecommendedAction::RequireApproval)
             .evidence_kind(EvidenceKind::Context)
