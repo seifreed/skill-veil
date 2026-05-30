@@ -89,6 +89,17 @@ fn push_ioc_rule(
             MAX_IOC_ITEMS_PER_KIND
         )));
     }
+    // Drop empty entries before building the alternation: an empty string
+    // escapes to `""`, producing `(?i)(|evil\.com)` whose empty branch matches
+    // the zero-width string at every byte and flags every scanned document.
+    let escaped: Vec<String> = items
+        .iter()
+        .filter(|item| !item.is_empty())
+        .map(|item| regex::escape(item))
+        .collect();
+    if escaped.is_empty() {
+        return Ok(());
+    }
     rules.push(Rule {
         id: format!(
             "IOC_FEED_{}_{}",
@@ -99,14 +110,7 @@ fn push_ioc_rule(
         severity: spec.severity,
         confidence: spec.confidence,
         condition: RuleCondition::Regex {
-            pattern: format!(
-                "(?i)({})",
-                items
-                    .iter()
-                    .map(|s| regex::escape(s))
-                    .collect::<Vec<_>>()
-                    .join("|")
-            ),
+            pattern: format!("(?i)({})", escaped.join("|")),
         },
         action: RecommendedAction::Block,
         reason: spec.reason.to_string(),
@@ -199,5 +203,38 @@ mod tests {
         assert_eq!(super::normalized_pack_name("evil/feed"), "EVIL_FEED");
         assert_eq!(super::normalized_pack_name(""), "UNNAMED");
         assert_eq!(super::normalized_pack_name("   "), "UNNAMED");
+    }
+
+    /// Contract: an empty-string feed entry is dropped rather than compiled
+    /// into an empty alternation `(?i)(|evil\.com)`, whose empty branch would
+    /// match the zero-width string at every byte and flag every document.
+    #[test]
+    fn ioc_feed_drops_empty_entries() {
+        let mut feed = feed_with_domains(0);
+        feed.domains = vec![String::new(), "evil.example.com".to_string()];
+        let rules = ioc_feed_to_rules(&feed).expect("feed must compile");
+        assert_eq!(rules.len(), 1, "only the domains kind yields a rule");
+        let RuleCondition::Regex { pattern } = &rules[0].condition else {
+            panic!("IOC domain rule must be a Regex condition");
+        };
+        let re = regex::Regex::new(pattern).expect("pattern must compile");
+        assert!(
+            !re.is_match("a perfectly benign document with no IOCs"),
+            "an empty entry must not become a match-everything regex; pattern={pattern}"
+        );
+        assert!(
+            re.is_match("contact evil.example.com now"),
+            "the real IOC entry must still match; pattern={pattern}"
+        );
+    }
+
+    /// Contract: a feed whose entries are all empty strings emits no rule —
+    /// there is nothing usable to match against.
+    #[test]
+    fn ioc_feed_with_only_empty_entries_emits_no_rule() {
+        let mut feed = feed_with_domains(0);
+        feed.domains = vec![String::new(), String::new()];
+        let rules = ioc_feed_to_rules(&feed).expect("feed must compile");
+        assert!(rules.is_empty(), "an all-empty feed must emit no rule");
     }
 }

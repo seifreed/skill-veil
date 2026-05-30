@@ -2,12 +2,14 @@ use crate::color::ColorMode;
 use crate::util::terminal_safe::sanitise_for_terminal;
 
 /// Format `entry` as a single bullet for one of the diff sections.
-/// `artifact_path` is attacker-controlled (it lives in the scanned package),
-/// so it MUST go through `sanitise_for_terminal` before reaching the TTY —
-/// matching the contract documented in `text.rs::append_findings`. Without
-/// this, a malicious skill carrying a path like `evil-\x1b[2J\x1b[Hbenign.py`
-/// could clear the operator's terminal and repaint a forged verdict line
-/// when a CI run prints the diff.
+/// `artifact_path` AND `reason` are attacker-controlled (both can carry
+/// strings — e.g. artifact paths — that originate inside the scanned package),
+/// so every field MUST go through `sanitise_for_terminal` before reaching the
+/// TTY — matching the contract in `text.rs::append_findings`. Without this, a
+/// malicious skill carrying a path like `evil-\x1b[2J\x1b[Hbenign.py` (which a
+/// detector then interpolates into a finding's `reason`) could clear the
+/// operator's terminal and repaint a forged verdict line when a CI run prints
+/// the diff.
 fn format_diff_entry(entry: &skill_veil_core::DiffEntry, color: ColorMode) -> String {
     let path = entry
         .artifact_path
@@ -16,9 +18,9 @@ fn format_diff_entry(entry: &skill_veil_core::DiffEntry, color: ColorMode) -> St
         .unwrap_or_else(|| "-".to_string());
     format!(
         "  - {} {} {}\n",
-        color.rule(&entry.rule_id),
+        color.rule(sanitise_for_terminal(&entry.rule_id)),
         path,
-        entry.reason
+        sanitise_for_terminal(&entry.reason)
     )
 }
 
@@ -132,6 +134,42 @@ mod tests {
         assert!(
             rendered.contains("evil-?[2J?[Hbenign.py"),
             "sanitised path must keep printable surroundings; got:\n{rendered}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `reason` and `rule_id` are attacker-controlled too — detectors
+    /// interpolate package-internal artifact paths into `reason` — so the diff
+    /// renderer MUST sanitise them, not only `artifact_path`.
+    #[test]
+    fn format_diff_text_sanitises_attacker_controlled_reason_and_rule_id() {
+        let diff = DiffReport {
+            new_findings: vec![DiffEntry {
+                fingerprint: "fp".into(),
+                rule_id: "R\x1b[31m".into(),
+                category: ThreatCategory::SocialManipulation,
+                artifact_path: Some("ok.py".into()),
+                reason: "claims X but evil-\x1b[2J\x1b[Hbenign.py contradicts".into(),
+            }],
+            resolved_findings: vec![],
+            waived_findings: vec![],
+            baselined_findings: vec![],
+            unchanged_findings: 0,
+        };
+
+        let rendered = format_diff_text(
+            &diff,
+            ColorMode::from_choice(crate::cli_args::ColorChoiceArg::Never, false),
+        );
+
+        assert!(
+            !rendered.contains('\x1b'),
+            "control bytes in reason/rule_id must be sanitised; got:\n{rendered}",
+        );
+        assert!(
+            rendered.contains("evil-?[2J?[Hbenign.py contradicts"),
+            "printable surroundings of reason must survive; got:\n{rendered}",
         );
     }
 

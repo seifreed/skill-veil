@@ -49,6 +49,14 @@ release process is formalized.
   to `usize::MAX` (matching its documented contract) instead of discarding the
   value via `.ok()`; the prior behaviour failed its own contract on 32-bit
   targets.
+- Diff output now sanitises a finding's `reason` and `rule_id` (not only
+  `artifact_path`) before printing to the terminal, closing an ANSI-escape
+  injection path where a malicious package could repaint a CI operator's
+  terminal via control bytes carried in a finding's reason.
+- An empty-string entry in an IOC feed (`domains`/`ips`/`filenames`) is now
+  dropped instead of compiling into an empty-alternation regex that matched
+  every byte of every document — which had flagged every scan as malicious
+  and emitted one finding per character.
 
 ## [0.2.0] - 2026-05-20
 
