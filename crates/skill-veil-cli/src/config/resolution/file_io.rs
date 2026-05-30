@@ -74,6 +74,11 @@ pub(super) struct FileFormat {
     /// learn one schema.
     #[serde(default)]
     pub(super) promptintel: Option<FilePromptIntelSection>,
+    /// Optional `[osv]` section for OSV.dev CVE lookup. No credential —
+    /// the API is keyless. `enable` opts in; `cache_ttl_days` and
+    /// `offline` tune the on-disk cache.
+    #[serde(default)]
+    pub(super) osv: Option<FileOsvSection>,
 }
 
 impl fmt::Debug for FileFormat {
@@ -82,6 +87,7 @@ impl fmt::Debug for FileFormat {
             .field("llm", &self.llm)
             .field("vt", &self.vt)
             .field("promptintel", &self.promptintel)
+            .field("osv", &self.osv)
             .finish()
     }
 }
@@ -114,6 +120,17 @@ impl fmt::Debug for FilePromptIntelSection {
             .field("apikey", &redacted_secret(&self.apikey))
             .finish()
     }
+}
+
+#[derive(Deserialize, Default, Debug)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileOsvSection {
+    #[serde(default)]
+    pub(super) enable: Option<bool>,
+    #[serde(default)]
+    pub(super) cache_ttl_days: Option<i64>,
+    #[serde(default)]
+    pub(super) offline: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

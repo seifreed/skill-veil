@@ -272,7 +272,162 @@ fn mcp_least_privilege_and_poisoning_findings(content: &str, artifact_path: &str
         );
     }
 
+    if let Some(finding) = mcp_underdeclared_capability(content, artifact_path) {
+        findings.push(finding);
+    }
+
     findings
+}
+
+/// Capability category implied by a tool/command surface, with the keywords
+/// that detect it (in tool names) and the keywords that satisfy it (in a
+/// declared capability/permission token).
+struct CapabilityProbe {
+    label: &'static str,
+    tool_keywords: &'static [&'static str],
+    declared_keywords: &'static [&'static str],
+}
+
+const CAPABILITY_PROBES: &[CapabilityProbe] = &[
+    CapabilityProbe {
+        label: "process-execution",
+        tool_keywords: &[
+            "exec",
+            "run",
+            "shell",
+            "spawn",
+            "command",
+            "system",
+            "subprocess",
+            "terminal",
+            "bash",
+        ],
+        declared_keywords: &[
+            "exec",
+            "process",
+            "command",
+            "shell",
+            "spawn",
+            "run",
+            "system",
+            "subprocess",
+            "terminal",
+        ],
+    },
+    CapabilityProbe {
+        label: "network-access",
+        tool_keywords: &[
+            "fetch", "http", "url", "request", "download", "web", "curl", "wget", "scrape",
+        ],
+        declared_keywords: &[
+            "net", "network", "http", "fetch", "url", "web", "request", "outbound", "egress",
+            "connect",
+        ],
+    },
+];
+
+/// Flag an MCP manifest that declares a capability/permission allowlist yet
+/// exposes tools (or a command surface) implying a dangerous capability the
+/// allowlist does not grant — a least-privilege violation.
+///
+/// Structural (JSON) analysis: only fires when the manifest parses as JSON
+/// AND declares an explicit `capabilities`/`permissions`/`scopes` block. A
+/// manifest with no such block is intentionally not flagged here (that is the
+/// noisier "nothing declared" case, deliberately out of scope to avoid firing
+/// on every minimal manifest).
+fn mcp_underdeclared_capability(content: &str, artifact_path: &str) -> Option<Finding> {
+    let value: serde_json::Value = serde_json::from_str(content).ok()?;
+
+    let declared = collect_declared_capabilities(&value)?;
+    let tool_names = collect_tool_names_lower(&value);
+    let has_command = value
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .is_some();
+
+    let mut missing = Vec::new();
+    for probe in CAPABILITY_PROBES {
+        let implied = (probe.label == "process-execution" && has_command)
+            || tool_names
+                .iter()
+                .any(|name| probe.tool_keywords.iter().any(|kw| name.contains(kw)));
+        if !implied {
+            continue;
+        }
+        let covered = declared
+            .iter()
+            .any(|token| probe.declared_keywords.iter().any(|kw| token.contains(kw)));
+        if !covered {
+            missing.push(probe.label);
+        }
+    }
+
+    if missing.is_empty() {
+        return None;
+    }
+
+    Some(
+        Finding::builder("MCP_UNDERDECLARED_CAPABILITY", ThreatCategory::ScopeCreep)
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Context)
+            .artifact(
+                ArtifactKind::McpServerManifest,
+                Some(artifact_path.to_string()),
+            )
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .match_value(missing.join(", "))
+            .reason("MCP manifest declares a capability/permission allowlist but exposes tools implying a capability it does not grant (under-declared least privilege)")
+            .build(),
+    )
+}
+
+/// Collect declared capability tokens (lowercased) from the first present of
+/// `capabilities` / `permissions` / `scopes`. Accepts an array of strings or
+/// an object (keys are the tokens). Returns `None` when no such block exists.
+fn collect_declared_capabilities(value: &serde_json::Value) -> Option<Vec<String>> {
+    let mut found_block = false;
+    let mut tokens = Vec::new();
+    for key in ["capabilities", "permissions", "scopes"] {
+        let Some(node) = value.get(key) else { continue };
+        found_block = true;
+        match node {
+            serde_json::Value::Array(items) => {
+                for item in items.iter().filter_map(serde_json::Value::as_str) {
+                    tokens.push(item.to_ascii_lowercase());
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for k in map.keys() {
+                    tokens.push(k.to_ascii_lowercase());
+                }
+            }
+            serde_json::Value::String(s) => tokens.push(s.to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+    found_block.then_some(tokens)
+}
+
+/// Lowercased names of every entry in the `tools` array (string entries or
+/// objects with a `name` field).
+fn collect_tool_names_lower(value: &serde_json::Value) -> Vec<String> {
+    let Some(tools) = value.get("tools").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
+    tools
+        .iter()
+        .filter_map(|tool| match tool {
+            serde_json::Value::String(s) => Some(s.to_ascii_lowercase()),
+            serde_json::Value::Object(map) => map
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_ascii_lowercase),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) fn analyze_mcp_manifest(
@@ -442,5 +597,54 @@ mod tests {
         // words in a free-text README-style field must not trip the rule.
         let content = r#"{"notes": "ignore all previous benchmarks for performance"}"#;
         assert!(!fired(content, "MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION"));
+    }
+
+    #[test]
+    fn underdeclared_capability_fires_when_allowlist_omits_implied_cap() {
+        // Declares an fs-read allowlist but ships a command surface implying
+        // process execution that the allowlist never grants.
+        let content = r#"{
+          "command": "node",
+          "args": ["server.js"],
+          "permissions": ["fs:read"],
+          "tools": [{"name": "read_file", "description": "Read a file."}]
+        }"#;
+        assert!(fired(content, "MCP_UNDERDECLARED_CAPABILITY"));
+    }
+
+    #[test]
+    fn underdeclared_capability_fires_for_network_tool() {
+        let content = r#"{
+          "capabilities": ["fs:read"],
+          "tools": [{"name": "fetch_url"}]
+        }"#;
+        assert!(fired(content, "MCP_UNDERDECLARED_CAPABILITY"));
+    }
+
+    #[test]
+    fn declared_capability_covering_implied_does_not_fire() {
+        // The allowlist grants process execution, matching the command surface.
+        let content = r#"{
+          "command": "node",
+          "permissions": ["process:exec", "fs:read"],
+          "tools": [{"name": "run_command"}]
+        }"#;
+        assert!(!fired(content, "MCP_UNDERDECLARED_CAPABILITY"));
+    }
+
+    #[test]
+    fn no_capability_block_does_not_fire_underdeclared() {
+        // Without an explicit allowlist there is nothing to under-declare
+        // against; this case is intentionally out of scope (avoids firing on
+        // every minimal manifest).
+        let content = r#"{"command": "node", "tools": [{"name": "run_command"}]}"#;
+        assert!(!fired(content, "MCP_UNDERDECLARED_CAPABILITY"));
+    }
+
+    #[test]
+    fn yaml_manifest_does_not_panic_on_underdeclared_check() {
+        // The structural check is JSON-only; a YAML manifest simply skips it.
+        let content = "command: node\npermissions:\n  - fs:read\n";
+        assert!(!fired(content, "MCP_UNDERDECLARED_CAPABILITY"));
     }
 }

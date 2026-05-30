@@ -35,13 +35,38 @@ impl UnifiedConfig {
 
         let vt_apikey = extract_vt_apikey(parsed_unified.as_ref());
         let promptintel_apikey = extract_promptintel_apikey(parsed_unified.as_ref());
+        let osv = extract_osv_settings(parsed_unified.as_ref());
 
         Ok(Self {
             llm: resolve_llm(parsed_unified.as_ref())?,
             vt_apikey,
             promptintel_apikey,
+            osv,
         })
     }
+}
+
+/// Resolve the `[osv]` section into [`OsvSettings`]. An absent section or
+/// fields fall back to the opt-in defaults (disabled, 30-day cache, online).
+/// A non-positive `cache_ttl_days` is clamped to the default so a typo cannot
+/// silently disable caching.
+fn extract_osv_settings(parsed: Option<&FileFormat>) -> super::OsvSettings {
+    let mut settings = super::OsvSettings::default();
+    let Some(section) = parsed.and_then(|f| f.osv.as_ref()) else {
+        return settings;
+    };
+    if let Some(enable) = section.enable {
+        settings.enabled = enable;
+    }
+    if let Some(days) = section.cache_ttl_days {
+        if days > 0 {
+            settings.cache_ttl_days = days;
+        }
+    }
+    if let Some(offline) = section.offline {
+        settings.offline = offline;
+    }
+    settings
 }
 
 /// Extract a usable VT API key from the parsed unified config.

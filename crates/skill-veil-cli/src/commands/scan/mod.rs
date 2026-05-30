@@ -421,7 +421,7 @@ pub(crate) fn run_scan(
     }
 
     if let Some(osv_block) =
-        crate::osv::try_enrich_with_osv(&scan_result, crate::osv::is_enabled(args.osv), quiet)?
+        crate::osv::try_enrich_with_osv(&scan_result, args.osv, args.cache_dir.as_deref(), quiet)?
     {
         print!("{osv_block}");
     }

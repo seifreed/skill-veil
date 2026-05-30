@@ -1,7 +1,7 @@
 //! OSV.dev request/response types and the resolved advisory view rendered to
 //! the operator.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use skill_veil_core::Ecosystem;
 
 /// One dependency to look up.
@@ -12,7 +12,8 @@ pub(super) struct OsvQuery {
 }
 
 /// Advisory identifiers returned by `querybatch`, then hydrated with details.
-#[derive(Clone)]
+/// `Serialize`/`Deserialize` back the on-disk advisory-details cache.
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct ResolvedAdvisory {
     pub id: String,
     /// CVE / GHSA aliases (e.g. the canonical `CVE-…` for a `GHSA-…`).

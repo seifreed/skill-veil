@@ -50,6 +50,35 @@ pub(crate) struct UnifiedConfig {
     /// `PROMPTINTEL` environment variable wins, then this field, then
     /// "not configured".
     pub promptintel_apikey: Option<String>,
+    /// OSV.dev CVE-lookup settings from the `[osv]` section. Defaults to
+    /// disabled (opt-in) — the `--osv` flag and `SKILL_VEIL_OSV` env var
+    /// override `enable`.
+    pub osv: OsvSettings,
+}
+
+/// Settings for the OSV.dev CVE-lookup enrichment (`[osv]` section).
+#[derive(Debug, Clone)]
+pub(crate) struct OsvSettings {
+    /// Run the lookup. Opt-in: `false` unless `[osv] enable = true`, the
+    /// `--osv` flag, or `SKILL_VEIL_OSV=1`.
+    pub enabled: bool,
+    /// Days a cached advisory result is reused before re-querying.
+    pub cache_ttl_days: i64,
+    /// Serve only the on-disk cache; never touch the network.
+    pub offline: bool,
+}
+
+/// Default cache lifetime for OSV results, matching the LLM/VT cache window.
+pub(crate) const OSV_DEFAULT_CACHE_TTL_DAYS: i64 = 30;
+
+impl Default for OsvSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cache_ttl_days: OSV_DEFAULT_CACHE_TTL_DAYS,
+            offline: false,
+        }
+    }
 }
 
 impl std::fmt::Debug for UnifiedConfig {
@@ -64,6 +93,7 @@ impl std::fmt::Debug for UnifiedConfig {
                 "promptintel_apikey",
                 &self.promptintel_apikey.as_deref().map(|_| "<redacted>"),
             )
+            .field("osv", &self.osv)
             .finish()
     }
 }
@@ -176,6 +206,7 @@ mod tests {
             llm: None,
             vt_apikey: Some("vt-secret-do-not-leak".to_string()),
             promptintel_apikey: Some("promptintel-secret-do-not-leak".to_string()),
+            osv: OsvSettings::default(),
         };
 
         let rendered = format!("{config:?}");
