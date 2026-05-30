@@ -200,6 +200,10 @@ fn build_sarif_rules(
             },
         })
         .collect();
+    // `rules_map` is a HashMap, whose iteration order is randomised per process;
+    // sort by id so the SARIF `rules` array is byte-stable across runs (results
+    // reference rules by `ruleId` string, not array index, so reordering is safe).
+    rules.sort_by(|a, b| a.id.cmp(&b.id));
     if !summary.action_triggers.is_empty() {
         rules.push(SarifRule {
             id: "SKILL_VEIL_ACTION_TRIGGER".to_string(),
@@ -480,6 +484,60 @@ mod sarif_location_tests {
         assert_eq!(
             json, "{}",
             "an empty SarifLocation must round-trip to an empty JSON object"
+        );
+    }
+
+    fn finding_named(rule_id: &str) -> Finding {
+        Finding::builder(rule_id, ThreatCategory::Generic)
+            .match_value("payload")
+            .reason("test")
+            .artifact(
+                ArtifactKind::SkillDocument,
+                Some("pkg/SKILL.md".to_string()),
+            )
+            .build()
+    }
+
+    fn minimal_verdict_report() -> PackageVerdictReport {
+        PackageVerdictReport {
+            verdict: crate::findings::Verdict::Benign,
+            package_health: crate::findings::PackageHealth::Healthy,
+            hygiene_summary: crate::findings::HygieneSummary::default(),
+            declared_permissions: Vec::new(),
+            effective_capabilities: Vec::new(),
+            blast_radius_summary: crate::findings::BlastRadiusSummary::default(),
+            verdict_reasons: Vec::new(),
+            root_cause_groups: Vec::new(),
+            top_risk_drivers: Vec::new(),
+            calibration_notes: Vec::new(),
+            calibration_risk_adjustment: 0,
+        }
+    }
+
+    /// Contract: the SARIF `rules` array is byte-stable across runs. It is
+    /// built from a `HashMap`, whose iteration order is randomised per process,
+    /// so without an explicit sort the array reorders on every invocation —
+    /// breaking golden SARIF snapshots and report content-hashing. Results
+    /// reference rules by `ruleId` string (not array index), so sorting is safe.
+    #[test]
+    fn sarif_rules_are_sorted_by_id_for_deterministic_output() {
+        let findings = vec![
+            finding_named("RULE_C"),
+            finding_named("RULE_A"),
+            finding_named("RULE_B"),
+        ];
+        let summary = FindingSummary::from_findings(&findings);
+        let report = minimal_verdict_report();
+        let rules = build_sarif_rules(&findings, &summary, &report);
+        let data_ids: Vec<&str> = rules
+            .iter()
+            .map(|r| r.id.as_str())
+            .filter(|id| !id.starts_with("SKILL_VEIL_"))
+            .collect();
+        assert_eq!(
+            data_ids,
+            ["RULE_A", "RULE_B", "RULE_C"],
+            "SARIF rules must be emitted sorted by id for deterministic output"
         );
     }
 }

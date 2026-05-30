@@ -42,6 +42,9 @@ release process is formalized.
 - NOVA rule parsing no longer panics on a body-less regex keyword value
   (`/` or `/i`): the `value[1..0]` slice is guarded and the line is reported
   as malformed, so a single bad rule file can no longer abort the whole scan.
+- SARIF output is now deterministic: the `tool.driver.rules` array was built
+  from a `HashMap` and emitted in randomised per-process order; it is now
+  sorted by rule id, so identical inputs produce byte-identical SARIF.
 
 ## [0.2.0] - 2026-05-20
 
