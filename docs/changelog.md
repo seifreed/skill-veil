@@ -45,6 +45,10 @@ release process is formalized.
 - SARIF output is now deterministic: the `tool.driver.rules` array was built
   from a `HashMap` and emitted in randomised per-process order; it is now
   sorted by rule id, so identical inputs produce byte-identical SARIF.
+- Ollama context-length parsing now saturates an over-`usize` `context_length`
+  to `usize::MAX` (matching its documented contract) instead of discarding the
+  value via `.ok()`; the prior behaviour failed its own contract on 32-bit
+  targets.
 
 ## [0.2.0] - 2026-05-20
 

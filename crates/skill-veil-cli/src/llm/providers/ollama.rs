@@ -139,7 +139,10 @@ pub(crate) fn parse_ollama_context_length(body: &str) -> Option<usize> {
         for (key, value) in info {
             if key.ends_with(".context_length") {
                 if let Some(n) = value.as_u64() {
-                    return usize::try_from(n).ok();
+                    // Saturate to usize::MAX on a 32-bit target rather than
+                    // dropping the value: a too-large context window is still a
+                    // usable upper bound, and `.ok()` would silently discard it.
+                    return Some(usize::try_from(n).unwrap_or(usize::MAX));
                 }
             }
         }
