@@ -420,6 +420,12 @@ pub(crate) fn run_scan(
         }
     }
 
+    if let Some(osv_block) =
+        crate::osv::try_enrich_with_osv(&scan_result, crate::osv::is_enabled(args.osv), quiet)?
+    {
+        print!("{osv_block}");
+    }
+
     if !args.no_llm_enrich {
         let llm_provider_override = resolve_llm_provider_override(args.llm_provider.as_deref())?;
         if let Some(llm_block) = llm::try_enrich_with_llm(

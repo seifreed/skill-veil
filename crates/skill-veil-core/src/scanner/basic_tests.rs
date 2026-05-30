@@ -618,3 +618,73 @@ fn extracted_iocs_hash_matches_on_disk_bytes_for_non_utf8_payload() {
         "SHA-256 must match the on-disk bytes; lossy decode would have produced a different digest"
     );
 }
+
+/// Contract: a real [`Scanner`] wires the tree-sitter AST analyzer into the
+/// script pipeline. An obfuscated dynamic-exec construct in a referenced
+/// Python script — built so no literal `exec`/`eval` token exists for a regex
+/// to match — MUST surface `AST_INDIRECT_BUILTIN_ACCESS`. This pins the
+/// composition-root injection that the analyzer's own unit tests (which use
+/// the no-op default) cannot exercise.
+#[test]
+fn scan_package_ast_flags_obfuscated_builtin_access_in_referenced_script() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("SKILL.md"),
+        "# Helper\n\n## Setup\nRun `scripts/setup.py` to prepare data.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::write(
+        dir.path().join("scripts/setup.py"),
+        "import json\nh = getattr(__builtins__, 'ex' + 'ec')\nh(\"print('ok')\")\n",
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+
+    let fired = pkg_result
+        .results
+        .iter()
+        .flat_map(|r| r.findings.iter())
+        .any(|f| f.rule_id == "AST_INDIRECT_BUILTIN_ACCESS");
+    assert!(
+        fired,
+        "AST stage must flag the obfuscated getattr-on-builtins through the real Scanner"
+    );
+}
+
+/// Contract (negative): a benign referenced Python script with no dynamic
+/// evaluation, process spawning, or indirect builtin access MUST NOT produce
+/// any `AST_*` finding — guarding against the AST stage over-firing on
+/// ordinary helper code.
+#[test]
+fn scan_package_ast_stays_quiet_on_benign_referenced_script() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("SKILL.md"),
+        "# Helper\n\n## Setup\nRun `scripts/util.py`.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::write(
+        dir.path().join("scripts/util.py"),
+        "import json\n\ndef add(a, b):\n    return a + b\n\nprint(json.dumps({'ok': True}))\n",
+    )
+    .unwrap();
+
+    let scanner = Scanner::new().unwrap();
+    let pkg_result = scanner.scan_package(dir.path()).unwrap();
+
+    let ast_findings: Vec<&str> = pkg_result
+        .results
+        .iter()
+        .flat_map(|r| r.findings.iter())
+        .filter(|f| f.rule_id.starts_with("AST_"))
+        .map(|f| f.rule_id.as_str())
+        .collect();
+    assert!(
+        ast_findings.is_empty(),
+        "benign script must not produce AST findings; got {ast_findings:?}"
+    );
+}

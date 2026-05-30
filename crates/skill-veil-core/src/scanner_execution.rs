@@ -249,6 +249,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     ) = build_verdict_and_summaries(&filtered_findings, &artifact_graph, path, artifact_kind);
     let should_fail = scanner.filter_service().should_fail(&filtered_findings);
     let extracted_iocs = collect_extracted_iocs(scanner, &doc, path, &primary_content);
+    let dependencies = collect_dependency_inventory(scanner, &doc, path, &primary_content);
 
     let metadata = build_artifact_metadata(path, &doc, artifact_kind);
     Ok(ScanResult {
@@ -273,7 +274,42 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         policy_audit: build_policy_audit(scanner, filter_outcome.applied_overrides),
         should_fail,
         extracted_iocs,
+        dependencies,
     })
+}
+
+/// Collect the package's declared dependencies from the primary artifact (when
+/// it is itself a manifest) and every supporting manifest. Pure and offline;
+/// the network-enabled OSV lookup that consumes this lives in the CLI crate.
+fn collect_dependency_inventory<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+    primary_path: &Path,
+    primary_content: &str,
+) -> Vec<crate::dependency_inventory::ParsedDependency> {
+    let mut deps = Vec::new();
+    let mut collect = |path: &Path, content: &str| {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            deps.extend(crate::dependency_inventory::collect_for_manifest(
+                name,
+                content,
+                &path.display().to_string(),
+            ));
+        }
+    };
+    collect(primary_path, primary_content);
+
+    let fs = scanner.file_discovery().fs_provider();
+    for path in collect_supporting_artifact_paths(scanner, doc) {
+        if !(fs.exists(&path) && fs.is_file(&path)) {
+            continue;
+        }
+        match read_text_file_lossy(&path, fs) {
+            Ok((content, _)) => collect(&path, &content),
+            Err(e) => tracing::warn!("dependency-inventory: skipping {}: {e}", path.display()),
+        }
+    }
+    deps
 }
 
 /// Snapshot the document-level metadata that the `ScanResult` carries
@@ -418,6 +454,12 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     findings.extend(collect_primary_doc_warnings::<F>(doc, path));
     findings.extend(scan_supporting_artifacts(scanner, doc));
     findings.extend(deceptive_docs_findings(scanner, doc));
+    findings.extend(unicode_deception_findings(
+        scanner,
+        doc,
+        artifact_kind,
+        artifact_path,
+    ));
     if let Some(w) = structured_parse_warning(path, primary_content, artifact_kind) {
         findings.push(w);
     }
@@ -462,6 +504,38 @@ fn deceptive_docs_findings<F: FileSystemProvider, P: MarkdownParser>(
         })
         .collect();
     crate::deceptive_docs::detect_deceptive_documentation(doc, &materialised)
+}
+
+/// Scan the primary document and every supporting artifact for Unicode-based
+/// deception (invisible characters, bidi overrides, tag-block smuggling,
+/// homoglyph tokens). Supporting-artifact I/O errors are logged and skipped,
+/// mirroring `deceptive_docs_findings`.
+fn unicode_deception_findings<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+    artifact_kind: ArtifactKind,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let mut findings = crate::unicode_deception::scan_unicode_deception(
+        &doc.raw_content,
+        artifact_kind,
+        artifact_path,
+    );
+    let fs = scanner.file_discovery().fs_provider();
+    for p in collect_supporting_artifact_paths(scanner, doc) {
+        if !(fs.exists(&p) && fs.is_file(&p)) {
+            continue;
+        }
+        match read_text_file_lossy(&p, fs) {
+            Ok((content, _)) => findings.extend(crate::unicode_deception::scan_unicode_deception(
+                &content,
+                ArtifactKind::ReferencedArtifact,
+                &p.display().to_string(),
+            )),
+            Err(e) => tracing::warn!("unicode-deception: skipping {}: {e}", p.display()),
+        }
+    }
+    findings
 }
 
 fn collect_primary_doc_warnings<F: FileSystemProvider>(

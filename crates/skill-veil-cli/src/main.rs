@@ -10,6 +10,7 @@ mod config;
 mod dataset;
 mod init;
 mod llm;
+mod osv;
 mod promptintel;
 mod rule_tools;
 mod text_output;

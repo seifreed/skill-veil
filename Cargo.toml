@@ -28,6 +28,14 @@ pulldown-cmark = "0.10"
 # Pattern matching
 regex = "1.10"
 
+# AST-based script analysis (Python / JavaScript / TypeScript). The grammar
+# crates ship C sources compiled at build time via `cc`; they expose the
+# `LanguageFn` ABI shared with the `tree-sitter` runtime.
+tree-sitter = "0.26"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+
 # File system
 walkdir = "2.5"
 globset = "0.4"

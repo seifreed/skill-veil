@@ -11,7 +11,9 @@
 //! for the rule and `patterns.rs` for the façade pattern used elsewhere
 //! when an adapter import would otherwise smear across the boundary.
 
-use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
+use crate::adapters::{
+    PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider, TreeSitterAstAnalyzer,
+};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
 use crate::policy::{BaselineFile, DispositionOverlay, PolicyFile, WaiverFile};
@@ -106,7 +108,9 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
             build_engine_and_policy(&fs, &options)?;
         Ok(Self {
             engine,
-            artifact_orchestration: ArtifactOrchestratorService::new(),
+            artifact_orchestration: ArtifactOrchestratorService::with_ast_analyzer(Arc::new(
+                TreeSitterAstAnalyzer::default(),
+            )),
             file_discovery: FileDiscoveryService::with_fs_provider(options.recursive, fs),
             filter_service: ScanFilterService::with_policy_state(
                 options,
@@ -133,7 +137,9 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
             build_engine_and_policy(&fs_provider, &options)?;
         Ok(Self {
             engine,
-            artifact_orchestration: ArtifactOrchestratorService::new(),
+            artifact_orchestration: ArtifactOrchestratorService::with_ast_analyzer(Arc::new(
+                TreeSitterAstAnalyzer::default(),
+            )),
             file_discovery: FileDiscoveryService::with_fs_provider(options.recursive, fs_provider),
             filter_service: ScanFilterService::with_policy_state(
                 options,

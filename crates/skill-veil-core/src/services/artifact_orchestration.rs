@@ -14,9 +14,13 @@ use crate::artifact_graph::{
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
+use crate::ports::{NoopAstAnalyzer, ScriptAstAnalyzer};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-pub struct ArtifactOrchestratorService;
+pub struct ArtifactOrchestratorService {
+    ast: Arc<dyn ScriptAstAnalyzer>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ArtifactLink {
@@ -25,9 +29,25 @@ pub struct ArtifactLink {
 }
 
 impl ArtifactOrchestratorService {
+    /// Construct with the no-op AST analyzer. The composition root
+    /// ([`Scanner`](crate::scanner::Scanner)) replaces it with the real
+    /// tree-sitter analyzer via [`Self::with_ast_analyzer`]; manifest-only
+    /// unit tests use this default since they never analyze scripts.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            ast: Arc::new(NoopAstAnalyzer),
+        }
+    }
+
+    /// Inject a concrete AST analyzer. Called by the composition root.
+    #[must_use]
+    pub fn with_ast_analyzer(ast: Arc<dyn ScriptAstAnalyzer>) -> Self {
+        Self { ast }
+    }
+
+    pub(crate) fn ast_analyzer(&self) -> &dyn ScriptAstAnalyzer {
+        self.ast.as_ref()
     }
 
     pub fn analyze(

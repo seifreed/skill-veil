@@ -144,6 +144,7 @@ fn format_text_output_includes_policy_escalation_reasons() {
         policy_audit: Default::default(),
         should_fail: false,
         extracted_iocs: Default::default(),
+        dependencies: Vec::new(),
     };
 
     let output = format_text_output(&[result], TextOutputOptions::default());
@@ -230,6 +231,7 @@ fn format_text_output_sanitises_terminal_controlled_scan_fields() {
         policy_audit: Default::default(),
         should_fail: false,
         extracted_iocs: Default::default(),
+        dependencies: Vec::new(),
     };
 
     let output = format_text_output(
@@ -313,6 +315,7 @@ fn format_text_output_quiet_summary_hides_detailed_findings() {
         policy_audit: Default::default(),
         should_fail: false,
         extracted_iocs: Default::default(),
+        dependencies: Vec::new(),
     };
 
     let output = format_text_output(
@@ -406,6 +409,7 @@ fn format_text_output_explain_policy_focuses_on_policy_section() {
         policy_audit: Default::default(),
         should_fail: false,
         extracted_iocs: Default::default(),
+        dependencies: Vec::new(),
     };
 
     let output = format_text_output(
@@ -890,6 +894,7 @@ fn format_text_output_finding_limit_is_a_per_package_budget() {
         policy_audit: Default::default(),
         should_fail: false,
         extracted_iocs: Default::default(),
+        dependencies: Vec::new(),
     };
 
     let output = format_text_output(
@@ -1017,6 +1022,7 @@ fn format_text_output_finding_limit_none_renders_every_finding() {
         policy_audit: Default::default(),
         should_fail: false,
         extracted_iocs: Default::default(),
+        dependencies: Vec::new(),
     };
 
     let output = format_text_output(

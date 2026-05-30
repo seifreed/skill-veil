@@ -603,6 +603,11 @@ pub struct ScanArgs {
     /// it for scanning instead of skipping. Default is lookup-only.
     #[arg(long, default_value_t = false)]
     pub vt_submit_unknown: bool,
+    /// Query OSV.dev for known CVEs in the package's declared dependencies.
+    /// Opt-in (network): also enabled by setting `SKILL_VEIL_OSV=1`.
+    /// Advisory only — never changes the skill-veil verdict.
+    #[arg(long, default_value_t = false)]
+    pub osv: bool,
     /// Disable LLM enrichment even when `~/.skill-veil.toml` has an `[llm]`
     /// section. Enrichment is otherwise auto-activated when config exists.
     #[arg(long, default_value_t = false)]

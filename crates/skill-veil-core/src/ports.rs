@@ -118,6 +118,88 @@ pub trait PatternMatcher: Send + Sync {
     fn captures_iter(&self, pattern: &str, text: &str) -> Vec<Captures>;
 }
 
+/// Source language a [`ScriptAstAnalyzer`] can parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptLanguage {
+    Python,
+    JavaScript,
+    TypeScript,
+}
+
+impl ScriptLanguage {
+    /// Map a lowercase file extension to a parseable language. Returns
+    /// `None` for extensions with no AST grammar (e.g. shell, PowerShell).
+    #[must_use]
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext {
+            "py" | "pyw" | "pyi" => Some(Self::Python),
+            "js" | "cjs" | "mjs" | "jsx" => Some(Self::JavaScript),
+            "ts" | "cts" | "mts" | "tsx" => Some(Self::TypeScript),
+            _ => None,
+        }
+    }
+}
+
+/// A structural construct an AST analyzer flagged. These capture
+/// behaviour a flat regex cannot see reliably — e.g. a concatenated
+/// string flowing into a dynamic-evaluation call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AstSignalKind {
+    /// Dynamic code evaluation: the `exec`/`eval`/`compile` builtins
+    /// (Python), `eval`/`Function`/`vm.runInContext` (JS/TS).
+    DynamicCodeExecution,
+    /// Process spawning: the `subprocess` module, the `system`/`popen`
+    /// family of the `os` module (Python), `spawn` and the
+    /// `child_process` family (JS/TS).
+    ProcessExecution,
+    /// Dynamic import whose target is a non-literal expression:
+    /// `__import__`/`importlib.import_module` (Python),
+    /// `require(<expr>)`/`import(<expr>)` (JS/TS).
+    DynamicImport,
+    /// Indirect access to interpreter internals: `getattr(__builtins__, ...)`,
+    /// `globals()[...]`, `__builtins__[...]`.
+    IndirectBuiltinAccess,
+    /// A string literal or concatenation flowing into a dynamic-evaluation
+    /// call within the same expression.
+    StringToCodeFlow,
+}
+
+/// One structural finding from a [`ScriptAstAnalyzer`].
+#[derive(Debug, Clone)]
+pub struct AstSignal {
+    pub kind: AstSignalKind,
+    /// 1-based line of the offending node.
+    pub line: usize,
+    /// Short source snippet for evidence (already length-bounded by the adapter).
+    pub evidence: String,
+}
+
+/// Trait for AST-based analysis of referenced scripts — allows swapping the
+/// tree-sitter backend for a stub in tests. The default implementation is
+/// [`TreeSitterAstAnalyzer`].
+///
+/// Implementations MUST fail open: an unparseable input returns an empty
+/// vector rather than erroring, so a malformed script never aborts a scan.
+///
+/// [`TreeSitterAstAnalyzer`]: crate::adapters::TreeSitterAstAnalyzer
+pub trait ScriptAstAnalyzer: Send + Sync {
+    /// Parse `content` as `language` and return every structural signal found.
+    fn analyze(&self, content: &str, language: ScriptLanguage) -> Vec<AstSignal>;
+}
+
+/// Null-object [`ScriptAstAnalyzer`] that finds nothing. Lives in the domain
+/// (not `adapters`) so application-layer services can default to it without
+/// importing a concrete adapter; the composition root injects the real
+/// tree-sitter analyzer.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopAstAnalyzer;
+
+impl ScriptAstAnalyzer for NoopAstAnalyzer {
+    fn analyze(&self, _content: &str, _language: ScriptLanguage) -> Vec<AstSignal> {
+        Vec::new()
+    }
+}
+
 /// A match found by the pattern matcher
 ///
 /// Contains the position and content of a single pattern match.

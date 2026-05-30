@@ -697,6 +697,7 @@ mod tests {
             policy_audit: PolicyAudit::default(),
             should_fail: false,
             extracted_iocs: ExtractedIocs::default(),
+            dependencies: Vec::new(),
         }
     }
 

@@ -138,6 +138,12 @@ pub struct ScanResult {
         skip_serializing_if = "crate::ioc_extraction::ExtractedIocs::is_empty"
     )]
     pub extracted_iocs: crate::ioc_extraction::ExtractedIocs,
+    /// Dependencies declared by the package's manifests. Populated offline by
+    /// the scanner; consumed by network-enabled enrichment (`skill-veil`'s
+    /// OSV.dev CVE lookup). Additive field — defaults to empty so existing
+    /// on-disk caches still deserialise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<crate::dependency_inventory::ParsedDependency>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

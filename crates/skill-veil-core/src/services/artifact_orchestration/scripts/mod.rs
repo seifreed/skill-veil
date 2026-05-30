@@ -12,7 +12,10 @@ use crate::detectors::scripts::{
     detect_remote_binary_downloads, detect_shell_persistence_write, detect_shell_side_effects,
     detect_typosquatted_install, references_dotenv_file,
 };
-use crate::findings::ArtifactKind;
+use crate::findings::{
+    ArtifactKind, EvidenceKind, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+};
+use crate::ports::{AstSignal, AstSignalKind, ScriptLanguage};
 use crate::services::ArtifactOrchestratorService;
 use std::path::Path;
 
@@ -156,7 +159,129 @@ pub(crate) fn analyze_script(
         ArtifactKind::ReferencedArtifact,
     ));
 
+    // AST stage runs on the *raw* `content`, not the comment-stripped /
+    // lowercased view: tree-sitter ignores comments structurally, and string
+    // mentions of dangerous APIs are tokenised as string literals (not calls),
+    // so it does not need the regex-side comment scrubbing.
+    findings.extend(ast_findings(
+        artifact_orchestration,
+        content,
+        &language,
+        &artifact_path,
+    ));
+
     findings
+}
+
+/// Map AST signals from the injected [`ScriptAstAnalyzer`] to findings. Returns
+/// empty for languages with no grammar (shell, PowerShell, etc.).
+fn ast_findings(
+    artifact_orchestration: &ArtifactOrchestratorService,
+    content: &str,
+    language: &str,
+    artifact_path: &str,
+) -> Vec<crate::findings::Finding> {
+    let Some(lang) = ScriptLanguage::from_extension(language) else {
+        return Vec::new();
+    };
+    artifact_orchestration
+        .ast_analyzer()
+        .analyze(content, lang)
+        .into_iter()
+        .map(|signal| ast_signal_to_finding(&signal, artifact_path))
+        .collect()
+}
+
+fn ast_signal_to_finding(signal: &AstSignal, artifact_path: &str) -> crate::findings::Finding {
+    let (rule_id, category, severity, action, evidence_kind) = ast_signal_descriptor(signal.kind);
+    crate::findings::Finding::builder(rule_id, category)
+        .severity(severity)
+        .action(action)
+        .evidence_kind(evidence_kind)
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .artifact(
+            ArtifactKind::ReferencedArtifact,
+            Some(artifact_path.to_string()),
+        )
+        .match_value(signal.evidence.clone())
+        .reason(ast_signal_reason(signal.kind))
+        .line(signal.line)
+        .build()
+}
+
+/// `(rule_id, category, severity, action, evidence_kind)` for each signal.
+/// The two novel high-signal catches a regex cannot make —
+/// `IndirectBuiltinAccess` and `StringToCodeFlow` — block; the constructs a
+/// regex already covers stay advisory so they do not double-count into the
+/// verdict.
+fn ast_signal_descriptor(
+    kind: AstSignalKind,
+) -> (
+    &'static str,
+    ThreatCategory,
+    Severity,
+    RecommendedAction,
+    EvidenceKind,
+) {
+    match kind {
+        AstSignalKind::DynamicCodeExecution => (
+            "AST_DYNAMIC_CODE_EXECUTION",
+            ThreatCategory::RemoteExec,
+            Severity::Medium,
+            RecommendedAction::RequireApproval,
+            EvidenceKind::Behavior,
+        ),
+        AstSignalKind::ProcessExecution => (
+            "AST_PROCESS_EXECUTION",
+            ThreatCategory::RemoteExec,
+            Severity::Low,
+            RecommendedAction::Log,
+            EvidenceKind::Context,
+        ),
+        AstSignalKind::DynamicImport => (
+            "AST_DYNAMIC_IMPORT",
+            ThreatCategory::Obfuscation,
+            Severity::Low,
+            RecommendedAction::Log,
+            EvidenceKind::Context,
+        ),
+        AstSignalKind::IndirectBuiltinAccess => (
+            "AST_INDIRECT_BUILTIN_ACCESS",
+            ThreatCategory::Obfuscation,
+            Severity::High,
+            RecommendedAction::Block,
+            EvidenceKind::Behavior,
+        ),
+        AstSignalKind::StringToCodeFlow => (
+            "AST_STRING_TO_CODE_FLOW",
+            ThreatCategory::Obfuscation,
+            Severity::High,
+            RecommendedAction::Block,
+            EvidenceKind::Behavior,
+        ),
+    }
+}
+
+fn ast_signal_reason(kind: AstSignalKind) -> &'static str {
+    match kind {
+        AstSignalKind::DynamicCodeExecution => {
+            "dynamic code evaluation (exec/eval/compile family) parsed from the script AST"
+        }
+        AstSignalKind::ProcessExecution => {
+            "process-spawning call parsed from the script AST"
+        }
+        AstSignalKind::DynamicImport => {
+            "dynamic import of a computed module name parsed from the script AST"
+        }
+        AstSignalKind::IndirectBuiltinAccess => {
+            "indirect access to interpreter builtins (getattr/globals) — an obfuscation a literal pattern cannot see"
+        }
+        AstSignalKind::StringToCodeFlow => {
+            "a constructed string flows into a dynamic-evaluation call in the same expression"
+        }
+    }
 }
 
 pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {

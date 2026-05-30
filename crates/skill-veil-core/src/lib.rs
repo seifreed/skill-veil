@@ -62,6 +62,7 @@ pub mod artifact_graph;
 mod artifact_taint;
 pub mod benchmark;
 mod deceptive_docs;
+pub mod dependency_inventory;
 mod detectors;
 pub mod findings;
 mod inline_suppressions;
@@ -78,6 +79,7 @@ mod scanner_graph;
 mod scanner_support;
 pub(crate) mod scanner_types;
 pub mod services;
+mod unicode_deception;
 mod verdict;
 mod verdict_calibration;
 
@@ -95,6 +97,7 @@ pub use benchmark::{
     CorpusManifest, CoverageBucket, DeduplicationMetrics, GoldCorpusManifest, GoldSample,
     LabeledSample, RegressionMetrics, SampleEvaluation, SampleLabel, ThresholdRecommendation,
 };
+pub use dependency_inventory::{Ecosystem, ParsedDependency};
 pub use findings::{
     artifact_scope_for_kind, signal_class_for, ActionTrigger, ArtifactKind, ArtifactScope,
     BlastRadiusLevel, BlastRadiusSummary, ConsensusClass, ConsensusDiscrepancy, DeclaredPermission,
@@ -130,11 +133,14 @@ pub use verdict::is_conclusive_single_rule_id;
 
 // Port traits (interfaces for dependency injection)
 pub use ports::{
-    DecodedText, FileContent, FileMeta, FileSystemProvider, MarkdownParser, PatternMatcher,
+    AstSignal, AstSignalKind, DecodedText, FileContent, FileMeta, FileSystemProvider,
+    MarkdownParser, NoopAstAnalyzer, PatternMatcher, ScriptAstAnalyzer, ScriptLanguage,
 };
 
 // Default adapters (implementations of port traits)
-pub use adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider};
+pub use adapters::{
+    PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider, TreeSitterAstAnalyzer,
+};
 pub use artifact_graph::{
     ArtifactCapability, ArtifactCapabilityFact, ArtifactCapabilitySource, ArtifactEdge,
     ArtifactGraph, ArtifactNode, ArtifactRelation, EndpointKind,
