@@ -145,7 +145,26 @@ fn hydrate_advisories(
     cache: Option<&OsvCache>,
     offline: bool,
 ) -> Vec<DependencyAdvisories> {
+    let mut fetch = |id: &str| OsvClient::new().advisory_details(id).ok();
+    hydrate_with(pinned, ids_per_dep, cache, offline, &mut fetch)
+}
+
+/// Core of [`hydrate_advisories`], generic over the detail fetcher so the
+/// network-fetch budget can be exercised deterministically in tests.
+///
+/// The `MAX_ADVISORY_DETAILS` cap counts only actual network fetches: cache
+/// hits and `id_only` fallbacks are memoised for dedup but never consume the
+/// budget, so a large set of already-cached advisories cannot starve an
+/// uncached one of its single fetch.
+fn hydrate_with<F: FnMut(&str) -> Option<ResolvedAdvisory>>(
+    pinned: &[ParsedDependency],
+    ids_per_dep: &[Option<Vec<String>>],
+    cache: Option<&OsvCache>,
+    offline: bool,
+    fetch: &mut F,
+) -> Vec<DependencyAdvisories> {
     let mut memo: BTreeMap<String, ResolvedAdvisory> = BTreeMap::new();
+    let mut fetched = 0usize;
     let mut out = Vec::new();
     for (dep, ids) in pinned.iter().zip(ids_per_dep) {
         let Some(ids) = ids else { continue };
@@ -154,7 +173,14 @@ fn hydrate_advisories(
         }
         let mut resolved = Vec::new();
         for id in ids {
-            resolved.push(resolve_one_detail(id, cache, offline, &mut memo));
+            resolved.push(resolve_one_detail(
+                id,
+                cache,
+                offline,
+                &mut memo,
+                &mut fetched,
+                fetch,
+            ));
         }
         out.push(DependencyAdvisories {
             name: dep.name.clone(),
@@ -166,33 +192,37 @@ fn hydrate_advisories(
     out
 }
 
-fn resolve_one_detail(
+fn resolve_one_detail<F: FnMut(&str) -> Option<ResolvedAdvisory>>(
     id: &str,
     cache: Option<&OsvCache>,
     offline: bool,
     memo: &mut BTreeMap<String, ResolvedAdvisory>,
+    fetched: &mut usize,
+    fetch: &mut F,
 ) -> ResolvedAdvisory {
     if let Some(hit) = memo.get(id) {
         return hit.clone();
     }
     let detail = cache
         .and_then(|c| c.get_details(id))
-        .or_else(|| fetch_and_cache_detail(id, cache, offline, memo.len()))
+        .or_else(|| fetch_and_cache_detail(id, cache, offline, fetched, fetch))
         .unwrap_or_else(|| ResolvedAdvisory::id_only(id));
     memo.insert(id.to_string(), detail.clone());
     detail
 }
 
-fn fetch_and_cache_detail(
+fn fetch_and_cache_detail<F: FnMut(&str) -> Option<ResolvedAdvisory>>(
     id: &str,
     cache: Option<&OsvCache>,
     offline: bool,
-    fetched_so_far: usize,
+    fetched: &mut usize,
+    fetch: &mut F,
 ) -> Option<ResolvedAdvisory> {
-    if offline || fetched_so_far >= MAX_ADVISORY_DETAILS {
+    if offline || *fetched >= MAX_ADVISORY_DETAILS {
         return None;
     }
-    let detail = OsvClient::new().advisory_details(id).ok()?;
+    *fetched += 1;
+    let detail = fetch(id)?;
     if let Some(cache) = cache {
         cache.put_details(id, &detail);
     }
@@ -298,5 +328,94 @@ mod tests {
         assert!(try_enrich_with_osv(&pkg, true, None, true)
             .unwrap()
             .is_none());
+    }
+
+    fn full(id: &str) -> ResolvedAdvisory {
+        ResolvedAdvisory {
+            id: id.to_string(),
+            aliases: vec![format!("CVE-{id}")],
+            summary: Some("summary".to_string()),
+            severity: Some("CVSS_V3:7.5".to_string()),
+        }
+    }
+
+    #[test]
+    fn cached_advisories_do_not_consume_the_network_fetch_budget() {
+        // Contract: the MAX_ADVISORY_DETAILS cap bounds network fetches, not
+        // total advisories. A run with the budget's worth of already-cached
+        // advisories must still fetch a single uncached one — cache hits do
+        // not spend the budget.
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = OsvCache::new(Some(tmp.path()), 30).unwrap();
+        let cached_ids: Vec<String> = (0..MAX_ADVISORY_DETAILS)
+            .map(|i| format!("CACHED-{i:04}"))
+            .collect();
+        for id in &cached_ids {
+            cache.put_details(id, &full(id));
+        }
+        let mut ids = cached_ids.clone();
+        ids.push("UNCACHED-1".to_string());
+        let ids_per_dep = vec![Some(ids)];
+        let pinned = vec![dep("requests", Some("2.31.0"))];
+
+        let calls = std::cell::RefCell::new(Vec::new());
+        let mut fetch = |id: &str| {
+            calls.borrow_mut().push(id.to_string());
+            Some(full(id))
+        };
+        let out = hydrate_with(&pinned, &ids_per_dep, Some(&cache), false, &mut fetch);
+
+        assert_eq!(
+            *calls.borrow(),
+            vec!["UNCACHED-1".to_string()],
+            "only the uncached id is fetched; the cached ones never spent the budget"
+        );
+        let uncached = out[0]
+            .advisories
+            .iter()
+            .find(|a| a.id == "UNCACHED-1")
+            .unwrap();
+        assert!(
+            uncached.summary.is_some(),
+            "the uncached advisory is hydrated with full detail, not degraded to id_only"
+        );
+    }
+
+    #[test]
+    fn network_fetch_budget_caps_uncached_advisories() {
+        // The other direction: with more uncached advisories than the budget
+        // and no cache, exactly MAX_ADVISORY_DETAILS are fetched and the rest
+        // degrade to id_only.
+        let overflow = 5;
+        let ids: Vec<String> = (0..MAX_ADVISORY_DETAILS + overflow)
+            .map(|i| format!("U-{i:04}"))
+            .collect();
+        let ids_per_dep = vec![Some(ids)];
+        let pinned = vec![dep("requests", Some("2.31.0"))];
+
+        let calls = std::cell::RefCell::new(0usize);
+        let mut fetch = |id: &str| {
+            *calls.borrow_mut() += 1;
+            Some(full(id))
+        };
+        let out = hydrate_with(&pinned, &ids_per_dep, None, false, &mut fetch);
+
+        assert_eq!(
+            *calls.borrow(),
+            MAX_ADVISORY_DETAILS,
+            "network fetches are capped at MAX_ADVISORY_DETAILS"
+        );
+        let hydrated = out[0]
+            .advisories
+            .iter()
+            .filter(|a| a.summary.is_some())
+            .count();
+        let id_only = out[0]
+            .advisories
+            .iter()
+            .filter(|a| a.summary.is_none())
+            .count();
+        assert_eq!(hydrated, MAX_ADVISORY_DETAILS);
+        assert_eq!(id_only, overflow);
     }
 }

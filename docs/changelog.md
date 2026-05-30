@@ -31,6 +31,15 @@ release process is formalized.
   public-compatibility surface, registered in `NATIVE_DETECTOR_RULE_IDS`
   and pinned by a frozen-registry test plus an E2E fixture corpus.
 
+### Fixed
+- OSV detail-fetch budget (`MAX_ADVISORY_DETAILS`) no longer counts cache
+  hits as network fetches, so a large set of already-cached advisories can
+  no longer starve an uncached advisory of its single lookup (it was
+  silently degraded to an ID-only row).
+- OSV advisory IDs from the `querybatch` response are validated before
+  being interpolated into the `/vulns/{id}` request path; a value carrying
+  path/query metacharacters is rejected instead of shaping the request URL.
+
 ## [0.2.0] - 2026-05-20
 
 This release expands skill-veil's threat coverage with a new community

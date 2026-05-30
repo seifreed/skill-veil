@@ -18,6 +18,7 @@ const USER_AGENT: &str = concat!(
 const HTTP_TIMEOUT_SECS: u64 = 30;
 const MAX_ADDITIONAL_ATTEMPTS: u32 = 2;
 const INITIAL_BACKOFF_MS: u64 = 1_000;
+const MAX_ADVISORY_ID_LEN: usize = 128;
 
 #[derive(Debug, Error)]
 pub(super) enum OsvError {
@@ -27,6 +28,22 @@ pub(super) enum OsvError {
     Transport(String),
     #[error("OSV response decode error: {0}")]
     Decode(String),
+    #[error("invalid OSV advisory id: {0:?}")]
+    InvalidAdvisoryId(String),
+}
+
+/// Whether `id` is the shape of an OSV advisory identifier (e.g. `GHSA-…`,
+/// `CVE-2021-1234`, `PYSEC-2022-43012`). The IDs are taken from the network
+/// `querybatch` response and interpolated into the `/vulns/{id}` path, so a
+/// value carrying path or query metacharacters (`/`, `..`, `?`, `#`,
+/// whitespace) must be rejected before it can shape the request URL rather
+/// than being percent-mangled into an unintended same-host endpoint.
+fn is_valid_advisory_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= MAX_ADVISORY_ID_LEN
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
 pub(super) struct OsvClient {
@@ -66,6 +83,9 @@ impl OsvClient {
 
     /// Fetch full details for one advisory ID.
     pub fn advisory_details(&self, id: &str) -> Result<ResolvedAdvisory, OsvError> {
+        if !is_valid_advisory_id(id) {
+            return Err(OsvError::InvalidAdvisoryId(id.to_string()));
+        }
         let url = format!("{BASE_URL}/vulns/{id}");
         let details: VulnDetails = self.get_json(&url)?;
         Ok(details.into_resolved())
@@ -125,5 +145,39 @@ impl OsvClient {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advisory_id_validation_accepts_real_ids_and_rejects_url_shaping() {
+        for ok in [
+            "GHSA-xxxx-yyyy-zzzz",
+            "CVE-2021-1234",
+            "PYSEC-2022-43012",
+            "OSV-2020-1.0_x",
+        ] {
+            assert!(is_valid_advisory_id(ok), "{ok} should be accepted");
+        }
+        for bad in [
+            "",
+            "../querybatch",
+            "id with space",
+            "a/b",
+            "x?y",
+            "x#frag",
+            "a@b",
+            "name%2e",
+            "GHSA\u{0000}",
+        ] {
+            assert!(!is_valid_advisory_id(bad), "{bad:?} should be rejected");
+        }
+        assert!(
+            !is_valid_advisory_id(&"a".repeat(MAX_ADVISORY_ID_LEN + 1)),
+            "oversized id should be rejected"
+        );
     }
 }
