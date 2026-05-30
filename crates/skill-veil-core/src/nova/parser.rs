@@ -455,6 +455,17 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
                 reason: "regex pattern is not closed with `/` or `/i`",
             });
         };
+        // A lone `/` or `/i` has its opening and "closing" delimiter at the
+        // same position, so `closing == 0` and `value[1..0]` would panic.
+        // Treat a delimiter pair with no body between them as malformed
+        // rather than crashing the whole scan on one bad rule line.
+        if closing < 1 {
+            return Err(ParseError::MalformedLine {
+                section: "keywords",
+                line: raw.to_string(),
+                reason: "regex pattern is not closed with `/` or `/i`",
+            });
+        }
         let body = &value[1..closing];
         let case_sensitive = !trailing_i; // `/x/` is case-sensitive; `/x/i` is not
         regex::Regex::new(body).map_err(|source| ParseError::InvalidRegex {
@@ -1325,5 +1336,49 @@ rule Second {
                 panic!("real-world fixture failed to parse: {e}\n--- body ---\n{body}")
             });
         }
+    }
+
+    /// Contract: a regex keyword value with no body between its delimiters
+    /// (`/`, `/i`) is rejected as malformed, never panics. The slice
+    /// `value[1..closing]` would otherwise hit `begin > end` for `closing == 0`.
+    #[test]
+    fn keyword_regex_without_body_is_malformed_not_panic() {
+        for bad in ["/", "/i"] {
+            match parse_keyword_value(bad) {
+                Err(ParseError::MalformedLine { .. }) => {}
+                other => panic!("{bad:?} should be MalformedLine, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn keyword_regex_with_body_parses() {
+        let cs = parse_keyword_value("/abc/").unwrap();
+        assert!(cs.is_regex && cs.case_sensitive && cs.pattern == "abc");
+        let ci = parse_keyword_value("/abc/i").unwrap();
+        assert!(ci.is_regex && !ci.case_sensitive && ci.pattern == "abc");
+        // `//` and `//i` are empty (body-present, length 0) regexes — valid.
+        assert!(parse_keyword_value("//").unwrap().pattern.is_empty());
+        assert!(parse_keyword_value("//i").unwrap().pattern.is_empty());
+    }
+
+    /// Contract: one malformed rule line surfaces as a parse error, never a
+    /// panic that would abort the whole scan (mirrors the per-rule
+    /// "a single bad pattern cannot crash a scan" guarantee).
+    #[test]
+    fn body_less_regex_in_rule_is_error_not_panic() {
+        // The trailing `$y = /a/` supplies a later closing slash so the brace
+        // matcher succeeds and `$x = /i` actually reaches `parse_keyword_value`
+        // (the panic site under the pre-fix code).
+        let body = r#"
+            rule Boom {
+                keywords:
+                    $x = /i
+                    $y = /a/
+                condition:
+                    keywords.$x
+            }
+        "#;
+        assert!(parse_rules(body).is_err());
     }
 }

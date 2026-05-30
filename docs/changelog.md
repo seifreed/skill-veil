@@ -39,6 +39,9 @@ release process is formalized.
 - OSV advisory IDs from the `querybatch` response are validated before
   being interpolated into the `/vulns/{id}` request path; a value carrying
   path/query metacharacters is rejected instead of shaping the request URL.
+- NOVA rule parsing no longer panics on a body-less regex keyword value
+  (`/` or `/i`): the `value[1..0]` slice is guarded and the line is reported
+  as malformed, so a single bad rule file can no longer abort the whole scan.
 
 ## [0.2.0] - 2026-05-20
 
