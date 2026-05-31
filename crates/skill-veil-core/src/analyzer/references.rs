@@ -2,7 +2,17 @@ use crate::lazy_pattern;
 use crate::path_safety::path_stays_within_base;
 use crate::patterns::compile_patterns;
 use crate::ports::CompiledPattern;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+
+/// Hard cap on the number of distinct referenced files extracted from a
+/// single document. A legitimate skill references a handful of supporting
+/// artifacts; an unbounded count is an attacker shaping the input. Without
+/// the cap, a `SKILL.md` packed with thousands of distinct `[a](fN.sh)`
+/// links would push an unbounded reference set into the artifact graph,
+/// whose node/edge insertion is linear-scan — turning the scan
+/// super-linear (a denial-of-service on a single `scan-file`).
+const MAX_REFERENCED_FILES: usize = 1024;
 
 const SCRIPT_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl";
 const ALL_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl|exe|bin|dll";
@@ -117,8 +127,21 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
         .iter()
         .chain(std::iter::once::<&CompiledPattern>(&EXEC_REFERENCE_PATTERN));
 
-    for re in patterns {
+    // O(1) membership for dedup: a linear `references.contains(..)` per
+    // match made the whole pass O(N^2) in the number of distinct
+    // references, which an attacker controls via the document body.
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    'patterns: for re in patterns {
         for cap in re.captures_iter(content) {
+            if references.len() >= MAX_REFERENCED_FILES {
+                tracing::warn!(
+                    "extract_references: capping at {} references for {}; \
+                     remaining links are ignored",
+                    MAX_REFERENCED_FILES,
+                    base_path.display()
+                );
+                break 'patterns;
+            }
             let Some(m) = cap.get(1) else { continue };
             // The `chmod +x`/`./` exec pattern uses `[^\s]+`, which greedily
             // swallows trailing markdown/shell punctuation (`./x.sh)` inside a
@@ -183,7 +206,7 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
                 continue;
             }
 
-            if !references.contains(&resolved) {
+            if seen.insert(resolved.clone()) {
                 references.push(resolved);
             }
         }
@@ -262,6 +285,36 @@ mod tests {
                 "URL target must not be resolved: {sample:?} -> {refs:?}"
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// The reference set is bounded (no unbounded O(N^2) growth on a
+    /// crafted document) and de-duplicated. Pre-fix, dedup used a linear
+    /// `Vec::contains` per match (O(N^2)) and there was no cap, so a
+    /// `SKILL.md` packed with distinct links could hang a scan.
+    #[test]
+    fn extract_references_caps_and_dedups() {
+        let base_path = Path::new("/tmp/pkg/SKILL.md");
+
+        let mut content = String::new();
+        for i in 0..(MAX_REFERENCED_FILES + 50) {
+            content.push_str(&format!("[a](f{i}.sh)\n"));
+        }
+        let refs = extract_references(&content, base_path);
+        assert_eq!(
+            refs.len(),
+            MAX_REFERENCED_FILES,
+            "distinct references must be capped at MAX_REFERENCED_FILES"
+        );
+
+        let dup = "[a](dup.sh)\n".repeat(100);
+        let refs = extract_references(&dup, base_path);
+        assert_eq!(
+            refs.iter().filter(|p| p.ends_with("dup.sh")).count(),
+            1,
+            "duplicate references must collapse to a single entry"
+        );
     }
 
     /// # Contract
