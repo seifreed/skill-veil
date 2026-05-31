@@ -326,18 +326,24 @@ fn run_cross_check(args: PromptIntelCrossCheckArgs) -> Result<bool> {
 }
 
 /// # Contract
-/// - `total - errors == 0` never trips: empty/all-errored corpora
-///   are already surfaced via `summary.errors`; a doubled CI failure
-///   would mask the real "bad path" diagnostic.
-/// - Errored prompts are excluded from the denominator:
-///   `detected / (total - errors) < threshold`.
+/// - `total == 0` never trips: an empty or all-errored corpus has no
+///   successfully-scanned prompts. Errored prompts are surfaced via
+///   `summary.errors` and are NOT counted in `summary.total` (the
+///   producer increments `total` only on a successful scan), so an
+///   all-errored corpus has `total == 0`.
+/// - The denominator is `summary.total`, which already excludes errored
+///   prompts, so this gate's rate equals the `detected / total` rate the
+///   text report prints. Subtracting `errors` again (the pre-fix
+///   `total - errors`) double-excluded them, inflating the rate above the
+///   reported value — a regressed corpus whose reported rate was below
+///   the threshold could still pass CI.
 /// - Boundary is strict-less-than: `rate == threshold` passes.
 ///   Matches `scan-package --fail-on`.
 fn detection_below_gate(summary: &cross_check::CrossCheckSummary, threshold: Option<f64>) -> bool {
     let Some(threshold) = threshold else {
         return false;
     };
-    let denom = summary.total.saturating_sub(summary.errors);
+    let denom = summary.total;
     if denom == 0 {
         return false;
     }
@@ -385,11 +391,14 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
+    /// Mirror the producer invariant: `total` counts only successfully
+    /// scanned prompts (`total == detected + missed`), and `errors` is a
+    /// DISJOINT counter that never contributes to `total`.
     fn summary(total: usize, detected: usize, errors: usize) -> CrossCheckSummary {
         CrossCheckSummary {
             total,
             detected,
-            missed: total.saturating_sub(detected).saturating_sub(errors),
+            missed: total.saturating_sub(detected),
             errors,
             ..CrossCheckSummary::default()
         }
@@ -407,17 +416,30 @@ mod tests {
         assert!(!detection_below_gate(&summary(0, 0, 0), Some(1.0)));
     }
 
+    /// An all-errored corpus has no successfully-scanned prompts, so the
+    /// producer leaves `total == 0` (errors are disjoint). The gate must
+    /// not trip on it.
     #[test]
     fn all_errors_do_not_trip() {
-        assert!(!detection_below_gate(&summary(10, 0, 10), Some(0.95)));
+        assert!(!detection_below_gate(&summary(0, 0, 10), Some(0.95)));
     }
 
-    /// 48 detected of 50, with 2 errors → 48/(50-2) = 100%; passes
-    /// `--fail-below 0.95` because errors are excluded from the
-    /// denominator.
+    /// Errored prompts are disjoint from `total`, so they neither raise
+    /// nor lower the rate: 48 detected of 50 scanned = 96% ≥ 0.95 passes,
+    /// regardless of how many sibling prompts errored.
     #[test]
-    fn errors_excluded_from_denominator() {
+    fn errors_are_disjoint_from_denominator() {
         assert!(!detection_below_gate(&summary(50, 48, 2), Some(0.95)));
+    }
+
+    /// Contract (fix pin): errored prompts MUST NOT inflate the rate. With
+    /// 47 detected of 50 scanned the true rate is 94% (< 0.95) and the
+    /// gate must trip — even with 2 errored siblings. The pre-fix
+    /// `detected / (total - errors)` computed 47/48 = 97.9% and wrongly
+    /// PASSED, letting a regressed corpus through CI.
+    #[test]
+    fn errored_prompts_do_not_inflate_rate_past_gate() {
+        assert!(detection_below_gate(&summary(50, 47, 2), Some(0.95)));
     }
 
     /// `48/50 == 0.96` does NOT trip `--fail-below 0.96`.
