@@ -95,6 +95,13 @@ const NETWORK_COMMAND_TOKENS: &[&str] = &[
     "irm",
     "ncat",
     "nc",
+    // Windows `.exe`-suffixed variants: the `.` after the bare token
+    // fails the word-boundary check, so `nc.exe 10.0.0.1 4444` evaded
+    // the egress half of the secret->network flow.
+    "ncat.exe",
+    "nc.exe",
+    "curl.exe",
+    "wget.exe",
 ];
 
 const NETWORK_VERB_SUBSTRINGS: &[&str] = &[

