@@ -42,12 +42,11 @@ release process is formalized.
   `output_handling`, `trigger_abuse`, `system_prompt_leakage`) attached
   to rules via `taxonomy_tags:` and propagated onto findings; surfaced
   in JSON and SARIF (`properties.tags`). Communication-only — never
-  feeds verdict scoring. The embedded baseline tags the supplementary
-  `SKILL_*` rules (`builtin_rules.yaml`) and the native `MCP_*`
-  detectors; the `official` pack carries the same tags via the
-  `skill-veil-rules` repo (kept byte-identical to the embedded mirror by
-  `rules_repo_mirror`), so its `OFFICIAL_*` tags land on the next signed
-  rules release.
+  feeds verdict scoring. All six categories ship tagged in the embedded
+  baseline: the supplementary `SKILL_*` rules (`builtin_rules.yaml`), the
+  native `MCP_*` detectors, and the `OFFICIAL_*` pack
+  (`resources/official/*.yaml`, kept byte-identical to the canonical
+  `skill-veil-rules` repo by `rules_repo_mirror`).
 
 ### Changed
 - Native detector rule IDs (`UNICODE_*`, `MCP_*`, `SUPPLY_CHAIN_TYPOSQUAT`)

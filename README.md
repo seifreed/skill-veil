@@ -99,20 +99,20 @@ Artifacts       package.json, requirements.txt, pyproject.toml, Cargo.toml,
 
 Beyond the scoring `category`, rules and findings carry orthogonal
 `taxonomy_tags` so coverage of the shared agent-skill threat vocabulary is
-demonstrable in machine-readable output (JSON / SARIF `tags`). The embedded
-baseline tags the supplementary `SKILL_*` rules and the native `MCP_*`
-detectors directly; the `official` (`OFFICIAL_*`) pack carries the same tags
-via the [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules)
-repo (its tags ship to end users on the next signed rules release).
+demonstrable in machine-readable output (JSON / SARIF `tags`). All six
+categories ship tagged in the embedded baseline (`SKILL_*` + `OFFICIAL_*`
+rules and the native `MCP_*` detectors); the `OFFICIAL_*` tags are kept
+byte-identical to the canonical
+[`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) repo.
 
-| Taxonomy tag | Representative rules (embedded baseline) |
+| Taxonomy tag | Representative rules |
 |---|---|
-| `memory_poisoning` | `SKILL_PROMPT_TAMPERING_OVERRIDE`, `SKILL_MEMORY_WIPE`, `SKILL_PROMPT_HIJACK_JAILBREAK`, `MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION` |
-| `rogue_agent` | `SKILL_REMOTE_SELF_UPDATE`, `SKILL_SELF_REGISTER_INSTALL_ENDPOINT`, `SKILL_CRON_PERSISTENCE`, `SKILL_LAUNCHAGENT_PERSISTENCE` |
-| `excessive_agency` | `SKILL_AUTONOMY_ESCALATION_NO_REVIEW`, `SKILL_AUTONOMY_OVERRIDE`, `SKILL_TOOL_ABUSE_SESSION_EXTRACTION`, `MCP_WILDCARD_CAPABILITY` |
-| `trigger_abuse` | `SKILL_CHINESE_CONDITIONAL_AUTONOMY` |
-| `system_prompt_leakage` | `SKILL_TOOL_ABUSE_SESSION_EXTRACTION` |
-| `output_handling` | `OFFICIAL_PROMPT_TAMPERING_DUAL_OUTPUT_SECTION` *(via skill-veil-rules)* |
+| `memory_poisoning` | `OFFICIAL_PROMPT_OVERRIDE_WITH_PERSISTENCE`, `SKILL_MEMORY_WIPE`, `SKILL_PROMPT_HIJACK_JAILBREAK`, `MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION` |
+| `rogue_agent` | `OFFICIAL_AGENT_CONFIG_NEUTRALIZE`, `OFFICIAL_SEMANTIC_PERSISTENCE_REINSTALL`, `SKILL_REMOTE_SELF_UPDATE`, `SKILL_CRON_PERSISTENCE` |
+| `excessive_agency` | `OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW`, `OFFICIAL_MCP_PERMISSIVE_TOOL_EXPOSURE`, `SKILL_TOOL_ABUSE_SESSION_EXTRACTION`, `MCP_WILDCARD_CAPABILITY` |
+| `output_handling` | `OFFICIAL_PROMPT_TAMPERING_DUAL_OUTPUT_SECTION` |
+| `trigger_abuse` | `SKILL_CHINESE_AUTO_TRIGGER`, `SKILL_CHINESE_CONDITIONAL_AUTONOMY` |
+| `system_prompt_leakage` | `OFFICIAL_SYSTEM_PROMPT_DISCLOSURE`, `OFFICIAL_TOOL_ABUSE_SESSION_EXTRACTION` |
 
 ---
 

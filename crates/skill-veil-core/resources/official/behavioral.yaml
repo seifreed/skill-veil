@@ -6,6 +6,7 @@ metadata:
     - skill-veil.dev/rules/v1alpha1
 rules:
   - id: OFFICIAL_PROMPT_TAMPERING_OVERRIDE
+    taxonomy_tags: [memory_poisoning]
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.84
@@ -24,6 +25,7 @@ rules:
       - "Jailbreak"
 
   - id: OFFICIAL_TOOL_ABUSE_SESSION_EXTRACTION
+    taxonomy_tags: [system_prompt_leakage, excessive_agency]
     category: tool_abuse
     severity: high
     confidence: 0.82
@@ -42,6 +44,7 @@ rules:
       - "Credential Harvesting Templates"
 
   - id: OFFICIAL_AUTONOMY_ESCALATION_NO_REVIEW
+    taxonomy_tags: [excessive_agency]
     category: autonomy_escalation
     severity: high
     confidence: 0.80
@@ -66,6 +69,7 @@ rules:
   # legitimate autopilot skills can use overlapping phrasing — verdict
   # surface as "suspicious" rather than "malicious".
   - id: OFFICIAL_AUTONOMY_BYPASS_UNBOUNDED_LOOP
+    taxonomy_tags: [excessive_agency]
     category: autonomy_escalation
     severity: medium
     confidence: 0.78
@@ -211,6 +215,7 @@ rules:
       - "AI driven attack enablement"
 
   - id: OFFICIAL_PERSIST_CRON_STEALTH
+    taxonomy_tags: [rogue_agent]
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.88
@@ -303,6 +308,7 @@ rules:
       - "Agentic Misuse (tool/agent loops)"
 
   - id: OFFICIAL_PROMPT_OVERRIDE_WITH_PERSISTENCE
+    taxonomy_tags: [memory_poisoning]
     category: persistent_prompt_tampering
     severity: critical
     confidence: 0.91
@@ -357,6 +363,7 @@ rules:
       - "Data exfiltration via prompt"
 
   - id: OFFICIAL_SEMANTIC_PERSISTENCE_REINSTALL
+    taxonomy_tags: [memory_poisoning, rogue_agent]
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.86
@@ -411,6 +418,7 @@ rules:
       - official_pack
 
   - id: OFFICIAL_MCP_BROAD_OAUTH_SCOPE
+    taxonomy_tags: [excessive_agency]
     category: scope_creep
     severity: high
     confidence: 0.85
@@ -444,6 +452,7 @@ rules:
       - official_pack
 
   - id: OFFICIAL_MCP_PERMISSIVE_TOOL_EXPOSURE
+    taxonomy_tags: [excessive_agency]
     category: tool_abuse
     severity: high
     confidence: 0.83
@@ -567,6 +576,7 @@ rules:
   # auto-updater / heartbeat-monitoring family that calls home or
   # dispatches to an external endpoint.
   - id: OFFICIAL_PERSIST_HEARTBEAT_REMOTE_CALLBACK
+    taxonomy_tags: [rogue_agent]
     category: persistent_prompt_tampering
     severity: medium
     confidence: 0.75
@@ -705,6 +715,7 @@ rules:
   # conversations en proximidad. Frases legítimas como "persistent
   # Chrome sessions" (Playwright) NO matchean.
   - id: OFFICIAL_PERSIST_CROSS_SESSION_NARRATIVE
+    taxonomy_tags: [memory_poisoning]
     category: persistent_prompt_tampering
     severity: medium
     confidence: 0.70
@@ -871,6 +882,7 @@ rules:
   # o "dummy" — neutralizar el LLM y dejar al agente sin modelo
   # (denial-of-service / agent neutralization).
   - id: OFFICIAL_AGENT_CONFIG_NEUTRALIZE
+    taxonomy_tags: [rogue_agent]
     category: tool_abuse
     severity: medium
     confidence: 0.78
@@ -1142,6 +1154,7 @@ rules:
   # reveal / disclose / output" verb keeps benign discussions of "what
   # is a system prompt" from firing.
   - id: OFFICIAL_SYSTEM_PROMPT_DISCLOSURE
+    taxonomy_tags: [system_prompt_leakage]
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.78
@@ -1402,6 +1415,7 @@ rules:
   # mandate OR a tool-invocation/override clause. Carriers are
   # GENERIC families, not literal copies. Contributed by Grok-4-fast.
   - id: OFFICIAL_INDIRECT_INJECTION_CONTEXT_CARRIER
+    taxonomy_tags: [memory_poisoning]
     category: obfuscation
     severity: high
     confidence: 0.80
@@ -1790,6 +1804,7 @@ rules:
       - "Direct prompt injection"
 
   - id: OFFICIAL_PROMPT_TAMPERING_DUAL_OUTPUT_SECTION
+    taxonomy_tags: [output_handling]
     category: persistent_prompt_tampering
     severity: high
     confidence: 0.78
