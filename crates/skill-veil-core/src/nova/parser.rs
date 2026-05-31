@@ -1318,9 +1318,9 @@ rule Second {
 
     /// Contract: every published `.nov` file in the canonical NOVA
     /// rule pack parses without error. Pinned against the snapshot
-    /// at commit `9249cf49…` cached locally during dev. CI will
-    /// re-run this against `~/.cache/skill-veil/nova-rules/<sha>`
-    /// once the init pipeline is wired up.
+    /// at commit `9249cf49…` cached locally during dev. The
+    /// `nova_real_corpus` integration test re-runs this against the
+    /// installed pack under `NOVA_RULES_DIR` when that env var is set.
     #[test]
     fn parser_accepts_real_nova_rule_pack_subset() {
         // Hand-pasted minimal rules that exercise every section
