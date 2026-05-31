@@ -149,16 +149,29 @@ fn evaluate_structural_signals(
         "instructions",
         "configuration",
     ];
-    let has_operational_sections = if sections.is_empty() {
+    // Whole-word heading match shared by both branches. Pre-fix the
+    // empty-sections fallback used a raw `lower.contains("## install")`
+    // substring test (so `## Installation` counted) while the parsed
+    // branch required an exact / space-prefixed name (so `## Installation`
+    // did NOT count). The same document then scored differently depending
+    // only on whether the markdown parser succeeded — a parse failure
+    // could RAISE the structural score. Both branches now apply identical
+    // whole-word semantics to the heading name.
+    let is_operational_heading = |name: &str| {
         OPERATIONAL_SECTION_NAMES
             .iter()
-            .any(|name| lower.contains(&format!("## {name}")))
-    } else {
-        sections.iter().any(|section| {
-            OPERATIONAL_SECTION_NAMES
-                .iter()
-                .any(|name| section.name == *name || section.name.starts_with(&format!("{name} ")))
+            .any(|op| name == *op || name.starts_with(&format!("{op} ")))
+    };
+    let has_operational_sections = if sections.is_empty() {
+        lower.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with('#')
+                && is_operational_heading(trimmed.trim_start_matches('#').trim())
         })
+    } else {
+        sections
+            .iter()
+            .any(|section| is_operational_heading(&section.name))
     };
 
     let has_imperative_language = IMPERATIVE_LANGUAGE_REGEX.is_match(content);
@@ -294,5 +307,48 @@ fn classify_artifact(
             ArtifactClassification::HeuristicSkillLike
         }
         _ => ArtifactClassification::GenericMarkdown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn section(name: &str) -> Section {
+        Section {
+            name: name.to_string(),
+            level: 2,
+            content: String::new(),
+            code_blocks: Vec::new(),
+            start_line: 1,
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `has_operational_sections` MUST be identical whether the document
+    /// was parsed into sections or fell back to the empty-sections path
+    /// (a parser failure). Pre-fix the fallback used a `## install`
+    /// substring test, so `## Installation` counted only on the degraded
+    /// path — a parse failure could RAISE the structural score relative to
+    /// a successful parse of the same document.
+    #[test]
+    fn operational_section_detection_is_parse_path_independent() {
+        for (heading, name) in [
+            ("## Installation", "installation"),
+            ("## Setup", "setup"),
+            ("## Workflows", "workflows"),
+            ("## Usage notes", "usage notes"),
+        ] {
+            let content = format!("# Skill\n\n{heading}\nsome body text\n");
+            let parsed = evaluate_structural_signals(&content, &[section(name)], &[]);
+            let fallback = evaluate_structural_signals(&content, &[], &[]);
+            assert_eq!(
+                parsed.has_operational_sections, fallback.has_operational_sections,
+                "heading {heading:?}: parsed and empty-section paths must agree \
+                 (parsed={}, fallback={})",
+                parsed.has_operational_sections, fallback.has_operational_sections,
+            );
+        }
     }
 }
