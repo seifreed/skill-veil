@@ -149,7 +149,31 @@ fn analyze_referenced_artifact<F: FileSystemProvider, P: MarkdownParser>(
         artifact_kind,
         artifact_path.as_str(),
     ));
+
+    if crate::detectors::bytecode::is_python_bytecode(referenced_file) {
+        if let Ok(content) = fs.read_file_bytes(referenced_file) {
+            let has_source = pyc_sibling_source_exists(fs, referenced_file);
+            findings.extend(crate::detectors::bytecode::analyze_pyc(
+                content.as_bytes(),
+                has_source,
+                referenced_file,
+            ));
+        }
+    }
     findings
+}
+
+/// `true` when a `.py` source file with the same stem sits next to a
+/// `.pyc`. Sourceless bytecode is a documented way to hide logic from
+/// review, so its absence is a signal the bytecode detector consumes.
+fn pyc_sibling_source_exists<F: FileSystemProvider>(fs: &F, pyc: &Path) -> bool {
+    pyc.file_stem()
+        .map(|stem| {
+            let mut source = stem.to_os_string();
+            source.push(".py");
+            pyc.with_file_name(source)
+        })
+        .is_some_and(|source| fs.exists(&source) && fs.is_file(&source))
 }
 
 /// Build the list of supporting-artifact paths to evaluate for a skill document.

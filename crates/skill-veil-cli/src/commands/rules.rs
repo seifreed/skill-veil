@@ -220,7 +220,7 @@ fn rules_validate(rules_dir: PathBuf, format: OutputFormat) -> Result<()> {
                     .context("Failed to serialize validation report")?
             );
         }
-        OutputFormat::Sarif | OutputFormat::Shield => {
+        OutputFormat::Sarif | OutputFormat::Shield | OutputFormat::Html => {
             anyhow::bail!("rules validate only supports text or json output");
         }
     }
@@ -243,7 +243,7 @@ fn rules_pack_info(rules_dir: PathBuf, format: OutputFormat) -> Result<()> {
                 serde_json::to_string_pretty(&info).context("Failed to serialize pack info")?
             );
         }
-        OutputFormat::Sarif | OutputFormat::Shield => {
+        OutputFormat::Sarif | OutputFormat::Shield | OutputFormat::Html => {
             anyhow::bail!("rules pack-info only supports text or json output");
         }
     }

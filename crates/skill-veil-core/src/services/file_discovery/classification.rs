@@ -38,7 +38,7 @@ pub(super) const YML_GLOB_PATTERN: &str = "*.yml";
 /// reference extraction. Enumerating siblings closes that gap.
 pub(super) const SCRIPT_GLOB_PATTERNS: &[&str] = &[
     "*.sh", "*.bash", "*.zsh", "*.ksh", "*.fish", "*.py", "*.ps1", "*.js", "*.cjs", "*.mjs",
-    "*.ts", "*.rb", "*.pl", "*.rs", "*.go", "*.php",
+    "*.ts", "*.rb", "*.pl", "*.rs", "*.go", "*.php", "*.pyc", "*.pyo",
 ];
 
 /// Glob patterns for data-bearing files that are routinely abused as payload

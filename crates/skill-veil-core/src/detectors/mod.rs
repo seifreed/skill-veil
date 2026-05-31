@@ -12,6 +12,7 @@
 //! changes to one detection family do not force readers through
 //! unrelated logic.
 
+pub(crate) mod bytecode;
 pub(crate) mod instructions;
 pub(crate) mod lockfiles;
 pub(crate) mod manifests;

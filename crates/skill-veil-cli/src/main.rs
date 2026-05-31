@@ -12,6 +12,7 @@ mod dataset;
 mod init;
 mod llm;
 mod osv;
+mod overlap;
 mod promptintel;
 mod rule_tools;
 mod text_output;

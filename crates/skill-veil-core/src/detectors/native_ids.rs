@@ -1,7 +1,8 @@
-//! Stable rule IDs emitted by the native (Rust) detectors added for
-//! SkillSpector parity: the Unicode-deception pass
-//! ([`crate::unicode_deception`]) and the MCP manifest detector
-//! ([`crate::detectors::mcp`]).
+//! Stable rule IDs emitted by the native (Rust) detectors: the
+//! Unicode-deception pass ([`crate::unicode_deception`]), the MCP manifest
+//! detector ([`crate::detectors::mcp`]), the dependency typosquat detector
+//! ([`crate::detectors::typosquat`]), and the Python `.pyc` bytecode
+//! integrity detector ([`crate::detectors::bytecode`]).
 //!
 //! # Stability contract
 //!
@@ -32,6 +33,10 @@ pub const MCP_UNDERDECLARED_CAPABILITY: &str = "MCP_UNDERDECLARED_CAPABILITY";
 
 pub const SUPPLY_CHAIN_TYPOSQUAT: &str = "SUPPLY_CHAIN_TYPOSQUAT";
 
+pub const BYTECODE_PYC_INVALID_MAGIC: &str = "BYTECODE_PYC_INVALID_MAGIC";
+pub const BYTECODE_PYC_SOURCELESS: &str = "BYTECODE_PYC_SOURCELESS";
+pub const BYTECODE_PYC_SUSPICIOUS_CONTENT: &str = "BYTECODE_PYC_SUSPICIOUS_CONTENT";
+
 /// Frozen registry of every rule ID emitted by the native parity detectors.
 /// Used by the public stability contract and the regression harness in
 /// `tests/native_detector_ids.rs`.
@@ -52,6 +57,9 @@ pub const NATIVE_DETECTOR_RULE_IDS: &[&str] = &[
     MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION,
     MCP_UNDERDECLARED_CAPABILITY,
     SUPPLY_CHAIN_TYPOSQUAT,
+    BYTECODE_PYC_INVALID_MAGIC,
+    BYTECODE_PYC_SOURCELESS,
+    BYTECODE_PYC_SUSPICIOUS_CONTENT,
 ];
 
 #[cfg(test)]
@@ -62,6 +70,9 @@ mod tests {
     #[test]
     fn native_id_registry_is_frozen() {
         let expected = [
+            "BYTECODE_PYC_INVALID_MAGIC",
+            "BYTECODE_PYC_SOURCELESS",
+            "BYTECODE_PYC_SUSPICIOUS_CONTENT",
             "MCP_BROAD_IDENTITY_SCOPE",
             "MCP_INLINE_AUTH_SECRET",
             "MCP_NO_AUTH_MODEL",

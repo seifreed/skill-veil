@@ -17,6 +17,10 @@ struct Case {
     artifact: String,
     expect_match: bool,
     content: String,
+    /// For the `pyc` artifact only: write a sibling `payload.py` source so
+    /// the `BYTECODE_PYC_SOURCELESS` negative case can be expressed.
+    #[serde(default)]
+    with_source: bool,
 }
 
 fn expand(raw: &str) -> String {
@@ -26,6 +30,26 @@ fn expand(raw: &str) -> String {
         .replace("{TAGA}", "\u{E0041}")
         .replace("{TAGB}", "\u{E0042}")
         .replace("{CYR_A}", "\u{0430}")
+}
+
+/// Decode a hex string (whitespace ignored) to bytes. Used by `pyc`
+/// fixtures to embed raw `.pyc` headers and marshalled bodies inline.
+fn hex_decode(raw: &str) -> Vec<u8> {
+    let digits: Vec<u8> = raw
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .map(|b| match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            other => panic!("invalid hex digit: {other}"),
+        })
+        .collect();
+    assert!(
+        digits.len().is_multiple_of(2),
+        "hex fixture must have even length"
+    );
+    digits.chunks_exact(2).map(|p| (p[0] << 4) | p[1]).collect()
 }
 
 fn fixture_scanner() -> Scanner {
@@ -58,10 +82,25 @@ fn native_detector_ids_match_fixture_corpus() {
 
     for case in &corpus.cases {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join(entrypoint_name(&case.artifact));
-        std::fs::write(&path, expand(&case.content)).unwrap();
+        let scan_target = if case.artifact == "pyc" {
+            // The bytecode detector fires on a `.pyc` discovered alongside a
+            // skill entrypoint, not on a single text file. Lay out a minimal
+            // package: SKILL.md (the explicit entrypoint) + payload.pyc (the
+            // hex-encoded bytecode) + an optional payload.py source.
+            let skill = dir.path().join("SKILL.md");
+            std::fs::write(&skill, "# Fixture Skill\n\nReferences payload.pyc\n").unwrap();
+            std::fs::write(dir.path().join("payload.pyc"), hex_decode(&case.content)).unwrap();
+            if case.with_source {
+                std::fs::write(dir.path().join("payload.py"), "print(1)\n").unwrap();
+            }
+            skill
+        } else {
+            let path = dir.path().join(entrypoint_name(&case.artifact));
+            std::fs::write(&path, expand(&case.content)).unwrap();
+            path
+        };
 
-        let result = scanner.scan_file(&path).unwrap();
+        let result = scanner.scan_file(&scan_target).unwrap();
         let fired = result.findings.iter().any(|f| f.rule_id == case.rule_id);
         if fired != case.expect_match {
             failures.push(format!(

@@ -536,6 +536,18 @@ pub(crate) fn run_scan(
         }
     }
 
+    // Cross-skill artifact overlap. Advisory, CLI-local, report-only: it
+    // reads files and hashes them but never touches the scan result, so
+    // the `verdict_snapshot` assert below stays valid. Text format only —
+    // it would pollute the structured payload.
+    if args.check_overlap && matches!(args.format, crate::cli_args::OutputFormat::Text) {
+        if let Some(block) = crate::overlap::try_check_overlap(&scan_result, true, quiet) {
+            if !quiet {
+                print!("{block}");
+            }
+        }
+    }
+
     // The text block is operator-friendly noise; suppress it for
     // JSON / SARIF / Shield output where it would pollute the
     // structured payload. NOVA findings still flow through those

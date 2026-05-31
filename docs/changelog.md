@@ -9,6 +9,29 @@ release process is formalized.
 
 ### Added
 
+**Python bytecode (`.pyc`) integrity detector (native)**
+- New native detector emitting `BYTECODE_PYC_INVALID_MAGIC` (malformed /
+  hand-crafted CPython header), `BYTECODE_PYC_SOURCELESS` (compiled
+  bytecode shipped without its `.py` source — a way to hide logic from
+  review), and `BYTECODE_PYC_SUSPICIOUS_CONTENT` (process/network/dynamic-
+  code primitives in the marshalled body). `*.pyc` / `*.pyo` are now
+  discovered as supporting artifacts. Closes the bytecode-engine gap vs
+  Cisco's skill-scanner. The three IDs are frozen public API in
+  `NATIVE_DETECTOR_RULE_IDS` with positive + negative fixtures.
+
+**Interactive HTML report (`--format html`)**
+- Self-contained, script-free HTML report: header summary with the worst
+  verdict, one collapsible `<details>` per package, and a severity-coloured
+  findings table. All interpolated text is HTML-entity escaped. Safe to
+  email or attach as a CI artifact.
+
+**Cross-skill artifact overlap (`--check-overlap`)**
+- When a scan covers more than one skill, reports artifacts that are
+  byte-identical across packages (shared payloads, cloned templates, a
+  compromised helper fanned out). Walks each package root, hashes files
+  (SHA-256), and lists the cross-package duplicates. Advisory, CLI-local,
+  text output only — never changes a verdict.
+
 **Exit-affecting LLM false-positive adjudication (`--llm-fp-adjudicate`)**
 - Opt-in (default OFF) exit-affecting variant of `--llm-fp-review`. A
   `Suspicious` package that ≥2-of-3 providers independently judge benign

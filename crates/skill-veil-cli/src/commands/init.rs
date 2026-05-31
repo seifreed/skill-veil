@@ -100,7 +100,7 @@ pub(crate) fn run_rules_status(args: RulesStatusArgs) -> Result<()> {
                 ),
             }
         }
-        OutputFormat::Sarif | OutputFormat::Shield => {
+        OutputFormat::Sarif | OutputFormat::Shield | OutputFormat::Html => {
             anyhow::bail!("`rules status` only supports text or json output");
         }
     }

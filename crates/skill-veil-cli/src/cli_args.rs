@@ -717,6 +717,13 @@ pub struct ScanArgs {
     /// `--llm-fp-review`.
     #[arg(long)]
     pub llm_fp_review_out: Option<PathBuf>,
+    /// Opt-in (default OFF). When scanning more than one skill, report
+    /// artifacts that are byte-identical across multiple skills (shared
+    /// payloads, cloned templates, a compromised helper fanned out). Reads
+    /// file contents to hash them; advisory only — never changes a verdict
+    /// or the structured payload. Shown in text output.
+    #[arg(long, default_value_t = false)]
+    pub check_overlap: bool,
     /// Opt-in (default OFF). Exit-affecting variant of `--llm-fp-review`.
     /// A `Suspicious` package that ≥2-of-3 providers judge benign no
     /// longer fails the exit code (its findings are treated as Log for
@@ -887,6 +894,8 @@ pub enum OutputFormat {
     Json,
     Sarif,
     Shield,
+    /// Self-contained interactive HTML report (scan command only).
+    Html,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]

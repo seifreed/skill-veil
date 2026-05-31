@@ -341,7 +341,7 @@ pub(crate) fn run_scan_dataset(
                 .context("Failed to serialize dataset JSON")?
             }
         }
-        OutputFormat::Sarif | OutputFormat::Shield => {
+        OutputFormat::Sarif | OutputFormat::Shield | OutputFormat::Html => {
             format_results(&dataset_results, args.format, text_options)?
         }
     };

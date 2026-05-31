@@ -56,3 +56,15 @@ cases:
   # --- Supply-chain typosquatting (dependency manifest) ---
   - { id: typosquat-pos,       rule_id: SUPPLY_CHAIN_TYPOSQUAT, artifact: manifest, expect_match: true,  content: '{"name":"demo","dependencies":{"lodahs":"1.0.0"}}' }
   - { id: typosquat-neg,       rule_id: SUPPLY_CHAIN_TYPOSQUAT, artifact: manifest, expect_match: false, content: '{"name":"demo","dependencies":{"lodash":"4.17.21"}}' }
+  # --- Python bytecode integrity (.pyc discovered next to a skill) ---
+  # `content` is the hex bytes of the .pyc. A valid CPython header is any
+  # 16 bytes whose bytes[2..4] are CR LF (0d 0a): '420d0d0a' + 12 zero bytes.
+  # The `pyc` artifact writes SKILL.md + payload.pyc (+ payload.py when
+  # with_source) and scans the package. Suspicious body marker below is the
+  # hex of a process-exec qualified name; benign body is hex of 'print'.
+  - { id: pyc-magic-pos,       rule_id: BYTECODE_PYC_INVALID_MAGIC, artifact: pyc, expect_match: true,  content: '00000000000000000000000000000000' }
+  - { id: pyc-magic-neg,       rule_id: BYTECODE_PYC_INVALID_MAGIC, artifact: pyc, expect_match: false, content: '420d0d0a000000000000000000000000' }
+  - { id: pyc-sourceless-pos,  rule_id: BYTECODE_PYC_SOURCELESS, artifact: pyc, expect_match: true,  content: '420d0d0a000000000000000000000000' }
+  - { id: pyc-sourceless-neg,  rule_id: BYTECODE_PYC_SOURCELESS, artifact: pyc, expect_match: false, with_source: true, content: '420d0d0a000000000000000000000000' }
+  - { id: pyc-content-pos,     rule_id: BYTECODE_PYC_SUSPICIOUS_CONTENT, artifact: pyc, expect_match: true,  with_source: true, content: '420d0d0a0000000000000000000000006f732e73797374656d' }
+  - { id: pyc-content-neg,     rule_id: BYTECODE_PYC_SUSPICIOUS_CONTENT, artifact: pyc, expect_match: false, with_source: true, content: '420d0d0a0000000000000000000000007072696e74' }

@@ -60,7 +60,7 @@ pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
         OutputFormat::Json => serde_json::to_string_pretty(&evaluation)
             .context("Failed to serialize benchmark output")?,
         OutputFormat::Text => format_benchmark_text(&evaluation),
-        OutputFormat::Sarif | OutputFormat::Shield => {
+        OutputFormat::Sarif | OutputFormat::Shield | OutputFormat::Html => {
             anyhow::bail!("Benchmark only supports text or json output")
         }
     };

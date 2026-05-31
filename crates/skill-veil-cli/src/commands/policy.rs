@@ -68,7 +68,7 @@ pub(crate) fn run_diff(args: DiffArgs, color_choice: ColorChoiceArg) -> Result<(
         OutputFormat::Json => {
             serde_json::to_string_pretty(&diff).context("Failed to serialize diff")?
         }
-        OutputFormat::Sarif | OutputFormat::Shield => {
+        OutputFormat::Sarif | OutputFormat::Shield | OutputFormat::Html => {
             anyhow::bail!("Diff only supports text or json output")
         }
     };

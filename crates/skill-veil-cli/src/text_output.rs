@@ -10,7 +10,9 @@ mod limits;
 mod text;
 
 pub(crate) use diff::{format_diff_ci_summary, format_diff_text};
-pub(crate) use formats::{format_json_output, format_sarif_output, format_shield_output};
+pub(crate) use formats::{
+    format_html_output, format_json_output, format_sarif_output, format_shield_output,
+};
 pub(crate) use text::format_text_output;
 
 #[derive(Copy, Clone)]
@@ -42,5 +44,6 @@ pub(crate) fn format_results(
         OutputFormat::Json => format_json_output(results),
         OutputFormat::Sarif => format_sarif_output(results),
         OutputFormat::Shield => Ok(format_shield_output(results)),
+        OutputFormat::Html => Ok(format_html_output(results)),
     }
 }
