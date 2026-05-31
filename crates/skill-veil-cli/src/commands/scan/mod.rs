@@ -379,6 +379,15 @@ pub(crate) fn run_scan(
         }
     }
 
+    // Operator threat-mapping: overlay free-form `user_taxonomy` labels onto
+    // findings before rendering. Communication-only — it never touches a
+    // verdict, risk score, or action, so the `verdict_snapshot` assert below
+    // stays valid.
+    if let Some(mapping_path) = args.threat_mapping.as_deref() {
+        let mapping = crate::threat_mapping::ThreatMapping::load(mapping_path)?;
+        mapping.apply(&mut scan_result.results);
+    }
+
     let output_content = format_results(&scan_result.results, args.format, text_options)?;
 
     if let Some(output_path) = args.output {

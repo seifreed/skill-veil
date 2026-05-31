@@ -1,8 +1,9 @@
 //! Stable rule IDs emitted by the native (Rust) detectors: the
 //! Unicode-deception pass ([`crate::unicode_deception`]), the MCP manifest
 //! detector ([`crate::detectors::mcp`]), the dependency typosquat detector
-//! ([`crate::detectors::typosquat`]), and the Python `.pyc` bytecode
-//! integrity detector ([`crate::detectors::bytecode`]).
+//! ([`crate::detectors::typosquat`]), the Python `.pyc` bytecode integrity
+//! detector ([`crate::detectors::bytecode`]), and the shell-pipeline taint
+//! detector ([`crate::detectors::scripts::pipeline`]).
 //!
 //! # Stability contract
 //!
@@ -37,6 +38,9 @@ pub const BYTECODE_PYC_INVALID_MAGIC: &str = "BYTECODE_PYC_INVALID_MAGIC";
 pub const BYTECODE_PYC_SOURCELESS: &str = "BYTECODE_PYC_SOURCELESS";
 pub const BYTECODE_PYC_SUSPICIOUS_CONTENT: &str = "BYTECODE_PYC_SUSPICIOUS_CONTENT";
 
+pub const PIPELINE_FETCH_TO_SHELL: &str = "PIPELINE_FETCH_TO_SHELL";
+pub const PIPELINE_SECRET_TO_NETWORK: &str = "PIPELINE_SECRET_TO_NETWORK";
+
 /// Frozen registry of every rule ID emitted by the native parity detectors.
 /// Used by the public stability contract and the regression harness in
 /// `tests/native_detector_ids.rs`.
@@ -60,6 +64,8 @@ pub const NATIVE_DETECTOR_RULE_IDS: &[&str] = &[
     BYTECODE_PYC_INVALID_MAGIC,
     BYTECODE_PYC_SOURCELESS,
     BYTECODE_PYC_SUSPICIOUS_CONTENT,
+    PIPELINE_FETCH_TO_SHELL,
+    PIPELINE_SECRET_TO_NETWORK,
 ];
 
 #[cfg(test)]
@@ -84,6 +90,8 @@ mod tests {
             "MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION",
             "MCP_UNDERDECLARED_CAPABILITY",
             "MCP_WILDCARD_CAPABILITY",
+            "PIPELINE_FETCH_TO_SHELL",
+            "PIPELINE_SECRET_TO_NETWORK",
             "SUPPLY_CHAIN_TYPOSQUAT",
             "UNICODE_BIDI_OVERRIDE",
             "UNICODE_HOMOGLYPH_MIX",

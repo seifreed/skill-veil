@@ -9,8 +9,8 @@ use crate::detectors::scripts::{
     detect_deferred_execution, detect_file_secret_to_network_flow, detect_injection_patterns,
     detect_node_process_exec, detect_node_secret_fs_access, detect_powershell_dynamic_exec,
     detect_powershell_persistence, detect_python_exec_network, detect_python_secret_system_access,
-    detect_remote_binary_downloads, detect_shell_persistence_write, detect_shell_side_effects,
-    detect_typosquatted_install, references_dotenv_file,
+    detect_remote_binary_downloads, detect_shell_persistence_write, detect_shell_pipeline_taint,
+    detect_shell_side_effects, detect_typosquatted_install, references_dotenv_file,
 };
 use crate::findings::{
     ArtifactKind, EvidenceKind, MatchTarget, RecommendedAction, Severity, ThreatCategory,
@@ -134,6 +134,12 @@ pub(crate) fn analyze_script(
     ));
     findings.extend(detect_file_secret_to_network_flow(
         &lower,
+        &language,
+        &artifact_path,
+    ));
+    findings.extend(detect_shell_pipeline_taint(
+        &lower,
+        &comment_stripped,
         &language,
         &artifact_path,
     ));

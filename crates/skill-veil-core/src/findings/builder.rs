@@ -261,6 +261,7 @@ impl FindingBuilder {
             artifact_path: self.artifact_path,
             operational_contexts,
             taxonomy_tags: self.taxonomy_tags,
+            user_taxonomy: Vec::new(),
             line_number: self.line_number,
             suppression: None,
         }

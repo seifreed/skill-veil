@@ -67,6 +67,8 @@ malware engine.
 | **Bytecode Integrity** | Native `.pyc` detector: malformed CPython header (`BYTECODE_PYC_INVALID_MAGIC`), sourceless bytecode (`BYTECODE_PYC_SOURCELESS`), and process/network/eval primitives in the marshalled body (`BYTECODE_PYC_SUSPICIOUS_CONTENT`) |
 | **HTML Report** | `--format html`: self-contained, script-free interactive report with collapsible packages and a severity-coloured findings table |
 | **Cross-Skill Overlap** | `--check-overlap`: flags artifacts byte-identical across multiple scanned skills (shared payloads, cloned templates); advisory, never changes a verdict |
+| **Shell-Pipeline Taint** | Native source→sink detection through shell pipes: remote-fetch→shell (`PIPELINE_FETCH_TO_SHELL`) and secret→network egress (`PIPELINE_SECRET_TO_NETWORK`); the HTML report draws the taint-flow diagram |
+| **Threat Mapping** | `--threat-mapping`: overlay operator-defined taxonomy labels (JSON/YAML, by `rule_id` or `PREFIX*`) onto findings' `user_taxonomy`; extends the frozen `taxonomy_tags`, communication-only |
 | **Python / LangGraph** | `bindings/python/` package drives the binary and parses its JSON (verdict stays the scanner's own); typed `ScanReport`; `from skill_veil import graph` LangGraph adapter for AI pipelines |
 | **Analyst Feedback** | Append-only disposition overlay that turns production triage into a bounded, allowlist-only learned signal (never escalates an action) |
 | **Ground-Truth Corpus** | Curated gold corpus (3-LLM consensus + human review of disputes) scored by the same pipeline as the regression baseline |

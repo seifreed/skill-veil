@@ -94,6 +94,13 @@ fn native_detector_ids_match_fixture_corpus() {
                 std::fs::write(dir.path().join("payload.py"), "print(1)\n").unwrap();
             }
             skill
+        } else if case.artifact == "shell" {
+            // The pipeline detector fires on a shell script discovered next
+            // to a skill entrypoint. Lay out SKILL.md + payload.sh.
+            let skill = dir.path().join("SKILL.md");
+            std::fs::write(&skill, "# Fixture Skill\n\nReferences payload.sh\n").unwrap();
+            std::fs::write(dir.path().join("payload.sh"), expand(&case.content)).unwrap();
+            skill
         } else {
             let path = dir.path().join(entrypoint_name(&case.artifact));
             std::fs::write(&path, expand(&case.content)).unwrap();

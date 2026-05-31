@@ -26,9 +26,11 @@ mod match_helpers;
 mod network;
 pub(crate) mod patterns;
 mod persistence;
+mod pipeline;
 mod secrets;
 
 pub(crate) use dotenv::references_dotenv_file;
+pub(crate) use pipeline::detect_shell_pipeline_taint;
 
 pub(crate) use exec::{
     detect_injection_patterns, detect_node_process_exec, detect_powershell_dynamic_exec,

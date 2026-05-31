@@ -717,6 +717,13 @@ pub struct ScanArgs {
     /// `--llm-fp-review`.
     #[arg(long)]
     pub llm_fp_review_out: Option<PathBuf>,
+    /// Overlay operator-defined taxonomy labels onto findings from a JSON
+    /// or YAML file mapping `rule_id` (or `PREFIX*`) to label lists. The
+    /// labels surface in JSON output under each finding's `user_taxonomy`;
+    /// communication-only — they never change a verdict, risk score, or
+    /// action. Extends the frozen built-in `taxonomy_tags` vocabulary.
+    #[arg(long)]
+    pub threat_mapping: Option<PathBuf>,
     /// Opt-in (default OFF). When scanning more than one skill, report
     /// artifacts that are byte-identical across multiple skills (shared
     /// payloads, cloned templates, a compromised helper fanned out). Reads

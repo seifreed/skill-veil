@@ -345,6 +345,7 @@ mod tests {
             artifact_path: Some("SKILL.md".to_string()),
             operational_contexts: Vec::new(),
             taxonomy_tags: Vec::new(),
+            user_taxonomy: Vec::new(),
             line_number: None,
             suppression: None,
         }

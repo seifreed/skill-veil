@@ -84,6 +84,14 @@ pub struct Finding {
     /// verdict scoring. Additive field — older caches deserialise to empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub taxonomy_tags: Vec<TaxonomyTag>,
+    /// Free-form taxonomy labels applied by an operator-supplied
+    /// `--threat-mapping` file (keyed on `rule_id`). Like
+    /// [`Self::taxonomy_tags`] this is communication-only and NEVER feeds
+    /// verdict scoring; it exists so operators can overlay their own
+    /// vocabulary without touching the frozen [`TaxonomyTag`] registry.
+    /// Additive field — older caches deserialise to empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_taxonomy: Vec<String>,
     /// Line number if available
     pub line_number: Option<usize>,
     /// Set when this finding was suppressed by an inline annotation; absent for active findings.
