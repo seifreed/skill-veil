@@ -92,6 +92,15 @@ impl MarkdownParser for PulldownMarkdownParser {
                         current_content.push(' ');
                     }
                 }
+                // Block boundaries carry no Text/SoftBreak event, so without
+                // an explicit separator the last word of one paragraph / list
+                // item fuses with the first word of the next ("...line bPara
+                // two..."). That both manufactures tokens that never existed
+                // (false positive) and hides tokens split across the boundary
+                // (false negative) for `SectionContains` / `SectionRegex`.
+                Event::End(TagEnd::Paragraph | TagEnd::Item) if !in_code_block => {
+                    push_block_separator(&mut current_content);
+                }
                 _ => {}
             }
         }
@@ -135,6 +144,18 @@ fn flush_section_or_preamble(
     }
     current_content.clear();
     code_blocks.clear();
+}
+
+/// Append a single space between two text blocks unless the buffer is
+/// empty or already ends with a space. Keeps the separator consistent
+/// with the soft-break convention (a space, not a newline) so the
+/// documented section line-number collapse is unchanged, while
+/// preventing adjacent paragraphs / list items from gluing their
+/// boundary words together.
+fn push_block_separator(buf: &mut String) {
+    if !buf.is_empty() && !buf.ends_with(' ') {
+        buf.push(' ');
+    }
 }
 
 /// Convert a byte offset into a 1-based line number using the pre-computed
@@ -269,6 +290,46 @@ echo "hello"
         let sections = parser.parse_sections(content).unwrap();
         let setup = sections.iter().find(|s| s.name == "setup").unwrap();
         assert_eq!(setup.code_blocks[0].language, None);
+    }
+
+    /// # Contract
+    /// Two paragraphs inside one section MUST NOT have their boundary
+    /// words fused. Pre-fix the `Paragraph` end carried no separator, so
+    /// `...line b` + `Para two...` became `...line bPara two...`, which
+    /// both invented a token that never existed and hid the real words —
+    /// corrupting `SectionContains` / `SectionRegex` matching.
+    #[test]
+    fn adjacent_paragraphs_are_separated_in_section_content() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Setup\nalpha line b\n\nPara two gamma\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+        assert!(
+            setup.content.contains("b Para"),
+            "paragraph boundary must be separated; got {:?}",
+            setup.content
+        );
+        assert!(
+            !setup.content.contains("bPara"),
+            "paragraph boundary words must not fuse; got {:?}",
+            setup.content
+        );
+    }
+
+    /// # Contract
+    /// Adjacent list items MUST NOT fuse their boundary words either —
+    /// the same `_ => {}` swallow affected `Item` ends.
+    #[test]
+    fn adjacent_list_items_are_separated_in_section_content() {
+        let parser = PulldownMarkdownParser::new();
+        let content = "## Steps\n- alpha\n- beta\n";
+        let sections = parser.parse_sections(content).unwrap();
+        let steps = sections.iter().find(|s| s.name == "steps").unwrap();
+        assert!(
+            !steps.content.contains("alphabeta"),
+            "list-item boundary words must not fuse; got {:?}",
+            steps.content
+        );
     }
 
     /// Contract: code block contents live in `section.code_blocks` only,

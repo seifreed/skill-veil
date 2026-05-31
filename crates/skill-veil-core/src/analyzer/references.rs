@@ -89,7 +89,17 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
         Path::new(".")
     });
 
-    let link_pattern = format!(r#"\[.*?\]\((\.?/?[^\)]+\.({}))\)"#, ALL_EXT_PATTERN);
+    // CommonMark link destinations can carry a title (`(path "t")`), be
+    // angle-bracket wrapped (`(<path>)`), or trail a query/fragment
+    // (`(path?x=1)`). The destination capture stops at whitespace, `)`,
+    // and `>` so none of those trailing forms either defeat the match
+    // (referenced file silently never scanned) or get glued onto the
+    // captured path. The query/fragment and title are consumed but not
+    // captured.
+    let link_pattern = format!(
+        r#"\[.*?\]\(\s*<?(\.?/?[^\s)>]+\.({}))(?:[?#][^\s)>]*)?>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#,
+        ALL_EXT_PATTERN
+    );
     let command_pattern = format!(
         r#"(?:source|run|execute|include)\s+[\"']?([^\s\"']+\.({}))"#,
         SCRIPT_EXT_PATTERN
@@ -110,7 +120,20 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
     for re in patterns {
         for cap in re.captures_iter(content) {
             let Some(m) = cap.get(1) else { continue };
-            let raw = m.matched_text.as_str();
+            // The `chmod +x`/`./` exec pattern uses `[^\s]+`, which greedily
+            // swallows trailing markdown/shell punctuation (`./x.sh)` inside a
+            // link, `` `./x.sh` `` in prose). Strip it so the resolved path is
+            // the real file, not a phantom that fails the read. A leading `./`
+            // is normalised away so the same file referenced as `./x` and `x`
+            // does not produce two distinct (un-deduplicated) entries.
+            let raw = m
+                .matched_text
+                .as_str()
+                .trim_end_matches([')', '`', '"', '\'', ',', ';', '>']);
+            let raw = raw.strip_prefix("./").unwrap_or(raw);
+            if raw.is_empty() {
+                continue;
+            }
 
             // Reject scheme-prefixed URLs (`http://`, `https://`, `ftp://`,
             // `file://`, `mailto:`, custom schemes). `Path::is_absolute`
@@ -239,6 +262,62 @@ mod tests {
                 "URL target must not be resolved: {sample:?} -> {refs:?}"
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// A CommonMark link with a title, angle brackets, or a trailing
+    /// query/fragment MUST still resolve its referenced script. Pre-fix
+    /// the regex required the destination to end exactly at `.<ext>)`, so
+    /// `[run](payload.sh "Installer")` matched nothing and the referenced
+    /// script — potential malware in a non-conventional directory — was
+    /// never queued for scanning.
+    #[test]
+    fn extract_references_handles_link_titles_brackets_and_query() {
+        let base_path = Path::new("/tmp/pkg/SKILL.md");
+        for sample in [
+            r#"[run](assets/payload.sh "Installer")"#,
+            "[run](<assets/payload.sh>)",
+            "[run](assets/payload.sh?v=1)",
+            "[run](assets/payload.sh#top)",
+            "[run](./assets/payload.sh 'note')",
+        ] {
+            let refs = extract_references(sample, base_path);
+            assert!(
+                refs.iter().any(|p| p.ends_with("assets/payload.sh")),
+                "must resolve referenced script for {sample:?}; got {refs:?}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// Trailing markdown/shell punctuation captured by the `./`/`chmod +x`
+    /// exec pattern MUST be stripped, and a leading `./` normalised, so a
+    /// reference resolves to the real file rather than a phantom path that
+    /// fails the read (and is never deduplicated against the clean form).
+    #[test]
+    fn extract_references_strips_trailing_punctuation_and_normalises_dot_slash() {
+        let base_path = Path::new("/tmp/pkg/SKILL.md");
+        let refs = extract_references("Run `./payload.sh` to install.", base_path);
+        assert!(
+            refs.iter().any(|p| p.ends_with("payload.sh")),
+            "must resolve payload.sh from backtick-wrapped exec ref; got {refs:?}"
+        );
+        assert!(
+            refs.iter().all(|p| !p.to_string_lossy().contains('`')),
+            "no captured reference may retain a backtick; got {refs:?}"
+        );
+        // `[a](./scripts/x.sh)` must not also yield a phantom `scripts/x.sh)`.
+        let refs = extract_references("[a](./scripts/x.sh)", base_path);
+        assert!(
+            refs.iter().all(|p| !p.to_string_lossy().contains(')')),
+            "no captured reference may retain a paren; got {refs:?}"
+        );
+        assert!(
+            refs.iter().any(|p| p.ends_with("scripts/x.sh")),
+            "must resolve scripts/x.sh; got {refs:?}"
+        );
     }
 
     /// # Contract (low-level helper)
