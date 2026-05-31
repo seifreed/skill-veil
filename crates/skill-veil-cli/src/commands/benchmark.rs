@@ -113,9 +113,10 @@ pub(crate) fn update_benchmark_history(
         .releases
         .retain(|existing| existing.release_id != release_id);
     history.releases.push(entry);
-    history
-        .releases
-        .sort_by(|left, right| left.release_id.cmp(&right.release_id));
+    // Order chronologically by run time, not lexically by release_id: the
+    // dashboard treats the last entry as the most recent run, and a lexical
+    // sort mis-orders once versions cross a 10s boundary ("v0.10.0" < "v0.9.0").
+    history.releases.sort_by_key(|entry| entry.generated_at);
 
     let content =
         serde_json::to_string_pretty(&history).context("Failed to serialize benchmark history")?;

@@ -64,6 +64,9 @@ release process is formalized.
 - The PromptIntel rate-limit tracker now records a call attempt even when the
   request fails, matching its documented "record on every attempt" contract, so
   a saturating endpoint actually backs off instead of only counting successes.
+- Benchmark history is now ordered chronologically by run time instead of
+  lexically by `release_id`, so the dashboard's "Latest Delta" compares the two
+  newest runs (a lexical sort placed `v0.9.0` after `v0.10.0`).
 
 ## [0.2.0] - 2026-05-20
 

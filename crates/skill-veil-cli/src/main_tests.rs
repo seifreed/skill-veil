@@ -635,6 +635,76 @@ fn validate_fixture_case_attribute_expectation_fails_without_a_finding() {
     );
 }
 
+fn minimal_corpus_evaluation() -> CorpusEvaluation {
+    let metrics = skill_veil_core::RegressionMetrics {
+        precision: 1.0,
+        recall: 1.0,
+        false_positive_rate: 0.0,
+        accuracy: 1.0,
+        exact_label_accuracy: 1.0,
+        true_positive: 1,
+        false_positive: 0,
+        true_negative: 1,
+        false_negative: 0,
+    };
+    CorpusEvaluation {
+        metrics,
+        coverage: skill_veil_core::CorpusCoverage {
+            total_samples: 1,
+            by_label: Vec::new(),
+            by_focus_category: Vec::new(),
+            by_attack_family: Vec::new(),
+        },
+        deduplication: skill_veil_core::DeduplicationMetrics {
+            original_findings: 1,
+            unique_findings: 1,
+            duplicates_removed: 0,
+        },
+        confidence_calibration: Default::default(),
+        threshold_recommendation: skill_veil_core::ThresholdRecommendation {
+            current_approval_threshold: 20,
+            current_block_threshold: 50,
+            recommended_approval_threshold: 20,
+            recommended_block_threshold: 50,
+            current_metrics: metrics,
+            recommended_metrics: metrics,
+            rationale: "minimal".to_string(),
+        },
+        family_metrics: Vec::new(),
+        samples: Vec::new(),
+    }
+}
+
+/// # Contract
+/// Benchmark history is ordered chronologically by `generated_at`, so the last
+/// entry is the most recent run and the dashboard's "Latest Delta" compares the
+/// two newest runs. A lexical `release_id` sort broke this once versions crossed
+/// a 10s boundary (`"v0.10.0" < "v0.9.0"`), making the older release look newest.
+#[test]
+fn update_benchmark_history_orders_by_generated_at_not_release_id() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let history_path = std::env::temp_dir().join(format!("skill-veil-history-order-{unique}.json"));
+    let evaluation = minimal_corpus_evaluation();
+
+    commands::update_benchmark_history(&history_path, "v0.9.0", &evaluation).unwrap();
+    commands::update_benchmark_history(&history_path, "v0.10.0", &evaluation).unwrap();
+
+    let content = fs::read_to_string(&history_path).unwrap();
+    let history: BenchmarkHistory = serde_json::from_str(&content).unwrap();
+    let _ = fs::remove_file(&history_path);
+
+    assert_eq!(history.releases.len(), 2);
+    assert_eq!(
+        history.releases.last().unwrap().release_id,
+        "v0.10.0",
+        "the most recently generated run must be last (chronological), not the \
+         lexically-largest release_id"
+    );
+}
+
 /// # Contract
 /// `update_benchmark_history` MUST replace an existing entry with
 /// the same `release_id` instead of duplicating it. Otherwise a
