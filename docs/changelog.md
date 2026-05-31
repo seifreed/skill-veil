@@ -37,6 +37,34 @@ release process is formalized.
   yanked packages and dependencies with no release in `stale_days`
   (default 730). On-disk TTL cache + offline mode. Never changes the
   verdict.
+
+**Advisory LLM false-positive review (`--llm-fp-review`)**
+- Opt-in, multi-provider LLM review of `Suspicious` packages. For each
+  eligible package the consensus trio (openai+grok+ollama-cloud) is asked
+  whether it is benign; packages ≥2 providers independently judge benign
+  are flagged as likely false positives in a separate report block, with
+  a suggested triage action.
+- ADVISORY ONLY: never changes the core verdict, risk score, exit code,
+  or the JSON/SARIF/Shield payload, so it needs no `adjudication-eval`
+  corpus calibration. Reuses `enrich_scan_result` for the hardened
+  anti-jailbreak prompt and applies the same single-provider-flip
+  injection guard as the taint adjudication — a lone provider flipping to
+  benign while the others disagree is reported as injection-suspected,
+  never as a false positive.
+- `--llm-fp-review-out <path>` writes the result as a JSON sidecar
+  (schema `skill-veil.fp-review.v1`). The `triage` preset turns the
+  review on alongside the existing adjudication levers.
+
+**Python bindings & LangGraph adapter (`bindings/python/`)**
+- `skill-veil` Python package that drives the native binary and parses
+  its JSON output (the verdict stays the scanner's own): `scan()` /
+  `scan_raw()` returning a typed `ScanReport`, with `find_binary`
+  resolution via `$SKILL_VEIL_BIN` / `PATH` / cargo target dirs.
+- LangGraph adapter (`from skill_veil import graph`) mirroring
+  `graph.invoke({"input_path": ...})`, plus a framework-agnostic
+  `scan_node`. Output parsing tolerates trailing enrichment text by
+  decoding only the leading JSON document.
+
 - Named taxonomy tags (`TaxonomyTag`): an orthogonal, frozen vocabulary
   (`memory_poisoning`, `rogue_agent`, `excessive_agency`,
   `output_handling`, `trigger_abuse`, `system_prompt_leakage`) attached

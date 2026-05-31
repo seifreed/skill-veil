@@ -14,6 +14,7 @@
 pub(crate) mod cache;
 pub(crate) mod client;
 pub(crate) mod enrich;
+pub(crate) mod fp_review;
 pub(crate) mod prompt;
 pub(crate) mod providers;
 pub(crate) mod taint_adjudication;

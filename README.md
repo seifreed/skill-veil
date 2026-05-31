@@ -62,6 +62,8 @@ malware engine.
 | **PromptIntel Integration** | Curated jailbreak corpus + agent-feed IOC enrichment + threat-intel report submission with persistent rate-limit tracker |
 | **LLM Enrichment** | Optional third scoring engine across Ollama, LM Studio, OpenAI, Anthropic, and Ollama Cloud |
 | **LLM Adjudication** | Gated, ≥2-of-3 consensus reconciliation: taint-FP `Malicious→Suspicious` downgrade and the symmetric FN `Suspicious→Malicious` upgrade; immutable core verdict; single-provider-flip prompt-injection signal; offline replay tooling (`adjudication-eval`) |
+| **LLM FP Review** | Opt-in, advisory `--llm-fp-review`: ≥2-of-3 consensus flags likely false positives in the `Suspicious` queue with a hardened anti-jailbreak prompt and injection guard; never changes the verdict, exit code, or payload; optional `skill-veil.fp-review.v1` JSON sidecar |
+| **Python / LangGraph** | `bindings/python/` package drives the binary and parses its JSON (verdict stays the scanner's own); typed `ScanReport`; `from skill_veil import graph` LangGraph adapter for AI pipelines |
 | **Analyst Feedback** | Append-only disposition overlay that turns production triage into a bounded, allowlist-only learned signal (never escalates an action) |
 | **Ground-Truth Corpus** | Curated gold corpus (3-LLM consensus + human review of disputes) scored by the same pipeline as the regression baseline |
 | **Native NOVA Semantics** | `semantics:` patterns run on-device by default via a local sentence-embedding model; opt out with `--no-nova-semantics` |

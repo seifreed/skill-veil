@@ -206,6 +206,7 @@ pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
             // adjudication-OFF on purpose.
             args.llm_adjudicate_taint = true;
             args.llm_adjudicate_upgrade = true;
+            args.llm_fp_review = true;
         }
     }
     args
@@ -481,6 +482,38 @@ pub(crate) fn run_scan(
         None
     };
 
+    // Advisory LLM false-positive review. Strictly report-only: works
+    // on clones, never affects the core verdict, risk score, exit code,
+    // or the structured payload, so the `verdict_snapshot` assert below
+    // stays valid and no corpus recalibration is required. The text
+    // block is suppressed for non-text formats (it would pollute the
+    // structured output); the machine-readable form is the opt-in JSON
+    // sidecar.
+    if args.llm_fp_review && !args.no_llm_enrich {
+        if let Some(outcome) = crate::llm::fp_review::run_fp_review(
+            &scan_result,
+            &args.path,
+            args.cache_dir.as_deref(),
+            quiet,
+            args.llm_fp_review,
+        )? {
+            if !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text) {
+                print!("{}", outcome.report_block);
+            }
+            if let Some(out) = args.llm_fp_review_out.as_deref() {
+                let json = crate::llm::fp_review::to_json(&outcome)?;
+                write_scan_output(out, &json)?;
+                if !quiet {
+                    eprintln!("FP review written to: {}", terminal_path(out));
+                }
+            }
+        }
+    } else if args.llm_fp_review && args.no_llm_enrich && !quiet {
+        eprintln!(
+            "LLM FP review skipped: --llm-fp-review needs LLM access but --no-llm-enrich was set"
+        );
+    }
+
     if !args.no_promptintel_enrich {
         if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
             &scan_result,
@@ -633,18 +666,20 @@ mod tests {
     }
 
     /// Contract: the `triage` preset turns ON both LLM adjudication
-    /// levers — the single explicit opt-in surface for default-on
-    /// adjudication.
+    /// levers and the advisory LLM false-positive review — the single
+    /// explicit opt-in surface for analyst-facing LLM passes.
     #[test]
     fn triage_preset_enables_taint_adjudication() {
         let a = preset_args(Some("triage"));
         assert!(a.llm_adjudicate_taint, "triage must enable downgrade");
         assert!(a.llm_adjudicate_upgrade, "triage must enable upgrade");
+        assert!(a.llm_fp_review, "triage must enable advisory FP review");
     }
 
     /// Contract (negative): every deterministic preset — and the
-    /// no-preset default — leaves BOTH adjudication levers OFF, so CI
-    /// verdicts never depend on an external LLM.
+    /// no-preset default — leaves BOTH adjudication levers AND the
+    /// advisory FP review OFF, so CI verdicts never depend on an
+    /// external LLM.
     #[test]
     fn local_ci_strict_enterprise_presets_leave_taint_adjudication_off() {
         for preset in [
@@ -656,8 +691,8 @@ mod tests {
         ] {
             let a = preset_args(preset);
             assert!(
-                !a.llm_adjudicate_taint && !a.llm_adjudicate_upgrade,
-                "preset {preset:?} must leave adjudication OFF",
+                !a.llm_adjudicate_taint && !a.llm_adjudicate_upgrade && !a.llm_fp_review,
+                "preset {preset:?} must leave adjudication and FP review OFF",
             );
         }
     }

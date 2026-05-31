@@ -701,6 +701,22 @@ pub struct ScanArgs {
     /// suitable.
     #[arg(long)]
     pub cache_dir: Option<PathBuf>,
+    /// Opt-in (default OFF). Advisory LLM false-positive review. For
+    /// each `Suspicious` package, the LLM consensus trio (openai+grok+
+    /// ollama-cloud) is asked whether it is benign; packages ≥2
+    /// providers judge benign are flagged as likely false positives in
+    /// a separate report block. ADVISORY ONLY — never changes the core
+    /// verdict, risk score, exit code, or the JSON/SARIF payload. A lone
+    /// provider flipping to benign while the others disagree is reported
+    /// as prompt-injection-suspected, never as a false positive.
+    #[arg(long, default_value_t = false)]
+    pub llm_fp_review: bool,
+    /// Write the `--llm-fp-review` result to this path as a JSON sidecar
+    /// (schema `skill-veil.fp-review.v1`). Independent of `--format`; the
+    /// core scan output is never altered. Has no effect without
+    /// `--llm-fp-review`.
+    #[arg(long)]
+    pub llm_fp_review_out: Option<PathBuf>,
 }
 
 #[derive(Args, Clone)]
