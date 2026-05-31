@@ -520,82 +520,83 @@ impl CompiledRule {
         doc: &SkillDocument,
         findings: &mut Vec<Finding>,
     ) -> bool {
-        let Some(sec) = doc.get_section(section) else {
-            return false;
-        };
-
         let mut matched = false;
-        let content_lower = case_fold(&sec.content);
+        // Scan EVERY section with this name, not just the first: a
+        // duplicate `## Setup` heading would otherwise hide a payload from
+        // a section-scoped rule. Each section keeps its own `start_line`.
+        for sec in doc.sections_named(section) {
+            let content_lower = case_fold(&sec.content);
 
-        // Build a mapping from folded character index to original character
-        // index. Case-folding can expand characters (e.g. İ → i̇, ß → ss), so a
-        // position in the folded string does not correspond 1-to-1 with the
-        // original. Without this mapping, `char_offset` computed from
-        // `content_lower` would point to the wrong position in `sec.content`.
-        let mut lower_to_original: Vec<usize> = Vec::new();
-        for (orig_idx, ch) in sec.content.chars().enumerate() {
-            for _ in 0..folded_char_count(ch) {
-                lower_to_original.push(orig_idx);
+            // Build a mapping from folded character index to original character
+            // index. Case-folding can expand characters (e.g. İ → i̇, ß → ss), so a
+            // position in the folded string does not correspond 1-to-1 with the
+            // original. Without this mapping, `char_offset` computed from
+            // `content_lower` would point to the wrong position in `sec.content`.
+            let mut lower_to_original: Vec<usize> = Vec::new();
+            for (orig_idx, ch) in sec.content.chars().enumerate() {
+                for _ in 0..folded_char_count(ch) {
+                    lower_to_original.push(orig_idx);
+                }
             }
-        }
-        // Sentinel: one-past-the-end original char index, used when the match
-        // extends to the end of the lowercased content.
-        lower_to_original.push(sec.content.chars().count());
+            // Sentinel: one-past-the-end original char index, used when the match
+            // extends to the end of the lowercased content.
+            lower_to_original.push(sec.content.chars().count());
 
-        for value in values {
-            if value.is_empty() {
-                continue;
-            }
-            let value_lower = case_fold(value);
-            // Find ALL occurrences, not just the first. A malicious string
-            // appearing multiple times in a section should produce multiple
-            // findings — finding only the first undercounts risk.
-            let mut search_from = 0;
-            while let Some(pos_lower) = content_lower[search_from..].find(&value_lower) {
-                // Map the byte offset in `content_lower` to the corresponding
-                // character range in the original mixed-case content via the
-                // lower_to_original index built above.
-                let lower_char_start = content_lower[..search_from + pos_lower].chars().count();
-                let lower_char_end = lower_char_start + value_lower.chars().count();
-                let orig_start = lower_to_original[lower_char_start];
-                let orig_end = lower_to_original[lower_char_end];
-                let original_text: String = sec
-                    .content
-                    .chars()
-                    .skip(orig_start)
-                    .take(orig_end - orig_start)
-                    .collect();
-                // Convert section-relative char offset to document-relative
-                // line number so inline suppressions (which key on
-                // document-level line numbers) can match these findings.
-                let orig_byte_offset = sec
-                    .content
-                    .char_indices()
-                    .nth(orig_start)
-                    .map_or(sec.content.len(), |(idx, _)| idx);
-                let line_number = calculate_line_number(&sec.content, orig_byte_offset)
-                    + sec.start_line.saturating_sub(1);
-                let target = MatchTarget::Section {
-                    name: section.to_string(),
-                };
-                findings.push(
-                    self.create_finding_with_doc(target, &original_text, Some(doc))
-                        .with_line(line_number),
-                );
-                matched = true;
-                // Advance past this match to find subsequent occurrences.
-                // Use character count, not byte length, to advance because
-                // case-folding can change byte length (e.g. İ → i̇: 2 bytes
-                // become 3). Walking by chars and converting back to a byte
-                // offset in `content_lower` avoids skipping or re-matching
-                // when the lowercase form differs in byte width from the
-                // original.
-                let match_end_bytes = search_from + pos_lower + value_lower.len();
-                let advance_chars = content_lower[..match_end_bytes].chars().count();
-                search_from = content_lower
-                    .char_indices()
-                    .nth(advance_chars)
-                    .map_or(match_end_bytes, |(idx, _)| idx);
+            for value in values {
+                if value.is_empty() {
+                    continue;
+                }
+                let value_lower = case_fold(value);
+                // Find ALL occurrences, not just the first. A malicious string
+                // appearing multiple times in a section should produce multiple
+                // findings — finding only the first undercounts risk.
+                let mut search_from = 0;
+                while let Some(pos_lower) = content_lower[search_from..].find(&value_lower) {
+                    // Map the byte offset in `content_lower` to the corresponding
+                    // character range in the original mixed-case content via the
+                    // lower_to_original index built above.
+                    let lower_char_start = content_lower[..search_from + pos_lower].chars().count();
+                    let lower_char_end = lower_char_start + value_lower.chars().count();
+                    let orig_start = lower_to_original[lower_char_start];
+                    let orig_end = lower_to_original[lower_char_end];
+                    let original_text: String = sec
+                        .content
+                        .chars()
+                        .skip(orig_start)
+                        .take(orig_end - orig_start)
+                        .collect();
+                    // Convert section-relative char offset to document-relative
+                    // line number so inline suppressions (which key on
+                    // document-level line numbers) can match these findings.
+                    let orig_byte_offset = sec
+                        .content
+                        .char_indices()
+                        .nth(orig_start)
+                        .map_or(sec.content.len(), |(idx, _)| idx);
+                    let line_number = calculate_line_number(&sec.content, orig_byte_offset)
+                        + sec.start_line.saturating_sub(1);
+                    let target = MatchTarget::Section {
+                        name: section.to_string(),
+                    };
+                    findings.push(
+                        self.create_finding_with_doc(target, &original_text, Some(doc))
+                            .with_line(line_number),
+                    );
+                    matched = true;
+                    // Advance past this match to find subsequent occurrences.
+                    // Use character count, not byte length, to advance because
+                    // case-folding can change byte length (e.g. İ → i̇: 2 bytes
+                    // become 3). Walking by chars and converting back to a byte
+                    // offset in `content_lower` avoids skipping or re-matching
+                    // when the lowercase form differs in byte width from the
+                    // original.
+                    let match_end_bytes = search_from + pos_lower + value_lower.len();
+                    let advance_chars = content_lower[..match_end_bytes].chars().count();
+                    search_from = content_lower
+                        .char_indices()
+                        .nth(advance_chars)
+                        .map_or(match_end_bytes, |(idx, _)| idx);
+                }
             }
         }
         matched
@@ -608,10 +609,6 @@ impl CompiledRule {
         doc: &SkillDocument,
         findings: &mut Vec<Finding>,
     ) -> bool {
-        let Some(sec) = doc.get_section(section) else {
-            return false;
-        };
-
         let Some(compiled) = self.compiled_patterns.get(pattern) else {
             tracing::warn!(
                 rule_id = %self.rule.id,
@@ -619,24 +616,29 @@ impl CompiledRule {
             );
             return false;
         };
-        let matches = compiled.find_matches(&sec.content);
         let initial_count = findings.len();
-        for mat in matches {
-            // Convert section-relative offset to document-relative
-            // line number so inline suppressions (which operate on
-            // document-level line numbers) can match these findings.
-            let line_number =
-                calculate_line_number(&sec.content, mat.start) + sec.start_line.saturating_sub(1);
-            let finding = self
-                .create_finding_with_doc(
-                    MatchTarget::Section {
-                        name: section.to_string(),
-                    },
-                    &mat.matched_text,
-                    Some(doc),
-                )
-                .with_line(line_number);
-            findings.push(finding);
+        // Scan EVERY section with this name, not just the first: a
+        // duplicate `## Setup` heading would otherwise hide a payload from
+        // a section-scoped rule. Each section keeps its own `start_line`
+        // so reported line numbers stay accurate.
+        for sec in doc.sections_named(section) {
+            for mat in compiled.find_matches(&sec.content) {
+                // Convert section-relative offset to document-relative
+                // line number so inline suppressions (which operate on
+                // document-level line numbers) can match these findings.
+                let line_number = calculate_line_number(&sec.content, mat.start)
+                    + sec.start_line.saturating_sub(1);
+                let finding = self
+                    .create_finding_with_doc(
+                        MatchTarget::Section {
+                            name: section.to_string(),
+                        },
+                        &mat.matched_text,
+                        Some(doc),
+                    )
+                    .with_line(line_number);
+                findings.push(finding);
+            }
         }
         findings.len() > initial_count
     }

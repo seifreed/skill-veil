@@ -77,6 +77,16 @@ impl SkillDocument {
         self.sections.iter().find(|s| s.name == name_lower)
     }
 
+    /// Every section whose (lowercased) name equals `name`, in document
+    /// order. A document can legitimately — or maliciously — repeat a
+    /// heading (`## Setup` twice); section-scoped rules MUST inspect
+    /// every same-named section, because returning only the first lets a
+    /// payload planted under a duplicate heading evade a `section:` rule.
+    pub fn sections_named<'a>(&'a self, name: &str) -> impl Iterator<Item = &'a Section> + 'a {
+        let name_lower = name.to_lowercase();
+        self.sections.iter().filter(move |s| s.name == name_lower)
+    }
+
     pub fn all_code_blocks(&self) -> Vec<&CodeBlock> {
         self.sections
             .iter()
