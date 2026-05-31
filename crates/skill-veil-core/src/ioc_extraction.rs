@@ -144,6 +144,17 @@ const KEEP_SPECIAL_IPV4: &[&str] = &[
 /// a `tracing::warn` so operators see the cap was hit.
 pub const MAX_IOCS_PER_KIND_PER_ARTIFACT: usize = 4_096;
 
+/// Upper bound on the span of an artifact scanned for IOCs. The per-kind
+/// output sets are capped, but each regex pass still materialises EVERY
+/// match into an intermediate `Vec<PatternMatch>` (each cloning its
+/// matched text) before that cap applies — so a multi-hundred-MB artifact
+/// of densely packed URL/IP tokens grows several GB of transient match
+/// vectors regardless of the output cap. Bounding the scanned span caps
+/// that transient growth. A legitimate skill's indicators sit far inside
+/// this window; content past it on a multi-MB artifact is attacker
+/// padding. Mirrors the existing NOVA per-body cap.
+pub const MAX_IOC_SCAN_BYTES: usize = 16 * 1024 * 1024;
+
 /// Extract IOCs from a single artifact's textual content plus its path.
 /// `path` is used for (a) computing the file hash and (b) attaching to the
 /// returned FileHash record.
@@ -170,6 +181,23 @@ pub fn extract_from_artifact(path: &Path, content: &[u8]) -> ExtractedIocs {
 /// a crafted 50 MB artifact with millions of unique URLs / IPs caused
 /// several-GB heap growth before returning.
 pub fn extract_from_text(text: &str) -> ExtractedIocs {
+    // Bound the scanned span so each regex pass cannot materialise an
+    // unbounded intermediate match vector before the per-kind output caps
+    // apply. Truncate to a UTF-8 char boundary at or below the cap.
+    let text = if text.len() > MAX_IOC_SCAN_BYTES {
+        let mut end = MAX_IOC_SCAN_BYTES;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        tracing::warn!(
+            cap = MAX_IOC_SCAN_BYTES,
+            len = text.len(),
+            "ioc_extraction: artifact exceeds IOC scan cap; scanning only the leading window"
+        );
+        &text[..end]
+    } else {
+        text
+    };
     let mut urls: BTreeSet<String> = BTreeSet::new();
     let mut domains: BTreeSet<String> = BTreeSet::new();
     let mut ipv4: BTreeSet<String> = BTreeSet::new();
@@ -352,6 +380,31 @@ mod tests {
             "URL set must be capped at {}; got {}",
             MAX_IOCS_PER_KIND_PER_ARTIFACT,
             iocs.urls.len()
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `extract_from_text` scans only the leading `MAX_IOC_SCAN_BYTES` of
+    /// an oversized artifact, so each regex pass cannot materialise an
+    /// unbounded intermediate match vector. An IOC inside the window is
+    /// still found; one past the cap is not scanned.
+    #[test]
+    fn extract_from_text_bounds_scan_span() {
+        let mut text = String::with_capacity(MAX_IOC_SCAN_BYTES + 64);
+        text.push_str("http://early.example/path ");
+        text.push_str(&"x".repeat(MAX_IOC_SCAN_BYTES));
+        text.push_str(" http://late.example/path");
+
+        let iocs = extract_from_text(&text);
+
+        assert!(
+            iocs.urls.iter().any(|u| u.contains("early.example")),
+            "an in-window IOC must be extracted"
+        );
+        assert!(
+            !iocs.urls.iter().any(|u| u.contains("late.example")),
+            "an IOC past the scan cap must not be scanned"
         );
     }
 
