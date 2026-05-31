@@ -117,10 +117,7 @@ pub(crate) fn scan_typosquat(deps: &[ParsedDependency]) -> Vec<Finding> {
         if popular.contains(&canon) {
             continue;
         }
-        let Some(target) = popular
-            .iter()
-            .find(|name| is_edit_distance_one(&canon, name))
-        else {
+        let Some(target) = find_typosquat_target(&canon, popular) else {
             continue;
         };
         if !seen.insert((dep.ecosystem, canon.clone(), target.clone())) {
@@ -129,6 +126,19 @@ pub(crate) fn scan_typosquat(deps: &[ParsedDependency]) -> Vec<Finding> {
         findings.push(build_finding(dep, target));
     }
     findings
+}
+
+/// Pick the popular name a candidate typosquats. A name can be
+/// edit-distance 1 from several popular names at once; selecting the
+/// lexicographically smallest makes the emitted finding reproducible
+/// across runs — `HashSet` iteration order is per-process randomised,
+/// so `iter().find(..)` would otherwise vary the reported target (and
+/// thus the finding's `match_value` / `reason` text) run to run.
+fn find_typosquat_target<'a>(canon: &str, popular: &'a HashSet<String>) -> Option<&'a String> {
+    popular
+        .iter()
+        .filter(|name| is_edit_distance_one(canon, name))
+        .min()
 }
 
 fn build_finding(dep: &ParsedDependency, target: &str) -> Finding {
@@ -218,6 +228,36 @@ mod tests {
     #[test]
     fn distant_name_does_not_fire() {
         assert!(rule_ids(&[dep("my-internal-helper", Ecosystem::Npm)]).is_empty());
+    }
+
+    /// Contract: when a candidate is edit-distance 1 from MORE THAN ONE
+    /// popular name, the reported target is the lexicographically
+    /// smallest match — deterministic regardless of `HashSet` iteration
+    /// order, so the finding text is byte-identical across runs.
+    #[test]
+    fn typosquat_target_selection_is_deterministic() {
+        let mut popular = HashSet::new();
+        popular.insert("requests".to_string());
+        popular.insert("requestx".to_string());
+
+        // `requestz` is one substitution from both candidates.
+        let target = find_typosquat_target("requestz", &popular);
+
+        assert_eq!(
+            target.map(String::as_str),
+            Some("requests"),
+            "must deterministically pick the lexicographically smallest match"
+        );
+    }
+
+    /// Contract (negative): a candidate equidistant from none of the
+    /// popular names yields no target.
+    #[test]
+    fn typosquat_target_absent_when_no_match() {
+        let mut popular = HashSet::new();
+        popular.insert("requests".to_string());
+
+        assert!(find_typosquat_target("totally-different", &popular).is_none());
     }
 
     #[test]
