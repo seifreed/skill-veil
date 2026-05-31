@@ -717,6 +717,16 @@ pub struct ScanArgs {
     /// `--llm-fp-review`.
     #[arg(long)]
     pub llm_fp_review_out: Option<PathBuf>,
+    /// Opt-in (default OFF). Exit-affecting variant of `--llm-fp-review`.
+    /// A `Suspicious` package that ≥2-of-3 providers judge benign no
+    /// longer fails the exit code (its findings are treated as Log for
+    /// the gate only). A single-provider benign flip against ≥2
+    /// dissenters is injection-suspected and ALWAYS fails. Never changes
+    /// the core verdict, risk score, or the JSON/SARIF payload (they
+    /// still show Suspicious); composes with `--llm-adjudicate-taint`
+    /// (disjoint verdict classes). Implies `--llm-fp-review`.
+    #[arg(long, default_value_t = false)]
+    pub llm_fp_adjudicate: bool,
 }
 
 #[derive(Args, Clone)]

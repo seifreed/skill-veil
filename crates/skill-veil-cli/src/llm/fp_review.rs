@@ -13,19 +13,28 @@
 //!
 //! # Security model — read this before touching anything
 //!
-//! Unlike the taint adjudication, this layer is ADVISORY ONLY. It NEVER
-//! changes:
-//! - the core scanner verdict (`ScanResult::verdict`),
-//! - the `risk_score`,
-//! - the process exit code (`should_fail`),
-//! - the JSON / SARIF / Shield structured payload.
+//! Two modes, both leaving the core scanner verdict
+//! (`ScanResult::verdict`), the `risk_score`, and the JSON / SARIF /
+//! Shield structured payload IMMUTABLE, and the `verdict_snapshot`
+//! anti-tamper assertion in `commands::scan` valid (everything here
+//! works on clones):
 //!
-//! It works on clones, produces a separate rendered block plus an
-//! opt-in JSON sidecar, and leaves the `verdict_snapshot` anti-tamper
-//! assertion in `commands::scan` valid. Because nothing here is
-//! verdict- or exit-affecting, it needs no `adjudication-eval` corpus
-//! calibration — the contract that gates the taint downgrade's eligible
-//! rule set does not apply.
+//! - **Advisory** (`--llm-fp-review`, default): produces a rendered
+//!   block plus an opt-in JSON sidecar and changes NOTHING else — not
+//!   even the exit code.
+//! - **Adjudicate** (`--llm-fp-adjudicate`, opt-in): additionally
+//!   softens the process exit code for benign-consensus `Suspicious`
+//!   packages, exactly as the taint adjudication softens it for
+//!   benign-consensus `Malicious` packages. The two target disjoint
+//!   verdict classes and compose through `package_fail_overrides`.
+//!
+//! The default (advisory) path needs no `adjudication-eval` corpus
+//! calibration. The adjudicate path is exit-affecting and conservative
+//! (it only stops a benign-consensus Suspicious package from failing
+//! CI, never downgrades Malicious, never hides findings from
+//! JSON/SARIF); broadening or defaulting it ON should be gated by
+//! fresh `adjudication-eval` evidence, the same contract that governs
+//! the taint downgrade.
 //!
 //! The panel sees skill text and could be prompt-injected. The
 //! mitigations are inherited verbatim by reusing `enrich_scan_result`
@@ -34,15 +43,16 @@
 //! lone provider flipping to `benign` while the others disagree is
 //! reported as `injection_suspected`, NOT as a false positive.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::Serialize;
+use skill_veil_core::services::ScanFilterService;
 use skill_veil_core::{
-    ConsensusDiscrepancy, Finding, PackageScanResult, ProviderVote, RecommendedAction, ScanResult,
-    SignalClass, Verdict,
+    ConsensusDiscrepancy, Finding, PackageScanResult, ProviderVote, RecommendedAction, ScanOptions,
+    ScanResult, SignalClass, Verdict,
 };
 
 use crate::commands::scan::llm::{prepare_llm_inputs, LlmInputs};
@@ -165,14 +175,56 @@ pub(crate) struct FpReviewItem {
     pub(crate) flipped_provider: Option<String>,
 }
 
-/// Result of an advisory review pass. The caller prints `report_block`
-/// (text format only) and may serialise `items` to a JSON sidecar.
-/// Never carries a mutated `ScanResult`.
+/// Result of a review pass. The caller prints `report_block` (text
+/// format only) and may serialise `items` to a JSON sidecar. Never
+/// carries a mutated `ScanResult`.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct FpReviewOutcome {
     pub(crate) items: Vec<FpReviewItem>,
+    /// Per-package exit-code override, populated ONLY in adjudicate mode
+    /// (`--llm-fp-adjudicate`); empty in advisory mode. Composes with the
+    /// taint adjudication's overrides — the two target disjoint verdict
+    /// classes (`Suspicious` vs `Malicious`).
+    #[serde(skip)]
+    pub(crate) package_fail_overrides: BTreeMap<usize, bool>,
     #[serde(skip)]
     pub(crate) report_block: String,
+}
+
+/// Lower this `Suspicious` package's reviewable findings to `Log` in a
+/// CLONE, then ask the filter whether it still fails under the
+/// operator's `--fail-on`. Never mutates the scan result. Mirrors the
+/// taint adjudication's `downgraded_should_fail`.
+fn fp_downgraded_should_fail(filter: &ScanFilterService, result: &ScanResult) -> bool {
+    let adjusted: Vec<Finding> = result
+        .findings
+        .iter()
+        .map(|f| {
+            let mut c = f.clone();
+            if is_fp_candidate_finding(&c) {
+                c.recommended_action = RecommendedAction::Log;
+            }
+            c
+        })
+        .collect();
+    filter.should_fail(&adjusted)
+}
+
+/// Pure exit-code override decision for one reviewed package. `None`
+/// means "no override — keep the original `should_fail`". An
+/// injection-suspected package ALWAYS fails (override `true`); a
+/// benign-consensus package fails only if it still fails after its
+/// reviewable findings are lowered to `Log`.
+#[must_use]
+pub(crate) fn fp_exit_override(
+    consensus: FpReviewConsensus,
+    downgraded_should_fail: bool,
+) -> Option<bool> {
+    match consensus {
+        FpReviewConsensus::SuspectedFalsePositive => Some(downgraded_should_fail),
+        FpReviewConsensus::InjectionSuspected => Some(true),
+        FpReviewConsensus::NoConsensus => None,
+    }
 }
 
 fn truncate_path(path: &str) -> String {
@@ -193,8 +245,13 @@ fn render_votes(votes: &[FpProviderVote]) -> String {
 }
 
 #[must_use]
-fn render_block(items: &[FpReviewItem]) -> String {
-    let mut out = String::from("\n--- LLM false-positive review (advisory) ---\n");
+fn render_block(items: &[FpReviewItem], adjudicate: bool) -> String {
+    let header = if adjudicate {
+        "\n--- LLM false-positive adjudication (AFFECTS exit code; core verdict unchanged) ---\n"
+    } else {
+        "\n--- LLM false-positive review (advisory) ---\n"
+    };
+    let mut out = String::from(header);
     if items.is_empty() {
         out.push_str("No Suspicious packages were eligible for LLM false-positive review.\n");
         return out;
@@ -204,11 +261,12 @@ fn render_block(items: &[FpReviewItem]) -> String {
         match item.consensus {
             FpReviewConsensus::SuspectedFalsePositive => {
                 let _ = writeln!(out, "[likely false positive] {path}");
-                let _ = writeln!(
-                    out,
-                    "    core verdict: {} (UNCHANGED — advisory only)",
-                    item.core_verdict
-                );
+                let core_note = if adjudicate {
+                    "(UNCHANGED in JSON/SARIF; exit code no longer fails)"
+                } else {
+                    "(UNCHANGED — advisory only)"
+                };
+                let _ = writeln!(out, "    core verdict: {} {core_note}", item.core_verdict);
                 let _ = writeln!(
                     out,
                     "    ≥2 providers independently judged this package benign"
@@ -247,7 +305,16 @@ fn render_block(items: &[FpReviewItem]) -> String {
         }
         let _ = writeln!(out, "    votes: {}", render_votes(&item.provider_votes));
     }
-    out.push_str("This review never changes the skill-veil verdict, risk score, or exit code.\n");
+    if adjudicate {
+        out.push_str(
+            "Core verdict, risk score, and JSON/SARIF are unchanged; only the exit \
+             code is softened for benign-consensus packages.\n",
+        );
+    } else {
+        out.push_str(
+            "This review never changes the skill-veil verdict, risk score, or exit code.\n",
+        );
+    }
     out
 }
 
@@ -281,8 +348,10 @@ pub(crate) fn run_fp_review(
     scan_result: &PackageScanResult,
     scan_path: &Path,
     cache_dir_override: Option<&Path>,
+    scan_options: &ScanOptions,
     quiet: bool,
     opt_in: bool,
+    adjudicate: bool,
 ) -> Result<Option<FpReviewOutcome>> {
     if !opt_in {
         return Ok(None);
@@ -354,7 +423,9 @@ pub(crate) fn run_fp_review(
         }
     }
 
+    let filter = ScanFilterService::new(scan_options.clone());
     let mut items = Vec::with_capacity(eligible_idx.len());
+    let mut package_fail_overrides: BTreeMap<usize, bool> = BTreeMap::new();
     for (fi, &orig_i) in eligible_idx.iter().enumerate() {
         let parsed: Vec<(String, Verdict)> = votes[fi]
             .iter()
@@ -382,6 +453,13 @@ pub(crate) fn run_fp_review(
             })
             .collect();
 
+        if adjudicate {
+            let downgraded = fp_downgraded_should_fail(&filter, r);
+            if let Some(ov) = fp_exit_override(consensus, downgraded) {
+                package_fail_overrides.insert(orig_i, ov);
+            }
+        }
+
         items.push(FpReviewItem {
             package: r
                 .findings
@@ -398,9 +476,10 @@ pub(crate) fn run_fp_review(
         });
     }
 
-    let report_block = render_block(&items);
+    let report_block = render_block(&items, adjudicate);
     Ok(Some(FpReviewOutcome {
         items,
+        package_fail_overrides,
         report_block,
     }))
 }
@@ -506,6 +585,7 @@ mod tests {
                 suggested_action: Some(RecommendedAction::Log),
                 flipped_provider: None,
             }],
+            package_fail_overrides: BTreeMap::new(),
             report_block: String::new(),
         };
         let json = to_json(&outcome).unwrap();
@@ -514,21 +594,55 @@ mod tests {
         assert!(json.contains("suspected_false_positive"));
     }
 
-    #[test]
-    fn render_block_states_advisory_contract() {
-        let items = vec![FpReviewItem {
+    fn fp_item(consensus: FpReviewConsensus) -> FpReviewItem {
+        FpReviewItem {
             package: "pkg/SKILL.md".to_string(),
             package_id: None,
             core_verdict: Verdict::Suspicious,
-            consensus: FpReviewConsensus::SuspectedFalsePositive,
+            consensus,
             provider_votes: vec![],
             suspected_fp_rule_ids: vec!["R1".to_string()],
             suggested_action: Some(RecommendedAction::Log),
             flipped_provider: None,
-        }];
-        let block = render_block(&items);
+        }
+    }
+
+    #[test]
+    fn render_block_states_advisory_contract() {
+        let items = vec![fp_item(FpReviewConsensus::SuspectedFalsePositive)];
+        let block = render_block(&items, false);
         assert!(block.contains("advisory only"));
         assert!(block.contains("never changes the skill-veil verdict"));
         assert!(block.contains("likely false positive"));
+    }
+
+    #[test]
+    fn render_block_adjudicate_mode_states_exit_code_effect() {
+        let items = vec![fp_item(FpReviewConsensus::SuspectedFalsePositive)];
+        let block = render_block(&items, true);
+        assert!(block.contains("AFFECTS exit code"));
+        assert!(block.contains("JSON/SARIF are unchanged"));
+        assert!(!block.contains("never changes the skill-veil verdict"));
+    }
+
+    /// Contract: a benign-consensus package overrides the exit code with
+    /// its post-downgrade `should_fail` (so a clean recompute passes); an
+    /// injection-suspected package ALWAYS fails; no-consensus yields no
+    /// override (original `should_fail` stands).
+    #[test]
+    fn fp_exit_override_softens_benign_fails_injection() {
+        assert_eq!(
+            fp_exit_override(FpReviewConsensus::SuspectedFalsePositive, false),
+            Some(false)
+        );
+        assert_eq!(
+            fp_exit_override(FpReviewConsensus::SuspectedFalsePositive, true),
+            Some(true)
+        );
+        assert_eq!(
+            fp_exit_override(FpReviewConsensus::InjectionSuspected, false),
+            Some(true)
+        );
+        assert_eq!(fp_exit_override(FpReviewConsensus::NoConsensus, true), None);
     }
 }

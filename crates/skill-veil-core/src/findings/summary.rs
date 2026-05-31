@@ -1,10 +1,30 @@
 use super::capability_scoring::graph_risk_context;
 use super::{
-    Finding, RecommendedAction, Severity, ThreatCategory, MAX_RISK_SCORE, RISK_THRESHOLD_APPROVAL,
-    RISK_THRESHOLD_BLOCK,
+    Finding, RecommendedAction, Severity, ThreatCategory, EXECUTABLE_SCRIPT_RISK_MULTIPLIER,
+    MAX_RISK_SCORE, RISK_THRESHOLD_APPROVAL, RISK_THRESHOLD_BLOCK,
 };
 use crate::artifact_graph::ArtifactGraph;
 use serde::{Deserialize, Serialize};
+
+/// File extensions that mark an artifact as an executable script for the
+/// `EXECUTABLE_SCRIPT_RISK_MULTIPLIER` amplifier. Lowercase, no dot.
+const SCRIPT_EXTENSIONS: &[&str] = &[
+    "py", "pyw", "js", "mjs", "cjs", "ts", "sh", "bash", "zsh", "ps1", "psm1", "rb", "pl", "php",
+];
+
+/// `true` when any graph artifact path carries a known script extension —
+/// the structural "package ships an executable script" signal.
+#[must_use]
+fn graph_references_executable_script(graph: &ArtifactGraph) -> bool {
+    graph.nodes.iter().any(|node| {
+        node.path
+            .rsplit('.')
+            .next()
+            .filter(|ext| *ext != node.path)
+            .map(str::to_ascii_lowercase)
+            .is_some_and(|ext| SCRIPT_EXTENSIONS.contains(&ext.as_str()))
+    })
+}
 
 /// Summary of all findings for a skill
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,7 +93,27 @@ impl FindingSummary {
                 .or_insert(factor);
         }
 
-        let total_score = findings_score + graph_score as f32;
+        let base_score = findings_score + graph_score as f32;
+        let total_score = if graph_references_executable_script(artifact_graph) {
+            let amplified = base_score * EXECUTABLE_SCRIPT_RISK_MULTIPLIER;
+            let added = (amplified - base_score).max(0.0).round() as u32;
+            if added > 0 {
+                let key = "artifact:executable_script".to_string();
+                factor_map
+                    .entry(key.clone())
+                    .and_modify(|f| f.contribution += added)
+                    .or_insert(RiskFactor {
+                        factor: key,
+                        contribution: added,
+                        rationale: "Package references an executable script \
+                                    (empirically 2.12x more likely to be vulnerable)"
+                            .to_string(),
+                    });
+            }
+            amplified
+        } else {
+            base_score
+        };
         let risk_score = normalize_score(total_score);
         let recommended_action = select_recommended_action(risk_score, findings, graph_action);
 
@@ -292,6 +332,95 @@ mod tests {
         });
         assert_eq!(triggers[0].factor, "a_trig");
         assert_eq!(triggers[1].factor, "z_trig");
+    }
+
+    fn graph_with_path(path: &str, kind: crate::findings::ArtifactKind) -> ArtifactGraph {
+        ArtifactGraph {
+            nodes: vec![crate::artifact_graph::ArtifactNode {
+                path: path.to_string(),
+                kind,
+                capabilities: Vec::new(),
+            }],
+            edges: Vec::new(),
+        }
+    }
+
+    fn mid_band_finding() -> Finding {
+        Finding::builder("R_MID", ThreatCategory::SupplyChain)
+            .severity(Severity::Medium)
+            .confidence(0.7)
+            .build()
+    }
+
+    /// Contract: a package that references an executable script gets its
+    /// aggregated risk score amplified by `EXECUTABLE_SCRIPT_RISK_MULTIPLIER`
+    /// and an audited `artifact:executable_script` factor in the breakdown.
+    #[test]
+    fn executable_script_amplifies_risk_score() {
+        use crate::findings::ArtifactKind;
+        let findings = vec![mid_band_finding()];
+        let plain = FindingSummary::from_findings_and_graph(
+            &findings,
+            &graph_with_path("README.md", ArtifactKind::GenericArtifact),
+        );
+        let scripted = FindingSummary::from_findings_and_graph(
+            &findings,
+            &graph_with_path("scripts/setup.py", ArtifactKind::ReferencedArtifact),
+        );
+        assert!(
+            plain.risk_score < MAX_RISK_SCORE,
+            "test base must stay sub-cap"
+        );
+        assert!(
+            scripted.risk_score > plain.risk_score,
+            "executable script must amplify: {} !> {}",
+            scripted.risk_score,
+            plain.risk_score
+        );
+        assert!(scripted
+            .score_breakdown
+            .iter()
+            .any(|f| f.factor == "artifact:executable_script"));
+    }
+
+    /// Contract (negative): a package with no script artifact is scored
+    /// identically to the no-graph path and carries no amplifier factor.
+    #[test]
+    fn no_executable_script_leaves_score_unamplified() {
+        use crate::findings::ArtifactKind;
+        let findings = vec![mid_band_finding()];
+        let doc_graph = FindingSummary::from_findings_and_graph(
+            &findings,
+            &graph_with_path("SKILL.md", ArtifactKind::SkillDocument),
+        );
+        let no_graph = FindingSummary::from_findings(&findings);
+        assert_eq!(doc_graph.risk_score, no_graph.risk_score);
+        assert!(!doc_graph
+            .score_breakdown
+            .iter()
+            .any(|f| f.factor == "artifact:executable_script"));
+    }
+
+    #[test]
+    fn graph_references_executable_script_matches_scripts_only() {
+        use crate::findings::ArtifactKind;
+        assert!(graph_references_executable_script(&graph_with_path(
+            "a/b/setup.py",
+            ArtifactKind::ReferencedArtifact
+        )));
+        assert!(graph_references_executable_script(&graph_with_path(
+            "hook.SH",
+            ArtifactKind::ReferencedArtifact
+        )));
+        assert!(!graph_references_executable_script(&graph_with_path(
+            "SKILL.md",
+            ArtifactKind::SkillDocument
+        )));
+        assert!(!graph_references_executable_script(&graph_with_path(
+            "Makefile",
+            ArtifactKind::GenericArtifact
+        )));
+        assert!(!graph_references_executable_script(&ArtifactGraph::new()));
     }
 
     fn summary_with(score: u32, action: RecommendedAction) -> FindingSummary {

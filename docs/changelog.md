@@ -9,6 +9,28 @@ release process is formalized.
 
 ### Added
 
+**Exit-affecting LLM false-positive adjudication (`--llm-fp-adjudicate`)**
+- Opt-in (default OFF) exit-affecting variant of `--llm-fp-review`. A
+  `Suspicious` package that ≥2-of-3 providers independently judge benign
+  no longer fails the exit code (its reviewable findings are treated as
+  `Log` for the gate recompute only). A single-provider benign flip
+  against ≥2 dissenters is injection-suspected and ALWAYS fails.
+- Never changes the core verdict, risk score, or the JSON/SARIF payload
+  (they still show `Suspicious`). Composes with `--llm-adjudicate-taint`
+  over disjoint verdict classes via per-package exit-code overrides. The
+  `triage` preset enables it; deterministic presets leave it OFF so CI
+  exit codes never depend on an external LLM.
+
+**Executable-script risk amplifier**
+- Risk scores are multiplied by `EXECUTABLE_SCRIPT_RISK_MULTIPLIER` (1.3)
+  when a package references an executable script artifact (a graph node
+  with a known script extension), surfaced as an audited
+  `artifact:executable_script` factor in the score breakdown. Drawn from
+  the empirical finding that script-bearing skills are 2.12x more likely
+  to be vulnerable (Liu et al., 2026). Multiplicative-and-bounded so it
+  lifts the mid-band without pushing low-scoring benign packages over a
+  threshold; calibrated against `labeled_corpus_meets_phase1_baseline`.
+
 **SkillSpector-parity detectors (native)**
 - Unicode deception pass across all artifacts: zero-width/invisible
   characters (`UNICODE_INVISIBLE_CHARS`), bidirectional overrides /

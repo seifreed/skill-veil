@@ -328,10 +328,15 @@ pub(crate) fn effective_verdict_upgrade(
 /// `ScanResult`; the caller prints `report_block` and uses
 /// `effective_should_fail` for the exit code only.
 pub(crate) struct AdjudicationOutcome {
-    /// `OR` of (non-downgraded `r.should_fail`) and (downgraded
-    /// packages' `should_fail` recomputed with taint Block findings
-    /// lowered to RequireApproval). Correct under any `--fail-on`.
-    pub(crate) effective_should_fail: bool,
+    /// Per-package exit-code override for the packages this pass
+    /// changed (injection / downgraded / upgraded), each recomputed
+    /// under the operator's `--fail-on` (taint Block→RequireApproval
+    /// for downgrades, forced fail for injection). Packages absent from
+    /// the map keep their original `should_fail`. The caller ORs this
+    /// over the result set, which lets it compose with another
+    /// exit-affecting pass over a disjoint verdict class (the FP
+    /// adjudication, which targets `Suspicious`) without double-counting.
+    pub(crate) package_fail_overrides: BTreeMap<usize, bool>,
     /// Sanitised, operator-facing block. Empty string ⇒ nothing
     /// downgraded (caller still prints it; it states "no packages
     /// met the gate / consensus").
@@ -553,20 +558,17 @@ pub(crate) fn run_adjudication(
 
     // 7. Effective exit code (clones only; verdict_snapshot intact).
     let filter = ScanFilterService::new(scan_options.clone());
-    let mut effective_should_fail = false;
+    let mut package_fail_overrides: BTreeMap<usize, bool> = BTreeMap::new();
     for (i, r) in scan_result.results.iter().enumerate() {
-        let fails = if injection_suspected.contains_key(&i) {
+        if injection_suspected.contains_key(&i) {
             // A flip-detected package ALWAYS fails — the injection
             // signal raises the effective verdict, never softens it.
-            true
+            package_fail_overrides.insert(i, true);
         } else if downgraded.contains_key(&i) {
-            downgraded_should_fail(&filter, r)
+            package_fail_overrides.insert(i, downgraded_should_fail(&filter, r));
         } else if upgraded.contains_key(&i) {
-            upgraded_should_fail(&filter, r)
-        } else {
-            r.should_fail
-        };
-        effective_should_fail |= fails;
+            package_fail_overrides.insert(i, upgraded_should_fail(&filter, r));
+        }
     }
 
     // 8. Sanitised operator-facing block.
@@ -581,7 +583,7 @@ pub(crate) fn run_adjudication(
     );
 
     Ok(Some(AdjudicationOutcome {
-        effective_should_fail,
+        package_fail_overrides,
         report_block,
     }))
 }

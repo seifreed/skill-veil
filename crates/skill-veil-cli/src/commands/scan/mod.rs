@@ -207,6 +207,7 @@ pub(crate) fn apply_scan_preset(mut args: ScanArgs) -> ScanArgs {
             args.llm_adjudicate_taint = true;
             args.llm_adjudicate_upgrade = true;
             args.llm_fp_review = true;
+            args.llm_fp_adjudicate = true;
         }
     }
     args
@@ -482,37 +483,47 @@ pub(crate) fn run_scan(
         None
     };
 
-    // Advisory LLM false-positive review. Strictly report-only: works
-    // on clones, never affects the core verdict, risk score, exit code,
-    // or the structured payload, so the `verdict_snapshot` assert below
-    // stays valid and no corpus recalibration is required. The text
-    // block is suppressed for non-text formats (it would pollute the
-    // structured output); the machine-readable form is the opt-in JSON
-    // sidecar.
-    if args.llm_fp_review && !args.no_llm_enrich {
-        if let Some(outcome) = crate::llm::fp_review::run_fp_review(
+    // LLM false-positive review. Works on clones, never affects the
+    // core verdict / risk score / structured payload, so the
+    // `verdict_snapshot` assert below stays valid. In advisory mode it
+    // is report-only; with `--llm-fp-adjudicate` it additionally softens
+    // the exit code for benign-consensus Suspicious packages via
+    // `package_fail_overrides` (composed with the taint adjudication
+    // below). The text block is suppressed for non-text formats; the
+    // machine-readable form is the opt-in JSON sidecar.
+    let fp_review_on = args.llm_fp_review || args.llm_fp_adjudicate;
+    let fp_outcome = if fp_review_on && !args.no_llm_enrich {
+        let outcome = crate::llm::fp_review::run_fp_review(
             &scan_result,
             &args.path,
             args.cache_dir.as_deref(),
+            &filter_options,
             quiet,
-            args.llm_fp_review,
-        )? {
+            fp_review_on,
+            args.llm_fp_adjudicate,
+        )?;
+        if let Some(outcome) = &outcome {
             if !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text) {
                 print!("{}", outcome.report_block);
             }
             if let Some(out) = args.llm_fp_review_out.as_deref() {
-                let json = crate::llm::fp_review::to_json(&outcome)?;
+                let json = crate::llm::fp_review::to_json(outcome)?;
                 write_scan_output(out, &json)?;
                 if !quiet {
                     eprintln!("FP review written to: {}", terminal_path(out));
                 }
             }
         }
-    } else if args.llm_fp_review && args.no_llm_enrich && !quiet {
-        eprintln!(
-            "LLM FP review skipped: --llm-fp-review needs LLM access but --no-llm-enrich was set"
-        );
-    }
+        outcome
+    } else {
+        if fp_review_on && args.no_llm_enrich && !quiet {
+            eprintln!(
+                "LLM FP review skipped: --llm-fp-review / --llm-fp-adjudicate need LLM \
+                 access but --no-llm-enrich was set"
+            );
+        }
+        None
+    };
 
     if !args.no_promptintel_enrich {
         if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
@@ -555,15 +566,28 @@ pub(crate) fn run_scan(
     // `--fail-on` (resolved per-result by the filter service); a single
     // unreadable file must not unconditionally fail a scan when the user
     // asked for `--fail-on High` and no qualifying findings fired.
-    // When the ADR-0029 adjudication ran, its `effective_should_fail`
-    // already ORs every non-downgraded `r.should_fail` with the
-    // downgraded packages' recomputed (taint-Block→RequireApproval)
-    // contribution under the operator's `--fail-on`. Otherwise the
-    // legacy expression is byte-identical.
-    let should_fail = match &adjudicated {
-        Some(o) => o.effective_should_fail,
-        None => scan_result.results.iter().any(|r| r.should_fail),
-    };
+    //
+    // Both LLM adjudications expose per-package exit-code overrides for the
+    // packages they changed (taint: Malicious; FP adjudicate: Suspicious —
+    // disjoint classes). A package absent from both maps keeps its original
+    // `should_fail`. With neither map populated this is byte-identical to
+    // the legacy `any(should_fail)`, and equals the taint-only
+    // `effective_should_fail` when only taint ran.
+    let mut fail_overrides: std::collections::BTreeMap<usize, bool> =
+        std::collections::BTreeMap::new();
+    if let Some(o) = &adjudicated {
+        fail_overrides.extend(o.package_fail_overrides.iter().map(|(&i, &f)| (i, f)));
+    }
+    if let Some(o) = &fp_outcome {
+        for (&i, &f) in &o.package_fail_overrides {
+            fail_overrides.entry(i).or_insert(f);
+        }
+    }
+    let should_fail = scan_result
+        .results
+        .iter()
+        .enumerate()
+        .any(|(i, r)| *fail_overrides.get(&i).unwrap_or(&r.should_fail));
     Ok(should_fail)
 }
 
@@ -674,6 +698,7 @@ mod tests {
         assert!(a.llm_adjudicate_taint, "triage must enable downgrade");
         assert!(a.llm_adjudicate_upgrade, "triage must enable upgrade");
         assert!(a.llm_fp_review, "triage must enable advisory FP review");
+        assert!(a.llm_fp_adjudicate, "triage must enable FP adjudication");
     }
 
     /// Contract (negative): every deterministic preset — and the
@@ -691,7 +716,10 @@ mod tests {
         ] {
             let a = preset_args(preset);
             assert!(
-                !a.llm_adjudicate_taint && !a.llm_adjudicate_upgrade && !a.llm_fp_review,
+                !a.llm_adjudicate_taint
+                    && !a.llm_adjudicate_upgrade
+                    && !a.llm_fp_review
+                    && !a.llm_fp_adjudicate,
                 "preset {preset:?} must leave adjudication and FP review OFF",
             );
         }

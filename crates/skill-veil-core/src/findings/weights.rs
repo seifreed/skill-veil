@@ -22,6 +22,17 @@ pub const RISK_THRESHOLD_APPROVAL: u32 = 20;
 /// security scanner).
 pub const MAX_RISK_SCORE: u32 = 100;
 
+// Empirical amplifier from "Agent Skills in the Wild" (Liu et al., 2026):
+// skills shipping executable scripts were 2.12x more likely to be
+// vulnerable. We apply a conservative multiplier to the aggregated risk
+// score when a package references an executable script. Multiplicative is
+// self-limiting for low-scoring benign packages (a near-zero score stays
+// near-zero) and only meaningfully lifts the mid-band, where a script's
+// presence is the deciding contextual risk.
+/// Risk-score multiplier applied when a package references an executable
+/// script artifact. Calibrated against `labeled_corpus_meets_phase1_baseline`.
+pub const EXECUTABLE_SCRIPT_RISK_MULTIPLIER: f32 = 1.3;
+
 // Evidence weights reflect signal reliability: IOC is nearly deterministic (10),
 // behavioral patterns are very reliable (8), intent requires interpretation (4),
 // and context alone is the weakest signal (3).
