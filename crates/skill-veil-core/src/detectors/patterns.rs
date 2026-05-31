@@ -231,6 +231,10 @@ pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
                     | Some(b';')
                     | Some(b'&')
                     | Some(b'/')
+                    // Windows path separator: a fully-qualified
+                    // `c:\windows\system32\curl.exe` must not defeat the
+                    // token (the basename helpers already split on `\`).
+                    | Some(b'\\')
                     | Some(b'(')
                     | Some(b'"')
                     | Some(b'\'')
@@ -245,7 +249,18 @@ pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
             || after.starts_with(';')
             || after.starts_with('&')
             || after.starts_with('>')
-            || after.starts_with('<');
+            || after.starts_with('<')
+            // A quote / close-paren / comma / bracket closes the token in
+            // array-style invocations like `spawn("curl",["-d",sec,url])`
+            // — without these, the egress / persistence / install-hook
+            // detectors that share this helper missed the exfil shape.
+            || after.starts_with('"')
+            || after.starts_with('\'')
+            || after.starts_with('`')
+            || after.starts_with(')')
+            || after.starts_with(',')
+            || after.starts_with(']')
+            || after.starts_with('}');
         if left_ok && right_ok {
             return true;
         }
@@ -543,6 +558,27 @@ mod tests {
     ///
     /// Command-token matching rejects lookalike words that merely contain the
     /// command bytes.
+    /// # Contract
+    ///
+    /// A command token closed by a quote / comma / close-paren / bracket
+    /// (array-style invocation) or preceded by a Windows `\` path
+    /// separator is still recognised — these are the canonical
+    /// command-spawn shapes the shared helper previously missed.
+    #[test]
+    fn line_contains_command_token_accepts_array_and_windows_paths() {
+        assert!(line_contains_command_token(
+            "spawn(\"curl\", [\"-d\", secret, url])",
+            "curl"
+        ));
+        assert!(line_contains_command_token("spawn('nc',['1.2.3.4'])", "nc"));
+        assert!(line_contains_command_token("system(curl)", "curl"));
+        assert!(line_contains_command_token("run(curl,args)", "curl"));
+        assert!(line_contains_command_token(
+            "c:\\windows\\system32\\curl.exe http://x",
+            "curl.exe"
+        ));
+    }
+
     #[test]
     fn line_contains_command_token_rejects_substrings() {
         assert!(!line_contains_command_token("mycurl\t$url", "curl"));
