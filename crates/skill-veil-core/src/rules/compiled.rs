@@ -54,6 +54,36 @@ fn calculate_line_number(content: &str, offset: usize) -> usize {
     content[..offset].chars().filter(|c| *c == '\n').count() + 1
 }
 
+/// Case-fold for case-insensitive `SectionContains` matching. Lowercases via
+/// `char::to_lowercase`, additionally folding the German sharp S (`ß`/`ẞ`) to
+/// `ss` so a rule written with either form matches content using the other —
+/// `str::to_lowercase` alone leaves `ß` as `ß`, which never equals `ss`.
+fn case_fold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        push_folded_char(&mut out, ch);
+    }
+    out
+}
+
+fn push_folded_char(out: &mut String, ch: char) {
+    match ch {
+        'ß' | 'ẞ' => out.push_str("ss"),
+        _ => out.extend(ch.to_lowercase()),
+    }
+}
+
+/// Number of folded `char`s a single original `char` expands to. MUST stay in
+/// lockstep with [`push_folded_char`]: the `lower_to_original` index map relies
+/// on this count matching the folded string length so a folded offset maps back
+/// to the correct original character.
+fn folded_char_count(ch: char) -> usize {
+    match ch {
+        'ß' | 'ẞ' => 2,
+        _ => ch.to_lowercase().count(),
+    }
+}
+
 pub(super) fn artifact_kind_for_document(doc: &SkillDocument) -> ArtifactKind {
     let file_name = doc
         .path
@@ -494,16 +524,16 @@ impl CompiledRule {
         };
 
         let mut matched = false;
-        let content_lower = sec.content.to_lowercase();
+        let content_lower = case_fold(&sec.content);
 
-        // Build a mapping from lowercased character index to original character
+        // Build a mapping from folded character index to original character
         // index. Case-folding can expand characters (e.g. İ → i̇, ß → ss), so a
-        // position in the lowercased string does not correspond 1-to-1 with the
+        // position in the folded string does not correspond 1-to-1 with the
         // original. Without this mapping, `char_offset` computed from
         // `content_lower` would point to the wrong position in `sec.content`.
         let mut lower_to_original: Vec<usize> = Vec::new();
         for (orig_idx, ch) in sec.content.chars().enumerate() {
-            for _ in ch.to_lowercase() {
+            for _ in 0..folded_char_count(ch) {
                 lower_to_original.push(orig_idx);
             }
         }
@@ -515,7 +545,7 @@ impl CompiledRule {
             if value.is_empty() {
                 continue;
             }
-            let value_lower = value.to_lowercase();
+            let value_lower = case_fold(value);
             // Find ALL occurrences, not just the first. A malicious string
             // appearing multiple times in a section should produce multiple
             // findings — finding only the first undercounts risk.
@@ -708,6 +738,33 @@ impl CompiledRule {
                 // YARA matching is handled by the yara_engine module
                 false
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{case_fold, folded_char_count, push_folded_char};
+
+    #[test]
+    fn case_fold_folds_sharp_s_to_ss_in_both_cases() {
+        assert_eq!(case_fold("straße"), "strasse");
+        assert_eq!(case_fold("STRASSE"), "strasse");
+        assert_eq!(case_fold("STRAẞE"), "strasse");
+        assert_eq!(case_fold("Maßnahme"), case_fold("MASSNAHME"));
+    }
+
+    #[test]
+    fn folded_char_count_matches_pushed_length() {
+        // The `lower_to_original` index map relies on this lockstep.
+        for ch in ['a', 'A', 'ß', 'ẞ', 'İ', 'é', '日', 'Σ'] {
+            let mut folded = String::new();
+            push_folded_char(&mut folded, ch);
+            assert_eq!(
+                folded_char_count(ch),
+                folded.chars().count(),
+                "folded_char_count and push_folded_char disagree for {ch:?}"
+            );
         }
     }
 }

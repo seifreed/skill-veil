@@ -67,6 +67,16 @@ release process is formalized.
 - Benchmark history is now ordered chronologically by run time instead of
   lexically by `release_id`, so the dashboard's "Latest Delta" compares the two
   newest runs (a lexical sort placed `v0.9.0` after `v0.10.0`).
+- Gold-corpus LLM consensus now treats a tie (two labels each reaching the
+  ≥2-provider threshold, possible with a 4+-provider cohort) as no consensus
+  → disputed, instead of silently resolving to whichever label sorts first.
+- `SectionContains` rule matching folds the German sharp S (`ß`/`ẞ` ↔ `ss`),
+  so a rule written with either spelling matches content using the other
+  (`str::to_lowercase` alone left `ß` unequal to `ss`).
+- Terminal output sanitisation now neutralises zero-width / invisible format
+  characters (ZWSP/ZWJ/BOM/word-joiner/Hangul-fillers and the U+E0000 tag
+  block), so a crafted indicator can no longer hide bytes in the operator's
+  view of the diff/finding output.
 
 ## [0.2.0] - 2026-05-20
 

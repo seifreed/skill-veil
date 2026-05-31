@@ -436,6 +436,47 @@ fn test_section_contains_condition_emits_all_matching_values() {
         .all(|f| f.rule_id == "TEST_SECTION_CONTAINS_ANY"));
 }
 
+/// Contract: `SectionContains` matching folds the German sharp S, so a rule
+/// value written with `ß` matches content using `ss` and vice versa.
+/// `str::to_lowercase` alone leaves `ß` as `ß`, silently missing the `ss`
+/// spelling (and the reverse).
+#[test]
+fn section_contains_folds_sharp_s_across_ss_spelling() {
+    let mut engine = empty_engine();
+    engine
+        .add_rule(Rule {
+            id: "TEST_SHARP_S".to_string(),
+            category: crate::findings::ThreatCategory::ToolAbuse,
+            severity: Severity::Medium,
+            confidence: 0.8,
+            condition: RuleCondition::SectionContains {
+                section: "Setup".to_string(),
+                values: vec!["straße".to_string(), "MASSNAHME".to_string()],
+            },
+            action: crate::findings::RecommendedAction::RequireApproval,
+            reason: "sharp-s".to_string(),
+            shield: None,
+            enabled: true,
+            tags: vec![],
+            promptintel_threats: Vec::new(),
+            requires_code_artifact: false,
+            downgrade_when_confirmation_gate: false,
+            downgrade_when_documentation_context: false,
+        })
+        .unwrap();
+
+    // Each value's content uses the OPPOSITE sharp-s form: "STRASSE" (ss) for
+    // the rule value "straße", and "Maßnahme" (ß) for the value "MASSNAHME".
+    let doc = parse_test_doc("# Skill\n\n## Setup\nrun STRASSE then Maßnahme now.\n");
+    let findings = engine.evaluate(&doc);
+
+    assert_eq!(
+        findings.len(),
+        2,
+        "both sharp-s spellings must match across ß/ss; got {findings:?}"
+    );
+}
+
 #[test]
 fn test_artifact_kind_condition_matches_manifest() {
     let mut engine = empty_engine();

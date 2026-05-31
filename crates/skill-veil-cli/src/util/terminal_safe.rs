@@ -36,7 +36,7 @@ pub(crate) fn sanitise_for_terminal(value: &str) -> String {
         .map(|c| {
             if c == '\t' {
                 ' '
-            } else if c.is_control() || is_bidi_format_control(c) {
+            } else if c.is_control() || is_bidi_format_control(c) || is_invisible_format(c) {
                 '?'
             } else {
                 c
@@ -49,6 +49,23 @@ fn is_bidi_format_control(c: char) -> bool {
     matches!(
         c,
         '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
+}
+
+/// Zero-width / invisible format characters that render as nothing yet can
+/// splice or hide visible text — e.g. make `evil.com` read as one token, or
+/// smuggle ASCII through the tag block (U+E0000-U+E007F). They are not
+/// `char::is_control()`, so they would otherwise reach the TTY unfiltered and
+/// let a crafted indicator hide attacker-controlled bytes from the operator.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200b}'..='\u{200d}'      // zero-width space / non-joiner / joiner
+            | '\u{2060}'..='\u{2064}' // word joiner + invisible math operators
+            | '\u{feff}'             // zero-width no-break space (BOM)
+            | '\u{180e}'             // Mongolian vowel separator
+            | '\u{115f}' | '\u{1160}' | '\u{3164}' | '\u{ffa0}' // Hangul fillers
+            | '\u{e0000}'..='\u{e007f}' // tag block (ASCII smuggling)
     )
 }
 
@@ -133,5 +150,23 @@ mod tests {
 
         assert!(!cleaned.contains('\u{202e}'));
         assert_eq!(cleaned, "safe?gpj.exe");
+    }
+
+    /// Contract: zero-width / invisible format characters MUST be neutralised.
+    /// They render as nothing, so `evil\u{200b}.com` would display as
+    /// `evil.com` in the diff/finding output and a tag-block run
+    /// (U+E0000-U+E007F) smuggles invisible ASCII — both let a crafted
+    /// indicator hide bytes from the operator.
+    #[test]
+    fn sanitise_for_terminal_replaces_invisible_format_characters() {
+        assert_eq!(sanitise_for_terminal("evil\u{200b}.com"), "evil?.com");
+        assert_eq!(sanitise_for_terminal("a\u{feff}b"), "a?b");
+        assert_eq!(sanitise_for_terminal("x\u{2060}y"), "x?y");
+        let tag_block = "hi\u{e0041}\u{e0042}";
+        let cleaned = sanitise_for_terminal(tag_block);
+        assert!(!cleaned.contains('\u{e0041}') && !cleaned.contains('\u{e0042}'));
+        assert_eq!(cleaned, "hi??");
+        // Printable Unicode (accents, CJK) is untouched.
+        assert_eq!(sanitise_for_terminal("café 日本"), "café 日本");
     }
 }

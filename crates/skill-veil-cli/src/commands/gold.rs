@@ -118,13 +118,24 @@ fn llm_consensus(votes: &[ProviderVoteRecord]) -> Option<SampleLabel> {
         "normalized provider buckets cannot outnumber raw votes",
     );
 
-    [
+    // A label is a candidate when at least two distinct providers agree on it.
+    // With the documented 3-provider rollup at most one label can qualify, but
+    // a 4+-provider cohort can produce a genuine tie (e.g. 2 malicious / 2
+    // benign). Resolving that to the first label in iteration order would
+    // silently manufacture consensus, so a tie (or no qualifier) is `None` —
+    // the sample stays disputed and is sent to human review.
+    let qualifying: Vec<SampleLabel> = [
         SampleLabel::Malicious,
         SampleLabel::Benign,
         SampleLabel::Suspicious,
     ]
     .into_iter()
-    .find(|&label| by_provider.values().filter(|v| **v == Some(label)).count() >= 2)
+    .filter(|&label| by_provider.values().filter(|v| **v == Some(label)).count() >= 2)
+    .collect();
+    match qualifying.as_slice() {
+        [single] => Some(*single),
+        _ => None,
+    }
 }
 
 fn sample_label_from_llm_verdict(raw: &str) -> Option<SampleLabel> {
@@ -516,6 +527,33 @@ mod tests {
             ]),
             None,
             "a 1/1/1 split is no consensus"
+        );
+    }
+
+    /// Contract: a 4+-provider cohort with a tie (two labels each reaching the
+    /// ≥2 threshold) is NOT consensus — it stays disputed rather than being
+    /// silently resolved to whichever label sorts first in iteration order.
+    #[test]
+    fn consensus_tie_is_not_resolved_to_first_label() {
+        assert_eq!(
+            llm_consensus(&[
+                vote("openai", "malicious"),
+                vote("grok", "malicious"),
+                vote("anthropic", "benign"),
+                vote("ollama-cloud", "benign"),
+            ]),
+            None,
+            "a 2-2 malicious/benign tie must be disputed, not silently Malicious"
+        );
+        assert_eq!(
+            llm_consensus(&[
+                vote("openai", "benign"),
+                vote("grok", "benign"),
+                vote("anthropic", "benign"),
+                vote("ollama-cloud", "malicious"),
+            ]),
+            Some(SampleLabel::Benign),
+            "a clear 3-1 majority still forms consensus"
         );
     }
 
