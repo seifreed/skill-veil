@@ -194,6 +194,14 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
             if !kw_hits.is_empty() {
                 out.push_str(&format!("        keywords:  ${}\n", kw_hits.join(" $")));
             }
+            let sem_hits = scored_hits(&hit.m.semantic_hits, &hit.m.semantic_scores);
+            if !sem_hits.is_empty() {
+                out.push_str(&format!("        semantics: {}\n", sem_hits.join(" ")));
+            }
+            let llm_hits = scored_hits(&hit.m.llm_hits, &hit.m.llm_scores);
+            if !llm_hits.is_empty() {
+                out.push_str(&format!("        llm:       {}\n", llm_hits.join(" ")));
+            }
         }
     }
     if !report.skipped_capabilities.is_empty() {
@@ -211,6 +219,29 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
         }
     }
     out
+}
+
+/// Render the fired patterns of a `semantics:` / `llm:` section as
+/// `$var (0.83)` tokens, ordered by the section's `BTreeMap`. Only
+/// fired patterns (boolean `true` in `hits`) are emitted; a fired
+/// pattern always carries a score from the engine, but if one is
+/// somehow absent the `$var` is still shown without the score so the
+/// match is never silently dropped.
+fn scored_hits(
+    hits: &std::collections::BTreeMap<String, bool>,
+    scores: &std::collections::BTreeMap<String, f32>,
+) -> Vec<String> {
+    hits.iter()
+        .filter(|(_, fired)| **fired)
+        .map(|(var, _)| {
+            let score = scores.get(var);
+            let safe_var = sanitise_for_terminal(var);
+            match score {
+                Some(score) => format!("${safe_var} ({score:.2})"),
+                None => format!("${safe_var}"),
+            }
+        })
+        .collect()
 }
 
 fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
@@ -634,5 +665,66 @@ mod tests {
 
         assert!(!rendered.contains('\x1b'));
         assert!(!rendered.contains('\x07'));
+    }
+
+    /// # Contract
+    ///
+    /// A semantic / LLM NOVA match renders its fired patterns with the
+    /// real score in the operator text block. Before scores were
+    /// plumbed, only keyword hits appeared, so a semantic-only or
+    /// llm-only match showed the rule line with no sub-detail.
+    #[test]
+    fn render_text_block_shows_semantic_and_llm_hits_with_scores() {
+        let mut semantic_hits = std::collections::BTreeMap::new();
+        semantic_hits.insert("intent".to_string(), true);
+        let mut semantic_scores = std::collections::BTreeMap::new();
+        semantic_scores.insert("intent".to_string(), 0.83_f32);
+        let mut llm_hits = std::collections::BTreeMap::new();
+        llm_hits.insert("harmful".to_string(), true);
+        let mut llm_scores = std::collections::BTreeMap::new();
+        llm_scores.insert("harmful".to_string(), 0.91_f32);
+        let report = NovaScanReport {
+            install: NovaInstallSnapshot {
+                commit_sha: "0123456789abcdef".to_string(),
+                tarball_sha256: "a".repeat(64),
+                install_dir: PathBuf::from("/tmp/nova"),
+                file_count: 1,
+            },
+            hits: vec![NovaScanHit {
+                source_path: PathBuf::from("SKILL.md"),
+                rule: NovaRule {
+                    name: "rule".to_string(),
+                    meta: std::collections::BTreeMap::new(),
+                    keywords: std::collections::BTreeMap::new(),
+                    semantics: std::collections::BTreeMap::new(),
+                    llm: std::collections::BTreeMap::new(),
+                    condition: skill_veil_core::nova::condition::ConditionExpr::Literal(true),
+                },
+                m: NovaMatch {
+                    rule_name: "rule".to_string(),
+                    matched: true,
+                    keyword_hits: std::collections::BTreeMap::new(),
+                    semantic_hits,
+                    llm_hits,
+                    semantic_scores,
+                    llm_scores,
+                    skipped_capabilities: Vec::new(),
+                },
+            }],
+            skipped_capabilities: Vec::new(),
+            rule_count: 1,
+            body_count: 1,
+        };
+
+        let rendered = render_text_block(&report);
+
+        assert!(
+            rendered.contains("semantics: $intent (0.83)"),
+            "semantic hit with score missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("llm:       $harmful (0.91)"),
+            "llm hit with score missing:\n{rendered}"
+        );
     }
 }
