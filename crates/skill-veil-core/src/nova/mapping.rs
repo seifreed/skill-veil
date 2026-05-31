@@ -18,8 +18,11 @@
 //!   pin for false-positive rates against the skill-veil benchmark
 //!   corpus.
 //! - **`confidence`** is the per-pattern score the evaluator
-//!   surfaced (1.0 for keyword regex matches today; the real
-//!   semantic / LLM score once those evaluators are wired).
+//!   surfaced: `1.0` for keyword regex matches, the real cosine
+//!   similarity for semantic matches, and the model confidence for
+//!   LLM matches. When a fired pattern carries no score (e.g. a match
+//!   deserialised from a pre-score-plumbing cache) the rule's declared
+//!   threshold is used as the documented lower bound.
 
 use super::condition::Section;
 use super::model::{NovaMatch, NovaRule};
@@ -68,17 +71,25 @@ pub fn nova_match_to_findings(
     }
     for (var, hit) in &m.semantic_hits {
         if *hit {
-            // Real similarity score is not yet plumbed through the
-            // boolean `hit` map; until the semantic evaluator
-            // surfaces it, surface a confidence equal to the rule's
-            // declared threshold (lower bound of "this hit").
-            let conf = rule.semantics.get(var).map_or(0.5, |p| p.threshold);
+            // Prefer the real cosine similarity the evaluator surfaced;
+            // fall back to the rule's declared threshold (the lower
+            // bound of "this hit") only when the score is absent — e.g.
+            // a match deserialised from a pre-score-plumbing cache.
+            let conf = m
+                .semantic_scores
+                .get(var)
+                .copied()
+                .unwrap_or_else(|| rule.semantics.get(var).map_or(0.5, |p| p.threshold));
             out.push(make_finding(&ctx, Section::Semantics, var, conf));
         }
     }
     for (var, hit) in &m.llm_hits {
         if *hit {
-            let conf = rule.llm.get(var).map_or(0.5, |p| p.threshold);
+            let conf = m
+                .llm_scores
+                .get(var)
+                .copied()
+                .unwrap_or_else(|| rule.llm.get(var).map_or(0.5, |p| p.threshold));
             out.push(make_finding(&ctx, Section::Llm, var, conf));
         }
     }
@@ -224,8 +235,98 @@ mod tests {
             keyword_hits: hits.iter().map(|(k, v)| ((*k).into(), *v)).collect(),
             semantic_hits: BTreeMap::new(),
             llm_hits: BTreeMap::new(),
+            semantic_scores: BTreeMap::new(),
+            llm_scores: BTreeMap::new(),
             skipped_capabilities: vec![],
         }
+    }
+
+    fn semantic_rule(var: &str, threshold: f32) -> NovaRule {
+        let mut meta = BTreeMap::new();
+        meta.insert("description".into(), "semantic rule".into());
+        meta.insert("severity".into(), "medium".into());
+        let mut semantics = BTreeMap::new();
+        semantics.insert(
+            var.to_string(),
+            crate::nova::model::SemanticPattern {
+                pattern: "ignore previous instructions".into(),
+                threshold,
+            },
+        );
+        NovaRule {
+            name: "Sem".into(),
+            meta,
+            keywords: BTreeMap::new(),
+            semantics,
+            llm: BTreeMap::new(),
+            condition: ConditionExpr::Literal(true),
+        }
+    }
+
+    fn semantic_match(var: &str, score: Option<f32>) -> NovaMatch {
+        let mut semantic_hits = BTreeMap::new();
+        semantic_hits.insert(var.to_string(), true);
+        let mut semantic_scores = BTreeMap::new();
+        if let Some(s) = score {
+            semantic_scores.insert(var.to_string(), s);
+        }
+        NovaMatch {
+            rule_name: "Sem".into(),
+            matched: true,
+            keyword_hits: BTreeMap::new(),
+            semantic_hits,
+            llm_hits: BTreeMap::new(),
+            semantic_scores,
+            llm_scores: BTreeMap::new(),
+            skipped_capabilities: vec![],
+        }
+    }
+
+    /// Contract: when the evaluator surfaces a real cosine-similarity
+    /// score for a fired `semantics:` pattern, the Finding confidence
+    /// carries THAT score — not the rule's declared threshold. Pins the
+    /// score-plumbing so a refactor cannot silently revert NOVA semantic
+    /// findings to threshold-only confidence.
+    #[test]
+    fn semantic_finding_confidence_uses_real_score_not_threshold() {
+        let r = semantic_rule("s", 0.4);
+        let m = semantic_match("s", Some(0.83));
+        let findings = nova_match_to_findings(
+            &r,
+            &m,
+            None,
+            ArtifactKind::SkillDocument,
+            ArtifactScope::AgentEntrypoint,
+        );
+        assert_eq!(findings.len(), 1);
+        assert!(
+            (findings[0].raw_confidence - 0.83).abs() < f32::EPSILON,
+            "expected real score 0.83, got {}",
+            findings[0].raw_confidence
+        );
+    }
+
+    /// Contract (negative): with no score plumbed (e.g. a match
+    /// deserialised from a pre-score-plumbing cache), the Finding
+    /// confidence falls back to the rule's declared threshold — the
+    /// documented lower bound of "this hit".
+    #[test]
+    fn semantic_finding_confidence_falls_back_to_threshold_without_score() {
+        let r = semantic_rule("s", 0.4);
+        let m = semantic_match("s", None);
+        let findings = nova_match_to_findings(
+            &r,
+            &m,
+            None,
+            ArtifactKind::SkillDocument,
+            ArtifactScope::AgentEntrypoint,
+        );
+        assert_eq!(findings.len(), 1);
+        assert!(
+            (findings[0].raw_confidence - 0.4).abs() < f32::EPSILON,
+            "expected threshold fallback 0.4, got {}",
+            findings[0].raw_confidence
+        );
     }
 
     /// Contract: a non-matching NovaMatch maps to ZERO findings.
@@ -239,6 +340,8 @@ mod tests {
             keyword_hits: BTreeMap::new(),
             semantic_hits: BTreeMap::new(),
             llm_hits: BTreeMap::new(),
+            semantic_scores: BTreeMap::new(),
+            llm_scores: BTreeMap::new(),
             skipped_capabilities: vec![],
         };
         let findings = nova_match_to_findings(

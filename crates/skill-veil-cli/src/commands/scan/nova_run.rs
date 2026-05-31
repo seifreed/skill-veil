@@ -620,6 +620,8 @@ mod tests {
                     keyword_hits,
                     semantic_hits: std::collections::BTreeMap::new(),
                     llm_hits: std::collections::BTreeMap::new(),
+                    semantic_scores: std::collections::BTreeMap::new(),
+                    llm_scores: std::collections::BTreeMap::new(),
                     skipped_capabilities: Vec::new(),
                 },
             }],

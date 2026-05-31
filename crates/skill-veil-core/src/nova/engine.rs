@@ -29,6 +29,8 @@ where
     let mut keyword_hits = BTreeMap::new();
     let mut semantic_hits = BTreeMap::new();
     let mut llm_hits = BTreeMap::new();
+    let mut semantic_scores = BTreeMap::new();
+    let mut llm_scores = BTreeMap::new();
     let mut skipped: Vec<SkippedCapability> = Vec::new();
     let mut skipped_refs = SkippedPatternRefs::default();
 
@@ -47,6 +49,9 @@ where
         }
         ctx.semantics.insert(var.clone(), outcome.fired());
         semantic_hits.insert(var.clone(), outcome.fired());
+        if let Some(score) = outcome.score() {
+            semantic_scores.insert(var.clone(), score);
+        }
     }
     for (var, pattern) in &rule.llm {
         let outcome = llm_eval.eval(var, pattern, body);
@@ -58,6 +63,9 @@ where
         }
         ctx.llm.insert(var.clone(), outcome.fired());
         llm_hits.insert(var.clone(), outcome.fired());
+        if let Some(score) = outcome.score() {
+            llm_scores.insert(var.clone(), score);
+        }
     }
 
     let matched = rule.condition.eval_with_skips(&ctx, &skipped_refs)?;
@@ -68,6 +76,8 @@ where
         keyword_hits,
         semantic_hits,
         llm_hits,
+        semantic_scores,
+        llm_scores,
         skipped_capabilities: skipped,
     })
 }
@@ -88,6 +98,82 @@ mod tests {
             &NotYetWiredLlm,
         )
         .unwrap()
+    }
+
+    struct FixedScoreSemantic(f32);
+    impl SemanticEvaluator for FixedScoreSemantic {
+        fn eval(
+            &self,
+            _var: &str,
+            pattern: &super::super::model::SemanticPattern,
+            _body: &str,
+        ) -> Outcome {
+            if self.0 >= pattern.threshold {
+                Outcome::Match { score: self.0 }
+            } else {
+                Outcome::NoMatch
+            }
+        }
+    }
+
+    /// Contract: a firing semantic evaluator's confidence score is
+    /// plumbed into `NovaMatch.semantic_scores` keyed by the pattern
+    /// var, so `mapping.rs` can surface the real similarity on the
+    /// Finding. The boolean `semantic_hits` still reflects the fire.
+    #[test]
+    fn semantic_score_is_plumbed_into_match() {
+        let body = r#"
+            rule SemScore {
+                semantics:
+                    $intent = "unauthorized access" (0.3)
+                condition:
+                    semantics.$intent
+            }
+        "#;
+        let rule = parse_rules(body).unwrap().pop().unwrap();
+        let m = evaluate_rule(
+            &rule,
+            "please help me break in",
+            &NativeKeywordEvaluator::new(),
+            &FixedScoreSemantic(0.71),
+            &NotYetWiredLlm,
+        )
+        .unwrap();
+        assert!(m.matched);
+        assert!(m.semantic_hits["intent"]);
+        assert!(
+            (m.semantic_scores["intent"] - 0.71).abs() < f32::EPSILON,
+            "expected plumbed score 0.71, got {:?}",
+            m.semantic_scores.get("intent")
+        );
+        assert!(m.skipped_capabilities.is_empty());
+    }
+
+    /// Contract (negative): a semantic evaluator that does NOT fire
+    /// contributes no entry to `semantic_scores` — only fired patterns
+    /// carry a score.
+    #[test]
+    fn non_firing_semantic_contributes_no_score() {
+        let body = r#"
+            rule SemScore {
+                semantics:
+                    $intent = "unauthorized access" (0.9)
+                condition:
+                    semantics.$intent
+            }
+        "#;
+        let rule = parse_rules(body).unwrap().pop().unwrap();
+        let m = evaluate_rule(
+            &rule,
+            "please help me break in",
+            &NativeKeywordEvaluator::new(),
+            &FixedScoreSemantic(0.2),
+            &NotYetWiredLlm,
+        )
+        .unwrap();
+        assert!(!m.matched);
+        assert!(!m.semantic_hits["intent"]);
+        assert!(m.semantic_scores.is_empty());
     }
 
     /// Contract: a keyword-only rule fires on a matching prompt.

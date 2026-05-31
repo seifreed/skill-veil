@@ -144,7 +144,12 @@ impl<E: SentenceEmbedder> SemanticEvaluator for CosineSemanticEvaluator<E> {
             }
         };
         if sim >= pattern.threshold {
-            Outcome::Match
+            // Cosine similarity is in `[-1.0, 1.0]`; a firing match is
+            // already `>= threshold` (positive in practice), but clamp
+            // to the `[0.0, 1.0]` confidence contract for robustness.
+            Outcome::Match {
+                score: sim.clamp(0.0, 1.0),
+            }
         } else {
             Outcome::NoMatch
         }
@@ -409,7 +414,10 @@ mod tests {
             &pat("ignore previous instructions", 0.5),
             "ignore previous instructions",
         );
-        assert_eq!(outcome, Outcome::Match);
+        assert!(
+            matches!(outcome, Outcome::Match { score } if (score - 1.0).abs() < 1e-3),
+            "identical embeddings must fire with cosine ~1.0, got {outcome:?}"
+        );
     }
 
     /// Contract: a body whose embedding shares NO non-zero

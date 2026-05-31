@@ -93,6 +93,19 @@ pub struct NovaMatch {
     pub keyword_hits: BTreeMap<String, bool>,
     pub semantic_hits: BTreeMap<String, bool>,
     pub llm_hits: BTreeMap<String, bool>,
+    /// Confidence score for each firing `semantics:` pattern (cosine
+    /// similarity, `[0.0, 1.0]`). Only fired patterns are present, so a
+    /// `var` in `semantic_hits` with value `true` has a corresponding
+    /// entry here. Carried alongside the boolean so `mapping.rs` can
+    /// surface the real similarity on the Finding instead of falling
+    /// back to the rule's declared threshold.
+    #[serde(default)]
+    pub semantic_scores: BTreeMap<String, f32>,
+    /// Confidence score for each firing `llm:` pattern (model
+    /// confidence, `[0.0, 1.0]`). Same population contract as
+    /// [`Self::semantic_scores`].
+    #[serde(default)]
+    pub llm_scores: BTreeMap<String, f32>,
     /// Patterns the rule references in its `condition` that we cannot
     /// evaluate yet (e.g. semantic / LLM matches when no evaluator is
     /// wired up). The rule still loads, the condition is still

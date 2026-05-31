@@ -127,7 +127,9 @@ fn prompt_char_count(prompt: &LlmPrompt) -> usize {
 
 fn decide(verdict: &MatchVerdict, threshold: f32) -> Outcome {
     if verdict.r#match && verdict.confidence >= threshold {
-        Outcome::Match
+        Outcome::Match {
+            score: verdict.confidence.clamp(0.0, 1.0),
+        }
     } else {
         Outcome::NoMatch
     }
@@ -275,7 +277,10 @@ mod tests {
             r#"{"match": true, "confidence": 0.9}"#.to_string(),
         )]));
         let ev = ProviderLlmEvaluator::with_max_prompt_chars(provider, TEST_MAX_PROMPT_CHARS);
-        assert_eq!(ev.eval("$x", &pat(0.5), "any prompt body"), Outcome::Match);
+        assert_eq!(
+            ev.eval("$x", &pat(0.5), "any prompt body"),
+            Outcome::Match { score: 0.9 }
+        );
     }
 
     /// Contract: `match: true` but confidence BELOW the threshold MUST
@@ -337,7 +342,10 @@ mod tests {
             "```json\n{\"match\": true, \"confidence\": 0.8}\n```".to_string(),
         )]));
         let ev = ProviderLlmEvaluator::with_max_prompt_chars(provider, TEST_MAX_PROMPT_CHARS);
-        assert_eq!(ev.eval("$x", &pat(0.5), "any prompt body"), Outcome::Match);
+        assert_eq!(
+            ev.eval("$x", &pat(0.5), "any prompt body"),
+            Outcome::Match { score: 0.8 }
+        );
     }
 
     /// Contract: a provider returning an unauthorized error MUST surface
