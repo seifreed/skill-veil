@@ -106,7 +106,7 @@ pub(crate) fn enrich_scan_result(
 ) -> Result<LlmEnrichment> {
     let mut effective_config = config.clone();
     if let Some(override_kind) = opts.provider_override {
-        effective_config.provider = override_kind;
+        effective_config.apply_provider_override(override_kind);
     }
     let provider = build_provider(&effective_config)
         .map_err(|e| anyhow::anyhow!("failed to initialise LLM provider: {e}"))?;

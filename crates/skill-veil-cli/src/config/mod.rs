@@ -141,6 +141,33 @@ pub(crate) struct LlmConfigSection {
     pub limits: LlmLimits,
 }
 
+impl LlmConfigSection {
+    /// Apply a `--llm-provider` (or `--nova-llm` provider) override:
+    /// switch the active provider AND ensure it has a config entry whose
+    /// `api_key` is populated from the environment when no
+    /// `[llm.providers.X]` file section supplied one.
+    ///
+    /// Reassigning `provider` alone is not enough: `build_provider` reads
+    /// the per-provider `ProviderParams`, and a provider the user never
+    /// gave a file section for has no entry, so it falls back to
+    /// `ProviderParams::default()` (no key) and fails `NotConfigured` —
+    /// silently skipping enrichment even though the env key was exported.
+    /// This mirrors the entry-synthesis `resolve_llm` already performs for
+    /// the file-selected provider, so an override honours the documented
+    /// env-over-file precedence instead of being strictly worse than the
+    /// file selection.
+    pub(crate) fn apply_provider_override(&mut self, provider: LlmProviderKind) {
+        self.provider = provider;
+        self.provider_configs.entry(provider).or_insert_with(|| {
+            let mut params = ProviderParams::default();
+            if let Some(env_key) = provider.resolve_apikey_from_env() {
+                params.api_key = Some(env_key);
+            }
+            params
+        });
+    }
+}
+
 /// Per-provider configuration after resolving CLI overrides + config files.
 ///
 /// # Debug-secret-redaction contract
@@ -177,6 +204,76 @@ impl std::fmt::Debug for ProviderParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::providers::OPENAI_APIKEY_ENV;
+    use crate::config::test_support::ENV_LOCK;
+
+    fn section(provider: LlmProviderKind) -> LlmConfigSection {
+        LlmConfigSection {
+            provider,
+            provider_configs: BTreeMap::new(),
+            limits: LlmLimits::default(),
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `apply_provider_override` MUST synthesise a `ProviderParams` entry
+    /// for an overridden provider that has no `[llm.providers.X]` file
+    /// section, populating its `api_key` from the environment. Pre-fix the
+    /// override only reassigned `.provider`, leaving `provider_configs`
+    /// without an entry, so `build_provider` fell back to
+    /// `ProviderParams::default()` and failed `NotConfigured` — silently
+    /// skipping enrichment even though the env key was exported.
+    #[test]
+    fn provider_override_populates_env_key_without_file_section() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var(OPENAI_APIKEY_ENV, "env-openai-key-xyz");
+
+        let mut cfg = section(LlmProviderKind::Anthropic);
+        cfg.apply_provider_override(LlmProviderKind::OpenAi);
+
+        std::env::remove_var(OPENAI_APIKEY_ENV);
+
+        assert_eq!(cfg.provider, LlmProviderKind::OpenAi);
+        assert_eq!(
+            cfg.provider_configs
+                .get(&LlmProviderKind::OpenAi)
+                .and_then(|p| p.api_key.as_deref()),
+            Some("env-openai-key-xyz"),
+            "override must carry the env api_key onto the synthesised entry",
+        );
+    }
+
+    /// # Contract (preserve)
+    ///
+    /// When the overridden provider already has a config entry (a file
+    /// section, already env-layered by `resolve_llm`), the override MUST
+    /// NOT clobber it.
+    #[test]
+    fn provider_override_preserves_existing_entry() {
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var(OPENAI_APIKEY_ENV, "env-should-not-win");
+
+        let mut cfg = section(LlmProviderKind::Anthropic);
+        cfg.provider_configs.insert(
+            LlmProviderKind::OpenAi,
+            ProviderParams {
+                api_key: Some("file-section-key".to_string()),
+                ..ProviderParams::default()
+            },
+        );
+        cfg.apply_provider_override(LlmProviderKind::OpenAi);
+
+        std::env::remove_var(OPENAI_APIKEY_ENV);
+
+        assert_eq!(
+            cfg.provider_configs
+                .get(&LlmProviderKind::OpenAi)
+                .and_then(|p| p.api_key.as_deref()),
+            Some("file-section-key"),
+            "existing entry must be preserved, not overwritten",
+        );
+    }
 
     /// # Contract
     ///

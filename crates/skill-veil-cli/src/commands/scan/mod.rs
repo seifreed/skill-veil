@@ -79,7 +79,7 @@ fn build_nova_llm_eval(
         }
     };
     if let Some(kind) = provider_override {
-        llm_section.provider = kind;
+        llm_section.apply_provider_override(kind);
     }
     let provider: Arc<dyn crate::llm::client::LlmProvider> = match build_provider(&llm_section) {
         Ok(p) => Arc::from(p),
