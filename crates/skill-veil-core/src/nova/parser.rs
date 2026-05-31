@@ -49,7 +49,17 @@ pub enum ParseError {
     UnknownConditionSection(String),
     #[error("condition reference `{section}.${var}` does not match any pattern in the rule")]
     DanglingReference { section: Section, var: String },
+    #[error("condition nesting exceeds the maximum depth of {max}")]
+    ConditionTooDeep { max: usize },
 }
+
+/// Maximum nesting depth (parentheses + `not`) the condition expression
+/// parser will descend before rejecting the rule. The parser is recursive
+/// descent, so an attacker-supplied `.nov` whose condition is `((((…))))`
+/// or `not not not …` would otherwise overflow the stack and abort the
+/// process. Reachable via `rules test-pack --rules-dir <untrusted>` and
+/// any operator-supplied pack. 256 is far beyond any real condition.
+const MAX_CONDITION_DEPTH: usize = 256;
 
 /// Parse the contents of a `.nov` file into a list of rules. NOVA
 /// allows multiple rules per file; we yield them in source order.
@@ -771,12 +781,37 @@ fn tokenize_condition(input: &str) -> Result<Vec<CondToken>, ParseError> {
 struct TokenIter {
     tokens: Vec<CondToken>,
     pos: usize,
+    depth: usize,
 }
 
 impl TokenIter {
     fn new(tokens: Vec<CondToken>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
     }
+
+    /// Enter one recursion level, rejecting input that nests past
+    /// [`MAX_CONDITION_DEPTH`]. Paired with [`Self::leave`] on the success
+    /// path so that wide-but-shallow conditions (`(a) or (b) or …`) do not
+    /// accumulate depth across sibling branches.
+    fn enter(&mut self) -> Result<(), ParseError> {
+        self.depth += 1;
+        if self.depth > MAX_CONDITION_DEPTH {
+            Err(ParseError::ConditionTooDeep {
+                max: MAX_CONDITION_DEPTH,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     fn peek(&self) -> Option<&CondToken> {
         self.tokens.get(self.pos)
     }
@@ -823,7 +858,9 @@ fn parse_and(iter: &mut TokenIter) -> Result<ConditionExpr, ParseError> {
 
 fn parse_not(iter: &mut TokenIter) -> Result<ConditionExpr, ParseError> {
     if iter.eat(&CondToken::KwNot) {
+        iter.enter()?;
         let inner = parse_not(iter)?;
+        iter.leave();
         return Ok(ConditionExpr::Not(Box::new(inner)));
     }
     parse_atom(iter)
@@ -835,7 +872,9 @@ fn parse_atom(iter: &mut TokenIter) -> Result<ConditionExpr, ParseError> {
         .ok_or(ParseError::UnexpectedEof("condition atom"))?;
     match next {
         CondToken::LParen => {
+            iter.enter()?;
             let inner = parse_or(iter)?;
+            iter.leave();
             if !iter.eat(&CondToken::RParen) {
                 return Err(ParseError::UnexpectedToken {
                     context: "condition (expected `)`)",
@@ -1080,6 +1119,45 @@ fn check_refs(expr: &ConditionExpr, rule: &NovaRule) -> Result<(), ParseError> {
 mod tests {
     use super::*;
     use crate::nova::condition::{ConditionExpr, Section};
+
+    /// # Contract
+    ///
+    /// A condition nested past [`MAX_CONDITION_DEPTH`] is REJECTED with a
+    /// typed error, never a stack overflow. The recursive-descent
+    /// condition parser is otherwise reachable with attacker-supplied
+    /// `.nov` files (`rules test-pack --rules-dir <untrusted>`), where
+    /// `((((…))))` would abort the process.
+    #[test]
+    fn condition_nesting_beyond_max_depth_is_rejected_not_overflow() {
+        let depth = MAX_CONDITION_DEPTH + 50;
+        let body = format!(
+            "rule Deep {{\n    keywords:\n        $a = \"x\"\n    condition:\n        {}keywords.$a{}\n}}\n",
+            "(".repeat(depth),
+            ")".repeat(depth),
+        );
+        let err = parse_rules(&body).expect_err("deep nesting must error, not overflow");
+        assert!(
+            matches!(err, ParseError::ConditionTooDeep { .. }),
+            "expected ConditionTooDeep, got {err:?}"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A wide-but-shallow condition (`(a) or (b) or …`) must NOT trip the
+    /// depth guard — each parenthesised branch enters and leaves one
+    /// level, so sibling branches do not accumulate depth.
+    #[test]
+    fn wide_shallow_condition_parses() {
+        let terms = vec!["(keywords.$a)"; 300].join(" or ");
+        let body = format!(
+            "rule Wide {{\n    keywords:\n        $a = \"x\"\n    condition:\n        {terms}\n}}\n"
+        );
+        assert!(
+            parse_rules(&body).is_ok(),
+            "wide flat condition must parse without tripping the depth guard"
+        );
+    }
 
     #[test]
     fn parses_minimal_keywords_only_rule() {
