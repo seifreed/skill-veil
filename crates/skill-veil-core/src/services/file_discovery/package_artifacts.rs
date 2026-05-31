@@ -76,6 +76,20 @@ fn is_manifest_or_lockfile(path: &Path) -> bool {
     MANIFEST_NAMES.contains(&lowered.as_str()) || LOCKFILE_NAMES.contains(&lowered.as_str())
 }
 
+/// `true` when the glob `*.<ext>` matches `name`, i.e. `name` ends with
+/// `.<ext>` (case-insensitive). Faithful to globset semantics where `*`
+/// matches the empty prefix, so `*.env` matches a leading-dot dotfile
+/// `.env` — which `Path::extension()` (returning `None` for `.env`)
+/// would wrongly exclude. Byte comparison so a non-UTF-8-suffixed name
+/// can never panic on a non-char-boundary slice.
+fn filename_matches_glob_extension(name: &str, ext: &str) -> bool {
+    let name = name.as_bytes();
+    let ext = ext.as_bytes();
+    name.len() > ext.len()
+        && name[name.len() - ext.len() - 1] == b'.'
+        && name[name.len() - ext.len()..].eq_ignore_ascii_case(ext)
+}
+
 impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// Discover executable/script files co-located with a skill package.
     ///
@@ -206,12 +220,22 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
                 // matching a glob), filter by extension to respect the caller's
                 // pattern list. Non-recursive roots already went through
                 // `list_files` with the glob, so no extension filter needed.
+                //
+                // Match the glob `*.<ext>` against the file NAME, not
+                // `Path::extension()`: the latter reports `None` for a
+                // leading-dot dotfile (`.env`), so a recursive `config/.env`
+                // was silently dropped while a root-level `.env` (matched by
+                // globset's `*.env`, where `*` matches the empty prefix) was
+                // scanned — an asymmetric unscanned-artifact gap.
                 if *recursive && !extensions.is_empty() {
-                    let matches_ext = file.extension().is_some_and(|ext| {
-                        extensions
-                            .iter()
-                            .any(|e| e.eq_ignore_ascii_case(&ext.to_string_lossy()))
-                    });
+                    let matches_ext =
+                        file.file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|name| {
+                                extensions
+                                    .iter()
+                                    .any(|ext| filename_matches_glob_extension(name, ext))
+                            });
                     if !matches_ext {
                         continue;
                     }
@@ -312,6 +336,24 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// # Contract
+    /// `*.<ext>` matches a leading-dot dotfile (`.env`) the same way
+    /// globset does, so the recursive-walk filter does not drop a
+    /// `config/.env` that the non-recursive root would have scanned.
+    /// Pins the asymmetry fix between `Path::extension()` and globset.
+    #[test]
+    fn filename_matches_glob_extension_covers_dotfiles_and_normal_files() {
+        assert!(filename_matches_glob_extension(".env", "env"));
+        assert!(filename_matches_glob_extension(".ENV", "env"));
+        assert!(filename_matches_glob_extension("prod.env", "env"));
+        assert!(filename_matches_glob_extension("script.py", "py"));
+        // Negatives: no dot before the ext, exact-name-no-dot, too short.
+        assert!(!filename_matches_glob_extension("xenv", "env"));
+        assert!(!filename_matches_glob_extension("env", "env"));
+        assert!(!filename_matches_glob_extension("Makefile", "py"));
+        assert!(!filename_matches_glob_extension("archive.tar", "gz"));
+    }
 
     /// In-memory `FileSystemProvider` that lists exactly one path but always
     /// fails on `metadata`. Used to verify the fail-safe behaviour: when
