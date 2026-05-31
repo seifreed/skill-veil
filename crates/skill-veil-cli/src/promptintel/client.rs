@@ -262,6 +262,20 @@ impl ResponseMeta {
                 .and_then(|s| s.parse().ok()),
         }
     }
+
+    /// The server-reported remaining budget to record for a call `result`:
+    /// the response value on success, `None` on failure. A failed call still
+    /// counts toward the local back-off budget (the rate-limit tracker records
+    /// every attempt regardless of upstream success), so callers record this
+    /// before propagating any error.
+    pub(crate) fn remaining_for<T, E>(
+        result: &std::result::Result<(T, ResponseMeta), E>,
+    ) -> Option<u32> {
+        result
+            .as_ref()
+            .ok()
+            .and_then(|(_, meta)| meta.ratelimit_remaining)
+    }
 }
 
 /// Drain a response body into a string, capped at
@@ -344,6 +358,22 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// Contract: a failed call yields `None` (no server header) but is still
+    /// recordable, so the rate-limit tracker backs off on a saturating
+    /// endpoint instead of only counting successes.
+    #[test]
+    fn remaining_for_extracts_success_value_and_none_on_failure() {
+        let ok: std::result::Result<((), ResponseMeta), String> = Ok((
+            (),
+            ResponseMeta {
+                ratelimit_remaining: Some(4),
+            },
+        ));
+        assert_eq!(ResponseMeta::remaining_for(&ok), Some(4));
+        let err: std::result::Result<((), ResponseMeta), String> = Err("boom".to_string());
+        assert_eq!(ResponseMeta::remaining_for(&err), None);
+    }
 
     fn response_with_body(body: &str) -> ureq::Response {
         format!(

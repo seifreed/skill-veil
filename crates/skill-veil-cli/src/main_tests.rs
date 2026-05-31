@@ -593,6 +593,49 @@ fn validate_fixture_case_checks_full_expectations() {
 }
 
 /// # Contract
+/// A fixture case that declares no expectation asserts nothing, so it MUST be
+/// rejected rather than silently passing — otherwise a truncated/under-specified
+/// fixture masks a broken rule.
+#[test]
+fn validate_fixture_case_rejects_case_with_no_expectation() {
+    let case = RuleFixtureCase {
+        name: Some("empty".to_string()),
+        rule_id: "TEST_RULE".to_string(),
+        content: "# Skill".to_string(),
+        file_name: None,
+        expect_match: None,
+        expected_count: None,
+        expected_severity: None,
+        expected_action: None,
+        expected_category: None,
+    };
+    assert!(validate_fixture_case(&case, &[]).is_err());
+}
+
+/// # Contract
+/// An attribute expectation (`expected_severity`/`action`/`category`) implies a
+/// finding exists. A rule that produces zero findings MUST fail such a case,
+/// not pass vacuously through `any()` over an empty slice.
+#[test]
+fn validate_fixture_case_attribute_expectation_fails_without_a_finding() {
+    let case = RuleFixtureCase {
+        name: Some("vacuous".to_string()),
+        rule_id: "TEST_RULE".to_string(),
+        content: "# Skill".to_string(),
+        file_name: None,
+        expect_match: None,
+        expected_count: None,
+        expected_severity: Some(Severity::Critical),
+        expected_action: None,
+        expected_category: None,
+    };
+    assert!(
+        validate_fixture_case(&case, &[]).is_err(),
+        "expected_severity with no findings must fail, not pass vacuously"
+    );
+}
+
+/// # Contract
 /// `update_benchmark_history` MUST replace an existing entry with
 /// the same `release_id` instead of duplicating it. Otherwise a
 /// repeated benchmark run on the same release produces stacked

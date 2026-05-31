@@ -396,6 +396,20 @@ pub fn validate_fixture_case(
     case: &RuleFixtureCase,
     findings: &[skill_veil_core::Finding],
 ) -> Result<()> {
+    // A case that declares no expectation asserts nothing, so it would pass
+    // unconditionally — a silent hole that lets a truncated/under-specified
+    // fixture mask a broken rule. Require at least one expectation.
+    anyhow::ensure!(
+        case.expect_match.is_some()
+            || case.expected_count.is_some()
+            || case.expected_severity.is_some()
+            || case.expected_action.is_some()
+            || case.expected_category.is_some(),
+        "Rule fixture for {} declares no expectation; set at least one of \
+         expect_match / expected_count / expected_severity / expected_action / \
+         expected_category",
+        case.rule_id
+    );
     if let Some(expect_match) = case.expect_match {
         let matched = !findings.is_empty();
         if matched != expect_match {
@@ -417,33 +431,43 @@ pub fn validate_fixture_case(
             );
         }
     }
+    // An attribute expectation implies a finding exists: over an empty slice
+    // `any()` is false, so without the `is_empty()` guard a rule that never
+    // fired would vacuously satisfy `expected_severity`/`action`/`category`.
     if let Some(expected_severity) = case.expected_severity {
-        if findings
-            .iter()
-            .any(|finding| finding.severity != expected_severity)
+        if findings.is_empty()
+            || findings
+                .iter()
+                .any(|finding| finding.severity != expected_severity)
         {
             anyhow::bail!(
-                "Rule {} expected severity {}",
+                "Rule {} expected severity {} on a finding",
                 case.rule_id,
                 expected_severity
             );
         }
     }
     if let Some(expected_action) = case.expected_action {
-        if findings
-            .iter()
-            .any(|finding| finding.recommended_action != expected_action)
+        if findings.is_empty()
+            || findings
+                .iter()
+                .any(|finding| finding.recommended_action != expected_action)
         {
-            anyhow::bail!("Rule {} expected action {}", case.rule_id, expected_action);
+            anyhow::bail!(
+                "Rule {} expected action {} on a finding",
+                case.rule_id,
+                expected_action
+            );
         }
     }
     if let Some(expected_category) = &case.expected_category {
-        if findings
-            .iter()
-            .any(|finding| finding.category.to_string() != *expected_category)
+        if findings.is_empty()
+            || findings
+                .iter()
+                .any(|finding| finding.category.to_string() != *expected_category)
         {
             anyhow::bail!(
-                "Rule {} expected category {}",
+                "Rule {} expected category {} on a finding",
                 case.rule_id,
                 expected_category
             );

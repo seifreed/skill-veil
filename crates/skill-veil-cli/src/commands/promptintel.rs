@@ -10,7 +10,7 @@ use crate::cli_args::{
     PromptIntelFeedBudgetArgs, PromptIntelFeedListArgs, PromptIntelFeedSyncArgs,
     PromptIntelReportAction, PromptIntelReportListArgs, PromptIntelReportSubmitArgs,
 };
-use crate::promptintel::client::PromptIntelClient;
+use crate::promptintel::client::{PromptIntelClient, ResponseMeta};
 use crate::promptintel::config::PromptIntelConfig;
 use crate::promptintel::corpus::{self, DownloadOptions};
 use crate::promptintel::coverage::{self, CoverageOptions};
@@ -147,15 +147,16 @@ fn run_report_submit(args: PromptIntelReportSubmitArgs) -> Result<()> {
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let client = build_client()?;
-    let (response, response_meta) = client
-        .submit_report(&body)
-        .context("submitting report to api.promptintel.novahunting.ai")?;
-
+    // Record the attempt before propagating any error: a failed submission
+    // still spends server-side quota, so the local back-off must count it.
+    let result = client.submit_report(&body);
     rate_state.record_call(
         crate::promptintel::feed::ratelimit::endpoint::REPORTS_SUBMIT,
-        response_meta.ratelimit_remaining,
+        ResponseMeta::remaining_for(&result),
     );
     rate_state.save(&cache_root)?;
+    let (response, _response_meta) =
+        result.context("submitting report to api.promptintel.novahunting.ai")?;
 
     if !response.success {
         anyhow::bail!(
@@ -182,15 +183,13 @@ fn run_report_list(args: PromptIntelReportListArgs) -> Result<()> {
         .map_err(|e| anyhow::anyhow!(e))?;
 
     let client = build_client()?;
-    let (envelope, response_meta) = client
-        .list_my_reports(args.limit.max(1), args.offset)
-        .context("fetching agents/reports/mine")?;
-
+    let result = client.list_my_reports(args.limit.max(1), args.offset);
     rate_state.record_call(
         crate::promptintel::feed::ratelimit::endpoint::REPORTS_MINE,
-        response_meta.ratelimit_remaining,
+        ResponseMeta::remaining_for(&result),
     );
     rate_state.save(&cache_root)?;
+    let (envelope, _response_meta) = result.context("fetching agents/reports/mine")?;
 
     match args.format {
         PromptIntelCrossCheckFormat::Json => {

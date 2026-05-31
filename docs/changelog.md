@@ -57,6 +57,13 @@ release process is formalized.
   dropped instead of compiling into an empty-alternation regex that matched
   every byte of every document — which had flagged every scan as malicious
   and emitted one finding per character.
+- `rules test-pack` no longer reports success for a fixture pack with no cases,
+  a case with no expectation, or an `expected_severity`/`action`/`category`
+  that vacuously passes because the rule produced no findings — closing silent
+  holes that let an under-specified fixture mask a broken rule.
+- The PromptIntel rate-limit tracker now records a call attempt even when the
+  request fails, matching its documented "record on every attempt" contract, so
+  a saturating endpoint actually backs off instead of only counting successes.
 
 ## [0.2.0] - 2026-05-20
 

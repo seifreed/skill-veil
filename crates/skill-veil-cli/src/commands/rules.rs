@@ -179,6 +179,11 @@ fn rules_test_pack(rules_dir: PathBuf, fixtures: PathBuf) -> Result<()> {
         .with_context(|| format!("Failed to read fixtures {}", fixtures.display()))?;
     let fixture_pack: RuleFixtureFile =
         serde_yaml::from_str(&fixture_content).context("Failed to parse rule fixtures")?;
+    anyhow::ensure!(
+        !fixture_pack.cases.is_empty(),
+        "Fixture file {} contains no cases; an empty pack must not report success",
+        fixtures.display()
+    );
 
     let parser = PulldownMarkdownParser::new();
     let mut failures = Vec::new();

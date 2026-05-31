@@ -1,6 +1,6 @@
 //! The PromptIntel threat taxonomy as published by upstream curators.
 //!
-//! The taxonomy is the official 5-bucket / ~37-threat structure used
+//! The taxonomy is the official 4-bucket / 38-threat structure used
 //! to classify entries in the PromptIntel curated corpus. We mirror
 //! it verbatim here so:
 //!

@@ -12,7 +12,7 @@
 
 use super::ratelimit::{endpoint, RateLimitState};
 use super::store::{FeedMeta, FeedStore};
-use crate::promptintel::client::PromptIntelClient;
+use crate::promptintel::client::{PromptIntelClient, ResponseMeta};
 use crate::promptintel::types::FeedEntry;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -73,12 +73,12 @@ pub(crate) fn run_sync(
 
     let (resolved_mode, since) = resolve_sync_request(mode, existing.meta.as_ref(), Utc::now());
 
-    let (response, response_meta) = client
-        .agent_feed(FEED_PULL_LIMIT, since.as_deref())
-        .context("fetching PromptIntel agent-feed")?;
-
-    rate_state.record_call(endpoint::AGENT_FEED, response_meta.ratelimit_remaining);
+    // Record the attempt before propagating any error: a failed pull still
+    // spends server-side quota, so the local back-off must count it.
+    let result = client.agent_feed(FEED_PULL_LIMIT, since.as_deref());
+    rate_state.record_call(endpoint::AGENT_FEED, ResponseMeta::remaining_for(&result));
     rate_state.save(cache_root)?;
+    let (response, _response_meta) = result.context("fetching PromptIntel agent-feed")?;
 
     if !response.success {
         anyhow::bail!("PromptIntel agent-feed reported success=false");
