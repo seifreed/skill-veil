@@ -118,9 +118,14 @@ const CLAIM_DEFINITIONS: &[ClaimDef] = &[
             r"(?i)\bpure[-\s]?(python|js|rust)\b",
         ],
         contradiction_patterns: &[
-            r"\bsubprocess\s*\.\s*(run|Popen|call|check_call|check_output)\b",
+            // Require an opening `(` after the method so a prose / comment
+            // mention of the API (`// never calls subprocess.run`) is not
+            // treated as behavior — mirroring the NoNetwork hardening
+            // above. Pre-fix the bare `\b` terminator fired on the very
+            // denial phrasing an honest read-only skill uses.
+            r"\bsubprocess\s*\.\s*(run|Popen|call|check_call|check_output)\s*\(",
             r"\bos\s*\.\s*(system|popen|spawnl|spawnv)\s*\(",
-            r"\bchild_process\s*\.\s*(exec|execSync|spawn|spawnSync|fork)\b",
+            r"\bchild_process\s*\.\s*(exec|execSync|spawn|spawnSync|fork)\s*\(",
             r"(?i)\beval\s*\(\s*[a-z_][\w.]*input",
             r"\bos\.execvp?\s*\(",
         ],
@@ -243,6 +248,15 @@ fn detect_contradictions(
         if !only_claims.contains(&entry.kind) {
             continue;
         }
+        // The EncryptedOnly pattern's doc-comment promises an "absence of
+        // crypto/cipher language" gate. Implement it: when the artifact
+        // actually contains encryption language, a plaintext-credential
+        // write is plausibly of already-encrypted data, so the encryption
+        // claim is not contradicted — suppress to avoid flagging code
+        // whose claim is true at MaliciousBehavior/Block.
+        if entry.kind == ClaimKind::EncryptedOnly && content_has_crypto_language(contents) {
+            continue;
+        }
         for re in &entry.contradiction_regexes {
             if let Some(m) = re.find_matches(contents).into_iter().next() {
                 let line = locate_line(contents, m.start);
@@ -257,6 +271,27 @@ fn detect_contradictions(
         }
     }
     out
+}
+
+/// `true` when `content` contains cryptographic / cipher vocabulary,
+/// used to suppress an `EncryptedOnly` contradiction (a plaintext write
+/// in code that genuinely encrypts is not a contradiction of an
+/// encryption claim).
+fn content_has_crypto_language(content: &str) -> bool {
+    static CRYPTO: OnceLock<CompiledPattern> = OnceLock::new();
+    let re = CRYPTO.get_or_init(|| {
+        // Distinctive stems are matched as substrings (not `\b`-bounded)
+        // so they fire on identifier-embedded forms like
+        // `aes_gcm_encrypt` / `createCipheriv`; short ambiguous tokens
+        // stay word-bounded to avoid coincidental matches.
+        compile_patterns(&[
+            r"(?i)(encrypt|decrypt|cipher|crypto|fernet|nacl|sodium|chacha|\baes\b|\bgcm\b|\brsa\b|\bkms\b|\bpgp\b|\bgpg\b)",
+        ])
+        .into_iter()
+        .next()
+        .expect("crypto-language pattern is a valid literal")
+    });
+    re.is_match(content)
 }
 
 fn locate_line(content: &str, byte_offset: usize) -> Option<usize> {
@@ -476,6 +511,79 @@ mod tests {
             "import json\nprint(json.dumps({'ok': True}))".to_string(),
         )];
         assert!(detect_deceptive_documentation(&d, &supporting).is_empty());
+    }
+
+    /// Contract: a prose/comment MENTION of `subprocess.run` (no call
+    /// parenthesis) must NOT fire the NoSubprocess contradiction — the
+    /// denial phrasing an honest read-only skill uses is not behavior.
+    #[test]
+    fn no_subprocess_claim_skips_prose_mention() {
+        let d = doc("# X\n\nStatic analysis only. No subprocess invocations.");
+        let supporting = vec![(
+            PathBuf::from("/tmp/scripts/audit.py"),
+            "# This module never calls subprocess.run anywhere; read-only.\nprint('ok')\n"
+                .to_string(),
+        )];
+        assert!(
+            detect_deceptive_documentation(&d, &supporting)
+                .iter()
+                .all(|f| f.rule_id != "SKILL_DECEPTIVE_DOC_NO_SUBPROCESS"),
+            "a bare comment mention of subprocess.run must not fire",
+        );
+    }
+
+    /// Contract (positive): a real `subprocess.run(...)` CALL under a
+    /// no-subprocess claim still fires.
+    #[test]
+    fn no_subprocess_claim_with_real_call_fires() {
+        let d = doc("# X\n\nStatic analysis only. No subprocess invocations.");
+        let supporting = vec![(
+            PathBuf::from("/tmp/scripts/run.py"),
+            "import subprocess\nsubprocess.run(['sh', '-c', cmd])\n".to_string(),
+        )];
+        assert!(
+            detect_deceptive_documentation(&d, &supporting)
+                .iter()
+                .any(|f| f.rule_id == "SKILL_DECEPTIVE_DOC_NO_SUBPROCESS"),
+            "a real subprocess.run call must still fire",
+        );
+    }
+
+    /// Contract: an EncryptedOnly claim is NOT contradicted by a
+    /// credential write in code that actually contains crypto language —
+    /// the encryption claim is plausibly true. Implements the gate the
+    /// contradiction pattern's doc-comment promised.
+    #[test]
+    fn encrypted_only_suppressed_when_code_encrypts() {
+        let d = doc("# X\n\nAll credentials are encrypted at rest.");
+        let supporting = vec![(
+            PathBuf::from("/tmp/scripts/store.js"),
+            "const enc = aes_gcm_encrypt(data); fs.writeFileSync(p, enc); const api_key = \"rotated\";\n"
+                .to_string(),
+        )];
+        assert!(
+            detect_deceptive_documentation(&d, &supporting)
+                .iter()
+                .all(|f| f.rule_id != "SKILL_DECEPTIVE_DOC_ENCRYPTED_ONLY"),
+            "code that encrypts must not be flagged as a false encryption claim",
+        );
+    }
+
+    /// Contract (positive): an EncryptedOnly claim IS contradicted by a
+    /// plaintext credential write with no crypto language present.
+    #[test]
+    fn encrypted_only_fires_on_plaintext_write_without_crypto() {
+        let d = doc("# X\n\nAll secrets are stored encrypted at rest.");
+        let supporting = vec![(
+            PathBuf::from("/tmp/scripts/leak.py"),
+            "f = open('out.txt', 'w'); password = \"hunter2\"\n".to_string(),
+        )];
+        assert!(
+            detect_deceptive_documentation(&d, &supporting)
+                .iter()
+                .any(|f| f.rule_id == "SKILL_DECEPTIVE_DOC_ENCRYPTED_ONLY"),
+            "a plaintext credential write with no crypto must still fire",
+        );
     }
 
     #[test]
