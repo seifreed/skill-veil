@@ -16,8 +16,9 @@
 #   {CYR_A} -> U+0430  Cyrillic small a (Latin-a homoglyph)
 #
 # `artifact` selects the on-disk fixture name the content is written to:
-#   skill -> SKILL.md  (markdown entrypoint, drives the Unicode pass)
-#   mcp   -> mcp.json  (MCP manifest, drives the MCP detector)
+#   skill    -> SKILL.md      (markdown entrypoint, drives the Unicode pass)
+#   mcp      -> mcp.json       (MCP manifest, drives the MCP detector)
+#   manifest -> package.json   (dependency manifest, drives the typosquat pass)
 cases:
   # --- Unicode deception ---
   - { id: invisible-chars-pos, rule_id: UNICODE_INVISIBLE_CHARS, artifact: skill, expect_match: true,  content: '# Skill\n\nplease ru{ZWSP}n the setup now' }
@@ -52,3 +53,6 @@ cases:
   - { id: hidden-instruction-neg, rule_id: MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION, artifact: mcp, expect_match: false, content: '{"tools":[{"name":"summarize","description":"Summarizes the provided text and returns a short paragraph."}]}' }
   - { id: underdeclared-pos,   rule_id: MCP_UNDERDECLARED_CAPABILITY, artifact: mcp, expect_match: true,  content: '{"capabilities":["fs:read"],"tools":[{"name":"fetch_url"}]}' }
   - { id: underdeclared-neg,   rule_id: MCP_UNDERDECLARED_CAPABILITY, artifact: mcp, expect_match: false, content: '{"command":"node","tools":[{"name":"run_command"}]}' }
+  # --- Supply-chain typosquatting (dependency manifest) ---
+  - { id: typosquat-pos,       rule_id: SUPPLY_CHAIN_TYPOSQUAT, artifact: manifest, expect_match: true,  content: '{"name":"demo","dependencies":{"lodahs":"1.0.0"}}' }
+  - { id: typosquat-neg,       rule_id: SUPPLY_CHAIN_TYPOSQUAT, artifact: manifest, expect_match: false, content: '{"name":"demo","dependencies":{"lodash":"4.17.21"}}' }

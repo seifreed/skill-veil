@@ -434,7 +434,8 @@ impl CompiledRule {
             .artifact(artifact_kind, None)
             .matched_on(target)
             .match_value(match_value_str)
-            .reason(reason);
+            .reason(reason)
+            .taxonomy_tags(self.rule.taxonomy_tags.clone());
         if let Some(sc) = signal_class_override {
             builder = builder.signal_class(sc);
         }

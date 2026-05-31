@@ -11,6 +11,7 @@ mod enums;
 mod mapping;
 mod permissions;
 mod summary;
+mod taxonomy;
 mod types;
 mod weights;
 
@@ -28,6 +29,7 @@ pub use permissions::{
     DECLARED_PERMISSION_RULES,
 };
 pub use summary::{ActionTrigger, FindingSummary, RiskFactor, SeverityCounts};
+pub use taxonomy::{TaxonomyTag, TAXONOMY_TAGS};
 pub use types::{
     BlastRadiusSummary, Finding, HygieneSummary, PackageVerdictReport, RootCauseGroup,
     SuppressionRecord, VerdictCalibrationNote, VerdictReason,

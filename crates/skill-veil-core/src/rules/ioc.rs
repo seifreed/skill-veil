@@ -117,6 +117,7 @@ fn push_ioc_rule(
         shield: None,
         enabled: true,
         tags: vec!["ioc".to_string(), spec.ioc_tag.to_string()],
+        taxonomy_tags: Vec::new(),
         promptintel_threats: Vec::new(),
         requires_code_artifact: false,
         downgrade_when_confirmation_gate: false,

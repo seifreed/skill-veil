@@ -36,14 +36,44 @@ impl UnifiedConfig {
         let vt_apikey = extract_vt_apikey(parsed_unified.as_ref());
         let promptintel_apikey = extract_promptintel_apikey(parsed_unified.as_ref());
         let osv = extract_osv_settings(parsed_unified.as_ref());
+        let abandoned = extract_abandoned_settings(parsed_unified.as_ref());
 
         Ok(Self {
             llm: resolve_llm(parsed_unified.as_ref())?,
             vt_apikey,
             promptintel_apikey,
             osv,
+            abandoned,
         })
     }
+}
+
+/// Resolve the `[abandoned]` section into [`AbandonedSettings`]. An absent
+/// section or fields fall back to the opt-in defaults (disabled, 30-day cache,
+/// 730-day staleness, online). Non-positive `cache_ttl_days` / `stale_days`
+/// are clamped to their defaults so a typo cannot silently disable the check.
+fn extract_abandoned_settings(parsed: Option<&FileFormat>) -> super::AbandonedSettings {
+    let mut settings = super::AbandonedSettings::default();
+    let Some(section) = parsed.and_then(|f| f.abandoned.as_ref()) else {
+        return settings;
+    };
+    if let Some(enable) = section.enable {
+        settings.enabled = enable;
+    }
+    if let Some(days) = section.cache_ttl_days {
+        if days > 0 {
+            settings.cache_ttl_days = days;
+        }
+    }
+    if let Some(days) = section.stale_days {
+        if days > 0 {
+            settings.stale_days = days;
+        }
+    }
+    if let Some(offline) = section.offline {
+        settings.offline = offline;
+    }
+    settings
 }
 
 /// Resolve the `[osv]` section into [`OsvSettings`]. An absent section or
@@ -165,5 +195,42 @@ provider = "lmstudio"
         .expect("parses");
         assert!(extract_vt_apikey(Some(&parsed)).is_none());
         assert!(extract_vt_apikey(None).is_none());
+    }
+
+    /// Contract: a populated `[abandoned]` section resolves onto
+    /// `AbandonedSettings`, and a non-positive `stale_days` is clamped to the
+    /// default rather than silently disabling the staleness check.
+    #[test]
+    fn extract_abandoned_settings_reads_section_and_clamps_invalid_values() {
+        let parsed: FileFormat = toml::from_str(
+            r#"
+[abandoned]
+enable = true
+cache_ttl_days = 14
+stale_days = 0
+offline = true
+"#,
+        )
+        .expect("parses");
+        let settings = extract_abandoned_settings(Some(&parsed));
+        assert!(settings.enabled);
+        assert_eq!(settings.cache_ttl_days, 14);
+        assert_eq!(
+            settings.stale_days,
+            crate::config::ABANDONED_DEFAULT_STALE_DAYS,
+            "a non-positive stale_days must clamp to the default"
+        );
+        assert!(settings.offline);
+    }
+
+    /// Contract (negative): an absent `[abandoned]` section yields the opt-in
+    /// defaults (disabled) without panicking.
+    #[test]
+    fn extract_abandoned_settings_defaults_when_absent() {
+        let parsed: FileFormat =
+            toml::from_str("[llm]\nprovider = \"lmstudio\"\n").expect("parses");
+        let settings = extract_abandoned_settings(Some(&parsed));
+        assert!(!settings.enabled);
+        assert!(!extract_abandoned_settings(None).enabled);
     }
 }

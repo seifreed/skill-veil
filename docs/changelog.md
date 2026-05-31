@@ -25,11 +25,35 @@ release process is formalized.
 - OSV.dev CVE lookup (opt-in, advisory-only): `--osv` /
   `SKILL_VEIL_OSV=1` / `[osv]` config, on-disk TTL cache with an offline
   mode. Never changes the verdict.
+- Typosquatting detector (native, verdict-affecting): offline
+  Damerau-Levenshtein check of declared dependency names against an
+  embedded list of popular npm/PyPI/crates packages, with
+  ecosystem-aware canonicalisation so registry-equivalent names
+  (`python_dateutil` == `python-dateutil`) are not flagged
+  (`SUPPLY_CHAIN_TYPOSQUAT`).
+- Abandoned/unmaintained-package check (opt-in, advisory-only):
+  `--abandoned` / `SKILL_VEIL_ABANDONED=1` / `[abandoned]` config.
+  Per-registry metadata lookup (npm/PyPI/crates.io) flags deprecated /
+  yanked packages and dependencies with no release in `stale_days`
+  (default 730). On-disk TTL cache + offline mode. Never changes the
+  verdict.
+- Named taxonomy tags (`TaxonomyTag`): an orthogonal, frozen vocabulary
+  (`memory_poisoning`, `rogue_agent`, `excessive_agency`,
+  `output_handling`, `trigger_abuse`, `system_prompt_leakage`) attached
+  to rules via `taxonomy_tags:` and propagated onto findings; surfaced
+  in JSON and SARIF (`properties.tags`). Communication-only — never
+  feeds verdict scoring. The embedded baseline tags the supplementary
+  `SKILL_*` rules (`builtin_rules.yaml`) and the native `MCP_*`
+  detectors; the `official` pack carries the same tags via the
+  `skill-veil-rules` repo (kept byte-identical to the embedded mirror by
+  `rules_repo_mirror`), so its `OFFICIAL_*` tags land on the next signed
+  rules release.
 
 ### Changed
-- Native detector rule IDs (`UNICODE_*`, `MCP_*`) are now a documented
-  public-compatibility surface, registered in `NATIVE_DETECTOR_RULE_IDS`
-  and pinned by a frozen-registry test plus an E2E fixture corpus.
+- Native detector rule IDs (`UNICODE_*`, `MCP_*`, `SUPPLY_CHAIN_TYPOSQUAT`)
+  are now a documented public-compatibility surface, registered in
+  `NATIVE_DETECTOR_RULE_IDS` and pinned by a frozen-registry test plus an
+  E2E fixture corpus.
 
 ### Fixed
 - OSV detail-fetch budget (`MAX_ADVISORY_DETAILS`) no longer counts cache

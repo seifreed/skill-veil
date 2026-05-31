@@ -5,6 +5,7 @@ use super::enums::{
 };
 use super::permissions::DeclaredPermission;
 use super::summary::RiskFactor;
+use super::taxonomy::TaxonomyTag;
 use serde::{Deserialize, Serialize};
 
 /// Structured reason contributing to the final verdict.
@@ -78,6 +79,11 @@ pub struct Finding {
     /// Operational contexts impacted by this finding.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub operational_contexts: Vec<OperationalContext>,
+    /// Named taxonomy labels carried over from the rule that produced this
+    /// finding. Orthogonal to `category`: communication-only, never feeds
+    /// verdict scoring. Additive field — older caches deserialise to empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub taxonomy_tags: Vec<TaxonomyTag>,
     /// Line number if available
     pub line_number: Option<usize>,
     /// Set when this finding was suppressed by an inline annotation; absent for active findings.

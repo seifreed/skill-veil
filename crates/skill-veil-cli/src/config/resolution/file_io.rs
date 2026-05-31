@@ -79,6 +79,11 @@ pub(super) struct FileFormat {
     /// `offline` tune the on-disk cache.
     #[serde(default)]
     pub(super) osv: Option<FileOsvSection>,
+    /// Optional `[abandoned]` section for the abandoned/unmaintained-package
+    /// check. Keyless. `enable` opts in; `cache_ttl_days`, `stale_days`, and
+    /// `offline` tune the behaviour.
+    #[serde(default)]
+    pub(super) abandoned: Option<FileAbandonedSection>,
 }
 
 impl fmt::Debug for FileFormat {
@@ -88,6 +93,7 @@ impl fmt::Debug for FileFormat {
             .field("vt", &self.vt)
             .field("promptintel", &self.promptintel)
             .field("osv", &self.osv)
+            .field("abandoned", &self.abandoned)
             .finish()
     }
 }
@@ -129,6 +135,19 @@ pub(super) struct FileOsvSection {
     pub(super) enable: Option<bool>,
     #[serde(default)]
     pub(super) cache_ttl_days: Option<i64>,
+    #[serde(default)]
+    pub(super) offline: Option<bool>,
+}
+
+#[derive(Deserialize, Default, Debug)]
+#[serde(deny_unknown_fields)]
+pub(super) struct FileAbandonedSection {
+    #[serde(default)]
+    pub(super) enable: Option<bool>,
+    #[serde(default)]
+    pub(super) cache_ttl_days: Option<i64>,
+    #[serde(default)]
+    pub(super) stale_days: Option<i64>,
     #[serde(default)]
     pub(super) offline: Option<bool>,
 }

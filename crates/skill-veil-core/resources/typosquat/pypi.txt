@@ -1,0 +1,57 @@
+# Popular PyPI package names for typosquatting comparison.
+# Curated subset of the most-downloaded PyPI packages.
+# One name per line; blank lines and lines starting with '#' are ignored.
+# Source: PyPI top-packages / pypistats. Names normalised to lowercase.
+# Regenerate periodically.
+requests
+urllib3
+setuptools
+boto3
+botocore
+certifi
+idna
+charset-normalizer
+six
+python-dateutil
+pyyaml
+numpy
+pandas
+scipy
+click
+flask
+django
+fastapi
+jinja2
+werkzeug
+sqlalchemy
+pydantic
+aiohttp
+httpx
+beautifulsoup4
+lxml
+pillow
+matplotlib
+scikit-learn
+tensorflow
+torch
+transformers
+openai
+tqdm
+rich
+typer
+colorama
+packaging
+wheel
+pip
+cryptography
+pyjwt
+redis
+celery
+pytest
+tox
+black
+flake8
+mypy
+isort
+psycopg2
+pymongo

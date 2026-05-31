@@ -30,6 +30,8 @@ pub const MCP_WILDCARD_CAPABILITY: &str = "MCP_WILDCARD_CAPABILITY";
 pub const MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION: &str = "MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION";
 pub const MCP_UNDERDECLARED_CAPABILITY: &str = "MCP_UNDERDECLARED_CAPABILITY";
 
+pub const SUPPLY_CHAIN_TYPOSQUAT: &str = "SUPPLY_CHAIN_TYPOSQUAT";
+
 /// Frozen registry of every rule ID emitted by the native parity detectors.
 /// Used by the public stability contract and the regression harness in
 /// `tests/native_detector_ids.rs`.
@@ -49,6 +51,7 @@ pub const NATIVE_DETECTOR_RULE_IDS: &[&str] = &[
     MCP_WILDCARD_CAPABILITY,
     MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION,
     MCP_UNDERDECLARED_CAPABILITY,
+    SUPPLY_CHAIN_TYPOSQUAT,
 ];
 
 #[cfg(test)]
@@ -70,6 +73,7 @@ mod tests {
             "MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION",
             "MCP_UNDERDECLARED_CAPABILITY",
             "MCP_WILDCARD_CAPABILITY",
+            "SUPPLY_CHAIN_TYPOSQUAT",
             "UNICODE_BIDI_OVERRIDE",
             "UNICODE_HOMOGLYPH_MIX",
             "UNICODE_INVISIBLE_CHARS",

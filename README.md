@@ -56,6 +56,9 @@ malware engine.
 | **Benchmarking** | Labeled corpus, confidence calibration, threshold tuning, and release history dashboard |
 | **VirusTotal Integration** | Bulk download, report caching, and cross-check between skill-veil verdicts and VT Code Insight |
 | **OSV.dev CVE Lookup** | Opt-in, advisory-only query of OSV.dev for known CVEs in a package's pinned dependencies; on-disk TTL cache with an offline mode; never changes the verdict |
+| **Typosquat Detection** | Offline edit-distance check of declared dependency names against an embedded list of popular npm/PyPI/crates packages; verdict-affecting (`SUPPLY_CHAIN_TYPOSQUAT`) |
+| **Abandoned Packages** | Opt-in, advisory-only registry check (npm/PyPI/crates.io) for deprecated/yanked or long-unmaintained dependencies; on-disk TTL cache + offline mode; never changes the verdict |
+| **Named Taxonomy** | First-class `taxonomy_tags` on rules/findings (memory poisoning, rogue agent, excessive agency, output handling, trigger abuse, system-prompt leakage), surfaced in JSON + SARIF |
 | **PromptIntel Integration** | Curated jailbreak corpus + agent-feed IOC enrichment + threat-intel report submission with persistent rate-limit tracker |
 | **LLM Enrichment** | Optional third scoring engine across Ollama, LM Studio, OpenAI, Anthropic, and Ollama Cloud |
 | **LLM Adjudication** | Gated, ≥2-of-3 consensus reconciliation: taint-FP `Malicious→Suspicious` downgrade and the symmetric FN `Suspicious→Malicious` upgrade; immutable core verdict; single-provider-flip prompt-injection signal; offline replay tooling (`adjudication-eval`) |
@@ -63,7 +66,7 @@ malware engine.
 | **Ground-Truth Corpus** | Curated gold corpus (3-LLM consensus + human review of disputes) scored by the same pipeline as the regression baseline |
 | **Native NOVA Semantics** | `semantics:` patterns run on-device by default via a local sentence-embedding model; opt out with `--no-nova-semantics` |
 | **Inline Suppressions** | `# skill-veil:ignore`, `nosem`, and `nosemgrep` markers with optional rule-id and reason |
-| **Unified Config** | Single `~/.skill-veil.toml` for VT, LLM, PromptIntel, and OSV settings; per-flag overrides on the CLI |
+| **Unified Config** | Single `~/.skill-veil.toml` for VT, LLM, PromptIntel, OSV, and abandoned-package settings; per-flag overrides on the CLI |
 
 ### What It Detects
 
@@ -71,7 +74,8 @@ malware engine.
 Behavior        Remote execution, install hooks, deferred execution, persistence
 Composite       Fake-dependency dropper, crypto wallet-drainer staging,
                 C2 beacon staging (k-of-n; each signal benign alone)
-Supply Chain    Unpinned dependencies, missing lockfiles, remote MCP endpoints
+Supply Chain    Unpinned dependencies, missing lockfiles, remote MCP endpoints,
+                typosquatted dependency names (edit-distance vs popular packages)
 Deception       Invisible/zero-width chars, bidi overrides (Trojan Source),
                 tag-block ASCII smuggling, Latin↔Cyrillic/Greek homoglyphs
 Script AST      Dynamic eval, process spawning, dynamic imports, indirect
@@ -84,9 +88,31 @@ LLM Integrity   Single-provider benign flip vs ≥2 dissenters (prompt injection
 Prompt Risk     Persistent instruction tampering, cognitive rootkits, prompt packs
 Tooling Risk    Tool abuse, autonomy escalation, approval bypass patterns
 Runtime Risk    Privileged containers, host mounts, process execution, secret access
+Taxonomy        Named tags on rules/findings — memory poisoning, rogue agent,
+                excessive agency, output handling, trigger abuse, system-prompt
+                leakage (JSON + SARIF `tags`)
 Artifacts       package.json, requirements.txt, pyproject.toml, Cargo.toml,
                 Dockerfile, docker-compose, lockfiles, Makefile, .npmrc, pip.conf
 ```
+
+#### Named taxonomy coverage
+
+Beyond the scoring `category`, rules and findings carry orthogonal
+`taxonomy_tags` so coverage of the shared agent-skill threat vocabulary is
+demonstrable in machine-readable output (JSON / SARIF `tags`). The embedded
+baseline tags the supplementary `SKILL_*` rules and the native `MCP_*`
+detectors directly; the `official` (`OFFICIAL_*`) pack carries the same tags
+via the [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules)
+repo (its tags ship to end users on the next signed rules release).
+
+| Taxonomy tag | Representative rules (embedded baseline) |
+|---|---|
+| `memory_poisoning` | `SKILL_PROMPT_TAMPERING_OVERRIDE`, `SKILL_MEMORY_WIPE`, `SKILL_PROMPT_HIJACK_JAILBREAK`, `MCP_TOOL_DESCRIPTION_HIDDEN_INSTRUCTION` |
+| `rogue_agent` | `SKILL_REMOTE_SELF_UPDATE`, `SKILL_SELF_REGISTER_INSTALL_ENDPOINT`, `SKILL_CRON_PERSISTENCE`, `SKILL_LAUNCHAGENT_PERSISTENCE` |
+| `excessive_agency` | `SKILL_AUTONOMY_ESCALATION_NO_REVIEW`, `SKILL_AUTONOMY_OVERRIDE`, `SKILL_TOOL_ABUSE_SESSION_EXTRACTION`, `MCP_WILDCARD_CAPABILITY` |
+| `trigger_abuse` | `SKILL_CHINESE_CONDITIONAL_AUTONOMY` |
+| `system_prompt_leakage` | `SKILL_TOOL_ABUSE_SESSION_EXTRACTION` |
+| `output_handling` | `OFFICIAL_PROMPT_TAMPERING_DUAL_OUTPUT_SECTION` *(via skill-veil-rules)* |
 
 ---
 
@@ -113,6 +139,7 @@ Skill-veil's rule pack targets that surface:
 | Unicode deception | invisible / bidi / tag-block / homoglyph tokens (`UNICODE_*`) |
 | Script behavior (AST) | dynamic `eval`, process spawn, dynamic import in Python/JS/TS |
 | MCP least-privilege | wildcard grants, under-declared capabilities, tool-description poisoning (`MCP_*`) |
+| Typosquatting | dependency name one edit away from a popular npm/PyPI/crates package (`SUPPLY_CHAIN_TYPOSQUAT`) |
 
 ### Benchmark on the VT-flagged corpus
 

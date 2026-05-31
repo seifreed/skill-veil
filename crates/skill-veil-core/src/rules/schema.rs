@@ -1,5 +1,5 @@
 use super::condition::RuleCondition;
-use crate::findings::{RecommendedAction, Severity, ThreatCategory};
+use crate::findings::{RecommendedAction, Severity, TaxonomyTag, ThreatCategory};
 use serde::{Deserialize, Serialize};
 
 /// Shield hint for policy generation
@@ -45,6 +45,11 @@ pub struct Rule {
     /// Tags for filtering
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Named threat-taxonomy labels (e.g. `memory_poisoning`,
+    /// `system_prompt_leakage`). Orthogonal to `category`: propagated onto
+    /// findings for demonstrable coverage in JSON/SARIF, never feeds scoring.
+    #[serde(default)]
+    pub taxonomy_tags: Vec<TaxonomyTag>,
     /// Optional list of upstream PromptIntel threat names this rule
     /// covers (e.g. `["Jailbreak", "Hidden instruction in code or
     /// comments"]`). Used by the `promptintel coverage` command to

@@ -54,6 +54,40 @@ pub(crate) struct UnifiedConfig {
     /// disabled (opt-in) — the `--osv` flag and `SKILL_VEIL_OSV` env var
     /// override `enable`.
     pub osv: OsvSettings,
+    /// Abandoned/unmaintained-package settings from the `[abandoned]` section.
+    /// Defaults to disabled (opt-in) — the `--abandoned` flag and
+    /// `SKILL_VEIL_ABANDONED` env var override `enable`.
+    pub abandoned: AbandonedSettings,
+}
+
+/// Settings for the abandoned/unmaintained-package enrichment
+/// (`[abandoned]` section).
+#[derive(Debug, Clone)]
+pub(crate) struct AbandonedSettings {
+    /// Run the check. Opt-in: `false` unless `[abandoned] enable = true`, the
+    /// `--abandoned` flag, or `SKILL_VEIL_ABANDONED=1`.
+    pub enabled: bool,
+    /// Days a cached metadata result is reused before re-querying.
+    pub cache_ttl_days: i64,
+    /// A package with no release newer than this many days is flagged as
+    /// unmaintained.
+    pub stale_days: i64,
+    /// Serve only the on-disk cache; never touch the network.
+    pub offline: bool,
+}
+
+/// Default "no release in N days → unmaintained" threshold (two years).
+pub(crate) const ABANDONED_DEFAULT_STALE_DAYS: i64 = 730;
+
+impl Default for AbandonedSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cache_ttl_days: OSV_DEFAULT_CACHE_TTL_DAYS,
+            stale_days: ABANDONED_DEFAULT_STALE_DAYS,
+            offline: false,
+        }
+    }
 }
 
 /// Settings for the OSV.dev CVE-lookup enrichment (`[osv]` section).
@@ -94,6 +128,7 @@ impl std::fmt::Debug for UnifiedConfig {
                 &self.promptintel_apikey.as_deref().map(|_| "<redacted>"),
             )
             .field("osv", &self.osv)
+            .field("abandoned", &self.abandoned)
             .finish()
     }
 }
@@ -207,6 +242,7 @@ mod tests {
             vt_apikey: Some("vt-secret-do-not-leak".to_string()),
             promptintel_apikey: Some("promptintel-secret-do-not-leak".to_string()),
             osv: OsvSettings::default(),
+            abandoned: AbandonedSettings::default(),
         };
 
         let rendered = format!("{config:?}");

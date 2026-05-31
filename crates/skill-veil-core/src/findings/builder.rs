@@ -1,7 +1,7 @@
 use super::{
     artifact_scope_for_kind, calibrate_confidence, default_operational_contexts,
     default_remediation, signal_class_for, ArtifactKind, ArtifactScope, EvidenceKind, Finding,
-    MatchTarget, RecommendedAction, Severity, SignalClass, ThreatCategory,
+    MatchTarget, RecommendedAction, Severity, SignalClass, TaxonomyTag, ThreatCategory,
 };
 
 const DEFAULT_FINDING_CONFIDENCE: f32 = 0.9;
@@ -97,6 +97,7 @@ pub struct FindingBuilder {
     signal_class: Option<SignalClass>,
     artifact_path: Option<String>,
     line_number: Option<usize>,
+    taxonomy_tags: Vec<TaxonomyTag>,
     action_explicit: bool,
 }
 
@@ -124,6 +125,7 @@ impl FindingBuilder {
             signal_class: None,
             artifact_path: None,
             line_number: None,
+            taxonomy_tags: Vec::new(),
             action_explicit: false,
         }
     }
@@ -221,6 +223,12 @@ impl FindingBuilder {
         self
     }
 
+    /// Set the named taxonomy tags carried onto the finding.
+    pub fn taxonomy_tags(mut self, taxonomy_tags: Vec<TaxonomyTag>) -> Self {
+        self.taxonomy_tags = taxonomy_tags;
+        self
+    }
+
     /// Build the Finding instance
     #[must_use]
     pub fn build(self) -> Finding {
@@ -252,6 +260,7 @@ impl FindingBuilder {
             signal_class,
             artifact_path: self.artifact_path,
             operational_contexts,
+            taxonomy_tags: self.taxonomy_tags,
             line_number: self.line_number,
             suppression: None,
         }

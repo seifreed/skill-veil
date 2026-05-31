@@ -426,6 +426,15 @@ pub(crate) fn run_scan(
         print!("{osv_block}");
     }
 
+    if let Some(abandoned_block) = crate::abandoned::try_enrich_with_abandoned(
+        &scan_result,
+        args.abandoned,
+        args.cache_dir.as_deref(),
+        quiet,
+    )? {
+        print!("{abandoned_block}");
+    }
+
     if !args.no_llm_enrich {
         let llm_provider_override = resolve_llm_provider_override(args.llm_provider.as_deref())?;
         if let Some(llm_block) = llm::try_enrich_with_llm(

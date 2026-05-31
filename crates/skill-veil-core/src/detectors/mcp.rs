@@ -2,7 +2,8 @@ use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, Artifact
 use crate::detectors::native_ids;
 use crate::detectors::network::webhook::classify_webhook_exposure;
 use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, TaxonomyTag,
+    ThreatCategory,
 };
 use crate::lazy_pattern;
 use crate::services::ArtifactOrchestratorService;
@@ -270,6 +271,7 @@ fn mcp_least_privilege_and_poisoning_findings(content: &str, artifact_path: &str
                 })
                 .match_value("wildcard capability/permission grant")
                 .reason("MCP manifest grants a wildcard capability, permission, or scope instead of an explicit least-privilege set")
+                .taxonomy_tags(vec![TaxonomyTag::ExcessiveAgency])
                 .build(),
         );
     }
@@ -292,6 +294,7 @@ fn mcp_least_privilege_and_poisoning_findings(content: &str, artifact_path: &str
             })
             .match_value("instruction-like directive in tool description")
             .reason("MCP tool description embeds agent-directed instructions (tool poisoning): the model reads the description as guidance even though a human reviewer treats it as documentation")
+            .taxonomy_tags(vec![TaxonomyTag::MemoryPoisoning])
             .build(),
         );
     }

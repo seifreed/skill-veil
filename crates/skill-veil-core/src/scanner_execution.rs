@@ -221,6 +221,8 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     let artifact_path = path.display().to_string();
     let primary_content = doc.raw_content.clone();
 
+    let dependencies = collect_dependency_inventory(scanner, &doc, path, &primary_content);
+
     let (raw_findings, artifact_graph) = collect_raw_findings(
         scanner,
         &doc,
@@ -228,6 +230,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         artifact_kind,
         &artifact_path,
         &primary_content,
+        &dependencies,
     );
     let (raw_findings, suppressed_findings) = if scanner.honor_inline_suppressions() {
         collect_and_apply_suppressions(scanner, raw_findings, path, &doc, &primary_content)
@@ -249,7 +252,6 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     ) = build_verdict_and_summaries(&filtered_findings, &artifact_graph, path, artifact_kind);
     let should_fail = scanner.filter_service().should_fail(&filtered_findings);
     let extracted_iocs = collect_extracted_iocs(scanner, &doc, path, &primary_content);
-    let dependencies = collect_dependency_inventory(scanner, &doc, path, &primary_content);
 
     let metadata = build_artifact_metadata(path, &doc, artifact_kind);
     Ok(ScanResult {
@@ -449,6 +451,7 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     artifact_kind: ArtifactKind,
     artifact_path: &str,
     primary_content: &str,
+    dependencies: &[crate::dependency_inventory::ParsedDependency],
 ) -> (Vec<Finding>, ArtifactGraph) {
     let mut findings = scanner.engine().evaluate(doc);
     findings.extend(collect_primary_doc_warnings::<F>(doc, path));
@@ -460,6 +463,7 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
         artifact_kind,
         artifact_path,
     ));
+    findings.extend(crate::detectors::typosquat::scan_typosquat(dependencies));
     if let Some(w) = structured_parse_warning(path, primary_content, artifact_kind) {
         findings.push(w);
     }

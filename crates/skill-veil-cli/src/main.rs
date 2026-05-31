@@ -2,6 +2,7 @@
 //!
 //! Behavioral & Supply-Chain Security Analysis for Agent Skills
 
+mod abandoned;
 mod benchmark_output;
 mod cli_args;
 mod color;

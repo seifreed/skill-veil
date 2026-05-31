@@ -608,6 +608,12 @@ pub struct ScanArgs {
     /// Advisory only — never changes the skill-veil verdict.
     #[arg(long, default_value_t = false)]
     pub osv: bool,
+    /// Check the package's declared dependencies for deprecated or
+    /// long-unmaintained packages via their registries (npm/PyPI/crates.io).
+    /// Opt-in (network): also enabled by setting `SKILL_VEIL_ABANDONED=1`.
+    /// Advisory only — never changes the skill-veil verdict.
+    #[arg(long, default_value_t = false)]
+    pub abandoned: bool,
     /// Disable LLM enrichment even when `~/.skill-veil.toml` has an `[llm]`
     /// section. Enrichment is otherwise auto-activated when config exists.
     #[arg(long, default_value_t = false)]

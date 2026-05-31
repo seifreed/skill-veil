@@ -104,8 +104,8 @@ pub use findings::{
     BlastRadiusLevel, BlastRadiusSummary, ConsensusClass, ConsensusDiscrepancy, DeclaredPermission,
     DeduplicationSummary, EvidenceKind, Finding, FindingSummary, HygieneSummary, MatchTarget,
     OperationalContext, PackageHealth, PackageVerdictReport, ProviderVote, RecommendedAction,
-    RiskFactor, RootCauseGroup, Severity, SeverityCounts, SignalClass, ThreatCategory, Verdict,
-    VerdictReason, RISK_THRESHOLD_BLOCK,
+    RiskFactor, RootCauseGroup, Severity, SeverityCounts, SignalClass, TaxonomyTag, ThreatCategory,
+    Verdict, VerdictReason, RISK_THRESHOLD_BLOCK, TAXONOMY_TAGS,
 };
 pub use ioc_extraction::{ExtractedIocs, FileHash};
 pub use path_safety::path_stays_within_base;

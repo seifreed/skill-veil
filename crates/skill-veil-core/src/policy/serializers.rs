@@ -294,16 +294,32 @@ fn build_sarif_finding_results(
                 text: format!("{}: {}", finding.reason, finding.match_value),
             },
             locations: sarif_locations_for_finding(finding),
-            properties: Some(serde_json::json!({
-                "artifact_kind": finding.artifact_kind,
-                "artifact_scope": finding.artifact_scope,
-                "signal_class": finding.signal_class,
-                "evidence_kind": finding.evidence_kind,
-                "recommended_action": finding.recommended_action,
-                "package_verdict": verdict_report.verdict,
-            })),
+            properties: Some(sarif_finding_properties(finding, verdict_report)),
         })
         .collect()
+}
+
+fn sarif_finding_properties(
+    finding: &Finding,
+    verdict_report: &PackageVerdictReport,
+) -> serde_json::Value {
+    let mut properties = serde_json::json!({
+        "artifact_kind": finding.artifact_kind,
+        "artifact_scope": finding.artifact_scope,
+        "signal_class": finding.signal_class,
+        "evidence_kind": finding.evidence_kind,
+        "recommended_action": finding.recommended_action,
+        "package_verdict": verdict_report.verdict,
+    });
+    if !finding.taxonomy_tags.is_empty() {
+        let tags: Vec<String> = finding
+            .taxonomy_tags
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        properties["tags"] = serde_json::json!(tags);
+    }
+    properties
 }
 
 fn build_sarif_trigger_results(

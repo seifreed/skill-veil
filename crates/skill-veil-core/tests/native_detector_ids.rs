@@ -40,6 +40,7 @@ fn entrypoint_name(artifact: &str) -> &'static str {
     match artifact {
         "skill" => "SKILL.md",
         "mcp" => "mcp.json",
+        "manifest" => "package.json",
         other => panic!("unknown artifact kind in fixture: {other}"),
     }
 }

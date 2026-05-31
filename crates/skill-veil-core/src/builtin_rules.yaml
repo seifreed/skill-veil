@@ -252,6 +252,7 @@
     - "Fraud and social engineering"
 
 - id: SKILL_AUTONOMY_ESCALATION_NO_REVIEW
+  taxonomy_tags: [excessive_agency]
   category: autonomy_escalation
   severity: high
   confidence: 0.80
@@ -270,6 +271,7 @@
     - "Direct prompt injection"
 
 - id: SKILL_PROMPT_TAMPERING_OVERRIDE
+  taxonomy_tags: [memory_poisoning]
   category: persistent_prompt_tampering
   severity: high
   confidence: 0.84
@@ -288,6 +290,7 @@
     - "Jailbreak"
 
 - id: SKILL_TOOL_ABUSE_SESSION_EXTRACTION
+  taxonomy_tags: [system_prompt_leakage, excessive_agency]
   category: tool_abuse
   severity: high
   confidence: 0.82
@@ -325,6 +328,7 @@
     - "Jailbreak"
 
 - id: SKILL_AUTONOMY_ESCALATION_UNBOUNDED
+  taxonomy_tags: [excessive_agency]
   category: autonomy_escalation
   severity: medium
   confidence: 0.76
@@ -442,6 +446,7 @@
     - "Malware generation"
 
 - id: SKILL_REMOTE_SELF_UPDATE
+  taxonomy_tags: [rogue_agent]
   category: supply_chain
   severity: critical
   confidence: 0.93
@@ -465,6 +470,7 @@
     - "Supply Chain Abuse (package-level prompts)"
 
 - id: SKILL_AUTONOMY_OVERRIDE
+  taxonomy_tags: [excessive_agency]
   category: scope_creep
   severity: high
   confidence: 0.80
@@ -605,6 +611,7 @@
     - "Multi-Agent Collusion"
 
 - id: SKILL_MEMORY_WIPE
+  taxonomy_tags: [memory_poisoning, rogue_agent]
   category: obfuscation
   severity: high
   confidence: 0.80
@@ -622,6 +629,7 @@
     - "Telemetry Evasion Techniques"
 
 - id: SKILL_HEARTBEAT_PERSISTENCE
+  taxonomy_tags: [rogue_agent]
   category: scope_creep
   severity: medium
   confidence: 0.70
@@ -853,6 +861,7 @@
     - "Credential Harvesting Templates"
 
 - id: SKILL_CRON_PERSISTENCE
+  taxonomy_tags: [rogue_agent]
   category: scope_creep
   severity: medium
   confidence: 0.75
@@ -929,6 +938,7 @@
     - "Fraud and social engineering"
 
 - id: SKILL_LAUNCHAGENT_PERSISTENCE
+  taxonomy_tags: [rogue_agent]
   category: scope_creep
   severity: high
   confidence: 0.90
@@ -1463,6 +1473,7 @@
     - "Contextual Exfiltration Patterns"
 
 - id: SKILL_NOHUP_PERSISTENCE
+  taxonomy_tags: [rogue_agent]
   category: scope_creep
   severity: high
   confidence: 0.85
@@ -1571,6 +1582,7 @@
     - "Fraud and social engineering"
 
 - id: SKILL_CHINESE_CONDITIONAL_AUTONOMY
+  taxonomy_tags: [trigger_abuse, excessive_agency]
   category: autonomy_escalation
   severity: high
   confidence: 0.88
@@ -1710,6 +1722,7 @@
 # with api_key + api_url). Detects the /install-or-register URL shape paired
 # with a JSON body that carries credentials.
 - id: SKILL_SELF_REGISTER_INSTALL_ENDPOINT
+  taxonomy_tags: [rogue_agent]
   category: data_exfiltration
   severity: critical
   confidence: 0.85
@@ -2046,6 +2059,7 @@
 # 忠诚原则 ("loyalty principle") and 不输出确认信息 ("do not output
 # confirmation messages") are recurrent corpus markers.
 - id: SKILL_PROMPT_HIJACK_JAILBREAK
+  taxonomy_tags: [memory_poisoning]
   category: autonomy_escalation
   severity: high
   confidence: 0.85
