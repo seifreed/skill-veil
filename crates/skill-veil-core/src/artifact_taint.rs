@@ -293,6 +293,98 @@ mod tests {
         );
     }
 
+    /// # Contract
+    ///
+    /// In a cross-node flow, first-party affinity is decided against the
+    /// SOURCE node's credential, even though the external sink lives on a
+    /// different (child) node. A parent that reads `WAHOO_ACCESS_TOKEN`
+    /// and references a child that POSTs to `api.wahooligan.com` is the
+    /// modal benign first-party API client and must be DOWNGRADED.
+    /// Pre-fix the affinity check used the sink node's own secrets (none
+    /// here), so this benign split fired at full `Block` strength.
+    #[test]
+    fn cross_node_first_party_credential_is_downgraded() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_node("client.js", ArtifactKind::ReferencedArtifact);
+        graph.add_edge(
+            "skill.md",
+            "WAHOO_ACCESS_TOKEN",
+            ArtifactRelation::AccessesSecrets,
+        );
+        graph.add_edge("skill.md", "client.js", ArtifactRelation::References);
+        graph.add_edge(
+            "client.js",
+            "https://api.wahooligan.com/v1/user",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("cross-node secret-to-network finding must fire");
+        assert_eq!(
+            f.recommended_action,
+            RecommendedAction::RequireApproval,
+            "first-party cross-node credential must downgrade Block→RequireApproval; got {:?}",
+            f.recommended_action,
+        );
+        assert_eq!(
+            f.signal_class,
+            crate::findings::SignalClass::ReviewSignal,
+            "first-party cross-node credential must downgrade signal_class; got {:?}",
+            f.signal_class,
+        );
+        assert!(
+            f.match_value.contains("sinks_trusted=true"),
+            "downgrade must be recorded in match_value; got {:?}",
+            f.match_value,
+        );
+    }
+
+    /// # Contract (negative — recall guard)
+    ///
+    /// A real cross-node exfil — source reads a victim secret, child
+    /// ships it to an UNRELATED host — must NOT be downgraded by the
+    /// source-credential affinity check. The secret name shares no
+    /// identifying token with the destination, so the finding keeps full
+    /// `Block` strength.
+    #[test]
+    fn cross_node_unrelated_host_keeps_block() {
+        let mut graph = ArtifactGraph::new();
+        graph.add_node("skill.md", ArtifactKind::SkillDocument);
+        graph.add_node("client.js", ArtifactKind::ReferencedArtifact);
+        graph.add_edge(
+            "skill.md",
+            "WAHOO_ACCESS_TOKEN",
+            ArtifactRelation::AccessesSecrets,
+        );
+        graph.add_edge("skill.md", "client.js", ArtifactRelation::References);
+        graph.add_edge(
+            "client.js",
+            "https://collector.attacker-controlled.io/up",
+            ArtifactRelation::ConnectsTo,
+        );
+
+        let findings = derive_taint_findings(&graph, &[]);
+        let f = findings
+            .iter()
+            .find(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK")
+            .expect("cross-node secret-to-network finding must fire");
+        assert_eq!(
+            f.recommended_action,
+            RecommendedAction::Block,
+            "cross-party cross-node exfil must stay Block; got {:?}",
+            f.recommended_action,
+        );
+        assert!(
+            !f.match_value.contains("sinks_trusted=true"),
+            "cross-party exfil must NOT record a downgrade; got {:?}",
+            f.match_value,
+        );
+    }
+
     #[test]
     fn taint_requires_observed_external_network_sink() {
         let mut graph = ArtifactGraph::new();

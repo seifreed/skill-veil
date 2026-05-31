@@ -128,9 +128,44 @@ pub(super) fn all_external_sinks_first_party_or_trusted(
     node_path: &str,
 ) -> bool {
     let secret_names = node_secret_source_names(graph, node_path);
+    external_sinks_clear_downgrade_gate(graph, node_path, &secret_names)
+}
+
+/// Cross-node variant of [`all_external_sinks_first_party_or_trusted`].
+///
+/// In the cross-node scenario the external-network edges live on
+/// `sink_node` but the credential being exfiltrated is read by a
+/// DIFFERENT node, `source_node`. First-party affinity is a question
+/// about *that* credential — "does the destination own the secret being
+/// sent?" — so the sink's destination hosts must be matched against
+/// `source_node`'s secret names, not the sink's. Pre-fix this delegated
+/// to the per-node helper keyed on `sink_node`, which collected the
+/// sink's own secrets (usually none, since the connecting child rarely
+/// re-reads the parent's token); the affinity arm then evaluated an
+/// unrelated credential set, so a benign parent-reads-token /
+/// child-posts-to-its-own-API split never downgraded.
+pub(super) fn cross_node_external_sinks_first_party_or_trusted(
+    graph: &ArtifactGraph,
+    sink_node: &str,
+    source_node: &str,
+) -> bool {
+    let secret_names = node_secret_source_names(graph, source_node);
+    external_sinks_clear_downgrade_gate(graph, sink_node, &secret_names)
+}
+
+/// `true` when `sink_node` has at least one real external-network sink
+/// AND every such sink is either trusted (allowlist) or first-party to
+/// one of `secret_names`. The secret names are supplied by the caller
+/// because the credential owner differs between the per-node case
+/// (same node) and the cross-node case (the source node).
+fn external_sinks_clear_downgrade_gate(
+    graph: &ArtifactGraph,
+    sink_node: &str,
+    secret_names: &BTreeSet<String>,
+) -> bool {
     let mut saw_real_external = false;
     for edge in &graph.edges {
-        if edge.from != node_path {
+        if edge.from != sink_node {
             continue;
         }
         if !matches!(edge.relation, ArtifactRelation::ConnectsTo) {
@@ -140,7 +175,7 @@ pub(super) fn all_external_sinks_first_party_or_trusted(
             continue;
         }
         saw_real_external = true;
-        if !is_trusted_api_host(&edge.to) && !host_matches_secret_owner(&edge.to, &secret_names) {
+        if !is_trusted_api_host(&edge.to) && !host_matches_secret_owner(&edge.to, secret_names) {
             return false;
         }
     }

@@ -1,7 +1,8 @@
 use super::summarization::{sink_summary, source_summary};
 use super::utils::{
     all_external_sinks_first_party_or_trusted, artifact_kind_for_node, artifact_paths,
-    build_sibling_clusters, node_has_sink, node_has_source,
+    build_sibling_clusters, cross_node_external_sinks_first_party_or_trusted, node_has_sink,
+    node_has_source,
 };
 use super::{ArtifactTaintRule, ArtifactTaintRuleGroup, TaintSinkKind, TaintSourceKind};
 use crate::artifact_graph::ArtifactGraph;
@@ -190,19 +191,25 @@ pub(super) fn derive_cross_node_taint_findings(
                     let src = source_summary(graph, source_node, group.source);
                     let snk = sink_summary(graph, sink_node, group.sink);
                     let kind = artifact_kind_for_node(graph, source_node);
-                    // The trusted-host downgrade is keyed on the SINK
-                    // node since that is where the external-network
-                    // edges live. Apply the same gating as the
-                    // per-node pass so a single rule cannot fire at
-                    // full strength via the cross-node path while
-                    // being downgraded via the per-node path.
+                    // The external-network edges live on the SINK node,
+                    // but the credential being exfiltrated is read by the
+                    // SOURCE node — so first-party affinity must match the
+                    // sink's destination hosts against the SOURCE's secret
+                    // names. Apply the same gating as the per-node pass so
+                    // a single rule cannot fire at full strength via the
+                    // cross-node path while being downgraded via the
+                    // per-node path.
                     let apply_downgrade = !suppress_downgrade
                         && matches!(group.sink, TaintSinkKind::ExternalNetwork)
                         && matches!(
                             group.source,
                             TaintSourceKind::SecretAccess | TaintSourceKind::IdentityAccess,
                         )
-                        && all_external_sinks_first_party_or_trusted(graph, sink_node);
+                        && cross_node_external_sinks_first_party_or_trusted(
+                            graph,
+                            sink_node,
+                            source_node,
+                        );
                     for rule in &group.rules {
                         // Check budgets *before* pushing each finding.
                         // Per-group budget prevents a single group from
