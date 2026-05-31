@@ -105,18 +105,10 @@ impl NativeKeywordEvaluator {
         if let Some(rx) = cache.get(&cache_key) {
             return Some(rx.clone());
         }
-        let body = if case_sensitive {
-            pattern.to_string()
-        } else {
-            // Case-insensitive: prepend the inline flag if the
-            // author hasn't already.
-            if pattern.starts_with("(?") {
-                pattern.to_string()
-            } else {
-                format!("(?i){pattern}")
-            }
-        };
-        let rx = regex::Regex::new(&body).ok()?;
+        let rx = regex::RegexBuilder::new(pattern)
+            .case_insensitive(!case_sensitive)
+            .build()
+            .ok()?;
         cache.insert(cache_key, rx.clone());
         Some(rx)
     }
@@ -233,6 +225,37 @@ mod tests {
             Outcome::Match { score: 1.0 }
         );
         assert_eq!(ev.eval("$x", &p, "no number"), Outcome::NoMatch);
+    }
+
+    /// Contract: a case-insensitive (`/…/i`) regex whose body opens
+    /// with a group (`(?:…)`, lookaround, named group) still matches
+    /// case-insensitively. The flag is applied via `RegexBuilder`, so a
+    /// leading `(?` no longer suppresses case-folding.
+    #[test]
+    fn case_insensitive_regex_with_leading_group_folds_case() {
+        let ev = NativeKeywordEvaluator::new();
+        let p = kw(r"(?:Exec|Run)Command", true, false);
+        assert_eq!(
+            ev.eval("$x", &p, "calls execcommand at runtime"),
+            Outcome::Match { score: 1.0 }
+        );
+        assert_eq!(
+            ev.eval("$x", &p, "calls RUNCOMMAND at runtime"),
+            Outcome::Match { score: 1.0 }
+        );
+    }
+
+    /// Contract: a case-sensitive (`/…/`) regex with a leading group is
+    /// NOT silently case-folded — the `RegexBuilder` flag is off.
+    #[test]
+    fn case_sensitive_regex_with_leading_group_stays_exact() {
+        let ev = NativeKeywordEvaluator::new();
+        let p = kw(r"(?:Exec|Run)Command", true, true);
+        assert_eq!(
+            ev.eval("$x", &p, "calls ExecCommand"),
+            Outcome::Match { score: 1.0 }
+        );
+        assert_eq!(ev.eval("$x", &p, "calls execcommand"), Outcome::NoMatch);
     }
 
     /// Contract: an invalid regex from a parsed rule does NOT panic;
