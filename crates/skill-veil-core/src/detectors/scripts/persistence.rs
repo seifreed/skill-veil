@@ -80,8 +80,7 @@ pub(crate) fn detect_shell_persistence_write(
     artifact_path: &str,
 ) -> Vec<Finding> {
     if !matches!(language, "sh" | "bash" | "zsh" | "ksh" | "fish")
-        || !(content_lower.contains("> /etc/")
-            || content_lower.lines().any(is_shell_persistence_write_line))
+        || !content_lower.lines().any(is_shell_persistence_write_line)
     {
         return Vec::new();
     }
@@ -106,10 +105,46 @@ pub(crate) fn detect_shell_persistence_write(
 
 fn is_shell_persistence_write_line(line: &str) -> bool {
     line_invokes_tee_to_startup_target(line)
-        || (line.contains(">> ~/.")
+        // A redirect into a system config path is high-signal on its own.
+        || line_redirects_to(line, "/etc/")
+        // A redirect into a home dotfile is more common benignly, so it
+        // additionally requires a write-command token.
+        || (line_redirects_to(line, "~/.")
             && SHELL_PERSISTENCE_WRITE_TOKENS
                 .iter()
                 .any(|token| line_contains_command_token(line, token)))
+}
+
+/// True when `line` redirects (`>` or `>>`) into a target beginning with
+/// `prefix`, tolerating any whitespace between the operator and the
+/// target and an optional opening quote. Pre-fix the detector matched
+/// `contains("> /etc/")` / `contains(">> ~/.")`, which assumed an exact
+/// operator+space layout and missed `>/etc/profile`, `>>~/.bashrc`, and
+/// single-`>` truncating writes to a startup file — all standard shell.
+fn line_redirects_to(line: &str, prefix: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'>' {
+            let mut j = i + 1;
+            if j < bytes.len() && bytes[j] == b'>' {
+                j += 1;
+            }
+            while j < bytes.len() && matches!(bytes[j], b' ' | b'\t') {
+                j += 1;
+            }
+            if line[j..]
+                .trim_start_matches(['"', '\''])
+                .starts_with(prefix)
+            {
+                return true;
+            }
+            i = j.max(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+    false
 }
 
 fn line_invokes_tee_to_startup_target(line: &str) -> bool {
@@ -172,6 +207,40 @@ mod tests {
             findings[0].recommended_action,
             RecommendedAction::RequireApproval
         );
+    }
+
+    /// # Contract
+    ///
+    /// Space-less and single-`>` redirects to startup/system paths are
+    /// persistence writes too. Pre-fix `contains("> /etc/")` /
+    /// `contains(">> ~/.")` assumed an exact operator+space layout and
+    /// missed `>/etc/profile`, `>>~/.bashrc`, and truncating `> ~/.zshrc`.
+    #[test]
+    fn detect_shell_persistence_write_accepts_spaceless_and_single_redirect() {
+        for content in [
+            "echo 'evil' >/etc/profile\n",
+            "echo 'evil' >>/etc/cron.d/x\n",
+            "echo 'evil' >>~/.bashrc\n",
+            "echo 'evil' > ~/.zshrc\n",
+            "echo 'evil' >~/.profile\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_shell_persistence_write(&lower, "sh", "/tmp/install.sh");
+            assert_eq!(findings.len(), 1, "{content:?} must be detected");
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A stderr redirect (`2>&1`) and a redirect to a non-startup path
+    /// must NOT be flagged as persistence.
+    #[test]
+    fn detect_shell_persistence_write_ignores_non_startup_redirects() {
+        for content in ["run 2>&1 >/tmp/out.log\n", "echo hi > ./local.txt\n"] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_shell_persistence_write(&lower, "sh", "/tmp/install.sh");
+            assert!(findings.is_empty(), "{content:?} must not be flagged");
+        }
     }
 
     /// # Contract
