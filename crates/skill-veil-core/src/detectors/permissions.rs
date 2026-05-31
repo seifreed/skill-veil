@@ -149,6 +149,29 @@ pub(crate) fn intent_context(content: &str) -> String {
     }
 }
 
+/// `true` when `needle` appears in `haystack` delimited by `\b`-style
+/// word boundaries (a transition to/from `[A-Za-z0-9_]`), so a term like
+/// `list` does not match inside `allowlist`. `needle` may itself contain
+/// non-word bytes (`read-only`, `full access`); only the boundaries
+/// outside the match are checked.
+fn contains_word(haystack: &str, needle: &str) -> bool {
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let hb = haystack.as_bytes();
+    let nlen = needle.len();
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let i = start + pos;
+        let before_ok = i == 0 || !is_word(hb[i - 1]);
+        let after = i + nlen;
+        let after_ok = after >= hb.len() || !is_word(hb[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        start = i + 1;
+    }
+    false
+}
+
 pub(crate) fn infer_declared_intent(content: &str) -> (&'static str, usize) {
     let context = intent_context(content).to_ascii_lowercase();
     let narrow_terms = [
@@ -171,13 +194,21 @@ pub(crate) fn infer_declared_intent(content: &str) -> (&'static str, usize) {
         "full access",
         "admin",
     ];
+    // Word-boundary match, not bare substring: `contains("list")` fired
+    // inside `allowlist`/`playlist`/`checklist` and `contains("search")`
+    // inside `research`, mis-classifying a benign skill as "narrow" and
+    // (when it also declared a dangerous permission) fabricating a
+    // CAPABILITY_PERMISSION_MISMATCH. The broad list had the symmetric
+    // weakness (`write`⊂`rewrite`, `install`⊂`uninstall`, `admin`⊂
+    // `administer`). Mirrors the `\b`-style hardening already applied to
+    // the shell-exec / oauth-scope signals.
     let narrow_score = narrow_terms
         .iter()
-        .filter(|term| context.contains(**term))
+        .filter(|term| contains_word(&context, term))
         .count();
     let broad_score = broad_terms
         .iter()
-        .filter(|term| context.contains(**term))
+        .filter(|term| contains_word(&context, term))
         .count();
     if narrow_score > broad_score && narrow_score > 0 {
         ("narrow", narrow_score)
@@ -336,6 +367,36 @@ fn has_oauth_scope_signal(context: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Contract: `contains_word` matches on `\b`-style boundaries, so a
+    /// narrow/broad term is not detected inside a larger word.
+    #[test]
+    fn contains_word_respects_boundaries() {
+        assert!(contains_word("read-only inspection tool", "read-only"));
+        assert!(contains_word("please list the files", "list"));
+        assert!(!contains_word("firewall allowlist config", "list"));
+        assert!(!contains_word("research assistant", "search"));
+        assert!(!contains_word("rewrite the file", "write"));
+        assert!(!contains_word("uninstall step", "install"));
+    }
+
+    /// Contract: a benign skill whose only "narrow"-looking token is a
+    /// substring (`allowlist`→`list`, `research`→`search`) MUST NOT be
+    /// classified as narrow intent — that mis-classification fabricated a
+    /// CAPABILITY_PERMISSION_MISMATCH when paired with a dangerous grant.
+    #[test]
+    fn infer_intent_ignores_substring_matches() {
+        assert_ne!(
+            infer_declared_intent("Purpose: maintain the firewall allowlist.\n").0,
+            "narrow",
+            "'allowlist' must not match narrow term 'list'"
+        );
+        assert_ne!(
+            infer_declared_intent("Goal: a research assistant for the design team.\n").0,
+            "narrow",
+            "'research' must not match narrow term 'search'"
+        );
+    }
 
     /// Contract: a single source line that satisfies multiple anchor
     /// heuristics emits its context window exactly once. Without dedup, a
