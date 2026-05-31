@@ -891,6 +891,27 @@ mod tests {
         }
     }
 
+    /// Contract: the synchronous / file Node `child_process` variants
+    /// (execSync, spawnSync, execFile, execFileSync) are command-injection
+    /// sinks too. Pre-fix the bare `exec|spawn` alternation rejected them.
+    #[test]
+    fn detect_injection_patterns_node_covers_sync_variants() {
+        for content in [
+            "child_process.execSync(userInput);\n",
+            "child_process.spawnSync(cmd);\n",
+            "child_process.execFile(command);\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_injection_patterns(&lower, content, "js", "/tmp/x.js");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "COMMAND_INJECTION_SINK_NODE"),
+                "{content:?} must fire the Node injection sink; got {findings:?}"
+            );
+        }
+    }
+
     /// Contract: `detect_injection_patterns` MUST route `.psm1` and `.psd1`
     /// to the PowerShell injection patterns. Pre-fix only `"ps1"` was accepted.
     #[test]

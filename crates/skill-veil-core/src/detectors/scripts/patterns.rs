@@ -87,7 +87,7 @@ pub(crate) static NODE_INJECTION_PATTERNS: LazyLock<Vec<(&'static str, CompiledP
     LazyLock::new(|| {
         compile_each(&[(
             "COMMAND_INJECTION_SINK_NODE",
-            r"(?i)child_process\.(exec|spawn)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)",
+            r"(?i)child_process\.(exec|execsync|execfile|execfilesync|spawn|spawnsync)\([^)]*(req\.|process\.argv|userInput|input|cmd|command)",
         )])
     });
 
