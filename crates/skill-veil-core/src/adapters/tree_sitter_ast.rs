@@ -61,14 +61,28 @@ impl ScriptAstAnalyzer for TreeSitterAstAnalyzer {
     }
 }
 
-fn walk(node: Node, src: &[u8], language: ScriptLanguage, out: &mut Vec<AstSignal>) {
-    match language {
-        ScriptLanguage::Python => visit_python(node, src, out),
-        ScriptLanguage::JavaScript | ScriptLanguage::TypeScript => visit_js(node, src, out),
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk(child, src, language, out);
+/// Visit every node of the tree, applying the per-language signal
+/// detector. Iterative (explicit heap worklist) rather than recursive:
+/// tree-sitter parses deeply-nested source iteratively and returns a tree
+/// whose depth equals the nesting, so a recursive walk took one native
+/// stack frame per level and a few hundred KB of `((((…))))` in a
+/// referenced script overflowed the stack and ABORTED the whole process —
+/// violating the fail-open contract. The worklist lives on the heap
+/// (bounded by the already-capped source size), so no input can abort.
+/// Children are pushed in reverse so they pop left-to-right, preserving
+/// the original pre-order, left-to-right visit order.
+fn walk(root: Node, src: &[u8], language: ScriptLanguage, out: &mut Vec<AstSignal>) {
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        match language {
+            ScriptLanguage::Python => visit_python(node, src, out),
+            ScriptLanguage::JavaScript | ScriptLanguage::TypeScript => visit_js(node, src, out),
+        }
+        let mut cursor = node.walk();
+        let children: Vec<Node> = node.children(&mut cursor).collect();
+        for child in children.into_iter().rev() {
+            stack.push(child);
+        }
     }
 }
 
@@ -274,6 +288,29 @@ mod tests {
 
     fn has(signals: &[AstSignal], kind: AstSignalKind) -> bool {
         signals.iter().any(|s| s.kind == kind)
+    }
+
+    /// # Contract
+    ///
+    /// A deeply-nested but well-formed script MUST be analysed without
+    /// aborting the process. tree-sitter parses the nesting iteratively,
+    /// so the tree is valid; the AST walk must not overflow the native
+    /// stack on it (fail-open contract). Pre-fix the recursive `walk`
+    /// took one stack frame per nesting level and SIGABRTed on a few
+    /// hundred KB of `((((…))))`.
+    #[test]
+    fn deeply_nested_source_does_not_abort_python() {
+        let depth = 50_000;
+        let code = format!("x = {}1{}\n", "(".repeat(depth), ")".repeat(depth));
+        // Must return (any Vec) rather than abort the process.
+        let _signals = py(&code);
+    }
+
+    #[test]
+    fn deeply_nested_source_does_not_abort_js() {
+        let depth = 50_000;
+        let code = format!("var x = {}1{};\n", "(".repeat(depth), ")".repeat(depth));
+        let _signals = js(&code);
     }
 
     #[test]
