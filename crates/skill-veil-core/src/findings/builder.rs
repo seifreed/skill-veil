@@ -131,6 +131,7 @@ impl FindingBuilder {
     }
 
     /// Set the severity level
+    #[must_use]
     pub fn severity(mut self, severity: Severity) -> Self {
         self.severity = severity;
         if !self.action_explicit {
@@ -150,6 +151,7 @@ impl FindingBuilder {
     /// NaN. Without this guard, a malformed external rule pack
     /// (`confidence: .nan` is valid YAML 1.1) would propagate NaN through
     /// `Finding.confidence`, `Finding.raw_confidence`, and risk scoring.
+    #[must_use]
     pub fn confidence(mut self, confidence: f32) -> Self {
         if !confidence.is_nan() {
             self.confidence = confidence.clamp(0.0, 1.0);
@@ -158,24 +160,28 @@ impl FindingBuilder {
     }
 
     /// Set what was matched
+    #[must_use]
     pub fn matched_on(mut self, matched_on: MatchTarget) -> Self {
         self.matched_on = matched_on;
         self
     }
 
     /// Set the matched value/text
+    #[must_use]
     pub fn match_value(mut self, match_value: impl Into<String>) -> Self {
         self.match_value = match_value.into();
         self
     }
 
     /// Set the human-readable reason/explanation
+    #[must_use]
     pub fn reason(mut self, reason: impl Into<String>) -> Self {
         self.reason = reason.into();
         self
     }
 
     /// Set remediation guidance explicitly.
+    #[must_use]
     pub fn remediation(mut self, remediation: impl Into<String>) -> Self {
         self.remediation = remediation.into();
         self
@@ -185,6 +191,7 @@ impl FindingBuilder {
     ///
     /// When called, the action is treated as intentional and will not be
     /// overridden by a subsequent `.severity()` call.
+    #[must_use]
     pub fn action(mut self, action: RecommendedAction) -> Self {
         self.recommended_action = action;
         self.action_explicit = true;
@@ -192,12 +199,14 @@ impl FindingBuilder {
     }
 
     /// Set the evidence class.
+    #[must_use]
     pub fn evidence_kind(mut self, evidence_kind: EvidenceKind) -> Self {
         self.evidence_kind = evidence_kind;
         self
     }
 
     /// Set the artifact context.
+    #[must_use]
     pub fn artifact(mut self, artifact_kind: ArtifactKind, artifact_path: Option<String>) -> Self {
         self.artifact_kind = artifact_kind;
         self.artifact_scope = artifact_scope_for_kind(artifact_kind);
@@ -206,24 +215,28 @@ impl FindingBuilder {
     }
 
     /// Set the artifact scope explicitly.
+    #[must_use]
     pub fn artifact_scope(mut self, artifact_scope: ArtifactScope) -> Self {
         self.artifact_scope = artifact_scope;
         self
     }
 
     /// Set the signal class explicitly.
+    #[must_use]
     pub fn signal_class(mut self, signal_class: SignalClass) -> Self {
         self.signal_class = Some(signal_class);
         self
     }
 
     /// Set the line number
+    #[must_use]
     pub fn line(mut self, line: usize) -> Self {
         self.line_number = Some(line);
         self
     }
 
     /// Set the named taxonomy tags carried onto the finding.
+    #[must_use]
     pub fn taxonomy_tags(mut self, taxonomy_tags: Vec<TaxonomyTag>) -> Self {
         self.taxonomy_tags = taxonomy_tags;
         self
