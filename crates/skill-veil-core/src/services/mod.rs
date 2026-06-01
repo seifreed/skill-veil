@@ -13,5 +13,5 @@ pub(crate) use artifact_orchestration::dispatch::{
     DOCKER_COMPOSE_NAMES, INSTRUCTION_NAMES, MCP_NAMES, TOML_ARTIFACT_NAMES,
 };
 pub use artifact_orchestration::ArtifactOrchestratorService;
-pub use file_discovery::FileDiscoveryService;
+pub use file_discovery::{is_explicit_skill_file, FileDiscoveryService};
 pub use scan_filter::ScanFilterService;

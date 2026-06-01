@@ -51,15 +51,16 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     pub(crate) fn fs_provider(&self) -> &F {
         &self.fs_provider
     }
+}
 
-    /// Check whether the provided path is an explicit skill entrypoint.
-    /// Thin shim over [`classification::is_explicit_skill_file`] kept on
-    /// the service so existing call sites
-    /// (`FileDiscoveryService::<F>::is_explicit_skill_file(path)`) keep
-    /// resolving without naming the submodule.
-    pub fn is_explicit_skill_file(path: &Path) -> bool {
-        classification::is_explicit_skill_file(path)
-    }
+/// Check whether the provided path is an explicit skill entrypoint.
+///
+/// A pure path-shape predicate with no filesystem access, so it lives as
+/// a free function rather than on the provider-generic
+/// [`FileDiscoveryService`] — callers need not name an `F` they do not
+/// otherwise use.
+pub fn is_explicit_skill_file(path: &Path) -> bool {
+    classification::is_explicit_skill_file(path)
 }
 
 /// Hard cap on discovery descent depth. Protects against adversarial

@@ -8,7 +8,7 @@ use crate::artifact_graph::{ArtifactCapabilityFact, ArtifactGraph, ArtifactRelat
 use crate::findings::ArtifactKind;
 use crate::path_safety::path_resolves_within_base;
 use crate::ports::FileSystemProvider;
-use crate::services::{ArtifactOrchestratorService, FileDiscoveryService};
+use crate::services::{is_explicit_skill_file, ArtifactOrchestratorService};
 use crate::SkillDocument;
 use std::path::{Path, PathBuf};
 
@@ -21,7 +21,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
     let root_path = doc.path.display().to_string();
     graph.add_node_with_capabilities(
         root_path.clone(),
-        artifact_kind_for_path::<F>(&doc.path),
+        artifact_kind_for_path(&doc.path),
         artifact_capabilities(artifact_orchestration, fs_provider, &doc.path),
     );
     add_inferred_relations(
@@ -39,7 +39,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
             }
 
             let manifest_path = manifest.display().to_string();
-            let manifest_kind = artifact_kind_for_path::<F>(&manifest);
+            let manifest_kind = artifact_kind_for_path(&manifest);
             graph.add_node_with_capabilities(
                 manifest_path.clone(),
                 manifest_kind,
@@ -98,7 +98,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
         let referenced_path = referenced_file.display().to_string();
         graph.add_node_with_capabilities(
             referenced_path.clone(),
-            artifact_kind_for_path::<F>(referenced_file),
+            artifact_kind_for_path(referenced_file),
             artifact_capabilities(artifact_orchestration, fs_provider, referenced_file),
         );
         graph.add_edge(
@@ -118,7 +118,7 @@ pub(crate) fn build_artifact_graph<F: FileSystemProvider>(
     graph
 }
 
-pub fn artifact_kind_for_path<F: FileSystemProvider>(path: &Path) -> ArtifactKind {
+pub fn artifact_kind_for_path(path: &Path) -> ArtifactKind {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -161,7 +161,7 @@ pub fn artifact_kind_for_path<F: FileSystemProvider>(path: &Path) -> ArtifactKin
         {
             ArtifactKind::PromptPackDocument
         }
-        _ if FileDiscoveryService::<F>::is_explicit_skill_file(path) => ArtifactKind::SkillDocument,
+        _ if is_explicit_skill_file(path) => ArtifactKind::SkillDocument,
         _ => ArtifactKind::ReferencedArtifact,
     }
 }
@@ -332,7 +332,7 @@ fn add_inferred_relations<F: FileSystemProvider>(
         // node, but for inferred-only targets that never get a second
         // insertion, this is the only chance to classify them correctly.
         let target_path = std::path::PathBuf::from(&link.target);
-        let target_kind = artifact_kind_for_path::<F>(&target_path);
+        let target_kind = artifact_kind_for_path(&target_path);
         graph.add_node(link.target.clone(), target_kind);
         graph.add_edge(source_path.to_string(), link.target, link.relation);
     }

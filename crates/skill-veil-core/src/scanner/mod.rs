@@ -26,7 +26,9 @@ pub use crate::scanner_types::{
     ArtifactMetadata, PackageScanResult, ScanError, ScanErrorEntry, ScanOptions, ScanResult,
     ScanTargetMode,
 };
-use crate::services::{ArtifactOrchestratorService, FileDiscoveryService, ScanFilterService};
+use crate::services::{
+    is_explicit_skill_file, ArtifactOrchestratorService, FileDiscoveryService, ScanFilterService,
+};
 use crate::{scanner_execution, scanner_graph};
 use std::path::Path;
 use std::sync::Arc;
@@ -222,14 +224,14 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
     /// - [`ScanError::PathNotFound`] if `path` does not exist.
     /// - [`ScanError::InvalidSkillEntrypoint`] if `path` exists but is
     ///   not recognised as a skill entrypoint by
-    ///   `FileDiscoveryService::is_explicit_skill_file`.
+    ///   [`is_explicit_skill_file`].
     /// - Errors propagated from the analyzer / rule pipeline.
     pub fn scan_skill_file(&self, path: impl AsRef<Path>) -> Result<ScanResult, ScanError> {
         let path = path.as_ref();
         if !self.file_discovery.fs_provider().exists(path) {
             return Err(ScanError::PathNotFound(path.to_path_buf()));
         }
-        if !FileDiscoveryService::<F>::is_explicit_skill_file(path) {
+        if !is_explicit_skill_file(path) {
             return Err(ScanError::InvalidSkillEntrypoint(path.to_path_buf()));
         }
         scanner_execution::scan_document_path(self, path)

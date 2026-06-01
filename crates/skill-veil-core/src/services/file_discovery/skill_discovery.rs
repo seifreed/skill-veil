@@ -46,7 +46,7 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
         );
         candidates
             .into_iter()
-            .filter(|file_path| Self::is_explicit_skill_file(file_path))
+            .filter(|file_path| super::is_explicit_skill_file(file_path))
             .collect()
     }
 
@@ -109,7 +109,7 @@ impl<F: FileSystemProvider> FileDiscoveryService<F> {
     /// # Returns
     /// `true` if the file appears to be a skill document
     pub fn is_skill_file(&self, path: &Path) -> bool {
-        if Self::is_explicit_skill_file(path) {
+        if super::is_explicit_skill_file(path) {
             return true;
         }
 
@@ -231,11 +231,9 @@ mod tests {
         assert!(service.is_skill_file(Path::new("/some/path/mcp.json")));
         assert!(service.is_skill_file(Path::new("/some/path/mcp.yaml")));
         assert!(service.is_skill_file(Path::new("/some/path/mcp.yml")));
-        assert!(
-            FileDiscoveryService::<StdFileSystemProvider>::is_explicit_skill_file(Path::new(
-                "/some/path/My-Tool.SKILL.MD"
-            ))
-        );
+        assert!(super::super::is_explicit_skill_file(Path::new(
+            "/some/path/My-Tool.SKILL.MD"
+        )));
     }
 
     /// Contract: a markdown file with skill-shape content (heading +

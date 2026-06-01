@@ -44,7 +44,7 @@ use crate::scanner_support::{
     artifact_parse_error_finding, binary_disguise_finding, decode_warning_finding,
     parse_warning_finding, read_text_file_lossy, structured_parse_warning,
 };
-use crate::services::file_discovery::FileDiscoveryService;
+use crate::services::is_explicit_skill_file;
 use crate::verdict::derive_package_verdict;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -90,7 +90,7 @@ fn analyze_referenced_artifact<F: FileSystemProvider, P: MarkdownParser>(
     referenced_file: &Path,
 ) -> Vec<Finding> {
     let fs = scanner.file_discovery().fs_provider();
-    let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(referenced_file);
+    let artifact_kind = crate::scanner_graph::artifact_kind_for_path(referenced_file);
     let artifact_path = referenced_file.display().to_string();
 
     let artifact_doc =
@@ -206,7 +206,7 @@ fn collect_supporting_artifact_paths<F: FileSystemProvider, P: MarkdownParser>(
         }
     }
 
-    if !FileDiscoveryService::<F>::is_explicit_skill_file(&doc.path) {
+    if !is_explicit_skill_file(&doc.path) {
         return artifacts;
     }
     let Some(package_root) = doc.path.parent() else {
@@ -241,7 +241,7 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
         scanner.parser(),
         scanner.file_discovery().fs_provider(),
     )?;
-    let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(path);
+    let artifact_kind = crate::scanner_graph::artifact_kind_for_path(path);
     let artifact_path = path.display().to_string();
     let primary_content = doc.raw_content.clone();
 
@@ -478,7 +478,7 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
     dependencies: &[crate::dependency_inventory::ParsedDependency],
 ) -> (Vec<Finding>, ArtifactGraph) {
     let mut findings = scanner.engine().evaluate(doc);
-    findings.extend(collect_primary_doc_warnings::<F>(doc, path));
+    findings.extend(collect_primary_doc_warnings(doc, path));
     findings.extend(scan_supporting_artifacts(scanner, doc));
     findings.extend(deceptive_docs_findings(scanner, doc));
     findings.extend(unicode_deception_findings(
@@ -566,11 +566,8 @@ fn unicode_deception_findings<F: FileSystemProvider, P: MarkdownParser>(
     findings
 }
 
-fn collect_primary_doc_warnings<F: FileSystemProvider>(
-    doc: &SkillDocument,
-    path: &Path,
-) -> Vec<Finding> {
-    let artifact_kind = crate::scanner_graph::artifact_kind_for_path::<F>(path);
+fn collect_primary_doc_warnings(doc: &SkillDocument, path: &Path) -> Vec<Finding> {
+    let artifact_kind = crate::scanner_graph::artifact_kind_for_path(path);
     let mut warnings = Vec::new();
     if let Some(kind) = doc.binary_disguise_kind.as_deref() {
         warnings.push(binary_disguise_finding(
