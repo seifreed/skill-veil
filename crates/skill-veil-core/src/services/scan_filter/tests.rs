@@ -190,6 +190,43 @@ fn should_fail_treats_block_action_below_threshold_as_failing() {
     );
 }
 
+/// # Contract
+///
+/// A finding whose `Block` action is *native to the rule* (`action: block`,
+/// not escalated by a policy override) MUST survive the `--min-severity`
+/// filter even when its severity is below the threshold. Otherwise it is
+/// dropped before `should_fail` runs, silently defeating the Block
+/// fail-stop for native-Block rules — the severity filter previously
+/// shielded only override-escalated Block findings.
+#[test]
+fn min_severity_does_not_drop_native_block_finding() {
+    let options = ScanOptions {
+        min_severity: Some(Severity::High),
+        fail_on: Some(Severity::Critical),
+        ..Default::default()
+    };
+    let filter = ScanFilterService::new(options);
+
+    let mut native_block = create_finding("NATIVE_BLOCK", Severity::Low);
+    native_block.recommended_action = RecommendedAction::Block;
+    let benign_low = create_finding("BENIGN_LOW", Severity::Low);
+
+    let filtered = filter.filter_findings(vec![native_block, benign_low]);
+
+    assert!(
+        filtered.iter().any(|f| f.rule_id == "NATIVE_BLOCK"),
+        "a native-Block finding below --min-severity MUST survive the filter"
+    );
+    assert!(
+        !filtered.iter().any(|f| f.rule_id == "BENIGN_LOW"),
+        "a non-Block low finding below --min-severity MUST still be filtered out"
+    );
+    assert!(
+        filter.should_fail(&filtered),
+        "the surviving native-Block finding MUST trip the CI gate"
+    );
+}
+
 /// # Contract (negative)
 ///
 /// `should_fail` MUST preserve the historical "no threshold → never

@@ -170,12 +170,27 @@ impl ScanFilterService {
             .into_iter()
             .filter(|f| {
                 // A finding escalated to Block by a policy override always
-                // survives the severity filter. The operator's explicit "halt
-                // on this rule" intent must override any severity gate.
+                // survives — the operator's explicit "halt on this rule"
+                // intent overrides every filter, including include/exclude.
                 if block_overridden_fingerprints.contains(&finding_fingerprint(f)) {
                     return true;
                 }
-                self.should_include_by_severity_and_rules(f)
+                // Explicit include/exclude rule selection always applies: an
+                // operator who silences a rule means it, even for a Block
+                // finding.
+                if !self.passes_rule_filters(f) {
+                    return false;
+                }
+                // A native Block action (`action: block`) bypasses ONLY the
+                // min-severity gate. `Block` encodes "halt on this rule" intent
+                // that the severity gate cannot represent, and `should_fail`
+                // keys on it regardless of severity; dropping a
+                // below-min-severity Block finding here would silently defeat
+                // that gate for native-Block rules.
+                if f.recommended_action == RecommendedAction::Block {
+                    return true;
+                }
+                self.passes_min_severity(f)
             })
             .collect()
     }
@@ -200,29 +215,22 @@ impl ScanFilterService {
         apply_policy_overrides_with_audit(findings, self.policy.as_ref())
     }
 
-    /// Determine if a finding should be included based on severity and rule filters.
-    ///
-    /// This does NOT consider policy-override-escalated Block actions — those
-    /// are handled separately in `apply_severity_filter_with_overrides`.
-    fn should_include_by_severity_and_rules(&self, finding: &Finding) -> bool {
-        // Filter by minimum severity
-        if let Some(min_sev) = self.min_severity {
-            if finding.severity < min_sev {
-                return false;
-            }
+    /// Whether `finding` clears the configured minimum-severity gate.
+    fn passes_min_severity(&self, finding: &Finding) -> bool {
+        match self.min_severity {
+            Some(min_sev) => finding.severity >= min_sev,
+            None => true,
         }
+    }
 
-        // Filter by include rules (if specified, only those rules are included)
+    /// Whether `finding` clears the explicit include/exclude rule selection.
+    /// Unlike the severity gate, these are honoured even for `Block` findings:
+    /// an operator who lists or excludes a rule id means it.
+    fn passes_rule_filters(&self, finding: &Finding) -> bool {
         if !self.include_rules.is_empty() && !self.include_rules.contains(&finding.rule_id) {
             return false;
         }
-
-        // Filter by exclude rules
-        if self.exclude_rules.contains(&finding.rule_id) {
-            return false;
-        }
-
-        true
+        !self.exclude_rules.contains(&finding.rule_id)
     }
 
     /// Check if any findings should trigger a failure based on fail_on threshold.

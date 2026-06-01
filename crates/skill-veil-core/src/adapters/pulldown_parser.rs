@@ -183,11 +183,24 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 /// mirrors the section-name convention so downstream `has_code_language`
 /// comparisons stay case-insensitive without sprinkling
 /// `eq_ignore_ascii_case` across callers.
+///
+/// pulldown-cmark returns the entire fence info string, not just the
+/// language token: ` ```python {.line-numbers} ` yields
+/// `"python {.line-numbers}"`. Downstream `has_code_language` does an
+/// exact comparison, so the full info string would defeat any
+/// `code_language` rule whenever a highlighter attribute is present.
+/// Per CommonMark the language is the first token of the info string;
+/// language identifiers never contain whitespace, `,`, or `{`, so
+/// splitting on the first such delimiter isolates it without truncating
+/// legitimate tags like `c++` or `objective-c`.
 fn code_block_language(kind: &pulldown_cmark::CodeBlockKind<'_>) -> Option<String> {
     match kind {
         pulldown_cmark::CodeBlockKind::Fenced(lang) => {
-            let lang = lang.to_string();
-            (!lang.is_empty()).then(|| lang.to_ascii_lowercase())
+            let token = lang
+                .split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+                .next()
+                .unwrap_or("");
+            (!token.is_empty()).then(|| token.to_ascii_lowercase())
         }
         pulldown_cmark::CodeBlockKind::Indented => None,
     }
@@ -263,6 +276,47 @@ echo "hello"
         let sections = parser.parse_sections(content).unwrap();
         let setup = sections.iter().find(|s| s.name == "setup").unwrap();
         assert_eq!(setup.code_blocks[0].language.as_deref(), Some("python"));
+    }
+
+    /// # Contract
+    /// pulldown-cmark hands back the entire fence info string, so a
+    /// highlighter attribute (`{.line-numbers}`, ` title="x"`, `,extra`)
+    /// MUST be stripped to the bare language token. Otherwise an exact
+    /// `has_code_language("python")` comparison silently misses any fence
+    /// that carries an attribute — a trivial detection evasion.
+    #[test]
+    fn parse_sections_extracts_language_token_from_attributed_fence() {
+        let parser = PulldownMarkdownParser::new();
+        for (fence, expected) in [
+            ("```python {.line-numbers}", "python"),
+            ("```js title=\"setup\"", "js"),
+            ("```python,extra", "python"),
+        ] {
+            let content = format!("## Setup\n{fence}\nprint('hi')\n```\n");
+            let sections = parser.parse_sections(&content).unwrap();
+            let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+            assert_eq!(
+                setup.code_blocks[0].language.as_deref(),
+                Some(expected),
+                "fence `{fence}` must yield language token `{expected}`",
+            );
+        }
+    }
+
+    /// # Contract
+    /// A language token that legitimately contains `+`/`-` (`c++`,
+    /// `objective-c`) MUST survive intact — the attribute split only
+    /// breaks on whitespace, `,`, and `{`, none of which appear in a
+    /// language identifier.
+    #[test]
+    fn parse_sections_preserves_punctuated_language_token() {
+        let parser = PulldownMarkdownParser::new();
+        for lang in ["c++", "objective-c"] {
+            let content = format!("## Setup\n```{lang}\nx\n```\n");
+            let sections = parser.parse_sections(&content).unwrap();
+            let setup = sections.iter().find(|s| s.name == "setup").unwrap();
+            assert_eq!(setup.code_blocks[0].language.as_deref(), Some(lang));
+        }
     }
 
     /// # Contract
