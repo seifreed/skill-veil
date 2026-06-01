@@ -14,6 +14,13 @@ const LOCAL_INDICATORS: &[&str] = &[
 ];
 const EXTERNAL_PROTOCOLS: &[&str] = &["http://", "https://", "169.254.169.254"];
 
+// Cloud instance-metadata endpoints are credential-theft / SSRF targets, not
+// benign local hosts. GCP's `metadata.google.internal` ends in `.internal`,
+// which would otherwise match `LOCAL_INDICATORS` and be excluded from severe
+// blast radius — the AWS/Azure form (`169.254.169.254`) is already external,
+// so without this the two clouds are scored inconsistently.
+const CLOUD_METADATA_HOSTS: &[&str] = &["metadata.google.internal", "metadata.goog"];
+
 pub(super) fn build_blast_radius_summary(
     findings: &[Finding],
     declared_permissions: &[DeclaredPermission],
@@ -93,6 +100,9 @@ pub(super) fn build_blast_radius_summary(
 }
 
 fn is_local_only_target(value: &str) -> bool {
+    if CLOUD_METADATA_HOSTS.iter().any(|host| value.contains(host)) {
+        return false;
+    }
     if !LOCAL_INDICATORS.iter().any(|ind| value.contains(ind)) {
         return false;
     }
@@ -207,6 +217,68 @@ mod tests {
             1,
             "case-variant URLs MUST be deduplicated; got {:?}",
             summary.network_targets
+        );
+    }
+
+    /// # Contract
+    ///
+    /// Cloud instance-metadata endpoints are external credential-theft
+    /// targets, not local hosts. GCP's `metadata.google.internal` ends in
+    /// `.internal` but MUST count toward severe blast radius — the same as
+    /// AWS's `169.254.169.254` — while a genuine loopback host MUST NOT.
+    #[test]
+    fn gcp_metadata_host_is_not_local_only() {
+        assert!(
+            !is_local_only_target("http://metadata.google.internal/computeMetadata/v1/"),
+            "GCP metadata endpoint must not be treated as local-only",
+        );
+        assert!(
+            is_local_only_target("http://localhost:8080/health"),
+            "a genuine loopback host must stay local-only",
+        );
+
+        let make_finding = |match_value: &str| {
+            Finding::builder("TEST_RULE", ThreatCategory::DataExfiltration)
+                .severity(Severity::High)
+                .confidence(0.8)
+                .action(RecommendedAction::Block)
+                .evidence_kind(EvidenceKind::Behavior)
+                .matched_on(MatchTarget::Document)
+                .match_value(match_value.to_string())
+                .artifact(ArtifactKind::SkillDocument, None)
+                .artifact_scope(ArtifactScope::AgentEntrypoint)
+                .signal_class(SignalClass::MaliciousBehavior)
+                .reason("test".to_string())
+                .build()
+        };
+
+        let gcp = build_blast_radius_summary(
+            &[
+                make_finding("http://metadata.google.internal/computeMetadata/v1/instance/"),
+                make_finding("http://metadata.google.internal/computeMetadata/v1/project/"),
+            ],
+            &[],
+        );
+        let loopback = build_blast_radius_summary(
+            &[
+                make_finding("http://localhost:8080/health"),
+                make_finding("http://127.0.0.1:9000/status"),
+            ],
+            &[],
+        );
+        assert_eq!(
+            gcp.level,
+            BlastRadiusLevel::High,
+            "two data-exfiltration findings hitting GCP metadata must register High blast radius",
+        );
+        assert_eq!(
+            loopback.level,
+            BlastRadiusLevel::Medium,
+            "loopback-only data-exfiltration findings stay below High (no severe targets)",
+        );
+        assert!(
+            !gcp.network_targets.is_empty(),
+            "GCP metadata target must be recorded",
         );
     }
 }

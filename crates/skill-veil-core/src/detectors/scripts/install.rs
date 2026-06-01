@@ -16,12 +16,16 @@ use crate::lazy_pattern;
 // `-g`/`--global` flag, so it is a separate flagless alternative — pairing
 // it with the mandatory global-install flag (as the pre-fix pattern did)
 // made `npx <typosquat>` structurally unreachable, letting the highest-risk
-// remote-execution form evade the typosquat backstop. The other commands
-// keep the global-flag requirement; the Levenshtein-distance gate below
-// prevents the flagless `npx` arm from firing on legitimate package names.
+// remote-execution form evade the typosquat backstop. `npx` is not the only
+// flagless download-and-run launcher: `bunx`, `pnpm dlx`, `yarn dlx`,
+// `pipx run`, and `uvx` fetch and execute a package by name with no install
+// flag, so each is an equivalent typosquat vector and shares the flagless
+// arm. The other commands keep the global-flag requirement; the
+// Levenshtein-distance gate below prevents the flagless arms from firing on
+// legitimate package names.
 lazy_pattern!(
     INSTALL_RE,
-    r"(?i)\b(?:(?:npm[ \t]+install|npm[ \t]+i\b|yarn[ \t]+add|pnpm[ \t]+add|clawhub[ \t]+install|clauhub[ \t]+install)[ \t]+(?:-g|--global|--force)[ \t]+|npx[ \t]+)([a-z][a-z0-9_.-]{2,40})"
+    r"(?i)\b(?:(?:npm[ \t]+install|npm[ \t]+i\b|yarn[ \t]+add|pnpm[ \t]+add|clawhub[ \t]+install|clauhub[ \t]+install)[ \t]+(?:-g|--global|--force)[ \t]+|(?:npx|bunx|pnpm[ \t]+dlx|yarn[ \t]+dlx|pipx[ \t]+run|uvx)[ \t]+)([a-z][a-z0-9_.-]{2,40})"
 );
 
 const TYPOSQUAT_KNOWN_GOOD: &[&str] = &[
@@ -151,6 +155,31 @@ mod tests {
             detect_typosquatted_install(&benign, "sh", "/tmp/x.sh").is_empty(),
             "a legitimate flagless npx must not fire",
         );
+    }
+
+    /// # Contract
+    ///
+    /// Every flagless download-and-run launcher is a typosquat vector, not
+    /// just `npx`. `bunx`, `pnpm dlx`, `yarn dlx`, `pipx run`, and `uvx`
+    /// fetch and execute a package by name with no install flag, so a
+    /// typosquatted name under any of them MUST fire. A legitimate package
+    /// name under the same launcher MUST NOT fire (distance gate).
+    #[test]
+    fn detect_typosquatted_install_fires_on_all_flagless_launchers() {
+        for launcher in ["bunx", "pnpm dlx", "yarn dlx", "pipx run", "uvx"] {
+            let lower = format!("{launcher} shersh\n").to_ascii_lowercase();
+            assert!(
+                detect_typosquatted_install(&lower, "sh", "/tmp/x.sh")
+                    .iter()
+                    .any(|f| f.rule_id == "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT"),
+                "typosquat under `{launcher}` must fire",
+            );
+            let benign = format!("{launcher} create-react-app myapp\n").to_ascii_lowercase();
+            assert!(
+                detect_typosquatted_install(&benign, "sh", "/tmp/x.sh").is_empty(),
+                "a legitimate package under `{launcher}` must not fire",
+            );
+        }
     }
 
     /// # Contract
