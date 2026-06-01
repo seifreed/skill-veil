@@ -2,8 +2,8 @@ use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use skill_veil_core::{
-    parse_rules_file, IocFeedFile, RecommendedAction, Rule, RulePackFile, RulePackKind,
-    RulePackMetadata, Severity,
+    is_supported_rule_pack_schema, parse_rules_file, IocFeedFile, RecommendedAction, Rule,
+    RulePackFile, RulePackKind, RulePackMetadata, Severity,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::Metadata;
@@ -73,13 +73,29 @@ pub struct RulePackInfo {
 }
 
 pub fn parse_rule_source(content: &str) -> Result<ParsedRuleSource> {
+    // Mirror the schema-version gate in core's `parse_rules_file`: a pack
+    // with an unsupported `schema_version` is unloadable at scan time, so
+    // `rules validate` must reject it here too rather than report a green
+    // pass for a pack the scanner will refuse.
     if let Ok(pack) = serde_yaml::from_str::<RulePackFile>(content) {
         if !pack.rules.is_empty() || !pack.metadata.name.is_empty() {
+            if !is_supported_rule_pack_schema(&pack.schema_version) {
+                anyhow::bail!(
+                    "Unsupported rule pack schema version: {}",
+                    pack.schema_version
+                );
+            }
             return Ok(ParsedRuleSource::RulePack(pack));
         }
     }
     if let Ok(feed) = serde_yaml::from_str::<IocFeedFile>(content) {
         if !(feed.domains.is_empty() && feed.filenames.is_empty() && feed.ips.is_empty()) {
+            if !is_supported_rule_pack_schema(&feed.schema_version) {
+                anyhow::bail!(
+                    "Unsupported IOC feed schema version: {}",
+                    feed.schema_version
+                );
+            }
             return Ok(ParsedRuleSource::IocFeed(feed));
         }
     }
@@ -849,5 +865,58 @@ rules:
 
         assert!(!rendered.contains('\x1b'));
         assert!(!rendered.contains('\x07'));
+    }
+
+    /// Contract: `parse_rule_source` (the `rules validate` / `pack-info`
+    /// parser) rejects a rule pack whose `schema_version` is unsupported,
+    /// matching core's `parse_rules_file`. Pre-fix the CLI parser skipped
+    /// the schema check, so `rules validate` reported a green pass for a
+    /// pack the scanner refuses to load at scan time.
+    #[test]
+    fn parse_rule_source_rejects_unsupported_schema_version() {
+        let bad = r#"
+schema_version: skill-veil.dev/rules/v999-bogus
+metadata:
+  name: test-pack
+rules:
+  - id: SOME_RULE
+    category: generic
+    severity: medium
+    confidence: 0.8
+    when: !regex
+      pattern: "evil"
+    action: require_approval
+    reason: "test rule"
+"#;
+        let err = parse_rule_source(bad).expect_err("unsupported schema must be rejected");
+        assert!(
+            err.to_string().contains("schema version"),
+            "error must name the schema version mismatch; got {err}"
+        );
+    }
+
+    /// Contract: a pack carrying the supported `schema_version` still
+    /// parses as a `RulePack`. Pins the positive direction of the
+    /// schema-version gate.
+    #[test]
+    fn parse_rule_source_accepts_supported_schema_version() {
+        let good = r#"
+schema_version: skill-veil.dev/rules/v1alpha1
+metadata:
+  name: test-pack
+rules:
+  - id: SOME_RULE
+    category: generic
+    severity: medium
+    confidence: 0.8
+    when: !regex
+      pattern: "evil"
+    action: require_approval
+    reason: "test rule"
+"#;
+        assert!(matches!(
+            parse_rule_source(good).unwrap(),
+            ParsedRuleSource::RulePack(_)
+        ));
     }
 }
