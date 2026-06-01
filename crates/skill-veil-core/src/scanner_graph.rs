@@ -153,11 +153,22 @@ pub fn artifact_kind_for_path(path: &Path) -> ArtifactKind {
             ArtifactKind::AgentInstruction
         }
         Some(name) if name.ends_with(".prompt.md") => ArtifactKind::PromptPackDocument,
-        _ if path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("prompts")) =>
+        // A file under a `prompts/` directory is a prompt-pack document ONLY
+        // when it is markdown — matching `is_prompt_pack_document` (dispatch
+        // router) and `is_markdown_under_prompts_dir` (discovery). Without
+        // the extension gate, a non-markdown file (`prompts/grab.sh`) was
+        // tagged `PromptPackDocument`, which (a) contradicts how it is
+        // actually analysed and (b) excluded it from the
+        // `INTERNAL_NETWORK_ACCESS` allow-set — letting a script evade the
+        // internal-network detector merely by sitting under `prompts/`.
+        _ if file_name
+            .as_deref()
+            .is_some_and(|name| name.ends_with(".md") || name.ends_with(".mdx"))
+            && path
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("prompts")) =>
         {
             ArtifactKind::PromptPackDocument
         }
@@ -494,5 +505,37 @@ mod derive_package_id_tests {
     fn rejects_short_hex() {
         let p = PathBuf::from("/tmp/abcdef/SKILL.md");
         assert!(derive_package_id(&p).is_none());
+    }
+}
+
+#[cfg(test)]
+mod artifact_kind_for_path_tests {
+    use super::artifact_kind_for_path;
+    use crate::findings::ArtifactKind;
+    use std::path::Path;
+
+    /// Contract: a markdown file under `prompts/` is a PromptPackDocument,
+    /// but a NON-markdown file under `prompts/` must fall through to
+    /// ReferencedArtifact. Pre-fix any file under `prompts/` was tagged
+    /// PromptPackDocument, which excluded it from the INTERNAL_NETWORK_ACCESS
+    /// allow-set — letting a script evade the internal-network detector by
+    /// sitting under `prompts/`.
+    #[test]
+    fn prompts_dir_kind_requires_markdown_extension() {
+        assert_eq!(
+            artifact_kind_for_path(Path::new("/pkg/prompts/guide.md")),
+            ArtifactKind::PromptPackDocument,
+        );
+        for path in [
+            "/pkg/prompts/grab.sh",
+            "/pkg/prompts/payload.py",
+            "/pkg/prompts/config.json",
+        ] {
+            assert_eq!(
+                artifact_kind_for_path(Path::new(path)),
+                ArtifactKind::ReferencedArtifact,
+                "{path}: a non-markdown file under prompts/ must be a ReferencedArtifact",
+            );
+        }
     }
 }
