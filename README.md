@@ -933,21 +933,28 @@ block after the primary scan output. Disable per-scan with `--no-nova`.
 ### NOVA execution model
 
 NOVA rules support three orthogonal matching modes — keyword regex,
-semantic similarity, and LLM judgement. The current build executes
-**keyword matches natively** (regex / literal substring with the same
-engine used for skill-veil rules) and surfaces a one-line note when a
-rule's `condition:` requires `semantics.*` or `llm.*`, listing which
-capabilities were skipped. Pending future work:
+semantic similarity, and LLM judgement — and all three are wired:
 
-- Native sentence-embedding inference (likely `candle` or `ort` +
-  `all-MiniLM-L6-v2`) to enable `semantics:` evaluation.
-- Routing NOVA `llm:` sections to the existing
-  `~/.skill-veil.toml [llm]` provider chain (OpenAI, Anthropic,
-  Ollama, LM Studio, Ollama-Cloud).
+- **Keyword** matches run natively (regex / literal substring with the
+  same engine used for skill-veil rules). Always on.
+- **`semantics:`** runs native sentence-embedding inference
+  (`all-MiniLM-L6-v2` via fastembed, cosine similarity). Built behind
+  `--features nova-semantics`; on such a binary it is on by default and
+  the first run downloads the model (~90 MiB) into the HF hub cache.
+  Opt out with `--no-nova-semantics`.
+- **`llm:`** routes to the existing `~/.skill-veil.toml [llm]` provider
+  chain (OpenAI, Anthropic, Ollama, LM Studio, Ollama-Cloud). Opt in
+  with `--nova-llm`, since each pattern issues a provider call per
+  scanned body.
 
-A rule whose `condition:` is satisfied by keywords alone fires today;
-a rule that requires `semantics.X AND llm.Y` correctly does NOT fire
-on a keyword hit alone.
+When a channel is unavailable — the binary was built without
+`--features nova-semantics`, `--nova-llm` was not passed, no `[llm]`
+section is configured, or the model/provider fails to initialise — the
+scanner surfaces a one-line note listing the skipped capabilities, and
+any rule whose `condition:` requires that channel does NOT fire (the
+`Skipped → false` contract). A rule satisfied by keywords alone fires
+regardless; a rule requiring `semantics.X AND llm.Y` does NOT fire on a
+keyword hit alone.
 
 ### Auto-update notifier
 
