@@ -18,7 +18,12 @@ const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown"];
 const BINARY_MAGICS: &[(&[u8], &str)] = &[
     (b"PK\x03\x04", "ZIP"),
     (b"\x1f\x8b", "gzip"),
-    (b"MZ\x90", "PE/EXE"),
+    // PE/EXE: only the two-byte `MZ` DOS signature (IMAGE_DOS_SIGNATURE)
+    // is fixed. The third byte is `e_cblp` (bytes-on-last-page), which
+    // varies by toolchain — Go/Rust/MinGW and most packers emit a value
+    // other than 0x90, so gating on `MZ\x90` (the classic MS-linker stub)
+    // misses them.
+    (b"MZ", "PE/EXE"),
     (b"\x7fELF", "ELF"),
     (b"\x89PNG", "PNG"),
     (b"BM", "BMP"),
@@ -110,6 +115,22 @@ mod tests {
         for (bytes, expected_kind) in cases {
             let kind = detect_binary_disguise_kind(&PathBuf::from("doc.md"), bytes);
             assert_eq!(kind, Some(expected_kind), "magic {expected_kind} regressed");
+        }
+    }
+
+    /// Contract: a PE/EXE whose DOS stub is NOT the classic MS-linker
+    /// `MZ\x90...` form (a non-0x90 `e_cblp` third byte, as produced by
+    /// Go/Rust/MinGW/packers) is still detected. Pins the two-byte `MZ`
+    /// signature against a regression back to the 3-byte `MZ\x90` magic.
+    #[test]
+    fn detect_binary_disguise_kind_flags_pe_with_nonclassic_dos_stub() {
+        for third_byte in [0x00u8, 0x50, 0x78] {
+            let bytes = [b'M', b'Z', third_byte, 0x00];
+            assert_eq!(
+                detect_binary_disguise_kind(&PathBuf::from("evil.md"), &bytes),
+                Some("PE/EXE"),
+                "PE with e_cblp third byte {third_byte:#x} should be flagged"
+            );
         }
     }
 
