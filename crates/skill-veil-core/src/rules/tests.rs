@@ -440,9 +440,10 @@ fn test_section_contains_condition_emits_all_matching_values() {
 
 /// Contract: a `section:`-scoped rule MUST inspect EVERY section with the
 /// target name, not just the first. A payload planted under a duplicate
-/// `## Setup` heading would otherwise evade the rule. Pre-fix
-/// `SkillDocument::get_section` returned only the first match, so a second
-/// `## Setup` section's prose was never scanned by section-scoped rules.
+/// `## Setup` heading would otherwise evade the rule. Section lookups go
+/// through `SkillDocument::sections_named` (an iterator over all matches);
+/// a first-match-only lookup would leave a second `## Setup` section's
+/// prose unscanned by section-scoped rules.
 #[test]
 fn section_contains_scans_duplicate_named_sections() {
     let mut engine = empty_engine();

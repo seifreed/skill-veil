@@ -72,11 +72,6 @@ impl SkillDocument {
         })
     }
 
-    pub fn get_section(&self, name: &str) -> Option<&Section> {
-        let name_lower = name.to_lowercase();
-        self.sections.iter().find(|s| s.name == name_lower)
-    }
-
     /// Every section whose (lowercased) name equals `name`, in document
     /// order. A document can legitimately — or maliciously — repeat a
     /// heading (`## Setup` twice); section-scoped rules MUST inspect
