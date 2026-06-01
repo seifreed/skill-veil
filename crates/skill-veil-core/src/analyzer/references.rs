@@ -1,7 +1,6 @@
 use crate::lazy_pattern;
 use crate::path_safety::path_stays_within_base;
 use crate::patterns::compile_patterns;
-use crate::ports::CompiledPattern;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -14,10 +13,28 @@ use std::path::{Path, PathBuf};
 /// super-linear (a denial-of-service on a single `scan-file`).
 const MAX_REFERENCED_FILES: usize = 1024;
 
-const SCRIPT_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl";
+const SCRIPT_EXTENSIONS: &[&str] = &["sh", "py", "ps1", "js", "ts", "rb", "pl"];
 const ALL_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl|exe|bin|dll";
 
+/// Trailing characters stripped from a captured reference before
+/// resolution: markdown/shell punctuation that the greedy capture
+/// classes swallow, plus a sentence-ending `.` (`run bootstrap.py.`).
+/// None of these can be the final character of a real referenced file.
+const TRAILING_PUNCTUATION: &[char] = &[')', '`', '"', '\'', ',', ';', '>', '.'];
+
 lazy_pattern!(EXEC_REFERENCE_PATTERN, r"(?:chmod\s+\+x\s+|\./)([^\s]+)");
+
+/// Whether `path`'s final extension is one skill-veil treats as a script.
+/// The `command_pattern` captures the whole referenced token and defers
+/// the extension test here so a compound name (`utils.sh.inc`) is judged
+/// by its real trailing extension (`inc`, rejected) rather than letting a
+/// greedy regex truncate to an interior `.sh` and queue a phantom path.
+fn has_script_extension(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| SCRIPT_EXTENSIONS.contains(&ext))
+}
 
 /// Bare-prefix URL schemes that don't use `://` but are still URLs (data
 /// URIs, mailto, javascript). Anything else MUST present `scheme://` to
@@ -110,28 +127,40 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
         r#"\[.*?\]\(\s*<?(\.?/?[^\s)>]+\.({}))(?:[?#][^\s)>]*)?>?(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)"#,
         ALL_EXT_PATTERN
     );
-    let command_pattern = format!(
-        r#"(?:source|run|execute|include)\s+[\"']?([^\s\"']+\.({}))"#,
-        SCRIPT_EXT_PATTERN
-    );
+    // Capture the whole referenced token, not a `.<scriptext>`-anchored
+    // prefix. With the old anchored form the greedy path run backtracked
+    // to an *interior* script extension when the real trailing segment
+    // was not one — `source utils.sh.inc` captured `utils.sh`, queuing a
+    // phantom path that never exists. The extension test now happens in
+    // `has_script_extension` after trailing-punctuation stripping, so the
+    // token is judged by its real final extension. `link_pattern` keeps
+    // its inline extension group: its closing `\)` already anchors the
+    // destination so no truncation is possible.
+    let command_pattern = r#"(?:source|run|execute|include)\s+[\"']?([^\s\"']+)"#;
 
-    // The link/command patterns embed runtime-built extension lists
-    // (`SCRIPT_EXT_PATTERN`, `ALL_EXT_PATTERN`), so they cannot live
-    // inside `lazy_pattern!`. They go through `compile_patterns` —
-    // the bulk variant of the same composition seam — which still
-    // routes through the `PatternMatcher` port without naming the
-    // concrete adapter. The static `EXEC_REFERENCE_PATTERN` uses
+    // The link pattern embeds the runtime-built `ALL_EXT_PATTERN`, so it
+    // cannot live inside `lazy_pattern!`. Both dynamic patterns go through
+    // `compile_patterns` — the bulk variant of the same composition seam —
+    // which still routes through the `PatternMatcher` port without naming
+    // the concrete adapter. The static `EXEC_REFERENCE_PATTERN` uses
     // `lazy_pattern!` because it is a binary literal.
-    let dynamic = compile_patterns(&[link_pattern.as_str(), command_pattern.as_str()]);
+    let dynamic = compile_patterns(&[link_pattern.as_str(), command_pattern]);
+    // `compile_patterns` preserves input order, so `dynamic[0]` is the
+    // link pattern and `dynamic[1]` the command pattern. The command
+    // pattern captures a bare token and must be filtered to references
+    // whose final extension is a script; the link pattern already embeds
+    // its extension group and the exec pattern intentionally accepts
+    // extension-less targets (`chmod +x payload`).
     let patterns = dynamic
         .iter()
-        .chain(std::iter::once::<&CompiledPattern>(&EXEC_REFERENCE_PATTERN));
+        .zip([false, true])
+        .chain(std::iter::once((&*EXEC_REFERENCE_PATTERN, false)));
 
     // O(1) membership for dedup: a linear `references.contains(..)` per
     // match made the whole pass O(N^2) in the number of distinct
     // references, which an attacker controls via the document body.
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    'patterns: for re in patterns {
+    'patterns: for (re, requires_script_ext) in patterns {
         for cap in re.captures_iter(content) {
             if references.len() >= MAX_REFERENCED_FILES {
                 tracing::warn!(
@@ -152,9 +181,16 @@ pub(super) fn extract_references(content: &str, base_path: &Path) -> Vec<PathBuf
             let raw = m
                 .matched_text
                 .as_str()
-                .trim_end_matches([')', '`', '"', '\'', ',', ';', '>']);
+                .trim_end_matches(TRAILING_PUNCTUATION);
             let raw = raw.strip_prefix("./").unwrap_or(raw);
             if raw.is_empty() {
+                continue;
+            }
+
+            // The command pattern captures any token after a
+            // `source`/`run`/`execute`/`include` directive; keep only
+            // those that resolve to a script by their real extension.
+            if requires_script_ext && !has_script_extension(raw) {
                 continue;
             }
 
@@ -371,6 +407,54 @@ mod tests {
             refs.iter().any(|p| p.ends_with("scripts/x.sh")),
             "must resolve scripts/x.sh; got {refs:?}"
         );
+    }
+
+    /// # Contract
+    ///
+    /// A `source`/`include`/`run`/`execute` directive whose argument ends
+    /// in a non-script segment after a script extension (e.g.
+    /// `source utils.sh.inc`) MUST NOT capture the truncated prefix
+    /// (`utils.sh`). Pre-fix the unanchored `command_pattern` backtracked
+    /// to the earlier `.sh`, queuing a phantom path that never exists.
+    #[test]
+    fn extract_references_command_directive_does_not_truncate_compound_extension() {
+        let base_path = Path::new("/tmp/pkg/SKILL.md");
+        for sample in [
+            "source utils.sh.inc",
+            "include vendor/lib.js.gz",
+            "run handler.py.orig",
+        ] {
+            let refs = extract_references(sample, base_path);
+            assert!(
+                refs.is_empty(),
+                "compound-extension directive must not yield a truncated phantom: \
+                 {sample:?} -> {refs:?}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// The boundary added to `command_pattern` must not regress ordinary
+    /// `source`/`include` directives: a script referenced via a bare
+    /// directive (with or without trailing punctuation, with stacked
+    /// script extensions) is still queued.
+    #[test]
+    fn extract_references_command_directive_resolves_real_scripts() {
+        let base_path = Path::new("/tmp/pkg/SKILL.md");
+        let cases: &[(&str, &str)] = &[
+            ("source scripts/setup.sh", "scripts/setup.sh"),
+            ("run install.sh && echo done", "install.sh"),
+            ("execute \"deploy.py\"", "deploy.py"),
+            ("source stage.sh.py", "stage.sh.py"),
+        ];
+        for (sample, expected) in cases {
+            let refs = extract_references(sample, base_path);
+            assert!(
+                refs.iter().any(|p| p.ends_with(expected)),
+                "must resolve {expected:?} from {sample:?}; got {refs:?}"
+            );
+        }
     }
 
     /// # Contract (low-level helper)
