@@ -352,15 +352,18 @@ fn has_shell_exec_signal(context: &str) -> bool {
 /// substring, which fired on common prose: `"the scope of this tool"`,
 /// `"in scope"`, `"out of scope"`. Combined with two other declared
 /// rules this could escalate to `SCOPE_OVERPROVISIONING` on benign
-/// content. The new rule keeps the unambiguous SaaS triggers
-/// (`"oauth"`, `"calendar"`, `"drive"`, `"slack"`, `"read/write"`)
-/// and replaces bare `"scope"` with `"oauth scope"` (which also
-/// matches `"oauth scopes"`).
+/// content.
+///
+/// `drive` and `slack` are matched on word boundaries (`contains_word`):
+/// as bare substrings they fired on `driver`/`drives`/`hard drive` and
+/// `slackware`/`slack-off`, the same false-positive class the `scope`
+/// hardening already fixed. `oauth`/`calendar`/`read/write` are
+/// distinctive enough that a plain substring match is safe.
 fn has_oauth_scope_signal(context: &str) -> bool {
     context.contains("oauth")
         || context.contains("calendar")
-        || context.contains("drive")
-        || context.contains("slack")
+        || contains_word(context, "drive")
+        || contains_word(context, "slack")
         || context.contains("read/write")
 }
 
@@ -518,6 +521,27 @@ mod tests {
             assert!(
                 !has_oauth_scope_signal(&sample.to_ascii_lowercase()),
                 "must NOT classify benign prose as oauth-scopes: {sample:?}"
+            );
+        }
+    }
+
+    /// Contract: `drive` / `slack` are matched on word boundaries, so the
+    /// signal does NOT fire on words that merely contain them
+    /// (`driver`, `drives`, `hard drive` is fine but `driver` is not a
+    /// SaaS scope). Pre-fix the bare substring fired on `"printer driver"`,
+    /// which combined with two other declared rules escalated a benign
+    /// artifact to `SCOPE_OVERPROVISIONING`.
+    #[test]
+    fn oauth_scope_signal_does_not_fire_on_word_substrings() {
+        for sample in [
+            "- installs the printer driver",
+            "the device driver is auto-detected",
+            "this is a slackware build script",
+            "the project drives a hardware bus",
+        ] {
+            assert!(
+                !has_oauth_scope_signal(&sample.to_ascii_lowercase()),
+                "must NOT fire on word-substring lookalike: {sample:?}"
             );
         }
     }
