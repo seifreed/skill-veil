@@ -395,7 +395,7 @@
   severity: medium
   confidence: 0.75
   when: !regex
-    pattern: "(?i)(base64\\s+-[dD]|echo\\s+[A-Za-z0-9+/=]{20,}\\s*\\|\\s*base64)"
+    pattern: "(?i)(base64\\s+(?:-[dD]|--decode)|echo\\s+[A-Za-z0-9+/=]{20,}\\s*\\|\\s*base64)"
   action: require_approval
   reason: "Base64 encoded command execution"
   shield:
