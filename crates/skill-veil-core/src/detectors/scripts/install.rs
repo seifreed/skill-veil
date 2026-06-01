@@ -6,16 +6,22 @@ use crate::findings::{
 };
 use crate::lazy_pattern;
 
-// Bounded-whitespace, single-optional-flag pattern. The pre-fix shape
+// Bounded-whitespace install pattern. The pre-fix shape
 // `(?:-g\s+|--global\s+|--force\s+)+` paired `\s+` (which devours
 // newlines across statements) with an outer `+` quantifier, producing
 // catastrophic backtracking on large scripts (>=40 min for the 3k-sample
-// VT corpus). The `[ \t]+` keeps matching on a single line and the `?`
-// allows the flag to be absent in shells where an alias already injects
-// `-g`.
+// VT corpus). `[ \t]+` keeps matching on a single line.
+//
+// `npx <pkg>` downloads and runs a package directly and never takes a
+// `-g`/`--global` flag, so it is a separate flagless alternative — pairing
+// it with the mandatory global-install flag (as the pre-fix pattern did)
+// made `npx <typosquat>` structurally unreachable, letting the highest-risk
+// remote-execution form evade the typosquat backstop. The other commands
+// keep the global-flag requirement; the Levenshtein-distance gate below
+// prevents the flagless `npx` arm from firing on legitimate package names.
 lazy_pattern!(
     INSTALL_RE,
-    r"(?i)\b(?:npm[ \t]+install|npm[ \t]+i\b|npx|yarn[ \t]+add|pnpm[ \t]+add|clawhub[ \t]+install|clauhub[ \t]+install)[ \t]+(?:-g|--global|--force)[ \t]+([a-z][a-z0-9_.-]{2,40})"
+    r"(?i)\b(?:(?:npm[ \t]+install|npm[ \t]+i\b|yarn[ \t]+add|pnpm[ \t]+add|clawhub[ \t]+install|clauhub[ \t]+install)[ \t]+(?:-g|--global|--force)[ \t]+|npx[ \t]+)([a-z][a-z0-9_.-]{2,40})"
 );
 
 const TYPOSQUAT_KNOWN_GOOD: &[&str] = &[
@@ -120,6 +126,30 @@ mod tests {
                 .iter()
                 .any(|f| f.rule_id == "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT"),
             "expected SCRIPT_SUPPLY_CHAIN_TYPOSQUAT, got {findings:?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// `npx <typosquat>` (flagless remote execution) MUST fire. Pre-fix the
+    /// mandatory global-install flag after every command made the `npx` arm
+    /// structurally unreachable, so `npx shersh` — the highest-risk
+    /// download-and-run form — evaded the typosquat backstop. A legitimate
+    /// flagless `npx <good-pkg>` still does not fire (distance gate).
+    #[test]
+    fn detect_typosquatted_install_fires_on_flagless_npx() {
+        let lower = "npx shersh\n".to_ascii_lowercase();
+        let findings = detect_typosquatted_install(&lower, "sh", "/tmp/x.sh");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT"),
+            "npx typosquat must fire, got {findings:?}"
+        );
+        let benign = "npx create-react-app myapp\n".to_ascii_lowercase();
+        assert!(
+            detect_typosquatted_install(&benign, "sh", "/tmp/x.sh").is_empty(),
+            "a legitimate flagless npx must not fire",
         );
     }
 
