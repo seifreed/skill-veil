@@ -365,27 +365,18 @@ const CAPABILITY_PROBES: &[CapabilityProbe] = &[
 fn mcp_underdeclared_capability(content: &str, artifact_path: &str) -> Option<Finding> {
     let value: serde_json::Value = serde_json::from_str(content).ok()?;
 
-    let declared = collect_declared_capabilities(&value)?;
-    let tool_names = collect_tool_names_lower(&value);
-    let has_command = value
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .is_some();
-
-    let mut missing = Vec::new();
-    for probe in CAPABILITY_PROBES {
-        let implied = (probe.label == "process-execution" && has_command)
-            || tool_names
-                .iter()
-                .any(|name| probe.tool_keywords.iter().any(|kw| name.contains(kw)));
-        if !implied {
-            continue;
-        }
-        let covered = declared
-            .iter()
-            .any(|token| probe.declared_keywords.iter().any(|kw| token.contains(kw)));
-        if !covered {
-            missing.push(probe.label);
+    // The canonical MCP manifest nests one or more server configs under
+    // `mcpServers.<name>` (see examples/mcp-server/mcp.json); a bare config
+    // object with no wrapper is also valid. Evaluate every server object so
+    // the standard nested format is not silently skipped — pre-fix only
+    // top-level keys were read, so the least-privilege check never fired on
+    // a real `mcpServers` manifest.
+    let mut missing: Vec<&'static str> = Vec::new();
+    for server in mcp_server_objects(&value) {
+        for label in underdeclared_labels_for_server(server) {
+            if !missing.contains(&label) {
+                missing.push(label);
+            }
         }
     }
 
@@ -409,6 +400,53 @@ fn mcp_underdeclared_capability(content: &str, artifact_path: &str) -> Option<Fi
             .reason("MCP manifest declares a capability/permission allowlist but exposes tools implying a capability it does not grant (under-declared least privilege)")
             .build(),
     )
+}
+
+/// The server config objects to evaluate. For the canonical
+/// `{"mcpServers": {"<name>": {...}}}` shape this is each named server; for
+/// a bare config object (no wrapper) it is the value itself.
+fn mcp_server_objects(value: &serde_json::Value) -> Vec<&serde_json::Value> {
+    if let Some(servers) = value
+        .get("mcpServers")
+        .and_then(serde_json::Value::as_object)
+    {
+        return servers.values().collect();
+    }
+    vec![value]
+}
+
+/// Capability labels a single server object implies (via `command` or tool
+/// names) but does not grant in its declared `capabilities`/`permissions`/
+/// `scopes` block. Empty when the server declares no allowlist (the
+/// deliberately out-of-scope "nothing declared" case) or fully covers what
+/// it exposes.
+fn underdeclared_labels_for_server(server: &serde_json::Value) -> Vec<&'static str> {
+    let Some(declared) = collect_declared_capabilities(server) else {
+        return Vec::new();
+    };
+    let tool_names = collect_tool_names_lower(server);
+    let has_command = server
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .is_some();
+
+    let mut missing = Vec::new();
+    for probe in CAPABILITY_PROBES {
+        let implied = (probe.label == "process-execution" && has_command)
+            || tool_names
+                .iter()
+                .any(|name| probe.tool_keywords.iter().any(|kw| name.contains(kw)));
+        if !implied {
+            continue;
+        }
+        let covered = declared
+            .iter()
+            .any(|token| probe.declared_keywords.iter().any(|kw| token.contains(kw)));
+        if !covered {
+            missing.push(probe.label);
+        }
+    }
+    missing
 }
 
 /// Collect declared capability tokens (lowercased) from the first present of
@@ -637,6 +675,42 @@ mod tests {
           "tools": [{"name": "read_file", "description": "Read a file."}]
         }"#;
         assert!(fired(content, "MCP_UNDERDECLARED_CAPABILITY"));
+    }
+
+    /// Contract: the least-privilege check evaluates servers nested under
+    /// the canonical `mcpServers.<name>` wrapper, not just top-level keys.
+    /// Pre-fix it read only the top level, so a standard MCP manifest never
+    /// tripped the check. A nested server that fully covers its surface
+    /// still does not fire.
+    #[test]
+    fn underdeclared_capability_fires_for_nested_mcpservers_manifest() {
+        let underdeclared = r#"{
+          "mcpServers": {
+            "evil": {
+              "command": "node",
+              "permissions": ["fs:read"],
+              "tools": [{"name": "run_command"}]
+            }
+          }
+        }"#;
+        assert!(
+            fired(underdeclared, "MCP_UNDERDECLARED_CAPABILITY"),
+            "nested mcpServers under-declaration must fire",
+        );
+
+        let covered = r#"{
+          "mcpServers": {
+            "ok": {
+              "command": "node",
+              "permissions": ["process:exec", "fs:read"],
+              "tools": [{"name": "run_command"}]
+            }
+          }
+        }"#;
+        assert!(
+            !fired(covered, "MCP_UNDERDECLARED_CAPABILITY"),
+            "a nested server that grants the implied capability must not fire",
+        );
     }
 
     #[test]
