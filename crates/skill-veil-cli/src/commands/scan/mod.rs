@@ -10,7 +10,8 @@ use crate::{
 use anyhow::{Context, Result};
 use nova_llm_eval::ProviderLlmEvaluator;
 use skill_veil_core::{
-    RegexPatternMatcher, ScanOptions, ScanTargetMode, Scanner, StdFileSystemProvider,
+    Finding, RegexPatternMatcher, ScanOptions, ScanResult, ScanTargetMode, Scanner,
+    StdFileSystemProvider,
 };
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -325,49 +326,7 @@ pub(crate) fn run_scan(
         }
     };
     if let Some(report) = &nova_report {
-        let by_path = report.findings_by_path();
-        for result in &mut scan_result.results {
-            let Some(path_str) = result
-                .findings
-                .first()
-                .and_then(|f| f.artifact_path.clone())
-                .or_else(|| {
-                    result
-                        .primary_findings
-                        .first()
-                        .and_then(|f| f.artifact_path.clone())
-                })
-            else {
-                continue;
-            };
-            let key = std::path::PathBuf::from(&path_str);
-            if let Some(findings) = by_path.get(&key) {
-                result.findings.extend(findings.iter().cloned());
-                result.primary_findings.extend(findings.iter().cloned());
-            }
-        }
-        // If no ScanResult matched a hit's path (single-file mode
-        // where the path-key match misses), append all NOVA hits to
-        // the first result so they at least appear in JSON / SARIF
-        // output rather than being silently dropped.
-        let injected: usize = scan_result
-            .results
-            .iter()
-            .map(|r| {
-                r.findings
-                    .iter()
-                    .filter(|f| f.rule_id.starts_with("NOVA_"))
-                    .count()
-            })
-            .sum();
-        if injected == 0 && !report.hits.is_empty() {
-            if let Some(first) = scan_result.results.first_mut() {
-                for hit_findings in by_path.values() {
-                    first.findings.extend(hit_findings.iter().cloned());
-                    first.primary_findings.extend(hit_findings.iter().cloned());
-                }
-            }
-        }
+        attach_nova_findings(&mut scan_result.results, &report.findings_by_path());
     }
 
     if !scan_result.errors.is_empty() && !quiet {
@@ -613,6 +572,67 @@ pub(crate) fn run_scan(
     Ok(should_fail)
 }
 
+/// Attaches NOVA findings to the `ScanResult` that owns each matched file.
+///
+/// NOVA walks every text artifact under the scan target, but the scanner
+/// emits one `ScanResult` per discovered package entrypoint — so a hit on a
+/// non-entrypoint file (e.g. `pkg/b/README.md`) has no result keyed on its
+/// exact path. Each hit is attributed to the result whose entrypoint path
+/// shares the longest leading path-component prefix with the hit: the
+/// package that contains it. Both the entrypoint path (`metadata.path`) and
+/// the hit `source_path` derive from the same scan-target base and neither
+/// is canonicalised, so the prefix comparison is well-defined. Previously a
+/// multi-package scan dumped every unmatched NOVA hit onto the
+/// lexicographically-first result, mis-attributing findings to the wrong
+/// package in JSON / SARIF output.
+fn attach_nova_findings(
+    results: &mut [ScanResult],
+    by_path: &std::collections::HashMap<PathBuf, Vec<Finding>>,
+) {
+    for (hit_path, findings) in by_path {
+        let Some(idx) = nova_attribution_index(results, hit_path) else {
+            continue;
+        };
+        results[idx].findings.extend(findings.iter().cloned());
+        results[idx]
+            .primary_findings
+            .extend(findings.iter().cloned());
+    }
+}
+
+/// Index of the `ScanResult` whose entrypoint path shares the longest
+/// leading component prefix with `hit_path`, or `None` when there are no
+/// results. With a single result the answer is always that result, which
+/// preserves single-file / single-package behaviour. When no result shares
+/// any prefix (fully disjoint paths — not reachable for an in-tree scan),
+/// the first result is the non-dropping fallback.
+fn nova_attribution_index(results: &[ScanResult], hit_path: &Path) -> Option<usize> {
+    longest_prefix_index(results.iter().map(|r| r.metadata.path.as_path()), hit_path)
+}
+
+/// Index of the entrypoint path sharing the longest leading path-component
+/// prefix with `hit_path`. Returns the first entry as a non-dropping
+/// fallback when none shares any prefix, and `None` for an empty iterator.
+fn longest_prefix_index<'a>(
+    entrypoints: impl Iterator<Item = &'a Path>,
+    hit_path: &Path,
+) -> Option<usize> {
+    let mut best_idx: Option<usize> = None;
+    let mut best_len = 0usize;
+    for (idx, entry) in entrypoints.enumerate() {
+        let shared = entry
+            .components()
+            .zip(hit_path.components())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if best_idx.is_none() || shared > best_len {
+            best_idx = Some(idx);
+            best_len = shared;
+        }
+    }
+    best_idx
+}
+
 fn terminal_text(value: &str) -> String {
     sanitise_for_terminal(value)
 }
@@ -633,6 +653,54 @@ mod tests {
     use clap::Parser;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// Contract: a NOVA hit on a non-entrypoint file in a multi-package
+    /// scan is attributed to the package that contains it (longest shared
+    /// entrypoint-path prefix), NOT the lexicographically-first result.
+    /// Pre-fix the unmatched-hit fallback dumped every NOVA finding onto
+    /// `results[0]`, mis-attributing it to the wrong package.
+    #[test]
+    fn nova_hit_attributed_to_owning_package_in_multi_package_scan() {
+        let entrypoints = [
+            Path::new("pkg/a/SKILL.md"),
+            Path::new("pkg/b/SKILL.md"),
+            Path::new("pkg/c/SKILL.md"),
+        ];
+        let hit = Path::new("pkg/b/README.md");
+        assert_eq!(
+            longest_prefix_index(entrypoints.iter().copied(), hit),
+            Some(1),
+            "hit under pkg/b must attach to result for pkg/b, not pkg/a",
+        );
+    }
+
+    /// Contract: a NOVA hit on the entrypoint file itself attaches to that
+    /// entrypoint's result.
+    #[test]
+    fn nova_hit_on_entrypoint_attaches_to_its_own_result() {
+        let entrypoints = [Path::new("pkg/a/SKILL.md"), Path::new("pkg/b/SKILL.md")];
+        assert_eq!(
+            longest_prefix_index(entrypoints.iter().copied(), Path::new("pkg/b/SKILL.md")),
+            Some(1),
+        );
+    }
+
+    /// Contract: single-result (single-file / single-package) scans always
+    /// attribute to that one result, and an empty result set yields `None`.
+    #[test]
+    fn nova_attribution_single_and_empty_result_sets() {
+        let single = [Path::new("/tmp/SKILL.md")];
+        assert_eq!(
+            longest_prefix_index(single.iter().copied(), Path::new("/tmp/notes.md")),
+            Some(0),
+            "single result is always the target",
+        );
+        let empty: [&Path; 0] = [];
+        assert_eq!(
+            longest_prefix_index(empty.iter().copied(), Path::new("x.md")),
+            None,
+        );
+    }
 
     #[test]
     fn terminal_path_removes_scan_warning_control_sequences() {
