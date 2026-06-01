@@ -362,6 +362,36 @@ pub(crate) fn run_scan(
         attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
     }
 
+    // Dynamic-behavior sandbox (gated behind the `sandbox` build feature
+    // and the `--dynamic` flag — it EXECUTES untrusted code). Like NOVA /
+    // YARA it runs post-verdict and only injects advisory findings; gVisor
+    // is required (no silent fallback to the weaker runc kernel boundary).
+    #[cfg(feature = "sandbox")]
+    let sandbox_report = if args.dynamic {
+        match crate::sandbox::evaluate_against_target(&args.path, true) {
+            Ok(report) => report,
+            Err(err) => {
+                if !quiet {
+                    eprintln!("warning: dynamic sandbox skipped: {err:#}");
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+    #[cfg(feature = "sandbox")]
+    if let Some(report) = &sandbox_report {
+        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
+    }
+    #[cfg(not(feature = "sandbox"))]
+    if args.dynamic && !quiet {
+        eprintln!(
+            "--dynamic: this binary was built without `--features sandbox`; \
+             skipping dynamic analysis"
+        );
+    }
+
     if !scan_result.errors.is_empty() && !quiet {
         for err_entry in &scan_result.errors {
             eprintln!(
@@ -566,6 +596,14 @@ pub(crate) fn run_scan(
         let render_text = !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text);
         if render_text {
             print!("{}", yara_run::render_text_block(report));
+        }
+    }
+
+    #[cfg(feature = "sandbox")]
+    if let Some(report) = sandbox_report.as_ref() {
+        let render_text = !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text);
+        if render_text {
+            print!("{}", crate::sandbox::render_text_block(report));
         }
     }
 

@@ -65,6 +65,15 @@ nova-semantics = ["dep:fastembed"]
 # regardless of this build choice, mirroring the `nova-semantics`
 # pattern so invocations stay flag-compatible across build variants.
 yara = ["skill-veil-core/yara"]
+# Enable the dynamic-behavior sandbox channel: execute a skill's scripts
+# and an instrumented agent inside a hardened, gVisor-isolated container
+# and turn the observed runtime behavior into advisory findings. Off by
+# default — it requires a Docker daemon (and, for real isolation, the
+# gVisor `runsc` runtime) on the host, and it executes untrusted code.
+# The pure layers (hardening policy, observation model, behavior->finding
+# mapping) compile and test without a daemon; only the live executor
+# needs one.
+sandbox = []
 
 [dev-dependencies]
 tempfile.workspace = true

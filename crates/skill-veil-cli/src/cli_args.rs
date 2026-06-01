@@ -671,6 +671,15 @@ pub struct ScanArgs {
     /// compiled in (mirrors `--no-nova-semantics`).
     #[arg(long, default_value_t = false)]
     pub no_yara: bool,
+    /// Run the dynamic-behavior sandbox: execute the skill's scripts and an
+    /// instrumented agent inside a hardened, gVisor-isolated container and
+    /// turn the observed runtime behavior into advisory findings. Strictly
+    /// opt-in — it EXECUTES untrusted code, and requires a Docker daemon
+    /// (and, for real isolation, the gVisor `runsc` runtime) on the host.
+    /// Always parseable; on a binary built without `--features sandbox`, or
+    /// when Docker/gVisor is absent, it is a no-op with a one-line note.
+    #[arg(long, default_value_t = false)]
+    pub dynamic: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]

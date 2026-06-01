@@ -16,6 +16,8 @@ mod overlap;
 mod promptintel;
 mod rule_dirs;
 mod rule_tools;
+#[cfg(feature = "sandbox")]
+mod sandbox;
 mod text_output;
 mod threat_mapping;
 mod util;
