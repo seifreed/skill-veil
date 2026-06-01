@@ -69,6 +69,14 @@ pub struct ScanOptions {
     /// bodies are not trusted operator-authored source.
     #[serde(default = "default_honor_inline_suppressions")]
     pub honor_inline_suppressions: bool,
+    /// External rule-overlay directories, resolved by the composition root
+    /// (the CLI) and injected here. The core scanner does not read the
+    /// process environment or the platform cache directory; callers supply
+    /// the discovery result. An empty list loads only the embedded baseline
+    /// plus any explicit `rules_dir`. `#[serde(default)]`: additive — old
+    /// serialised `ScanOptions` still deserialise.
+    #[serde(default)]
+    pub runtime_overlay_dirs: Vec<PathBuf>,
 }
 
 fn default_honor_inline_suppressions() -> bool {
@@ -92,6 +100,7 @@ impl Default for ScanOptions {
             target_mode: ScanTargetMode::Auto,
             strict_rules: false,
             honor_inline_suppressions: true,
+            runtime_overlay_dirs: Vec::new(),
         }
     }
 }

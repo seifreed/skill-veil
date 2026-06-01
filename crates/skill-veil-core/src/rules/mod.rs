@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```
-//! use skill_veil_core::rules::{default_external_rule_dirs, RuleEngine};
+//! use skill_veil_core::rules::RuleEngine;
 //! use skill_veil_core::analyzer::SkillDocument;
 //! use skill_veil_core::adapters::{
 //!     PulldownMarkdownParser, RegexPatternMatcher, StdFileSystemProvider,
@@ -16,9 +16,11 @@
 //! use std::sync::Arc;
 //!
 //! // Compose adapters at the application boundary, then hand them to the
-//! // domain layer through the injected ports.
+//! // domain layer through the injected ports. External rule-overlay
+//! // directories are resolved by the composition root and passed in; an
+//! // empty list loads only the embedded baseline.
 //! let fs = StdFileSystemProvider::new();
-//! let runtime_dirs = default_external_rule_dirs();
+//! let runtime_dirs: Vec<PathBuf> = Vec::new();
 //! let engine = RuleEngine::with_defaults_and_matcher(
 //!     Arc::new(RegexPatternMatcher::new()),
 //!     &fs,
@@ -55,7 +57,7 @@ use tracing::warn;
 
 pub use compiled::CompiledRule;
 pub use condition::RuleCondition;
-pub use parser::{default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file};
+pub use parser::{is_supported_rule_pack_schema, parse_rules_file};
 pub use schema::{IocFeedFile, Rule, RulePackFile, RulePackKind, RulePackMetadata, ShieldHint};
 
 /// Versioned schema string for external rule packs.
@@ -255,14 +257,16 @@ pub enum ChecksumPolicy {
 /// # Example
 ///
 /// ```
-/// use skill_veil_core::rules::{default_external_rule_dirs, RuleEngine};
+/// use skill_veil_core::rules::RuleEngine;
 /// use skill_veil_core::adapters::{RegexPatternMatcher, StdFileSystemProvider};
+/// use std::path::PathBuf;
 /// use std::sync::Arc;
 ///
 /// // Compose adapters at the application boundary; the engine receives
-/// // them through the injected ports.
+/// // them through the injected ports. The composition root resolves the
+/// // external rule-overlay directories (empty here loads the baseline).
 /// let fs = StdFileSystemProvider::new();
-/// let runtime_dirs = default_external_rule_dirs();
+/// let runtime_dirs: Vec<PathBuf> = Vec::new();
 /// let engine = RuleEngine::with_defaults_and_matcher(
 ///     Arc::new(RegexPatternMatcher::new()),
 ///     &fs,

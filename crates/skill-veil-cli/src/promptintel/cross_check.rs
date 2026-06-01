@@ -422,6 +422,7 @@ fn scan_options(rules_dir: Option<PathBuf>) -> ScanOptions {
         target_mode: ScanTargetMode::File,
         rules_dir,
         honor_inline_suppressions: false,
+        runtime_overlay_dirs: crate::rule_dirs::default_external_rule_dirs(),
         ..Default::default()
     }
 }

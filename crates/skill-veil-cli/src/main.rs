@@ -14,6 +14,7 @@ mod llm;
 mod osv;
 mod overlap;
 mod promptintel;
+mod rule_dirs;
 mod rule_tools;
 mod text_output;
 mod threat_mapping;

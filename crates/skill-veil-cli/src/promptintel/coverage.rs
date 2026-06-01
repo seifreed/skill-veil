@@ -10,9 +10,7 @@
 use super::taxonomy::{bucket_for, TAXONOMY};
 use anyhow::{Context, Result};
 use serde::Serialize;
-use skill_veil_core::{
-    default_external_rule_dirs, RegexPatternMatcher, Rule, RuleEngine, StdFileSystemProvider,
-};
+use skill_veil_core::{RegexPatternMatcher, Rule, RuleEngine, StdFileSystemProvider};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,7 +62,7 @@ pub(crate) fn build_report(opts: &CoverageOptions) -> Result<CoverageReport> {
     let fs = StdFileSystemProvider::new();
     let runtime_dirs: Vec<PathBuf> = match opts.rules_dir.as_ref() {
         Some(dir) => vec![dir.clone()],
-        None => default_external_rule_dirs(),
+        None => crate::rule_dirs::default_external_rule_dirs(),
     };
     let engine = RuleEngine::with_defaults_and_matcher(
         Arc::new(RegexPatternMatcher::new()),

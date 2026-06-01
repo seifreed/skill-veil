@@ -3116,7 +3116,6 @@ name = "skill-veil-core"
 version = "0.2.0"
 dependencies = [
  "chrono",
- "dirs 5.0.1",
  "globset",
  "pulldown-cmark",
  "regex",

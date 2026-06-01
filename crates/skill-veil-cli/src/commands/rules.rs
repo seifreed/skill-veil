@@ -8,7 +8,7 @@ use crate::{
     util::terminal_safe::sanitise_for_terminal,
 };
 use anyhow::{Context, Result};
-use skill_veil_core::{PulldownMarkdownParser, Scanner, Severity};
+use skill_veil_core::{PulldownMarkdownParser, ScanOptions, Scanner, Severity};
 use std::path::PathBuf;
 
 pub(crate) fn run_rules(action: RulesAction) -> Result<()> {
@@ -18,7 +18,12 @@ pub(crate) fn run_rules(action: RulesAction) -> Result<()> {
             severity,
             format,
         } => {
-            let scanner = Scanner::new().context("Failed to initialize scanner")?;
+            let options = ScanOptions {
+                runtime_overlay_dirs: crate::rule_dirs::default_external_rule_dirs(),
+                ..Default::default()
+            };
+            let scanner =
+                Scanner::with_std_adapters(options).context("Failed to initialize scanner")?;
             rules_list(&scanner, category, severity, format)
         }
         RulesAction::Test {

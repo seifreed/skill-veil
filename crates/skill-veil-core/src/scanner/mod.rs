@@ -18,7 +18,7 @@ use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
 use crate::policy::{BaselineFile, DispositionOverlay, PolicyFile, WaiverFile};
 use crate::ports::{FileSystemProvider, MarkdownParser};
-use crate::rules::{default_external_rule_dirs, RuleEngine};
+use crate::rules::RuleEngine;
 use crate::scanner_support::{
     load_optional_baseline, load_optional_disposition, load_optional_policy, load_optional_waivers,
 };
@@ -51,11 +51,10 @@ fn build_engine_and_policy<F: FileSystemProvider>(
     fs: &F,
     options: &ScanOptions,
 ) -> Result<EngineAndPolicy, ScanError> {
-    let runtime_overlay_dirs = default_external_rule_dirs();
     let mut engine = RuleEngine::with_defaults_and_matcher_runtime_strict(
         Arc::new(RegexPatternMatcher::new()),
         fs,
-        &runtime_overlay_dirs,
+        &options.runtime_overlay_dirs,
         options.strict_rules,
     )?;
     // Built-ins already fail fast on internal duplicates. Keep the

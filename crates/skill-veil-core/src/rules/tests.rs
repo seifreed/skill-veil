@@ -3,7 +3,6 @@ use crate::adapters::{PulldownMarkdownParser, RegexPatternMatcher, StdFileSystem
 use crate::analyzer::SkillDocument;
 use crate::findings::Severity;
 use crate::ports::{FileContent, FileSystemError, FileSystemProvider};
-use crate::rules::default_external_rule_dirs;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,13 +16,13 @@ fn empty_engine() -> RuleEngine<RegexPatternMatcher> {
 }
 
 /// Build a `RuleEngine` preloaded with built-in rules and the production
-/// `RegexPatternMatcher` adapter. Mirrors the production boot path
-/// (`with_defaults_and_matcher` + `default_external_rule_dirs`) so a
+/// `RegexPatternMatcher` adapter, with no external overlay directories
+/// (embedded baseline only). Mirrors the production boot path so a
 /// regression in adapter wiring is surfaced uniformly across the suite.
 fn default_engine() -> RuleEngine<RegexPatternMatcher> {
     let fs = StdFileSystemProvider::new();
-    let dirs = default_external_rule_dirs();
-    RuleEngine::with_defaults_and_matcher(Arc::new(RegexPatternMatcher::new()), &fs, &dirs)
+    let overlay_dirs: Vec<PathBuf> = Vec::new();
+    RuleEngine::with_defaults_and_matcher(Arc::new(RegexPatternMatcher::new()), &fs, &overlay_dirs)
         .expect("with_defaults_and_matcher must succeed for the canonical built-in rule set")
 }
 

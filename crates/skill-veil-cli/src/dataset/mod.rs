@@ -28,6 +28,7 @@ pub(crate) fn default_dataset_scan_options() -> ScanOptions {
         recursive: true,
         target_mode: ScanTargetMode::Package,
         honor_inline_suppressions: false,
+        runtime_overlay_dirs: crate::rule_dirs::default_external_rule_dirs(),
         ..Default::default()
     }
 }
@@ -164,6 +165,7 @@ pub(crate) fn run_scan_dataset(
         // legacy `..Default::default()` left this at `false`, silently
         // dropping the flag the user asked for.
         strict_rules: args.strict_rules,
+        runtime_overlay_dirs: crate::rule_dirs::default_external_rule_dirs(),
         ..Default::default()
     };
 

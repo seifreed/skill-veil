@@ -121,9 +121,8 @@ pub use policy::{
     SuppressionSummary, WaiverEntry, WaiverFile, POLICY_AUDIT_PRECEDENCE, POLICY_SCHEMA_VERSION,
 };
 pub use rules::{
-    default_external_rule_dirs, is_supported_rule_pack_schema, parse_rules_file, IocFeedFile, Rule,
-    RuleCondition, RuleEngine, RulePackFile, RulePackKind, RulePackMetadata,
-    RULE_PACK_SCHEMA_VERSION,
+    is_supported_rule_pack_schema, parse_rules_file, IocFeedFile, Rule, RuleCondition, RuleEngine,
+    RulePackFile, RulePackKind, RulePackMetadata, RULE_PACK_SCHEMA_VERSION,
 };
 pub use scanner::{
     ArtifactMetadata, DefaultScanner, PackageScanResult, ScanError, ScanErrorEntry, ScanOptions,

@@ -77,6 +77,7 @@ pub(crate) fn run_benchmark(args: BenchmarkArgs) -> Result<()> {
 fn benchmark_scan_options() -> ScanOptions {
     ScanOptions {
         honor_inline_suppressions: false,
+        runtime_overlay_dirs: crate::rule_dirs::default_external_rule_dirs(),
         ..Default::default()
     }
 }

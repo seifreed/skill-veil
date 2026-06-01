@@ -251,6 +251,7 @@ pub(crate) fn run_scan(
         recursive: !args.no_recursive,
         target_mode,
         strict_rules: args.strict_rules,
+        runtime_overlay_dirs: crate::rule_dirs::default_external_rule_dirs(),
         ..Default::default()
     };
 
