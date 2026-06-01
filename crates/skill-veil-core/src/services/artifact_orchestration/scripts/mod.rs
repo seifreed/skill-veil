@@ -294,9 +294,13 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
     let lower = content.to_ascii_lowercase();
     let mut capabilities = Vec::new();
 
+    // Mirror the `ConnectsTo` relation in `script_relations`: raw-socket
+    // networking (`socket.`) is a network capability too, so a secret read
+    // piped over a bare socket still raises the secret+network combo.
     if lower.lines().any(line_contains_download_command)
         || lower.contains("http://")
         || lower.contains("https://")
+        || lower.contains("socket.")
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::NetworkAccess,
@@ -458,6 +462,8 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         || lower.contains("exec(")
         || lower.contains("spawn(")
         || lower.contains("child_process")
+        || lower.contains("os.execvp(")
+        || lower.contains("os.execvpe(")
         || lower.lines().any(line_invokes_powershell_expression_alias)
     {
         links.push(ArtifactLink {
@@ -816,6 +822,49 @@ mod tests {
             .iter()
             .any(|c| c.capability == ArtifactCapability::ProcessExecution));
         assert!(!relation_target_present(&links, "process"));
+    }
+
+    /// Contract: the `os.exec*` family raises BOTH the ProcessExecution
+    /// capability and the Executes relation. Pre-fix `os.execvp(` /
+    /// `os.execvpe(` were listed only in `script_capabilities` (and do not
+    /// contain the `exec(` substring the relation path matched on), so the
+    /// capability fired with no matching graph edge — violating the
+    /// documented "every ProcessExecution pattern must produce an Executes
+    /// edge" contract.
+    #[test]
+    fn os_exec_family_flips_both_capability_and_relation() {
+        for content in ["os.execvp(prog, args)\n", "os.execvpe(prog, args, env)\n"] {
+            let caps = script_capabilities(content);
+            let links = script_relations(content);
+            assert!(
+                caps.iter()
+                    .any(|c| c.capability == ArtifactCapability::ProcessExecution),
+                "{content:?} must raise ProcessExecution",
+            );
+            assert!(
+                relation_target_present(&links, "process"),
+                "{content:?} must produce an Executes edge",
+            );
+        }
+    }
+
+    /// Contract: raw-socket networking (`socket.`) raises BOTH the
+    /// NetworkAccess capability and the ConnectsTo relation. Pre-fix
+    /// `socket.` produced only the relation edge, so a secret read over a
+    /// bare socket lost the secret+network capability combo weight.
+    #[test]
+    fn raw_socket_flips_both_capability_and_relation() {
+        let content = "import socket\ns = socket.socket()\n";
+        let caps = script_capabilities(content);
+        let links = script_relations(content);
+        assert!(
+            capability_present(&caps, ArtifactCapability::NetworkAccess),
+            "socket. must raise NetworkAccess",
+        );
+        assert!(
+            relation_target_present(&links, "network"),
+            "socket. must produce a ConnectsTo edge",
+        );
     }
 
     /// # Contract
