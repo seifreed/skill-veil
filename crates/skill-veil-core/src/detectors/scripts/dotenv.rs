@@ -59,7 +59,7 @@ pub(crate) fn references_dotenv_file(lower: &str) -> bool {
                     | '>'
             ),
         };
-        if is_terminator {
+        if is_terminator && !is_placeholder_env_suffix(next, &lower[after..]) {
             let before = lower[..abs].chars().next_back();
             let before_ok = matches!(
                 before,
@@ -74,6 +74,24 @@ pub(crate) fn references_dotenv_file(lower: &str) -> bool {
         search_start = abs + 1;
     }
     false
+}
+
+/// True when `.env` is followed by `.<placeholder>` — a committed,
+/// non-secret template file (`.env.example`, `.env.sample`, `.env.dist`,
+/// `.env.template`). These carry stub values (`API_KEY=your-key-here`), so
+/// treating them as a secret source mints a false Critical secret-to-network
+/// finding on a benign `cp .env.example .env`. Real variants (`.env.local`,
+/// `.env.production`, …) are NOT placeholders and still match.
+/// `rest` is the slice beginning at the `.` after `.env`.
+fn is_placeholder_env_suffix(next: Option<char>, rest: &str) -> bool {
+    if next != Some('.') {
+        return false;
+    }
+    let suffix: String = rest[1..]
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect();
+    matches!(suffix.as_str(), "example" | "sample" | "dist" | "template")
 }
 
 #[cfg(test)]
@@ -146,6 +164,35 @@ mod tests {
             assert!(
                 !references_dotenv_file(&sample.to_ascii_lowercase()),
                 "lookalike before shell operator must stay rejected: {sample}"
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// `.env.example` / `.env.sample` / `.env.dist` / `.env.template` are
+    /// committed NON-secret placeholder templates and MUST NOT be treated
+    /// as a secret source — otherwise a benign `cp .env.example .env` near
+    /// a network call mints a Critical secret-to-network finding. Real
+    /// secret-bearing variants (`.env.local`, `.env.production`) still match.
+    #[test]
+    fn rejects_placeholder_env_templates() {
+        for sample in [
+            "cat .env.example",
+            "cat .env.sample",
+            "cat .env.dist",
+            "cat .env.template",
+            "read config from .env.example here",
+        ] {
+            assert!(
+                !references_dotenv_file(&sample.to_ascii_lowercase()),
+                "placeholder template must not match: {sample}"
+            );
+        }
+        for sample in ["cat .env.local", "cat .env.production"] {
+            assert!(
+                references_dotenv_file(&sample.to_ascii_lowercase()),
+                "real secret variant must still match: {sample}"
             );
         }
     }
