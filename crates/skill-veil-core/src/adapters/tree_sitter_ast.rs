@@ -215,7 +215,7 @@ fn classify_python_dotted(dotted: &str) -> Option<AstSignalKind> {
 fn visit_js(node: Node, src: &[u8], out: &mut Vec<AstSignal>) {
     if node.kind() == "new_expression" {
         if let Some(ctor) = node.child_by_field_name("constructor") {
-            if node_text(ctor, src) == "Function" {
+            if js_constructor_is_dynamic_code(ctor, src) {
                 push(out, AstSignalKind::DynamicCodeExecution, node, src);
             }
         }
@@ -245,8 +245,36 @@ fn visit_js(node: Node, src: &[u8], out: &mut Vec<AstSignal>) {
                 push(out, kind, node, src);
             }
         }
+        // Computed member access (`cp['spawn'](...)`, `window['eval'](...)`)
+        // is the canonical way to evade dotted-form detection. Classify the
+        // bracketed string-literal property the same way as the dotted form.
+        "subscript_expression" => {
+            if let Some(kind) = classify_js_subscript(func, src) {
+                push(out, kind, node, src);
+            }
+        }
         _ => {}
     }
+}
+
+/// A `new` constructor that compiles/evaluates code: the dynamic-function
+/// constructor, or the `vm` code-compilation constructors (`new vm.Script`,
+/// mirroring the `vm.runInContext` runtime methods `classify_js_member`
+/// already covers).
+fn js_constructor_is_dynamic_code(ctor: Node, src: &[u8]) -> bool {
+    if node_text(ctor, src) == "Function" {
+        return true;
+    }
+    ctor.kind() == "member_expression"
+        && ctor
+            .child_by_field_name("object")
+            .map(|o| node_text(o, src))
+            == Some("vm")
+        && matches!(
+            ctor.child_by_field_name("property")
+                .map(|p| node_text(p, src)),
+            Some("Script" | "SourceTextModule")
+        )
 }
 
 /// True when a call's first argument is anything other than a plain string or
@@ -267,7 +295,28 @@ fn classify_js_member(member: Node, src: &[u8]) -> Option<AstSignalKind> {
         .child_by_field_name("object")
         .map(|o| node_text(o, src))
         .unwrap_or_default();
+    classify_js_call_target(object, property)
+}
 
+/// Classify a computed (bracket) member callee — `obj['method'](...)`. Only
+/// a string-literal index is a statically-known method name; a computed
+/// index (variable) is unresolved data flow and out of scope.
+fn classify_js_subscript(subscript: Node, src: &[u8]) -> Option<AstSignalKind> {
+    let object = subscript
+        .child_by_field_name("object")
+        .map(|o| node_text(o, src))
+        .unwrap_or_default();
+    let index = subscript.child_by_field_name("index")?;
+    if index.kind() != "string" {
+        return None;
+    }
+    let property = node_text(index, src).trim_matches(['"', '\'', '`']);
+    classify_js_call_target(object, property)
+}
+
+/// Shared classification for a `obj.prop(...)` / `obj['prop'](...)` call
+/// target, keyed on the receiver object text and the property name.
+fn classify_js_call_target(object: &str, property: &str) -> Option<AstSignalKind> {
     // Process-spawning methods. `.exec`/`.execSync` collide with
     // `RegExp.prototype.exec`, so require a child_process-flavoured receiver
     // for those; the remaining methods have no common benign collision.
@@ -288,12 +337,23 @@ fn classify_js_member(member: Node, src: &[u8]) -> Option<AstSignalKind> {
     {
         return Some(AstSignalKind::DynamicCodeExecution);
     }
+    // Indirect dynamic-eval reached through a global-scope object —
+    // `globalThis.eval`, `window['eval']`, `global.Function`. The bare
+    // identifier forms are handled in `visit_js`; these are the
+    // member/subscript-access equivalents a flat keyword regex misses.
+    if matches!(property, "eval" | "Function") && object_is_global_scope(object) {
+        return Some(AstSignalKind::DynamicCodeExecution);
+    }
     None
 }
 
 fn object_looks_like_child_process(object: &str) -> bool {
     let lower = object.to_ascii_lowercase();
     lower.contains("child_process") || lower == "cp" || lower == "childprocess"
+}
+
+fn object_is_global_scope(object: &str) -> bool {
+    matches!(object, "globalThis" | "window" | "global" | "self")
 }
 
 #[cfg(test)]
@@ -468,6 +528,65 @@ mod tests {
     fn js_child_process_spawn_fires() {
         let code = "const cp = require('child_process'); cp.spawn('sh', ['-c', x])\n";
         assert!(has(&js(code), AstSignalKind::ProcessExecution));
+    }
+
+    /// Contract: bracket (computed) member access is the canonical way to
+    /// evade dotted-form detection, so `cp['spawn'](...)` must fire
+    /// ProcessExecution just like `cp.spawn(...)`. Pre-fix the
+    /// subscript-expression callee fell through unhandled.
+    #[test]
+    fn js_bracket_member_spawn_fires() {
+        let code = "const cp = require('child_process'); cp['spawn']('sh', ['-c', x])\n";
+        assert!(
+            has(&js(code), AstSignalKind::ProcessExecution),
+            "bracket-access spawn must fire just like the dotted form",
+        );
+    }
+
+    /// Contract: indirect dynamic-eval through a global object —
+    /// `globalThis.eval`, `window['eval']`, `global.Function` — is dynamic
+    /// code execution. Pre-fix only the bare `eval(...)` identifier fired.
+    #[test]
+    fn js_global_scope_indirect_eval_fires() {
+        for code in [
+            "globalThis.eval(payload)\n",
+            "window['eval'](payload)\n",
+            "global.Function('return ' + x)()\n",
+            "self['Function']('return 1')\n",
+        ] {
+            assert!(
+                has(&js(code), AstSignalKind::DynamicCodeExecution),
+                "{code:?} must flag DynamicCodeExecution",
+            );
+        }
+    }
+
+    /// Contract: a bracket index that is NOT a string literal (a variable)
+    /// is unresolved data flow and must NOT fire — keeps the bracket
+    /// handling from over-firing on benign dynamic dispatch.
+    #[test]
+    fn js_computed_variable_index_does_not_fire() {
+        assert!(
+            !has(
+                &js("const cp = require('child_process'); cp[method]('sh')\n"),
+                AstSignalKind::ProcessExecution
+            ),
+            "a variable index is unresolved and must not fire",
+        );
+    }
+
+    /// Contract: `new vm.Script(code)` compiles code and is dynamic code
+    /// execution, mirroring the already-covered `vm.runInContext` runtime
+    /// method.
+    #[test]
+    fn js_new_vm_script_fires() {
+        assert!(
+            has(
+                &js("const s = new vm.Script(userCode)\n"),
+                AstSignalKind::DynamicCodeExecution
+            ),
+            "new vm.Script must flag DynamicCodeExecution",
+        );
     }
 
     #[test]
