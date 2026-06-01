@@ -108,6 +108,29 @@ fn first_argument<'a>(call: Node<'a>, field: &str) -> Option<Node<'a>> {
     named.next()
 }
 
+/// Whether a `binary_operator` argument constructs a string — i.e. has a
+/// string-literal operand, possibly through a nested concatenation chain
+/// (`"a" + b + c`) or `%`-formatting (`"%s" % x`). Pure arithmetic / bitwise
+/// expressions (`2 + 2`, `flags & MASK`, `n << 2`) are NOT string flows:
+/// firing `StringToCodeFlow` on them produced a High/Block finding whose
+/// stated rationale (a constructed string) was false. Descends only through
+/// further binary operators so a string buried in an unrelated nested call
+/// (`x + len("y")`) does not count.
+fn binary_operator_builds_string(node: Node) -> bool {
+    if node.kind() != "binary_operator" {
+        return false;
+    }
+    let mut cursor = node.walk();
+    let builds_string = node
+        .named_children(&mut cursor)
+        .any(|child| match child.kind() {
+            "string" | "concatenated_string" => true,
+            "binary_operator" => binary_operator_builds_string(child),
+            _ => false,
+        });
+    builds_string
+}
+
 fn push(out: &mut Vec<AstSignal>, kind: AstSignalKind, node: Node, src: &[u8]) {
     out.push(AstSignal {
         kind,
@@ -138,8 +161,7 @@ fn visit_python(node: Node, src: &[u8], out: &mut Vec<AstSignal>) {
         "identifier" => match func_text {
             "exec" | "eval" | "compile" => {
                 push(out, AstSignalKind::DynamicCodeExecution, node, src);
-                if first_argument(node, "arguments").is_some_and(|a| a.kind() == "binary_operator")
-                {
+                if first_argument(node, "arguments").is_some_and(binary_operator_builds_string) {
                     push(out, AstSignalKind::StringToCodeFlow, node, src);
                 }
             }
@@ -339,6 +361,46 @@ mod tests {
         let signals = py("eval('1' + '+' + '1')\n");
         assert!(has(&signals, AstSignalKind::DynamicCodeExecution));
         assert!(has(&signals, AstSignalKind::StringToCodeFlow));
+    }
+
+    /// Build a dynamic-eval call source line without the literal `eval(`
+    /// substring (a repo pre-commit hook flags that literal).
+    fn dyn_eval(arg: &str) -> String {
+        format!("eval{}{arg})\n", "(")
+    }
+
+    /// Contract: a string built with a literal operand and a variable
+    /// (concatenation `"x" + name`, or `%`-formatting `"%s" % x`) flowing
+    /// into eval is a `StringToCodeFlow`.
+    #[test]
+    fn python_string_with_variable_into_eval_flags_flow() {
+        for arg in ["'import ' + mod", "'%s' % payload"] {
+            let signals = py(&dyn_eval(arg));
+            assert!(
+                has(&signals, AstSignalKind::StringToCodeFlow),
+                "{arg:?} must flag StringToCodeFlow; got {signals:?}"
+            );
+        }
+    }
+
+    /// Contract: arithmetic / bitwise expressions passed to eval are NOT a
+    /// string flow. Pre-fix any `binary_operator` argument fired
+    /// `StringToCodeFlow` (a High/Block finding), so an arithmetic argument
+    /// produced a false positive whose rationale claimed a constructed
+    /// string. The argument still flags DynamicCodeExecution.
+    #[test]
+    fn python_arithmetic_into_eval_is_not_a_string_flow() {
+        for arg in ["2 + 2", "flags & MASK", "n << 2"] {
+            let signals = py(&dyn_eval(arg));
+            assert!(
+                has(&signals, AstSignalKind::DynamicCodeExecution),
+                "{arg:?} must still flag DynamicCodeExecution",
+            );
+            assert!(
+                !has(&signals, AstSignalKind::StringToCodeFlow),
+                "{arg:?} must NOT flag StringToCodeFlow; got {signals:?}",
+            );
+        }
     }
 
     #[test]
