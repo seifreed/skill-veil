@@ -792,7 +792,7 @@ rules:
     severity: high
     confidence: 0.78
     when: !regex
-      pattern: "(?is)(?:\\brm\\s+-rf?\\s+(?:/|~/|\\$HOME|\\.[a-z]|\\*)|\\bdd\\s+if=\\S+\\s+of=/dev/(?:sd|nvme|disk)|\\bmkfs\\.\\w+\\s+(?:/dev/|/mnt/)|\\bfdisk\\s+(?:/dev/|--zap-all)|\\bdrop\\s+(?:database|table|schema)\\s+\\w+|\\btruncate\\s+table\\s+\\w+|\\b:\\(\\)\\{\\s*:\\|:&\\s*\\};:|\\bshred\\s+-[a-z]+\\s+(?:/|~/|\\$HOME)|\\bchmod\\s+(?:777|0?000|-R\\s+777)\\s+(?:/|~/|\\$HOME)|\\bkill(?:all)?\\s+-9\\s+(?:1\\b|init|systemd|launchd))"
+      pattern: "(?is)(?:\\brm\\s+-[rf]+\\s+(?:/|~/|\\$HOME|\\.[a-z]|\\*)|\\bdd\\s+if=\\S+\\s+of=/dev/(?:sd|nvme|disk)|\\bmkfs\\.\\w+\\s+(?:/dev/|/mnt/)|\\bfdisk\\s+(?:/dev/|--zap-all)|\\bdrop\\s+(?:database|table|schema)\\s+\\w+|\\btruncate\\s+table\\s+\\w+|\\b:\\(\\)\\{\\s*:\\|:&\\s*\\};:|\\bshred\\s+-[a-z]+\\s+(?:/|~/|\\$HOME)|\\bchmod\\s+(?:777|0?000|-R\\s+777)\\s+(?:/|~/|\\$HOME)|\\bkill(?:all)?\\s+-9\\s+(?:1\\b|init|systemd|launchd))"
     action: require_approval
     reason: "Skill describes destructive shell or database commands (rm -rf, dd, mkfs, drop database, fork bomb, killall init) — review for malicious intent"
     shield:

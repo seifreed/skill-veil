@@ -10,7 +10,7 @@ rules:
     severity: critical
     confidence: 0.98
     when: !regex
-      pattern: "\\bcurl\\b\\s+.*\\|\\s*(ba)?sh\\b"
+      pattern: "\\bcurl\\b[^\\n]*\\|\\s*(ba)?sh\\b|(?:bash|sh|zsh|eval)\\b[^\\n]{0,40}(?:<\\(|\\$\\()\\s*curl\\b"
     action: block
     reason: "Remote download and execution via curl piped to shell"
     shield:
@@ -27,7 +27,7 @@ rules:
     severity: critical
     confidence: 0.98
     when: !regex
-      pattern: "(?i)\\b(invoke-webrequest|invoke-restmethod|iwr|irm)\\b\\s*.*\\|\\s*(iex|invoke-expression)\\b"
+      pattern: "(?i)(?:\\b(invoke-webrequest|invoke-restmethod|iwr|irm)\\b\\s*.*\\|\\s*(iex|invoke-expression)\\b|\\b(iex|invoke-expression)\\b\\s*\\(?\\s*(invoke-webrequest|invoke-restmethod|iwr|irm)\\b)"
     action: block
     reason: "Remote download and execution via PowerShell IEX"
     shield:
