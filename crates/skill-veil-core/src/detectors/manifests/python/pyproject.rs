@@ -97,7 +97,14 @@ fn pyproject_unpinned_dep_finding(artifact_path: &str, match_value: String) -> F
 }
 
 fn is_unpinned_pep621_dependency(dependency: &str) -> bool {
-    !(dependency.contains("==") || dependency.contains("~=") || dependency.contains("@"))
+    // Strip the PEP 508 environment marker (`requests; python_version ==
+    // '3.8'`) before testing for a version operator: the `==`/`~=` inside
+    // a marker compares a marker variable, not a package version, so
+    // checking the whole string let a floating dependency masquerade as
+    // pinned. The version constraint, if any, lives in the requirement
+    // part before the `;`.
+    let requirement = dependency.split(';').next().unwrap_or(dependency);
+    !(requirement.contains("==") || requirement.contains("~=") || requirement.contains("@"))
 }
 
 fn is_unpinned_poetry_dependency(spec: &TomlValue) -> bool {
@@ -381,6 +388,35 @@ httpx = { version = "0.27.0" }
         assert!(
             !finding_present(&findings, "MANIFEST_PYPROJECT_UNPINNED_DEP"),
             "exact Poetry versions must not fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: a PEP 621 dependency that is unpinned but carries an
+    /// environment marker containing `==` (`requests; python_version ==
+    /// '3.8'`) MUST still fire — the `==` belongs to the marker, not a
+    /// version constraint. Pre-fix the whole-string `contains("==")`
+    /// treated it as pinned, so appending a common marker suppressed the
+    /// finding. A genuinely pinned dep with a marker stays clean.
+    #[test]
+    fn analyze_pyproject_flags_unpinned_pep621_dep_with_env_marker() {
+        let content = r#"[project]
+name = "x"
+version = "0"
+dependencies = ["requests; python_version == '3.8'", "flask==2.0; python_version == '3.8'"]
+"#;
+        let path = std::path::Path::new("/pkg/pyproject.toml");
+        let service = ArtifactOrchestratorService::new();
+        let findings = analyze_pyproject_toml(&service, path, content, &[]);
+        assert!(
+            findings.iter().any(|f| {
+                f.rule_id == "MANIFEST_PYPROJECT_UNPINNED_DEP"
+                    && f.match_value.starts_with("requests")
+            }),
+            "unpinned dep with env marker must fire; got {findings:?}",
+        );
+        assert!(
+            findings.iter().all(|f| !f.match_value.starts_with("flask")),
+            "a pinned dep with an env marker must stay clean; got {findings:?}",
         );
     }
 
