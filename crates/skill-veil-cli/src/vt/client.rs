@@ -532,82 +532,14 @@ impl VtClient {
     /// paths share the same 429/5xx exponential-backoff envelope as the
     /// read paths instead of failing on the first transient error.
     fn post_form_with_retry(&self, url: &str, body: &str) -> Result<ureq::Response, VtError> {
-        let mut attempt: u32 = 0;
-        loop {
-            let resp = self
-                .agent
+        self.execute_with_retry("POST", || {
+            self.agent
                 .post(url)
                 .set("x-apikey", &self.apikey)
                 .set("content-type", "application/x-www-form-urlencoded")
-                .send_string(body);
-            match resp {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if !(200..300).contains(&status) {
-                        let drained = drain_error_body(status, resp);
-                        return Err(VtError::HttpStatus {
-                            status,
-                            body: drained,
-                        });
-                    }
-                    return Ok(resp);
-                }
-                Err(ureq::Error::Status(status, resp)) => {
-                    if status == 401 || status == 403 {
-                        return Err(VtError::Unauthorized);
-                    }
-                    let is_retryable = status == 429 || (500..600).contains(&status);
-                    if is_retryable {
-                        if attempt >= MAX_ADDITIONAL_ATTEMPTS {
-                            return if status == 429 {
-                                Err(VtError::RateLimited { retries: attempt })
-                            } else {
-                                let drained = drain_error_body(status, resp);
-                                Err(VtError::HttpStatus {
-                                    status,
-                                    body: drained,
-                                })
-                            };
-                        }
-                        let delay = Duration::from_millis(
-                            INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
-                        );
-                        tracing::warn!(
-                            "VT POST returned status {} (attempt {}/{}), sleeping {:?}",
-                            status,
-                            attempt + 1,
-                            MAX_ADDITIONAL_ATTEMPTS,
-                            delay
-                        );
-                        std::thread::sleep(delay);
-                        attempt += 1;
-                        continue;
-                    }
-                    let drained = drain_error_body(status, resp);
-                    return Err(VtError::HttpStatus {
-                        status,
-                        body: drained,
-                    });
-                }
-                Err(ureq::Error::Transport(err)) => {
-                    if attempt >= MAX_ADDITIONAL_ATTEMPTS {
-                        return Err(VtError::Network(err.to_string()));
-                    }
-                    let delay = Duration::from_millis(
-                        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
-                    );
-                    tracing::warn!(
-                        "VT POST transport error {:?} (attempt {}/{}), sleeping {:?}",
-                        err,
-                        attempt + 1,
-                        MAX_ADDITIONAL_ATTEMPTS,
-                        delay
-                    );
-                    std::thread::sleep(delay);
-                    attempt += 1;
-                }
-            }
-        }
+                .send_string(body)
+                .map_err(Box::new)
+        })
     }
 
     fn request_with_retry(
@@ -616,13 +548,30 @@ impl VtClient {
         url: &str,
         query: &[(&str, &str)],
     ) -> Result<ureq::Response, VtError> {
-        let mut attempt: u32 = 0;
-        loop {
+        self.execute_with_retry("GET", || {
             let mut req = agent.get(url).set("x-apikey", &self.apikey);
             for (k, v) in query {
                 req = req.query(k, v);
             }
-            match req.call() {
+            req.call().map_err(Box::new)
+        })
+    }
+
+    /// Shared 429/5xx exponential-backoff envelope for VT requests.
+    ///
+    /// `send` is invoked fresh on every attempt — a `ureq` request is
+    /// consumed when issued and cannot be replayed — and `label` tags the
+    /// tracing output (`GET` / `POST`). 401/403 map to
+    /// [`VtError::Unauthorized`]; 429 and 5xx retry up to
+    /// [`MAX_ADDITIONAL_ATTEMPTS`]; every other non-2xx is a permanent
+    /// [`VtError::HttpStatus`].
+    fn execute_with_retry<S>(&self, label: &str, send: S) -> Result<ureq::Response, VtError>
+    where
+        S: Fn() -> Result<ureq::Response, Box<ureq::Error>>,
+    {
+        let mut attempt: u32 = 0;
+        loop {
+            match send().map_err(|boxed| *boxed) {
                 Ok(resp) => {
                     // With `redirects(0)` set on the agent (see
                     // `VtClient::new`), ureq returns 3xx responses as
@@ -659,11 +608,10 @@ impl VtClient {
                                 Err(VtError::HttpStatus { status, body })
                             };
                         }
-                        let delay = Duration::from_millis(
-                            INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
-                        );
+                        let delay = backoff_delay(attempt);
                         tracing::warn!(
-                            "VT returned status {} (attempt {}/{}), sleeping {:?}",
+                            "VT {} returned status {} (attempt {}/{}), sleeping {:?}",
+                            label,
                             status,
                             attempt + 1,
                             MAX_ADDITIONAL_ATTEMPTS,
@@ -680,11 +628,10 @@ impl VtClient {
                     if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                         return Err(VtError::Network(err.to_string()));
                     }
-                    let delay = Duration::from_millis(
-                        INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
-                    );
+                    let delay = backoff_delay(attempt);
                     tracing::warn!(
-                        "VT transport error {:?} (attempt {}/{}), sleeping {:?}",
+                        "VT {} transport error {:?} (attempt {}/{}), sleeping {:?}",
+                        label,
                         err,
                         attempt + 1,
                         MAX_ADDITIONAL_ATTEMPTS,
@@ -696,6 +643,12 @@ impl VtClient {
             }
         }
     }
+}
+
+/// Exponential backoff delay for retry `attempt` (0-based):
+/// `INITIAL_BACKOFF_MS * 2^attempt`, saturating.
+fn backoff_delay(attempt: u32) -> Duration {
+    Duration::from_millis(INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)))
 }
 
 #[cfg(test)]
