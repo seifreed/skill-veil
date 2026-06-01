@@ -56,6 +56,23 @@ fn canonical(name: &str, ecosystem: Ecosystem) -> String {
     }
 }
 
+/// Established, distinct packages that happen to sit within edit-distance 1
+/// of a popular name. They must NOT be flagged as typosquats. Kept separate
+/// from the popular set so they are exempt WITHOUT themselves becoming squat
+/// targets — adding them to the popular list would cascade new false
+/// positives onto their own neighbours (e.g. `colour` vs `color`). Entries
+/// are in canonical (lowercased) form for their ecosystem.
+fn is_known_legitimate(canon: &str, ecosystem: Ecosystem) -> bool {
+    let allowlist: &[&str] = match ecosystem {
+        // `preact` is a distinct React-alternative framework (≠ `react`);
+        // `color` is a distinct colour library (≠ `colors`).
+        Ecosystem::Npm => &["preact", "color"],
+        Ecosystem::PyPI => &[],
+        Ecosystem::CratesIo => &[],
+    };
+    allowlist.contains(&canon)
+}
+
 fn popular_set(ecosystem: Ecosystem) -> &'static HashSet<String> {
     static NPM: OnceLock<HashSet<String>> = OnceLock::new();
     static PYPI: OnceLock<HashSet<String>> = OnceLock::new();
@@ -114,7 +131,7 @@ pub(crate) fn scan_typosquat(deps: &[ParsedDependency]) -> Vec<Finding> {
             continue;
         }
         let popular = popular_set(dep.ecosystem);
-        if popular.contains(&canon) {
+        if popular.contains(&canon) || is_known_legitimate(&canon, dep.ecosystem) {
             continue;
         }
         let Some(target) = find_typosquat_target(&canon, popular) else {
@@ -202,6 +219,19 @@ mod tests {
         assert!(rule_ids(&[dep("requests", Ecosystem::PyPI)]).is_empty());
         assert!(rule_ids(&[dep("lodash", Ecosystem::Npm)]).is_empty());
         assert!(rule_ids(&[dep("serde", Ecosystem::CratesIo)]).is_empty());
+    }
+
+    /// Contract: an established, distinct package that happens to be one
+    /// edit away from a popular name (`preact` vs `react`, `color` vs
+    /// `colors`) is NOT a typosquat. Pre-fix the pure distance-1 rule
+    /// flagged these legitimate, widely-used packages with RequireApproval.
+    /// A genuine near-miss typo still fires.
+    #[test]
+    fn known_legitimate_neighbors_do_not_fire() {
+        assert!(rule_ids(&[dep("preact", Ecosystem::Npm)]).is_empty());
+        assert!(rule_ids(&[dep("color", Ecosystem::Npm)]).is_empty());
+        // A genuine typo of a popular package still fires.
+        assert_eq!(rule_ids(&[dep("raect", Ecosystem::Npm)]).len(), 1);
     }
 
     #[test]
