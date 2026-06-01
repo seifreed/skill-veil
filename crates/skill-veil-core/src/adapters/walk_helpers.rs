@@ -36,6 +36,17 @@ use std::path::Path;
 /// case in the filesystem itself, so the gap was Linux-only — exactly
 /// where adversarial scans run.
 pub(super) fn is_skipped_dir(entry: &walkdir::DirEntry, skip_dirs: &[&str]) -> bool {
+    // Never prune the walk root (depth 0). `filter_entry` is applied to the
+    // root too, so without this guard scanning a package whose own
+    // directory is named like a vendored tree (`vendor/`, `build/`,
+    // `dist/`, `target/`, `node_modules/`, …) would prune the root and
+    // discover NO manifests or lockfiles — letting an attacker suppress all
+    // dependency / supply-chain detection by naming the package root. The
+    // skip list is meant to prune vendored/generated *subtrees*, not the
+    // directory the operator explicitly chose to scan.
+    if entry.depth() == 0 {
+        return false;
+    }
     if !entry.file_type().is_dir() {
         return false;
     }
@@ -117,5 +128,58 @@ mod tests {
                 entry.file_name().to_string_lossy()
             );
         }
+    }
+
+    /// # Contract
+    ///
+    /// The walk root (depth 0) MUST NEVER be pruned, even when its own
+    /// basename matches a skip-list entry. `filter_entry` is applied to the
+    /// root, so pruning it would yield nothing — letting an attacker name a
+    /// package root `vendor/`/`build/` to suppress all manifest/lockfile
+    /// discovery. Files inside such a root must still be walked.
+    #[test]
+    fn is_skipped_dir_never_prunes_the_walk_root() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path().join("vendor");
+        fs::create_dir_all(&root).expect("create dir");
+        fs::write(root.join("package.json"), "{}").expect("write");
+        let skip_dirs = &["node_modules", "vendor", "build", "dist", "target"];
+        let found: Vec<String> = walkdir::WalkDir::new(&root)
+            .into_iter()
+            .filter_entry(|e| !is_skipped_dir(e, skip_dirs))
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            found.contains(&"package.json".to_string()),
+            "a scan root named like a skip-dir must still be walked; got {found:?}",
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A skip-dir nested BELOW the root is still pruned — the root guard
+    /// must not disable subtree pruning.
+    #[test]
+    fn is_skipped_dir_still_prunes_nested_skip_dir() {
+        let dir = tempdir().expect("tempdir");
+        let nested = dir.path().join("node_modules");
+        fs::create_dir_all(&nested).expect("create dir");
+        fs::write(nested.join("evil.js"), "x").expect("write");
+        fs::write(dir.path().join("keep.txt"), "y").expect("write");
+        let skip_dirs = &["node_modules"];
+        let found: Vec<String> = walkdir::WalkDir::new(dir.path())
+            .into_iter()
+            .filter_entry(|e| !is_skipped_dir(e, skip_dirs))
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(found.contains(&"keep.txt".to_string()));
+        assert!(
+            !found.contains(&"evil.js".to_string()),
+            "a nested node_modules must still be pruned; got {found:?}",
+        );
     }
 }
