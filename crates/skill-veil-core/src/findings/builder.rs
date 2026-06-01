@@ -335,6 +335,7 @@ impl Finding {
     }
 
     /// Calculate the weighted score for this finding
+    #[must_use]
     pub fn weighted_score(&self) -> f32 {
         self.severity.weight() as f32 * self.confidence * signal_weight(self.signal_class)
     }
