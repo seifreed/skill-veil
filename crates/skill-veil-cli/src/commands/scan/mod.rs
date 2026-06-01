@@ -21,6 +21,13 @@ mod cache;
 pub(crate) mod llm;
 mod nova_llm_eval;
 mod nova_run;
+// The cosine-math + trait layer is feature-independent but is only
+// constructed by `fastembed_impl` (feature-gated) and the module's own
+// contract tests. Compiling it exactly when the feature is on OR under
+// `test` keeps default builds free of dead code without a blanket
+// `#[allow(dead_code)]`, while still running the contract tests under a
+// plain `cargo test`.
+#[cfg(any(feature = "nova-semantics", test))]
 mod nova_semantics_eval;
 mod promptintel;
 mod vt;
@@ -606,25 +613,26 @@ pub(crate) fn run_scan(
     Ok(should_fail)
 }
 
-/// Attaches NOVA findings to the `ScanResult` that owns each matched file.
+/// Attaches a post-scan channel's findings (NOVA, YARA) to the `ScanResult`
+/// that owns each matched file.
 ///
-/// NOVA walks every text artifact under the scan target, but the scanner
-/// emits one `ScanResult` per discovered package entrypoint — so a hit on a
-/// non-entrypoint file (e.g. `pkg/b/README.md`) has no result keyed on its
-/// exact path. Each hit is attributed to the result whose entrypoint path
-/// shares the longest leading path-component prefix with the hit: the
+/// A channel walks every text artifact under the scan target, but the
+/// scanner emits one `ScanResult` per discovered package entrypoint — so a
+/// hit on a non-entrypoint file (e.g. `pkg/b/README.md`) has no result keyed
+/// on its exact path. Each hit is attributed to the result whose entrypoint
+/// path shares the longest leading path-component prefix with the hit: the
 /// package that contains it. Both the entrypoint path (`metadata.path`) and
 /// the hit `source_path` derive from the same scan-target base and neither
-/// is canonicalised, so the prefix comparison is well-defined. Previously a
-/// multi-package scan dumped every unmatched NOVA hit onto the
-/// lexicographically-first result, mis-attributing findings to the wrong
-/// package in JSON / SARIF output.
+/// is canonicalised, so the prefix comparison is well-defined. The
+/// longest-prefix rule keeps a multi-package scan from dumping unmatched
+/// hits onto the lexicographically-first result, which would mis-attribute
+/// findings to the wrong package in JSON / SARIF output.
 fn attach_findings_by_path(
     results: &mut [ScanResult],
     by_path: &std::collections::HashMap<PathBuf, Vec<Finding>>,
 ) {
     for (hit_path, findings) in by_path {
-        let Some(idx) = nova_attribution_index(results, hit_path) else {
+        let Some(idx) = channel_attribution_index(results, hit_path) else {
             continue;
         };
         results[idx].findings.extend(findings.iter().cloned());
@@ -640,7 +648,7 @@ fn attach_findings_by_path(
 /// preserves single-file / single-package behaviour. When no result shares
 /// any prefix (fully disjoint paths — not reachable for an in-tree scan),
 /// the first result is the non-dropping fallback.
-fn nova_attribution_index(results: &[ScanResult], hit_path: &Path) -> Option<usize> {
+fn channel_attribution_index(results: &[ScanResult], hit_path: &Path) -> Option<usize> {
     longest_prefix_index(results.iter().map(|r| r.metadata.path.as_path()), hit_path)
 }
 

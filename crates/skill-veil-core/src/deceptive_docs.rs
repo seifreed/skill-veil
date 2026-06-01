@@ -84,13 +84,11 @@ const CLAIM_DEFINITIONS: &[ClaimDef] = &[
             r"(?i)\bfor\s+privacy\s+and\s+performance\b",
         ],
         contradiction_patterns: &[
-            // Require an opening parenthesis after the method to match
-            // an actual function call rather than the bare lib name in
-            // prose like `// Use requests.post for HTTP calls` or
-            // `User requests.post data`. Pre-fix the pattern relied
-            // only on `\b(...)\.(...)\b`, which fired on documentation
-            // sentences and (combined with the AuditedSafe amplifier)
-            // escalated benign docstrings to Critical.
+            // Require an opening parenthesis after the method so this
+            // matches an actual call, not the bare lib name in prose like
+            // `// Use requests.post for HTTP calls` or `User requests.post
+            // data` — which, combined with the AuditedSafe amplifier, would
+            // escalate a benign docstring to Critical.
             //
             // `(?i)` is added for symmetry with the rest of the list:
             // the strict-case form would not catch idiomatic JS that

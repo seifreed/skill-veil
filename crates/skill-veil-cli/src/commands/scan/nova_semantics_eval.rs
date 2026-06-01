@@ -1,11 +1,3 @@
-// Without `--features nova-semantics`, the cosine math + trait
-// abstraction is never constructed by the production dispatcher
-// (`build_nova_semantic_eval` returns `None`), but the unit tests in
-// this module still drive every contract via stub embedders. Allowing
-// dead code here lets default builds stay quiet while preserving the
-// contract-pinning tests.
-#![allow(dead_code)]
-
 //! Native [`SemanticEvaluator`] backed by sentence embeddings + cosine
 //! similarity, gated behind the `nova-semantics` Cargo feature.
 //!
