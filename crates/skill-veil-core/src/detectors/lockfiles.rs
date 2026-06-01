@@ -300,14 +300,28 @@ fn is_scp_like_git_source(value: &str) -> bool {
     let Some((user_host, remote_path)) = value.split_once(':') else {
         return false;
     };
-    if user_host.contains('/') || remote_path.trim().is_empty() {
+    let remote_path = remote_path.trim();
+    if user_host.contains('/') || remote_path.is_empty() {
         return false;
     }
     let Some((user, host)) = user_host.split_once('@') else {
         return false;
     };
+    // Yarn Berry resolution descriptors (`lodash@npm:4.17.21`,
+    // `foo@workspace:packages/foo`, `bar@patch:bar@npm%3A1.0.0#…`) are
+    // structurally identical to SCP-style git remotes
+    // (`git@github.com:org/repo.git`): a `name@token:specifier` shape with no
+    // slash before the colon. The discriminator is the position after `@` — a
+    // genuine SCP remote names a network host (dotted domain or IP) or points
+    // at a `.git` repository path, whereas the Berry forms put a protocol
+    // keyword (`npm`, `workspace`, `patch`, …) there. Requiring one of those
+    // keeps real git remotes while not reading a benign yarn-berry lockfile as
+    // referencing a remote source — a spurious NetworkAccess capability the
+    // taint engine would otherwise consume.
+    let looks_like_git_remote = host.contains('.') || remote_path.ends_with(".git");
     !user.is_empty()
         && !host.is_empty()
+        && looks_like_git_remote
         && user.bytes().all(is_scp_user_host_byte)
         && host.bytes().all(is_scp_user_host_byte)
 }
@@ -1075,6 +1089,59 @@ source = "git+file:///tmp/pkg.git#0123456789abcdef0123456789abcdef01234567"
 
         assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
         assert!(relation_target_present(&links, "registry"));
+    }
+
+    /// # Contract
+    ///
+    /// An SCP-like git remote whose host is a bare internal hostname (no dot)
+    /// is still recognised when the remote path points at a `.git` repository.
+    #[test]
+    fn lockfile_graph_inference_accepts_dotless_host_git_path() {
+        let content = r#"{
+  "default": {
+    "pkg": {
+      "git": "git@gitserver:team/repo.git",
+      "ref": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}"#;
+
+        let caps = lockfile_capabilities(content);
+        let links = lockfile_relations(content);
+
+        assert!(capability_present(&caps, ArtifactCapability::NetworkAccess));
+        assert!(relation_target_present(&links, "registry"));
+    }
+
+    /// # Contract (negative)
+    ///
+    /// Yarn Berry resolution descriptors (`name@npm:version`,
+    /// `name@workspace:path`) share SCP-style git-remote syntax but name a
+    /// protocol keyword after `@`, not a network host. A benign yarn-berry
+    /// `yarn.lock` MUST NOT fabricate a `NetworkAccess` capability or a
+    /// registry edge — those graph facts feed the taint engine and would
+    /// manufacture spurious exfiltration findings.
+    #[test]
+    fn lockfile_graph_inference_rejects_yarn_berry_resolution_descriptors() {
+        let content = r#"
+"lodash@npm:^4.17.21":
+  version: 4.17.21
+  resolution: "lodash@npm:4.17.21"
+  checksum: 10c0/abcdef
+
+"app@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "app@workspace:."
+"#;
+
+        let caps = lockfile_capabilities(content);
+        let links = lockfile_relations(content);
+
+        assert!(!capability_present(
+            &caps,
+            ArtifactCapability::NetworkAccess
+        ));
+        assert!(!relation_target_present(&links, "registry"));
     }
 
     /// # Contract (negative)
