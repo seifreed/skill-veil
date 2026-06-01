@@ -83,8 +83,6 @@ pub trait LlmEvaluator {
     fn eval(&self, var: &str, pattern: &LlmPattern, body: &str) -> Outcome;
 }
 
-// ---- Bundled implementations --------------------------------------------
-
 /// Native keyword evaluator: literal substring match (case-aware) +
 /// regex match. Compiles each regex on first use and caches it for
 /// the lifetime of the evaluator instance.

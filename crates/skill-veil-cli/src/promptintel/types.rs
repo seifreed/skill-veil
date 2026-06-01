@@ -298,7 +298,6 @@ impl ReportDraft {
 
 /// Envelope returned by `GET /agents/reports/mine`.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct ReportListEnvelope {
     #[serde(default)]
     pub(crate) success: bool,
@@ -309,7 +308,6 @@ pub(crate) struct ReportListEnvelope {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct ReportListPagination {
     #[serde(default)]
     pub(crate) limit: u32,

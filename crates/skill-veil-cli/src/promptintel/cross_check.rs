@@ -76,14 +76,27 @@ impl BucketCounts {
     /// Returns `0.0` for empty buckets so the renderer never has to
     /// guard against division-by-zero.
     pub(crate) fn detection_rate_pct(&self) -> f64 {
-        if self.total == 0 {
-            return 0.0;
-        }
-        // Round to one decimal place.
-        #[allow(clippy::cast_precision_loss)]
-        let raw = (self.detected as f64) / (self.total as f64) * 100.0;
-        (raw * 10.0).round() / 10.0
+        rounded_percent(self.detected, self.total)
     }
+}
+
+/// Detection rate as a fraction in `[0.0, 1.0]`; `0.0` for an empty
+/// denominator. Counts are converted through `u32` (corpus sizes never
+/// approach `u32::MAX`) so the ratio carries no lossy `usize as f64`
+/// cast.
+pub(crate) fn detection_fraction(detected: usize, total: usize) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    f64::from(u32::try_from(detected).unwrap_or(u32::MAX))
+        / f64::from(u32::try_from(total).unwrap_or(u32::MAX))
+}
+
+/// `detection_fraction` expressed as a percentage rounded to one
+/// decimal place.
+pub(crate) fn rounded_percent(detected: usize, total: usize) -> f64 {
+    let pct = detection_fraction(detected, total) * 100.0;
+    (pct * 10.0).round() / 10.0
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,10 +276,7 @@ pub(crate) fn render_text(summary: &CrossCheckSummary) -> String {
         summary.total, summary.detected, summary.missed, summary.errors,
     ));
     if summary.total > 0 {
-        let rate = (f64::from(u32::try_from(summary.detected).unwrap_or(0))
-            / f64::from(u32::try_from(summary.total).unwrap_or(1)))
-            * 100.0;
-        let rate = (rate * 10.0).round() / 10.0;
+        let rate = rounded_percent(summary.detected, summary.total);
         out.push_str(&format!("overall detection rate: {rate}%\n"));
     }
 
@@ -348,7 +358,7 @@ fn render_threats_grouped(
             rows.push((*threat, counts));
         }
 
-        let bucket_pct = bucket_detection_rate(bucket_detected, bucket_total);
+        let bucket_pct = rounded_percent(bucket_detected, bucket_total);
         out.push_str(&format!(
             "\n  [{bucket_name}]  {bucket_detected:>3}/{bucket_total:<3}  ({bucket_pct}%)\n",
             bucket_name = bucket.name,
@@ -390,20 +400,11 @@ fn render_threats_grouped(
     }
 }
 
-fn bucket_detection_rate(detected: usize, total: usize) -> f64 {
-    if total == 0 {
-        return 0.0;
-    }
-    #[allow(clippy::cast_precision_loss)]
-    let raw = (detected as f64) / (total as f64) * 100.0;
-    (raw * 10.0).round() / 10.0
-}
-
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let mut out: String = s.chars().take(max - 1).collect();
+    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
 }

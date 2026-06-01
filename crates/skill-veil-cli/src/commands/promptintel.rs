@@ -190,17 +190,22 @@ fn run_report_list(args: PromptIntelReportListArgs) -> Result<()> {
     );
     rate_state.save(&cache_root)?;
     let (envelope, _response_meta) = result.context("fetching agents/reports/mine")?;
+    if !envelope.success {
+        eprintln!("warning: PromptIntel reported success=false for agents/reports/mine");
+    }
 
     match args.format {
         PromptIntelCrossCheckFormat::Json => {
             println!("{}", serde_json::to_string_pretty(&envelope.data)?);
         }
         PromptIntelCrossCheckFormat::Text => {
-            let total = envelope.pagination.as_ref().map(|p| p.total).unwrap_or(0);
+            let window = match envelope.pagination.as_ref() {
+                Some(p) => format!("{} total, limit {} offset {}", p.total, p.limit, p.offset),
+                None => "pagination unavailable".to_string(),
+            };
             println!(
-                "=== Reports submitted by this agent ({} returned, {} total) ===",
+                "=== Reports submitted by this agent ({} returned, {window}) ===",
                 envelope.data.len(),
-                total
             );
             for entry in &envelope.data {
                 println!(
@@ -343,13 +348,10 @@ fn detection_below_gate(summary: &cross_check::CrossCheckSummary, threshold: Opt
     let Some(threshold) = threshold else {
         return false;
     };
-    let denom = summary.total;
-    if denom == 0 {
+    if summary.total == 0 {
         return false;
     }
-    #[allow(clippy::cast_precision_loss)]
-    let rate = (summary.detected as f64) / (denom as f64);
-    rate < threshold
+    cross_check::detection_fraction(summary.detected, summary.total) < threshold
 }
 
 fn build_client() -> Result<PromptIntelClient> {

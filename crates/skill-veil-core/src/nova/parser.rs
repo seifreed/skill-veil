@@ -384,8 +384,6 @@ fn find_unquoted(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
-// ---- Section: meta -------------------------------------------------------
-
 fn parse_meta(body: String) -> Result<BTreeMap<String, String>, ParseError> {
     let mut out = BTreeMap::new();
     for raw_line in body.lines() {
@@ -418,8 +416,6 @@ fn strip_string_quotes(value: &str) -> String {
     }
     value.to_string()
 }
-
-// ---- Section: keywords ---------------------------------------------------
 
 fn parse_keywords(body: String) -> Result<BTreeMap<String, KeywordPattern>, ParseError> {
     let mut out = BTreeMap::new();
@@ -508,8 +504,6 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
         reason: "value must be quoted (\"…\" / '…') or a regex (/…/ or /…/i)",
     })
 }
-
-// ---- Section: semantics --------------------------------------------------
 
 fn parse_semantics(body: String) -> Result<BTreeMap<String, SemanticPattern>, ParseError> {
     let mut out = BTreeMap::new();
@@ -627,8 +621,6 @@ fn split_var_assignment<'a>(
     // NOVA-level constraint not a parser one (NOVA mandates `$`).
     Ok((stripped.to_string(), value.trim()))
 }
-
-// ---- Section: condition --------------------------------------------------
 
 fn parse_condition(body: String) -> Result<ConditionExpr, ParseError> {
     let cleaned: String = body
