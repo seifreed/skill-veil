@@ -742,7 +742,11 @@ impl CompiledRule {
             RuleCondition::All(conditions) => self.check_all_conditions(conditions, doc, findings),
             #[cfg(feature = "yara")]
             RuleCondition::Yara { .. } => {
-                // YARA matching is handled by the yara_engine module
+                // YARA runs as a standalone-file channel over the installed
+                // `.yar`/`.yara` pack (CLI `yara_run` → `yara_engine`), not as
+                // an inline YAML condition: a `!yara` rule embedded in the YAML
+                // rule engine is intentionally inert here. Returning `false`
+                // keeps such a rule from matching on partial evidence.
                 false
             }
         }

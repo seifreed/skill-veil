@@ -58,6 +58,13 @@ default = []
 # back to the `NotYetWiredSemantic` stub so the binary never fails
 # closed because of a build-time choice the user did not make.
 nova-semantics = ["dep:fastembed"]
+# Enable the YARA channel: load the `.yar`/`.yara` rules shipped in the
+# verified skill-veil-rules install and scan each artifact through
+# `skill_veil_core::yara_engine`. Forwards to the core crate's `yara`
+# feature (which pulls `yara-x`). The `--no-yara` runtime flag is parsed
+# regardless of this build choice, mirroring the `nova-semantics`
+# pattern so invocations stay flag-compatible across build variants.
+yara = ["skill-veil-core/yara"]
 
 [dev-dependencies]
 tempfile.workspace = true

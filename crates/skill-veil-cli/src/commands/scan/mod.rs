@@ -24,6 +24,8 @@ mod nova_run;
 mod nova_semantics_eval;
 mod promptintel;
 mod vt;
+#[cfg(feature = "yara")]
+mod yara_run;
 
 /// Shared cap for short error blurbs (LLM parse error, VT enrichment
 /// error). Both sources are external strings whose authors might emit
@@ -326,7 +328,31 @@ pub(crate) fn run_scan(
         }
     };
     if let Some(report) = &nova_report {
-        attach_nova_findings(&mut scan_result.results, &report.findings_by_path());
+        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
+    }
+
+    // YARA channel (gated behind the `yara` build feature). Mirrors NOVA:
+    // a post-verdict pass that loads the installed `.yar`/`.yara` pack and
+    // scans the same artifacts, injecting matches as first-class Findings.
+    // It never recomputes the verdict — see the `verdict_snapshot` assert
+    // below, which is taken AFTER this injection.
+    #[cfg(feature = "yara")]
+    let yara_report = if args.no_yara {
+        None
+    } else {
+        match yara_run::evaluate_against_target(&args.path, args.cache_dir.as_deref()) {
+            Ok(report) => report,
+            Err(err) => {
+                if !quiet {
+                    eprintln!("warning: YARA evaluation skipped: {err:#}");
+                }
+                None
+            }
+        }
+    };
+    #[cfg(feature = "yara")]
+    if let Some(report) = &yara_report {
+        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
     }
 
     if !scan_result.errors.is_empty() && !quiet {
@@ -528,6 +554,14 @@ pub(crate) fn run_scan(
         }
     }
 
+    #[cfg(feature = "yara")]
+    if let Some(report) = yara_report.as_ref() {
+        let render_text = !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text);
+        if render_text {
+            print!("{}", yara_run::render_text_block(report));
+        }
+    }
+
     debug_assert_eq!(
         verdict_snapshot,
         scan_result
@@ -585,7 +619,7 @@ pub(crate) fn run_scan(
 /// multi-package scan dumped every unmatched NOVA hit onto the
 /// lexicographically-first result, mis-attributing findings to the wrong
 /// package in JSON / SARIF output.
-fn attach_nova_findings(
+fn attach_findings_by_path(
     results: &mut [ScanResult],
     by_path: &std::collections::HashMap<PathBuf, Vec<Finding>>,
 ) {

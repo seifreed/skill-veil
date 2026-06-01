@@ -49,6 +49,14 @@ impl YaraEngine {
         })
     }
 
+    /// Number of YARA rule files loaded into the compiler source set. A
+    /// channel can consult this to skip `compile`/`scan` when an install
+    /// ships no `.yar`/`.yara` files, avoiding the cost of building and
+    /// scanning an empty ruleset.
+    pub fn loaded_rule_file_count(&self) -> usize {
+        self.source_chunks.len()
+    }
+
     /// Load a `.yar` or `.yara` file into the compiler source set through
     /// a `FileSystemProvider`. Going through the port keeps yara_engine
     /// honest under the hexagonal contract documented in `CLAUDE.md`:

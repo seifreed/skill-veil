@@ -663,6 +663,14 @@ pub struct ScanArgs {
     /// `condition:` needs that channel cannot fire.
     #[arg(long, default_value_t = false)]
     pub no_nova_semantics: bool,
+    /// Skip the YARA channel even when the binary is built with
+    /// `--features yara` and the installed skill-veil-rules pack ships
+    /// `.yar`/`.yara` files. YARA matching runs as a post-scan pass over
+    /// the same artifacts NOVA scans; this opts out. Always accepted so
+    /// invocations parse identically whether or not the `yara` feature is
+    /// compiled in (mirrors `--no-nova-semantics`).
+    #[arg(long, default_value_t = false)]
+    pub no_yara: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]

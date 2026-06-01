@@ -280,7 +280,7 @@ fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
     rules
 }
 
-fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
+pub(crate) fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
     let mut out = Vec::new();
     if regular_file_metadata(target).is_ok() {
         if let Ok(body) = read_to_string_with_cap(target, MAX_NOVA_SCAN_BODY_BYTES) {
