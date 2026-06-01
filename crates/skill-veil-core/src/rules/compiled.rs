@@ -235,7 +235,11 @@ impl CompiledRule {
     /// engines that hold a custom matcher continue to work, and lets a
     /// future `Yara` or feature-flagged matcher plug back in without
     /// another API break.
-    pub fn matches<M: PatternMatcher>(&self, doc: &SkillDocument, _matcher: &M) -> Vec<Finding> {
+    pub fn matches<M: PatternMatcher + ?Sized>(
+        &self,
+        doc: &SkillDocument,
+        _matcher: &M,
+    ) -> Vec<Finding> {
         let mut findings = Vec::new();
 
         if !self.rule.enabled {

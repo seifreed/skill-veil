@@ -275,7 +275,7 @@ pub enum ChecksumPolicy {
 /// .unwrap();
 /// assert!(engine.rule_count() > 0);
 /// ```
-pub struct RuleEngine<M: PatternMatcher> {
+pub struct RuleEngine<M: PatternMatcher + ?Sized> {
     rules: Vec<CompiledRule>,
     rules_dir: Option<std::path::PathBuf>,
     matcher: Arc<M>,
@@ -314,7 +314,7 @@ pub struct RuleEngine<M: PatternMatcher> {
     checksum_policy: ChecksumPolicy,
 }
 
-impl<M: PatternMatcher> RuleEngine<M> {
+impl<M: PatternMatcher + ?Sized> RuleEngine<M> {
     /// Create a new rule engine with a custom pattern matcher.
     #[must_use]
     pub fn with_matcher(matcher: Arc<M>) -> Self {

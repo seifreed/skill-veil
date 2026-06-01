@@ -17,7 +17,7 @@ use crate::adapters::{
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactGraph;
 use crate::policy::{BaselineFile, DispositionOverlay, PolicyFile, WaiverFile};
-use crate::ports::{FileSystemProvider, MarkdownParser};
+use crate::ports::{FileSystemProvider, MarkdownParser, PatternMatcher};
 use crate::rules::RuleEngine;
 use crate::scanner_support::{
     load_optional_baseline, load_optional_disposition, load_optional_policy, load_optional_waivers,
@@ -34,7 +34,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 type EngineAndPolicy = (
-    RuleEngine<RegexPatternMatcher>,
+    RuleEngine<dyn PatternMatcher>,
     Option<BaselineFile>,
     Option<WaiverFile>,
     Option<PolicyFile>,
@@ -50,9 +50,10 @@ type EngineAndPolicy = (
 fn build_engine_and_policy<F: FileSystemProvider>(
     fs: &F,
     options: &ScanOptions,
+    matcher: Arc<dyn PatternMatcher>,
 ) -> Result<EngineAndPolicy, ScanError> {
     let mut engine = RuleEngine::with_defaults_and_matcher_runtime_strict(
-        Arc::new(RegexPatternMatcher::new()),
+        matcher,
         fs,
         &options.runtime_overlay_dirs,
         options.strict_rules,
@@ -76,12 +77,20 @@ pub struct Scanner<
     F: FileSystemProvider = StdFileSystemProvider,
     P: MarkdownParser = PulldownMarkdownParser,
 > {
-    engine: RuleEngine<RegexPatternMatcher>,
+    engine: RuleEngine<dyn PatternMatcher>,
     artifact_orchestration: ArtifactOrchestratorService,
     file_discovery: FileDiscoveryService<F>,
     filter_service: ScanFilterService,
     parser: P,
     honor_inline_suppressions: bool,
+}
+
+/// Default pattern-matching adapter wired by the convenience
+/// constructors. Boxed as a trait object so the matcher is a runtime-
+/// injected port (see `with_custom_adapters_and_matcher`) without
+/// threading a third type parameter through the scan pipeline.
+fn default_pattern_matcher() -> Arc<dyn PatternMatcher> {
+    Arc::new(RegexPatternMatcher::new())
 }
 
 /// Scanner using the default standard-library filesystem and Pulldown Markdown adapters.
@@ -106,7 +115,7 @@ impl Scanner<StdFileSystemProvider, PulldownMarkdownParser> {
         // single instance — keep the std path symmetric.
         let fs = StdFileSystemProvider::new();
         let (engine, baseline, waivers, policy, disposition) =
-            build_engine_and_policy(&fs, &options)?;
+            build_engine_and_policy(&fs, &options, default_pattern_matcher())?;
         Ok(Self {
             engine,
             artifact_orchestration: ArtifactOrchestratorService::with_ast_analyzer(Arc::new(
@@ -133,9 +142,28 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         fs_provider: F,
         parser: P,
     ) -> Result<Self, ScanError> {
+        Self::with_custom_adapters_and_matcher(
+            options,
+            fs_provider,
+            parser,
+            default_pattern_matcher(),
+        )
+    }
+
+    /// Construct a scanner with all three ports injected, including the
+    /// [`PatternMatcher`]. The matcher is taken as a trait object so an
+    /// alternative regex backend or a test double can be supplied without
+    /// the scanner becoming generic over the matcher type.
+    #[must_use = "Scanner::with_custom_adapters_and_matcher() returns a Result that should be used"]
+    pub fn with_custom_adapters_and_matcher(
+        options: ScanOptions,
+        fs_provider: F,
+        parser: P,
+        matcher: Arc<dyn PatternMatcher>,
+    ) -> Result<Self, ScanError> {
         let honor_inline_suppressions = options.honor_inline_suppressions;
         let (engine, baseline, waivers, policy, disposition) =
-            build_engine_and_policy(&fs_provider, &options)?;
+            build_engine_and_policy(&fs_provider, &options, matcher)?;
         Ok(Self {
             engine,
             artifact_orchestration: ArtifactOrchestratorService::with_ast_analyzer(Arc::new(
@@ -154,7 +182,7 @@ impl<F: FileSystemProvider, P: MarkdownParser> Scanner<F, P> {
         })
     }
 
-    pub(crate) fn engine(&self) -> &RuleEngine<RegexPatternMatcher> {
+    pub(crate) fn engine(&self) -> &RuleEngine<dyn PatternMatcher> {
         &self.engine
     }
 
