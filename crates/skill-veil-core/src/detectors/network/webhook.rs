@@ -39,11 +39,27 @@ fn looks_like_optional_webhook_docs(content: &str) -> bool {
 
 pub(crate) fn classify_webhook_exposure(content: &str) -> Option<WebhookExposure> {
     let lower = content.to_ascii_lowercase();
-    if lower.contains("skip signature validation")
+    // A bypass phrase only signals webhook auth-bypass in a webhook /
+    // receiver context. Mirrors the `OFFICIAL_UNSIGNED_WEBHOOK_RECEIVER`
+    // YAML rule, which anchors the phrase to a webhook/receiver/listener/
+    // callback-endpoint token. Without the anchor (and the example/doc
+    // suppression the public-endpoint branch already applies) this fired
+    // `Block` on benign prose — `"without auth"` is a substring of "without
+    // authentication" and `"accept any payload"` appears in ordinary parser
+    // documentation.
+    let has_webhook_context = lower.contains("webhook")
+        || lower.contains("receiver")
+        || lower.contains("listener")
+        || lower.contains("callback endpoint");
+    let has_auth_bypass_phrase = lower.contains("skip signature validation")
         || lower.contains("no verification required")
         || lower.contains("accept any payload")
         || lower.contains("unsigned webhook")
-        || lower.contains("without auth")
+        || lower.contains("without auth");
+    if has_auth_bypass_phrase
+        && has_webhook_context
+        && !looks_like_optional_webhook_docs(content)
+        && !RE_EXAMPLE_WEBHOOK.is_match(content)
     {
         Some(WebhookExposure::AuthBypass)
     } else if lower.contains("webhook")
@@ -93,6 +109,39 @@ mod tests {
             classify_webhook_exposure(content),
             Some(WebhookExposure::AuthBypass)
         );
+    }
+
+    /// # Contract
+    ///
+    /// An auth-bypass phrase outside any webhook/receiver context MUST NOT
+    /// classify as webhook auth-bypass. Pre-fix the bare substrings fired a
+    /// `Block` finding on benign prose: `"without auth"` is a substring of
+    /// "without authentication", and `"accept any payload"` appears in
+    /// ordinary parser/API documentation.
+    #[test]
+    fn auth_bypass_phrase_without_webhook_context_does_not_fire() {
+        for content in [
+            "The parser will accept any payload format including JSON, XML and CSV.",
+            "This local cache utility runs without authentication against ~/.cache.",
+            "No verification required to read the bundled sample data.",
+        ] {
+            assert_eq!(
+                classify_webhook_exposure(content),
+                None,
+                "benign prose must not classify as webhook auth-bypass: {content:?}",
+            );
+        }
+    }
+
+    /// # Contract
+    ///
+    /// A webhook auth-bypass framed as an explicit example / documentation
+    /// snippet is suppressed, matching the public-endpoint branch.
+    #[test]
+    fn example_webhook_auth_bypass_is_suppressed() {
+        let content =
+            "Example webhook (for example/testing only): accept any payload, no verification required.";
+        assert_eq!(classify_webhook_exposure(content), None);
     }
 
     /// # Contract
