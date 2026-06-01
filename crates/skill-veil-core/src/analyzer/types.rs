@@ -6,8 +6,6 @@ use thiserror::Error;
 pub enum AnalyzerError {
     #[error("Failed to read file: {0}")]
     IoError(#[from] std::io::Error),
-    #[error("Invalid skill document: {0}")]
-    InvalidDocument(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

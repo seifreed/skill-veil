@@ -178,10 +178,6 @@ impl PackageScanResult {
     pub fn is_empty(&self) -> bool {
         self.results.is_empty() && self.errors.is_empty()
     }
-
-    pub fn total_count(&self) -> usize {
-        self.results.len() + self.errors.len()
-    }
 }
 
 impl Default for PackageScanResult {
@@ -193,13 +189,6 @@ impl Default for PackageScanResult {
 impl ScanResult {
     pub fn has_severity(&self, severity: Severity) -> bool {
         self.findings.iter().any(|f| f.severity >= severity)
-    }
-
-    pub fn findings_by_severity(&self, severity: Severity) -> Vec<&Finding> {
-        self.findings
-            .iter()
-            .filter(|f| f.severity >= severity)
-            .collect()
     }
 
     pub(crate) fn split_findings_by_scope(

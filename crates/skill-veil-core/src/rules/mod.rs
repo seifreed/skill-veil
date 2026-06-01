@@ -72,18 +72,12 @@ pub const DEFAULT_RULE_CONFIDENCE: f32 = 0.9;
 /// and evaluation.
 #[derive(Error, Debug)]
 pub enum RuleError {
-    /// Failed to load rules from a file or directory
-    #[error("Failed to load rules: {0}")]
-    LoadError(String),
     /// Rule configuration is invalid
     #[error("Invalid rule configuration: {0}")]
     InvalidRule(String),
     /// Failed to compile a pattern through the matcher port
     #[error("Pattern compilation failed: {0}")]
     PatternError(#[from] crate::ports::PatternError),
-    /// Failed to parse YAML rule file
-    #[error("YAML parsing error: {0}")]
-    YamlError(#[from] serde_yaml::Error),
     /// I/O error during file operations
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
