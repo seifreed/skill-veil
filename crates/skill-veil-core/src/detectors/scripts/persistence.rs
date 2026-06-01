@@ -12,6 +12,13 @@ use super::patterns::DEFERRED_PATTERNS;
 
 const SHELL_PERSISTENCE_WRITE_TOKENS: &[&str] = &["echo", "printf", "cat", "tee"];
 
+/// Lowercased path prefixes that denote a per-user home dotfile. `~` is the
+/// interactive shorthand; install scripts overwhelmingly use the `$HOME` /
+/// `${HOME}` environment-variable forms, which expand to the same place, so
+/// the persistence detector must treat all three as the same surface. (The
+/// detector runs on the ASCII-lowercased view, hence the lowercase `home`.)
+const HOME_DOTFILE_PREFIXES: &[&str] = &["~/.", "$home/.", "${home}/."];
+
 pub(crate) fn detect_deferred_execution(
     lower: &str,
     original: &str,
@@ -109,10 +116,16 @@ fn is_shell_persistence_write_line(line: &str) -> bool {
         || line_redirects_to(line, "/etc/")
         // A redirect into a home dotfile is more common benignly, so it
         // additionally requires a write-command token.
-        || (line_redirects_to(line, "~/.")
+        || (line_redirects_to_home_dotfile(line)
             && SHELL_PERSISTENCE_WRITE_TOKENS
                 .iter()
                 .any(|token| line_contains_command_token(line, token)))
+}
+
+fn line_redirects_to_home_dotfile(line: &str) -> bool {
+    HOME_DOTFILE_PREFIXES
+        .iter()
+        .any(|prefix| line_redirects_to(line, prefix))
 }
 
 /// True when `line` redirects (`>` or `>>`) into a target beginning with
@@ -151,7 +164,10 @@ fn line_invokes_tee_to_startup_target(line: &str) -> bool {
     line_contains_command_token(line, "tee")
         && line.split_whitespace().any(|token| {
             let target = token.trim_matches(['"', '\'']);
-            target.starts_with("/etc/") || target.starts_with("~/.")
+            target.starts_with("/etc/")
+                || HOME_DOTFILE_PREFIXES
+                    .iter()
+                    .any(|prefix| target.starts_with(prefix))
         })
 }
 
@@ -190,6 +206,35 @@ mod tests {
                 "{lang}: detect_powershell_persistence must fire on Register-ScheduledTask; got {findings:?}",
             );
         }
+    }
+
+    /// Contract: a dotfile persistence write addressed via `$HOME` /
+    /// `${HOME}` (the form install scripts actually use) MUST fire, just
+    /// like the `~/.` shorthand. Pre-fix the home arm matched only literal
+    /// `~/.`, so `echo evil >> $HOME/.bashrc` — textbook scripted
+    /// persistence — evaded `SCRIPT_SHELL_PERSISTENCE_WRITE`. Covers the
+    /// redirect and `tee` forms; a non-dotfile `$HOME` write stays clean.
+    #[test]
+    fn detect_shell_persistence_write_fires_on_home_env_var_dotfiles() {
+        for content in [
+            "echo 'evil' >> $HOME/.bashrc\n",
+            "echo 'evil' >> ${HOME}/.zshrc\n",
+            "printf x >> $HOME/.profile\n",
+            "echo 'evil' | tee -a $HOME/.bash_profile\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_shell_persistence_write(&lower, "sh", "/tmp/install.sh");
+            assert!(
+                !findings.is_empty(),
+                "must fire on {content:?}; got {findings:?}",
+            );
+        }
+        // A non-dotfile write under $HOME is not persistence — stays clean.
+        let benign = "echo data >> $HOME/output.log\n".to_ascii_lowercase();
+        assert!(
+            detect_shell_persistence_write(&benign, "sh", "/tmp/x.sh").is_empty(),
+            "a non-dotfile $HOME write must not fire",
+        );
     }
 
     /// # Contract

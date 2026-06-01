@@ -45,7 +45,7 @@ pub(crate) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern
             ),
             (
                 "SCRIPT_PERSISTENCE",
-                r"(?i)(/etc/cron|~/\.config/autostart|launchagents|startup\\|runonce)",
+                r"(?i)(/etc/cron|(?:~|\$\{?home\}?)/\.config/autostart|launchagents|startup\\|runonce)",
             ),
         ])
     },
@@ -251,6 +251,34 @@ mod tests {
                 "expected `{input}` NOT to match SCRIPT_DEFERRED_EXECUTION",
             );
         }
+    }
+
+    /// Contract: the autostart persistence clause matches `~/.config/
+    /// autostart` AND the `$HOME` / `${HOME}` environment-variable forms
+    /// scripts actually use. Pre-fix only the literal `~/` form matched, so
+    /// `$HOME/.config/autostart/evil.desktop` evaded SCRIPT_PERSISTENCE. A
+    /// non-autostart `$HOME` path stays unmatched.
+    #[test]
+    fn persistence_autostart_matches_home_env_var_forms() {
+        for input in [
+            "cp evil.desktop ~/.config/autostart/",
+            "cp evil.desktop $HOME/.config/autostart/",
+            "cp evil.desktop ${HOME}/.config/autostart/",
+            "cp evil.desktop $home/.config/autostart/",
+        ] {
+            assert!(
+                matches(&DEFERRED_PATTERNS, "SCRIPT_PERSISTENCE", input),
+                "expected `{input}` to match SCRIPT_PERSISTENCE",
+            );
+        }
+        assert!(
+            !matches(
+                &DEFERRED_PATTERNS,
+                "SCRIPT_PERSISTENCE",
+                "cat $HOME/.config/app.conf"
+            ),
+            "a non-autostart $HOME path must not match SCRIPT_PERSISTENCE",
+        );
     }
 
     /// Contract: `COMMAND_INJECTION_SINK_SHELL` matches genuine `bash -c`
