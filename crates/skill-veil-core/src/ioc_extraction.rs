@@ -256,7 +256,20 @@ pub fn extract_from_text(text: &str) -> ExtractedIocs {
         }
     }
 
+    let text_bytes = text.as_bytes();
     for m in IPV6_PATTERN.find_matches(text) {
+        // An IPv6 match immediately followed by `.<digit>` is the hex
+        // prefix of an IPv4-mapped/embedded address (`::ffff:1.2.3.4`,
+        // `64:ff9b::1.2.3.4`). The pattern has no embedded-IPv4 tail, so it
+        // stops at the first `.` and the prefix still contains `::`, which
+        // passes `is_plausible_ipv6` — emitting a garbled indicator
+        // (`::ffff:1`) that never appeared in the artifact into IOC output
+        // and downstream VT lookups. Reject the truncated match.
+        let truncates_embedded_ipv4 = text_bytes.get(m.end) == Some(&b'.')
+            && text_bytes.get(m.end + 1).is_some_and(u8::is_ascii_digit);
+        if truncates_embedded_ipv4 {
+            continue;
+        }
         let ip = m.matched_text;
         // Mirror `is_ipv6`: require colon-group boundary AND a plausible
         // IPv6 shape. Without `is_plausible_ipv6` the extractor silently
@@ -556,6 +569,31 @@ mod tests {
             "Valid IPv6 must still match; got {:?}",
             iocs.ipv6
         );
+    }
+
+    /// Contract: an IPv4-mapped/embedded IPv6 address MUST NOT emit a
+    /// truncated, garbled indicator. The pattern has no embedded-IPv4 tail,
+    /// so it would otherwise stop at the first `.` and leak the hex prefix
+    /// (e.g. `2001:db8::ffff:255`) into IOC output and VT lookups — an
+    /// address that never appeared in the artifact. Rejecting the truncated
+    /// match (a clean miss) is correct; emitting a wrong value is not.
+    #[test]
+    fn ipv6_extraction_does_not_emit_truncated_embedded_ipv4() {
+        for text in [
+            "endpoint = 2001:db8::ffff:255.255.255.255 done",
+            "nat64 = 64:ff9b::192.0.2.33 here",
+            "mapped = ::ffff:10.0.0.5 end",
+        ] {
+            let iocs = extract_from_text(text);
+            assert!(
+                !iocs
+                    .ipv6
+                    .iter()
+                    .any(|i| { i.ends_with(":255") || i.ends_with(":192") || i.ends_with(":10") }),
+                "must not emit a truncated embedded-IPv4 prefix; got {:?}",
+                iocs.ipv6
+            );
+        }
     }
 
     /// Contract: `is_plausible_ipv6` rejects strings without `::` whose
