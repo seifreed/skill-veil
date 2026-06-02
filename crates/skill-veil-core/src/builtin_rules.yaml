@@ -1531,7 +1531,7 @@
   severity: high
   confidence: 0.78
   when: !regex
-    pattern: "系统信息|操作系统|CPU信息|内存信息|磁盘信息|网络信息|计算机名称|已安装软件"
+    pattern: "CPU信息|内存信息|磁盘信息|网络信息|计算机名称|已安装软件|(?:收集|采集|获取|读取|上传|发送|回传|窃取|探测|枚举)[^\\n]{0,30}(?:操作系统|系统信息)|(?:操作系统|系统信息)[^\\n]{0,30}(?:收集|采集|获取|读取|上传|发送|回传|窃取|探测|枚举)"
   action: require_approval
   reason: "Chinese-language system fingerprinting — collects OS, CPU, memory, disk, network info"
   shield:

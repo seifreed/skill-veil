@@ -215,7 +215,7 @@ rules:
     severity: high
     confidence: 0.80
     when: !regex
-      pattern: "\\u81ea\\u52a8\\u89e6\\u53d1|\\u65e0\\u9700\\u624b\\u52a8|\\u4e0d\\u8981\\u7b49\\u7528\\u6237\\u786e\\u8ba4|\\u4e0d\\u8981\\u95ee\\u7528\\u6237|\\u7acb\\u5373\\u81ea\\u52a8\\u6267\\u884c|\\u5b8c\\u5168\\u81ea\\u52a8\\u5316"
+      pattern: "\\u81ea\\u52a8\\u89e6\\u53d1|\\u65e0\\u9700\\u624b\\u52a8[^\\n]{0,8}(?:\\u786e\\u8ba4|\\u5ba1\\u6279|\\u6279\\u51c6|\\u6388\\u6743|\\u4ecb\\u5165|\\u5e72\\u9884|\\u5ba1\\u6838|\\u540c\\u610f|\\u8bb8\\u53ef)|\\u4e0d\\u8981\\u7b49\\u7528\\u6237\\u786e\\u8ba4|\\u4e0d\\u8981\\u95ee\\u7528\\u6237|\\u7acb\\u5373\\u81ea\\u52a8\\u6267\\u884c|\\u5b8c\\u5168\\u81ea\\u52a8\\u5316"
     action: block
     reason: "Chinese-language autonomous execution instruction without user confirmation"
     shield:
