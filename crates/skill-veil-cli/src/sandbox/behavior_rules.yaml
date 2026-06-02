@@ -1,0 +1,63 @@
+# Behavioral detection rules for the dynamic sandbox (malware-sandbox style).
+#
+# Each rule matches a CO-OCCURRENCE of observed runtime behaviors within one
+# run: every condition in `all_of` must be satisfied by some observed
+# behavior. A condition matches on the behavior `class` plus an optional
+# `detail_any` list (the behavior's detail must contain at least one of the
+# substrings). These chain/signature detections sit on top of the
+# per-behavior `SANDBOX_*` findings — e.g. "read a secret AND connected out"
+# is the exfiltration chain a single behavior cannot express.
+#
+# Behavioral rule contributions belong in the skill-veil-rules repo's
+# `behavioral/` pack; this embedded set is the baseline shipped in the binary.
+
+- id: SANDBOX_BEHAVIOR_EXFIL_SECRET_TO_NETWORK
+  category: data_exfiltration
+  severity: critical
+  confidence: 0.9
+  all_of:
+    - class: sensitive_file_read
+    - class: network_connect
+  reason: "Runtime exfiltration chain: read a sensitive file (credential/key/dotfile) and opened an outbound network connection in the same run."
+  taxonomy_tags: [output_handling]
+  enabled: true
+
+- id: SANDBOX_BEHAVIOR_C2_KNOWN_PORT
+  category: remote_exec
+  severity: high
+  confidence: 0.85
+  all_of:
+    - class: network_connect
+      detail_any: [":4444", ":1337", ":31337", ":8771", ":9001", ":6667", ":6697"]
+  reason: "Connected at runtime to a port commonly used for C2 / reverse shells."
+  enabled: true
+
+- id: SANDBOX_BEHAVIOR_RUNTIME_PERSISTENCE
+  category: privilege_escalation
+  severity: high
+  confidence: 0.9
+  all_of:
+    - class: persistence_write
+  reason: "Wrote to a persistence surface (shell rc / cron / autostart / systemd unit) at runtime."
+  taxonomy_tags: [rogue_agent]
+  enabled: true
+
+- id: SANDBOX_BEHAVIOR_CONTAINER_ESCAPE_ATTEMPT
+  category: privilege_escalation
+  severity: high
+  confidence: 0.9
+  all_of:
+    - class: privilege_change
+      detail_any: ["docker.sock", "containerd", "crio", "podman", "setns", "unshare", "capset"]
+  reason: "Attempted a container-escape / privilege primitive at runtime (runtime control socket, namespace manipulation, or capability set)."
+  enabled: true
+
+- id: SANDBOX_BEHAVIOR_SECRET_THEN_SPAWN
+  category: credential_exposure
+  severity: high
+  confidence: 0.8
+  all_of:
+    - class: sensitive_file_read
+    - class: process_spawn
+  reason: "Read a sensitive file and then spawned a subprocess in the same run (credential handoff to an external command)."
+  enabled: true

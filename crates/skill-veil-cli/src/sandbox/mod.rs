@@ -15,6 +15,7 @@
 //! with a note) when Docker or the gVisor runtime is absent.
 
 pub(crate) mod agent;
+pub(crate) mod behavior_rules;
 pub(crate) mod executor;
 pub(crate) mod mapping;
 pub(crate) mod observation;
@@ -256,7 +257,8 @@ fn run_with_executor(
                 .extend(agent::run_agent(&instructions, llm));
         }
     }
-    let findings = mapping::observation_to_findings(&observation, target);
+    let mut findings = mapping::observation_to_findings(&observation, target);
+    findings.extend(behavior_rules::BehaviorRuleSet::embedded().evaluate(&observation, target));
     let timed_out = raw.timed_out || observation.timed_out;
     let truncated = observation.truncated;
     if findings.is_empty() && !timed_out && !truncated {
@@ -361,7 +363,8 @@ fn run_detonation_with_executor(
     if let Some(ip) = det.proxy_ip.as_deref() {
         observation.behaviors.retain(|b| !b.detail.contains(ip));
     }
-    let findings = mapping::observation_to_findings(&observation, target);
+    let mut findings = mapping::observation_to_findings(&observation, target);
+    findings.extend(behavior_rules::BehaviorRuleSet::embedded().evaluate(&observation, target));
     let timed_out = det.raw.timed_out || observation.timed_out;
     let truncated = observation.truncated;
     if findings.is_empty() && !timed_out && !truncated {
