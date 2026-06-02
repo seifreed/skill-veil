@@ -1,0 +1,41 @@
+# Agent-detonation image for the dynamic sandbox (Option B).
+#
+# Bundles a real coding agent (OpenCode) that USES a malicious skill the
+# way an operator would, so credential/arg-gated malicious code paths
+# actually execute and reveal their runtime behavior. The agent runs under
+# strace (so the skill's exec/connect/file syscalls are observed) and all
+# egress is routed through the selective recording proxy: the OpenCode
+# free-model gateway is allowlisted and forwarded; everything else (the
+# skill's C2 / exfil) is captured and blocked.
+#
+# OpenCode's free models are keyless. The agent needs a writable HOME for
+# its local db/config, provided at run time as a tmpfs (HOME=/tmp/ochome).
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends strace ca-certificates nodejs curl unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir cryptography
+
+# Install the standalone OpenCode binary and expose it world-executable.
+RUN curl -fsSL https://opencode.ai/install | bash \
+    && cp /root/.opencode/bin/opencode /usr/local/bin/opencode \
+    && chmod a+rx /usr/local/bin/opencode \
+    && opencode --version
+
+COPY gen_ca.py /gen_ca.py
+RUN python3 /gen_ca.py \
+    && cp /sv-ca/ca.crt /usr/local/share/ca-certificates/skill-veil-sandbox-ca.crt \
+    && update-ca-certificates \
+    && chmod -R a+rX /sv-ca
+
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+COPY observe.py /observe.py
+COPY proxy.py /proxy.py
+COPY detonate.py /detonate.py
+
+ENTRYPOINT ["python3", "/detonate.py"]

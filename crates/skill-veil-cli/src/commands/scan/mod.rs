@@ -367,7 +367,20 @@ pub(crate) fn run_scan(
     // YARA it runs post-verdict and only injects advisory findings; gVisor
     // is required (no silent fallback to the weaker runc kernel boundary).
     #[cfg(feature = "sandbox")]
-    let sandbox_report = if args.dynamic {
+    let sandbox_report = if args.sandbox_detonate_agent {
+        match crate::sandbox::evaluate_detonation_against_target(
+            &args.path,
+            !args.sandbox_allow_runc,
+        ) {
+            Ok(report) => report,
+            Err(err) => {
+                if !quiet {
+                    eprintln!("warning: agent detonation skipped: {err:#}");
+                }
+                None
+            }
+        }
+    } else if args.dynamic {
         match crate::sandbox::evaluate_against_target(
             &args.path,
             !args.sandbox_allow_runc,
@@ -390,10 +403,10 @@ pub(crate) fn run_scan(
         attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
     }
     #[cfg(not(feature = "sandbox"))]
-    if args.dynamic && !quiet {
+    if (args.dynamic || args.sandbox_detonate_agent) && !quiet {
         eprintln!(
-            "--dynamic: this binary was built without `--features sandbox`; \
-             skipping dynamic analysis"
+            "--dynamic/--sandbox-detonate-agent: this binary was built without \
+             `--features sandbox`; skipping dynamic analysis"
         );
     }
 

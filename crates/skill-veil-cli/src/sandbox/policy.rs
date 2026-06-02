@@ -108,6 +108,9 @@ pub(crate) struct SandboxPolicy {
     /// Optional custom seccomp profile. When `None`, Docker's built-in
     /// restrictive default profile applies (never `unconfined`).
     pub(crate) seccomp_profile: Option<PathBuf>,
+    /// Extra `--env KEY=VALUE` pairs for the container (e.g. `HOME` and the
+    /// detonation prompt/model the agent entrypoint reads). Empty by default.
+    pub(crate) extra_env: Vec<(String, String)>,
 }
 
 impl SandboxPolicy {
@@ -126,6 +129,7 @@ impl SandboxPolicy {
             tmpfs_size: DEFAULT_TMPFS_SIZE.to_string(),
             timeout_secs: DEFAULT_TIMEOUT_SECS,
             seccomp_profile: None,
+            extra_env: Vec::new(),
         }
     }
 
@@ -185,6 +189,10 @@ impl SandboxPolicy {
         ));
         args.push("--workdir".into());
         args.push(SKILL_MOUNT_TARGET.into());
+        for (key, value) in &self.extra_env {
+            args.push("--env".into());
+            args.push(format!("{key}={value}"));
+        }
 
         args.push(self.image.clone());
         args.extend(container_cmd.iter().cloned());
@@ -349,6 +357,26 @@ mod tests {
                 .any(|x| x.starts_with("HTTP_PROXY=") || x.starts_with("HTTPS_PROXY=")),
             "proxy env is injected by the executor, not the policy"
         );
+    }
+
+    /// # Contract
+    /// Extra env pairs render as `--env KEY=VALUE` after the hardening
+    /// flags and before the image; none are rendered when empty (so the
+    /// non-detonation modes are unaffected).
+    #[test]
+    fn extra_env_renders_as_env_pairs() {
+        assert!(!rendered().iter().any(|a| a.starts_with("HOME=")));
+        let mut policy = hardened();
+        policy.extra_env = vec![
+            ("HOME".to_string(), "/tmp/ochome".to_string()),
+            ("SV_DETONATE_TIMEOUT".to_string(), "240".to_string()),
+        ];
+        let a = policy.to_docker_run_args(&[]);
+        assert!(a.iter().any(|x| x == "HOME=/tmp/ochome"));
+        assert!(a.iter().any(|x| x == "SV_DETONATE_TIMEOUT=240"));
+        let env_idx = a.iter().position(|x| x == "HOME=/tmp/ochome").unwrap();
+        let image_idx = a.iter().position(|x| x == &policy.image).unwrap();
+        assert!(env_idx < image_idx, "env must precede the image");
     }
 
     /// # Contract (negative)

@@ -21,11 +21,21 @@ const DOCKERFILE: &str = include_str!("image/Dockerfile");
 const OBSERVE_PY: &str = include_str!("image/observe.py");
 const PROXY_PY: &str = include_str!("image/proxy.py");
 const GEN_CA_PY: &str = include_str!("image/gen_ca.py");
+/// Agent-detonation build context: the agent image bundles a real coding
+/// agent (OpenCode) that USES the skill so gated malicious paths execute.
+const AGENT_DOCKERFILE: &str = include_str!("image/Dockerfile.agent");
+const DETONATE_PY: &str = include_str!("image/detonate.py");
 
 /// Repository name for the sandbox image. The concrete tag is derived
 /// from the embedded build context's content hash (see
 /// [`content_addressed_image_tag`]).
 const IMAGE_REPO: &str = "skill-veil-sandbox";
+
+/// Hosts the agent-detonation proxy forwards (the OpenCode agent's own
+/// model gateway and startup fetches). Everything NOT on this list is the
+/// skill-under-analysis's traffic and is captured + blocked.
+const AGENT_PROXY_ALLOWLIST: &str =
+    "opencode.ai,models.dev,github.com,registry.npmjs.org,githubusercontent.com";
 
 /// Port the recording proxy listens on (matches `proxy.py`'s default).
 const PROXY_PORT: u16 = 8080;
@@ -53,6 +63,30 @@ pub(crate) fn content_addressed_image_tag() -> String {
     format!("{IMAGE_REPO}:sv{}", hex::encode(&digest[..6]))
 }
 
+/// Content-addressed tag for the agent-detonation image (separate repo so
+/// the lean observer image is never bloated with the agent toolchain).
+pub(crate) fn agent_image_tag() -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [
+        AGENT_DOCKERFILE,
+        OBSERVE_PY,
+        PROXY_PY,
+        GEN_CA_PY,
+        DETONATE_PY,
+    ] {
+        hasher.update(part.as_bytes());
+        hasher.update([0u8]);
+    }
+    let digest = hasher.finalize();
+    format!("{IMAGE_REPO}-agent:sv{}", hex::encode(&digest[..6]))
+}
+
+/// The hosts the agent-detonation proxy forwards to the real upstream.
+pub(crate) fn agent_proxy_allowlist() -> &'static str {
+    AGENT_PROXY_ALLOWLIST
+}
+
 /// What the host can provide for sandboxing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SandboxCapabilities {
@@ -75,6 +109,17 @@ pub(crate) struct RawRun {
 pub(crate) struct RecordedRun {
     pub(crate) raw: RawRun,
     pub(crate) proxy_log: String,
+}
+
+/// Outcome of an agent-detonation run: the run, the selective proxy's
+/// capture log (the skill's blocked egress; the agent's allowlisted egress
+/// is forwarded silently and never logged), and the proxy's IP so the
+/// caller can drop the agent→proxy hops from the observed behaviors.
+#[derive(Debug, Clone)]
+pub(crate) struct DetonationRun {
+    pub(crate) raw: RawRun,
+    pub(crate) proxy_log: String,
+    pub(crate) proxy_ip: Option<String>,
 }
 
 /// Drives container execution. Implemented by [`DockerExecutor`] in
@@ -100,6 +145,25 @@ pub(crate) trait SandboxExecutor {
         image: &str,
         timeout: Duration,
     ) -> Result<RecordedRun>;
+    /// Ensure the agent-detonation image `tag` is available. Default: not
+    /// available (only [`DockerExecutor`] builds it).
+    fn ensure_agent_image(&self, _tag: &str) -> Result<bool> {
+        Ok(false)
+    }
+    /// Run an agent-detonation: a dual-homed selective proxy (allowlist
+    /// forwarded, everything else captured + blocked) plus the sandboxed
+    /// agent container that detonates the skill. Default: unsupported.
+    fn run_agent_detonation(
+        &self,
+        _sandbox_args: &[String],
+        _network: &str,
+        _proxy_alias: &str,
+        _image: &str,
+        _allowlist: &str,
+        _timeout: Duration,
+    ) -> Result<DetonationRun> {
+        anyhow::bail!("agent detonation is not supported by this executor")
+    }
 }
 
 /// Production executor that shells out to the host `docker` binary.
@@ -154,8 +218,116 @@ impl SandboxExecutor for DockerExecutor {
         Ok(status.success())
     }
 
+    fn ensure_agent_image(&self, tag: &str) -> Result<bool> {
+        let present = Command::new("docker")
+            .args(["image", "inspect", tag])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if present {
+            return Ok(true);
+        }
+        let context = tempfile::tempdir().context("creating agent image build context")?;
+        write_file(context.path(), "Dockerfile", AGENT_DOCKERFILE)?;
+        write_file(context.path(), "observe.py", OBSERVE_PY)?;
+        write_file(context.path(), "proxy.py", PROXY_PY)?;
+        write_file(context.path(), "gen_ca.py", GEN_CA_PY)?;
+        write_file(context.path(), "detonate.py", DETONATE_PY)?;
+        // `--network host` so the OpenCode installer's downloads resolve
+        // even where the build sandbox's DNS is broken (e.g. some BuildKit
+        // hosts); the build still runs in the daemon, not the sandbox.
+        let status = Command::new("docker")
+            .arg("build")
+            .args(["--network", "host"])
+            .args(["-t", tag])
+            .arg(context.path())
+            .status()
+            .context("running docker build for the agent image")?;
+        Ok(status.success())
+    }
+
     fn run(&self, docker_args: &[String], timeout: Duration) -> Result<RawRun> {
         self.spawn_and_wait(docker_args, timeout)
+    }
+
+    fn run_agent_detonation(
+        &self,
+        sandbox_args: &[String],
+        network: &str,
+        proxy_alias: &str,
+        image: &str,
+        allowlist: &str,
+        timeout: Duration,
+    ) -> Result<DetonationRun> {
+        let egress = format!("{network}-egress");
+        let _ = Command::new("docker")
+            .args(["network", "create", "--internal", network])
+            .output()
+            .context("creating isolated detonation network")?;
+        let _ = Command::new("docker")
+            .args(["network", "create", &egress])
+            .output()
+            .context("creating detonation egress network")?;
+        let proxy_name = format!("{network}-proxy");
+        let proxy_started = Command::new("docker")
+            .args(["run", "-d", "--rm", "--name", &proxy_name])
+            .args(["--network", network, "--network-alias", proxy_alias])
+            .args(["--user", "65534:65534", "--read-only", "--cap-drop", "ALL"])
+            .args(["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=32m"])
+            .args(["--security-opt", "no-new-privileges"])
+            .args(["--env", &format!("SV_PROXY_ALLOWLIST={allowlist}")])
+            .args(["--entrypoint", "python3"])
+            .arg(image)
+            .arg("/proxy.py")
+            .status()
+            .context("starting selective detonation proxy")?
+            .success();
+        // Dual-home the proxy: a second interface with real egress so it
+        // can forward the allowlisted hosts upstream. The sandbox stays on
+        // the `--internal` net and can reach the internet ONLY through it.
+        let _ = Command::new("docker")
+            .args(["network", "connect", &egress, &proxy_name])
+            .output();
+
+        let mut proxy_ip = None;
+        let mut args = sandbox_args.to_vec();
+        if proxy_started {
+            thread::sleep(Duration::from_millis(1500));
+            proxy_ip = container_ip_on(&proxy_name, network);
+            if let Some(ip) = &proxy_ip {
+                let url = format!("http://{ip}:{PROXY_PORT}");
+                let insert_at = args.iter().position(|a| a == "run").map_or(0, |i| i + 1);
+                args.splice(
+                    insert_at..insert_at,
+                    [
+                        "--env".to_string(),
+                        format!("HTTP_PROXY={url}"),
+                        "--env".to_string(),
+                        format!("HTTPS_PROXY={url}"),
+                    ],
+                );
+            }
+        }
+        let raw_result = self.spawn_and_wait(&args, timeout);
+        let proxy_log = Command::new("docker")
+            .args(["logs", &proxy_name])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &proxy_name])
+            .output();
+        let _ = Command::new("docker")
+            .args(["network", "rm", network])
+            .output();
+        let _ = Command::new("docker")
+            .args(["network", "rm", &egress])
+            .output();
+        Ok(DetonationRun {
+            raw: raw_result?,
+            proxy_log,
+            proxy_ip,
+        })
     }
 
     fn run_recorded(
@@ -292,6 +464,20 @@ fn container_ip(name: &str) -> Option<String> {
     (!ip.is_empty()).then_some(ip)
 }
 
+/// The container's IPv4 on a SPECIFIC network. The detonation proxy is
+/// dual-homed (sandbox net + egress net), so the sandbox must be pointed
+/// at the proxy's address on the *sandbox* net, not whichever a `range`
+/// happens to yield first.
+fn container_ip_on(name: &str, network: &str) -> Option<String> {
+    let template = format!(r#"{{{{(index .NetworkSettings.Networks "{network}").IPAddress}}}}"#);
+    let output = Command::new("docker")
+        .args(["inspect", "-f", &template, name])
+        .output()
+        .ok()?;
+    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!ip.is_empty()).then_some(ip)
+}
+
 fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<()> {
     let path = dir.join(name);
     let mut file =
@@ -344,5 +530,22 @@ mod tests {
         perturbed.update(b"different ca generator\0");
         let other = format!("{IMAGE_REPO}:sv{}", hex::encode(&perturbed.finalize()[..6]));
         assert_ne!(tag, other, "a changed CA generator must change the tag");
+    }
+
+    /// # Contract
+    /// The agent-detonation image is a SEPARATE, content-addressed repo
+    /// (`skill-veil-sandbox-agent`) so the lean observer image is never
+    /// bloated with the agent toolchain, and its tag differs from the
+    /// observer image's.
+    #[test]
+    fn agent_image_tag_is_separate_repo_and_distinct() {
+        let agent = agent_image_tag();
+        assert_eq!(agent, agent_image_tag(), "deterministic");
+        assert!(
+            agent.starts_with("skill-veil-sandbox-agent:sv"),
+            "got {agent}"
+        );
+        assert_ne!(agent, content_addressed_image_tag());
+        assert!(agent_proxy_allowlist().contains("opencode.ai"));
     }
 }

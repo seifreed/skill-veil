@@ -81,13 +81,18 @@ impl SandboxReport {
 /// it is a directory, otherwise its parent (so a single `SKILL.md` brings
 /// its sibling scripts along).
 fn mount_dir_for(target: &Path) -> PathBuf {
-    match std::fs::metadata(target) {
+    let dir = match std::fs::metadata(target) {
         Ok(meta) if meta.is_dir() => target.to_path_buf(),
         _ => target
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from(".")),
-    }
+    };
+    // Docker bind mounts require an ABSOLUTE host path: a relative one is
+    // interpreted as a named-volume name and rejected (exit 125). The scan
+    // target may be relative (`scan-package data/foo --dynamic`), so resolve
+    // it before it reaches `--volume`.
+    std::fs::canonicalize(&dir).unwrap_or(dir)
 }
 
 /// Run the dynamic sandbox against `target` using the production Docker
@@ -253,6 +258,111 @@ fn run_with_executor(
     }
     let findings = mapping::observation_to_findings(&observation, target);
     let timed_out = raw.timed_out || observation.timed_out;
+    let truncated = observation.truncated;
+    if findings.is_empty() && !timed_out && !truncated {
+        return Ok(None);
+    }
+    Ok(Some(SandboxReport {
+        source_path: target.to_path_buf(),
+        findings,
+        runtime,
+        timed_out,
+        truncated,
+    }))
+}
+
+/// Wall-clock cap for one agent-detonation run. Longer than the script
+/// observer's: a real agent reasons over several turns before the skill's
+/// gated code path fires. The in-container detonator's own timeout is set
+/// shorter via `SV_DETONATE_TIMEOUT` so it returns partial output first.
+const DETONATION_TIMEOUT_SECS: u64 = 300;
+
+/// Run the agent-detonation mode against `target`: a real coding agent
+/// (OpenCode, free keyless model) USES the skill inside the hardened
+/// container so credential/arg/agent-gated malicious paths actually
+/// execute, observed under strace + the selective recording proxy.
+pub(crate) fn evaluate_detonation_against_target(
+    target: &Path,
+    require_gvisor: bool,
+) -> Result<Option<SandboxReport>> {
+    run_detonation_with_executor(target, require_gvisor, &DockerExecutor)
+}
+
+fn run_detonation_with_executor(
+    target: &Path,
+    require_gvisor: bool,
+    executor: &dyn SandboxExecutor,
+) -> Result<Option<SandboxReport>> {
+    let caps = executor.capabilities();
+    if !caps.docker {
+        return Ok(None);
+    }
+    let runtime = if caps.gvisor {
+        SandboxRuntime::Gvisor
+    } else if require_gvisor {
+        return Ok(None);
+    } else {
+        SandboxRuntime::Runc
+    };
+
+    let mut policy = SandboxPolicy::hardened(mount_dir_for(target));
+    policy.runtime = runtime;
+    policy.image = executor::agent_image_tag();
+    // The agent (OpenCode/Bun) + node + the skill's runtime need more
+    // headroom than the lean observer: its local db, a writable copy of the
+    // skill, and the strace log all live on the tmpfs.
+    policy.tmpfs_size = "1g".to_string();
+    policy.memory_limit = "1g".to_string();
+    let network = unique_network_name();
+    policy.network = NetworkPolicy::RecordingProxy {
+        network: network.clone(),
+    };
+    // The in-container detonator's own deadline, shorter than the outer
+    // wall-clock cap so it parses and emits partial output before the
+    // executor would kill it (and so the strace log stays bounded).
+    policy.extra_env = vec![
+        ("HOME".to_string(), "/tmp/ochome".to_string()),
+        ("SV_DETONATE_TIMEOUT".to_string(), "150".to_string()),
+    ];
+    let _seccomp_guard = match materialize_seccomp_profile() {
+        Some((dir, path)) => {
+            policy.seccomp_profile = Some(path);
+            Some(dir)
+        }
+        None => None,
+    };
+    if !executor.ensure_agent_image(&policy.image)? {
+        return Ok(None);
+    }
+    let args = policy.to_docker_run_args(&[]);
+    let timeout = Duration::from_secs(DETONATION_TIMEOUT_SECS);
+    let det = executor.run_agent_detonation(
+        &args,
+        &network,
+        "proxy",
+        &policy.image,
+        executor::agent_proxy_allowlist(),
+        timeout,
+    )?;
+    let mut observation = match observation::SandboxObservation::parse(&det.raw.stdout) {
+        Ok(obs) => obs,
+        Err(err) => {
+            tracing::warn!("detonation observer output was not valid JSON: {err}");
+            observation::SandboxObservation::default()
+        }
+    };
+    observation
+        .behaviors
+        .extend(proxy::parse_proxy_log(&det.proxy_log));
+    // Every container egress is routed to the proxy IP, which is the
+    // analysis channel (the agent's allowlisted LLM traffic), not the
+    // skill's own destination — drop those hops. The skill's real
+    // destinations survive via the proxy capture log (real host + payload).
+    if let Some(ip) = det.proxy_ip.as_deref() {
+        observation.behaviors.retain(|b| !b.detail.contains(ip));
+    }
+    let findings = mapping::observation_to_findings(&observation, target);
+    let timed_out = det.raw.timed_out || observation.timed_out;
     let truncated = observation.truncated;
     if findings.is_empty() && !timed_out && !truncated {
         return Ok(None);
@@ -617,6 +727,114 @@ mod tests {
             "content-addressed image tag must be used"
         );
         assert!(!args.iter().any(|a| a.ends_with(":latest")));
+    }
+
+    struct DetonatingExecutor {
+        stdout: String,
+        proxy_log: String,
+        proxy_ip: Option<String>,
+    }
+
+    impl SandboxExecutor for DetonatingExecutor {
+        fn capabilities(&self) -> SandboxCapabilities {
+            SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            }
+        }
+        fn ensure_image(&self, _tag: &str) -> Result<bool> {
+            Ok(true)
+        }
+        fn run(&self, _docker_args: &[String], _timeout: Duration) -> Result<RawRun> {
+            anyhow::bail!("detonation test does not use run")
+        }
+        fn run_recorded(
+            &self,
+            _a: &[String],
+            _n: &str,
+            _p: &str,
+            _i: &str,
+            _t: Duration,
+        ) -> Result<executor::RecordedRun> {
+            anyhow::bail!("detonation test does not use run_recorded")
+        }
+        fn ensure_agent_image(&self, _tag: &str) -> Result<bool> {
+            Ok(true)
+        }
+        fn run_agent_detonation(
+            &self,
+            _a: &[String],
+            _n: &str,
+            _p: &str,
+            _i: &str,
+            _allow: &str,
+            _t: Duration,
+        ) -> Result<executor::DetonationRun> {
+            Ok(executor::DetonationRun {
+                raw: RawRun {
+                    stdout: self.stdout.clone(),
+                    timed_out: false,
+                },
+                proxy_log: self.proxy_log.clone(),
+                proxy_ip: self.proxy_ip.clone(),
+            })
+        }
+    }
+
+    /// # Contract (end-to-end)
+    /// Agent detonation surfaces the skill's REAL behavior: the agent→proxy
+    /// hops (every container egress goes to the proxy IP, the analysis
+    /// channel) are dropped, while the skill's true destination AND payload
+    /// — recovered from the selective proxy's capture log — survive as a
+    /// finding, alongside the skill's process spawn.
+    #[test]
+    fn detonation_filters_proxy_hops_and_keeps_skill_behavior() {
+        let exec = DetonatingExecutor {
+            stdout: r#"{"behaviors":[
+                {"class":"process_spawn","detail":"node trigger.mjs","source":"script"},
+                {"class":"network_connect","detail":"10.0.0.9:8080","source":"script"}
+            ]}"#
+            .to_string(),
+            proxy_log: r#"{"method":"POST","url":"https://c2.invalid/exfil","host":"c2.invalid","body":"stolen=secret"}"#
+                .to_string(),
+            proxy_ip: Some("10.0.0.9".to_string()),
+        };
+        let report = run_detonation_with_executor(Path::new("pkg/SKILL.md"), true, &exec)
+            .unwrap()
+            .expect("detonation behaviors must produce a report");
+        let details: Vec<&str> = report
+            .findings
+            .iter()
+            .map(|f| f.match_value.as_str())
+            .collect();
+        assert!(
+            !details.iter().any(|d| d.contains("10.0.0.9")),
+            "agent→proxy hop must be filtered: {details:?}"
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.rule_id == "SANDBOX_PROCESS_SPAWN"
+                    && f.match_value.contains("trigger.mjs"))
+        );
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "SANDBOX_NETWORK_CONNECT"
+                && f.match_value.contains("c2.invalid")
+                && f.match_value.contains("stolen=secret")));
+    }
+
+    /// # Contract
+    /// The skill mount dir is always an ABSOLUTE host path: Docker rejects a
+    /// relative bind-mount source as an invalid named-volume name (exit
+    /// 125), so a relative scan target (`scan-package data/foo --dynamic`)
+    /// must be resolved before it reaches `--volume`.
+    #[test]
+    fn mount_dir_is_always_absolute() {
+        let dir = mount_dir_for(Path::new("."));
+        assert!(dir.is_absolute(), "mount dir must be absolute: {dir:?}");
     }
 
     /// # Contract (live, requires Docker)

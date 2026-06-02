@@ -2,10 +2,13 @@
 #
 # Minimal Debian slim + strace (portable syscall observation that works
 # under both runc and gVisor; eBPF is unreliable under Docker Desktop /
-# gVisor). The container is run with the isolation flags from
+# gVisor). Bundles the interpreters the observer detonates skills with —
+# sh, python3 (the base), and node — so JavaScript/TypeScript-module and
+# Python skills execute and reveal their runtime behavior, not just shell
+# scripts. The container is run with the isolation flags from
 # `sandbox::policy` (read-only root, dropped caps, non-root user, no
-# network). `/observe` runs the skill's scripts under strace and emits a
-# single JSON document of observed behavior on stdout.
+# network). `/observe` runs the skill's referenced scripts under strace
+# and emits a single JSON document of observed behavior on stdout.
 #
 # The image also bakes a throwaway MITM CA (`gen_ca.py`) so the recording
 # proxy (`proxy.py`) can decrypt the sandbox's outbound HTTPS and capture
@@ -15,7 +18,7 @@
 FROM python:3.12-slim
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends strace ca-certificates \
+    && apt-get install -y --no-install-recommends strace ca-certificates nodejs \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir cryptography
 
@@ -27,9 +30,11 @@ RUN python3 /gen_ca.py \
 
 # Point the common HTTP clients at the system bundle (now containing the
 # MITM CA) so HTTPS handshakes through the proxy verify and complete.
+# NODE_EXTRA_CA_CERTS makes Node's TLS trust the MITM CA as well.
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 COPY observe.py /observe.py
 COPY proxy.py /proxy.py

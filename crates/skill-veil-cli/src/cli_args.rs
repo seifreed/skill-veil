@@ -693,6 +693,14 @@ pub struct ScanArgs {
     /// `--dynamic`.
     #[arg(long, default_value_t = false)]
     pub sandbox_record_network: bool,
+    /// Detonate the skill with a REAL coding agent (OpenCode, free keyless
+    /// model) running inside the hardened container, so credential/arg/
+    /// agent-gated malicious code paths actually execute and are observed
+    /// under strace + the selective recording proxy (the agent's model
+    /// gateway is allowlisted; the skill's egress is captured and blocked).
+    /// Implies the dynamic sandbox; requires `--features sandbox` + Docker.
+    #[arg(long, default_value_t = false)]
+    pub sandbox_detonate_agent: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]
