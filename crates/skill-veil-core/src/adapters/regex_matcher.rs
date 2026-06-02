@@ -3,7 +3,7 @@
 use crate::ports::{Captures, CompiledPattern, PatternError, PatternMatch, PatternMatcher};
 use regex::{Regex, RegexBuilder};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 /// Hard upper bound on the compiled NFA size for a single regex pattern,
 /// in bytes. Mitigates ReDoS / state-explosion from user-supplied
@@ -40,12 +40,14 @@ fn build_bounded_regex(pattern: &str) -> Result<Regex, regex::Error> {
 /// on every invocation, which on the rule-engine hot path recompiles
 /// the same regex hundreds of times per scan and, with adversarial
 /// rule packs, scales to a viable denial-of-service. The internal
-/// `cache` is a `Mutex<HashMap>` so concurrent scanners observe a
-/// single compiled `Arc<Regex>` per pattern; contention is minimal
-/// because the cache is consulted on the (rare) cold path only.
+/// `cache` is an `RwLock<HashMap>` so concurrent scanners observe a
+/// single compiled `Arc<Regex>` per pattern. The warm path (every
+/// match) takes a SHARED read lock so the rayon workers that scan a
+/// dataset in parallel don't serialise on it; the exclusive write lock
+/// is taken only on the cold compile path, which after warmup is rare.
 #[derive(Debug, Default, Clone)]
 pub struct RegexPatternMatcher {
-    cache: Arc<Mutex<HashMap<String, Arc<Regex>>>>,
+    cache: Arc<RwLock<HashMap<String, Arc<Regex>>>>,
 }
 
 impl RegexPatternMatcher {
@@ -61,34 +63,25 @@ impl RegexPatternMatcher {
     /// [`REGEX_DFA_SIZE_LIMIT`]; the trait methods then fall back to
     /// returning empty results to keep the rest of the rule pass alive.
     fn cached(&self, pattern: &str) -> Option<Arc<Regex>> {
-        // Recover from poison: a panicked thread holding the lock should
-        // not permanently degrade the cache from O(1) lookup to O(n)
-        // recompilation per call. The data inside is still valid —
-        // poison only signals that a thread panicked *while* holding
-        // the lock, not that the HashMap is corrupt.
-        //
-        // NOTE: We deliberately use `into_inner()` without clearing the
-        // poison flag. Rust's `Mutex` does not expose `clear_poison()`
-        // on the guard, and `std::sync::RecoverableError` is unstable.
-        // After recovery, subsequent lock acquisitions will also recover
-        // via `into_inner()`, which is correct but takes the slow path.
-        // A true poison-clear would require `parking_lot::Mutex` or the
-        // unstable `std::sync::RecoverableError` API.
-        let recover_poison = |e: std::sync::PoisonError<_>| e.into_inner();
-        // Quick read path: most requests hit an already-compiled entry.
+        // Poison recovery: a thread that panicked while holding the lock
+        // must not permanently degrade the cache to recompiling every
+        // pattern. The data inside is still valid — poison only signals a
+        // panic *while* holding the lock — so `into_inner()` recovers it.
+        // Warm read path: most requests hit an already-compiled entry. A
+        // SHARED read lock lets all the parallel scan workers consult the
+        // cache concurrently — the previous exclusive `Mutex` serialised
+        // every single match and pinned a dataset scan to one core.
         if let Some(re) = self
             .cache
-            .lock()
-            .unwrap_or_else(recover_poison)
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
             .get(pattern)
         {
             return Some(Arc::clone(re));
         }
-        // Cold path: compile through the bounded builder, then insert
-        // into the cache so subsequent calls hit the warm path. We
-        // re-acquire the lock here rather than holding it across the
-        // potentially-expensive compile so a stuck compile cannot
-        // serialise the entire matcher.
+        // Cold path: compile through the bounded builder WITHOUT holding a
+        // lock (a stuck compile must not block the readers), then take the
+        // exclusive write lock briefly to insert.
         let re = match build_bounded_regex(pattern) {
             Ok(re) => Arc::new(re),
             Err(e) => {
@@ -102,8 +95,8 @@ impl RegexPatternMatcher {
         // reference counts predictable.
         Some(Arc::clone(
             self.cache
-                .lock()
-                .unwrap_or_else(recover_poison)
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
                 .entry(pattern.to_string())
                 .or_insert_with(|| Arc::clone(&re)),
         ))
@@ -252,7 +245,7 @@ mod tests {
             matcher.is_match(pattern, "fetch wget https://example.com/x");
             matcher.captures_iter(pattern, "exec curl https://attacker/x");
         }
-        let cache = matcher.cache.lock().expect("cache mutex poisoned");
+        let cache = matcher.cache.read().expect("cache rwlock poisoned");
         assert_eq!(
             cache.len(),
             1,
@@ -272,12 +265,43 @@ mod tests {
         matcher.find_matches(r"\d+", "a 1 b");
         matcher.find_matches(r"[a-z]+", "abc");
         matcher.find_matches(r"\d+", "c 2 d");
-        let cache = matcher.cache.lock().expect("cache mutex poisoned");
+        let cache = matcher.cache.read().expect("cache rwlock poisoned");
         assert_eq!(
             cache.len(),
             2,
             "two distinct patterns must produce two cache entries; got {} entries",
             cache.len()
+        );
+    }
+
+    /// # Contract (concurrency)
+    /// Many threads matching the same pattern through one shared matcher
+    /// run concurrently (the `RwLock` read path does not serialise them, so
+    /// a parallel dataset scan is not pinned to one core) and still share a
+    /// SINGLE compiled regex — no deadlock, no per-thread recompile.
+    #[test]
+    fn concurrent_matchers_share_one_compile_across_threads() {
+        use std::sync::Arc;
+        use std::thread;
+        let matcher = Arc::new(RegexPatternMatcher::new());
+        let pattern = r"\b(curl|wget)\b\s+https?://";
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let m = Arc::clone(&matcher);
+                thread::spawn(move || {
+                    for _ in 0..1000 {
+                        assert!(m.is_match(pattern, "run curl https://example.com/x"));
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("worker thread must not panic or deadlock");
+        }
+        assert_eq!(
+            matcher.cache.read().expect("cache rwlock poisoned").len(),
+            1,
+            "all threads must share one cached compile for the pattern"
         );
     }
 
@@ -340,7 +364,7 @@ mod tests {
         assert_eq!(
             matcher
                 .cache
-                .lock()
+                .read()
                 .expect("cache should be healthy after warm-up")
                 .len(),
             1,
@@ -349,7 +373,7 @@ mod tests {
         // Poison the mutex by causing a panic while holding it.
         let cache_clone = Arc::clone(&matcher.cache);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = cache_clone.lock().expect("lock before poison");
+            let _guard = cache_clone.write().expect("lock before poison");
             panic!("intentional test panic to poison mutex");
         }));
         assert!(result.is_err(), "inner panic should have propagated");
