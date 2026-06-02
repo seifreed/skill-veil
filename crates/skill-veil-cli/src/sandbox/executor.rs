@@ -21,6 +21,30 @@ const DOCKERFILE: &str = include_str!("image/Dockerfile");
 const OBSERVE_PY: &str = include_str!("image/observe.py");
 const PROXY_PY: &str = include_str!("image/proxy.py");
 
+/// Repository name for the sandbox image. The concrete tag is derived
+/// from the embedded build context's content hash (see
+/// [`content_addressed_image_tag`]).
+const IMAGE_REPO: &str = "skill-veil-sandbox";
+
+/// Image tag derived from the SHA-256 of the embedded build context.
+///
+/// `ensure_image` only skips the build when *this* exact tag already
+/// exists, so changing the Dockerfile, observer, or proxy yields a new
+/// tag and forces a rebuild — a stale `:latest` can no longer mask an
+/// updated build context. (The seccomp profile is a run-time
+/// `--security-opt` artifact, never baked into the image, so it is
+/// deliberately excluded from this hash.)
+pub(crate) fn content_addressed_image_tag() -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY] {
+        hasher.update(part.as_bytes());
+        hasher.update([0u8]);
+    }
+    let digest = hasher.finalize();
+    format!("{IMAGE_REPO}:sv{}", hex::encode(&digest[..6]))
+}
+
 /// What the host can provide for sandboxing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SandboxCapabilities {
@@ -228,4 +252,50 @@ fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<()> {
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// # Contract
+    /// The image tag is repository-scoped and derived from the embedded
+    /// build context, so it is stable across calls and never the ambiguous
+    /// `:latest` (which could mask a stale image).
+    #[test]
+    fn content_tag_is_stable_repo_scoped_and_not_latest() {
+        let tag = content_addressed_image_tag();
+        assert_eq!(tag, content_addressed_image_tag(), "must be deterministic");
+        assert!(tag.starts_with("skill-veil-sandbox:sv"), "got {tag}");
+        assert!(!tag.ends_with(":latest"));
+        let hex = tag.strip_prefix("skill-veil-sandbox:sv").unwrap();
+        assert_eq!(hex.len(), 12, "6 bytes of digest -> 12 hex chars: {hex}");
+        assert!(hex.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    /// # Contract
+    /// The tag is content-addressed: a different build context yields a
+    /// different tag, which is what forces `ensure_image` to rebuild. This
+    /// pins that all three embedded parts feed the hash.
+    #[test]
+    fn content_tag_changes_when_build_context_changes() {
+        use sha2::{Digest, Sha256};
+        let tag = content_addressed_image_tag();
+        let mut hasher = Sha256::new();
+        for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY] {
+            hasher.update(part.as_bytes());
+            hasher.update([0u8]);
+        }
+        let expected = format!("{IMAGE_REPO}:sv{}", hex::encode(&hasher.finalize()[..6]));
+        assert_eq!(tag, expected);
+
+        let mut perturbed = Sha256::new();
+        perturbed.update(DOCKERFILE.as_bytes());
+        perturbed.update([0u8]);
+        perturbed.update(OBSERVE_PY.as_bytes());
+        perturbed.update([0u8]);
+        perturbed.update(b"different proxy\0");
+        let other = format!("{IMAGE_REPO}:sv{}", hex::encode(&perturbed.finalize()[..6]));
+        assert_ne!(tag, other, "a changed proxy must change the tag");
+    }
 }

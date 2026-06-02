@@ -39,6 +39,22 @@ use policy::{NetworkPolicy, SandboxPolicy, SandboxRuntime};
 /// into the report separately.
 const OBSERVER_COMMAND: &[&str] = &["--scripts"];
 
+/// Custom seccomp profile applied to every sandbox run, embedded so the
+/// binary is self-contained.
+///
+/// It is `defaultAction: ALLOW` with a targeted `ERRNO` denylist, not a
+/// default-deny allowlist, *by design*: the sandbox's job is to OBSERVE
+/// untrusted code, so the payload must be allowed to run far enough for
+/// strace to record what it attempts. The profile's marginal hardening
+/// over Docker's built-in default is to additionally block a curated set
+/// of container-escape and kernel-attack primitives (io_uring,
+/// userfaultfd, bpf, mount family, module loading, kexec, …) that no
+/// legitimate analysis needs. `ERRNO` rather than `KILL` keeps the
+/// blocked attempt observable instead of tearing the container down. The
+/// real isolation boundary remains gVisor + read-only root + dropped
+/// caps + no network; this is defense in depth.
+const SECCOMP_PROFILE_JSON: &str = include_str!("image/seccomp.json");
+
 /// Outcome of a sandbox run, ready to inject into the scan results.
 #[derive(Debug)]
 pub(crate) struct SandboxReport {
@@ -89,6 +105,20 @@ pub(crate) fn evaluate_against_target(
         &DockerExecutor,
         agent_llm.as_deref(),
     )
+}
+
+/// Materialize the embedded seccomp profile into a temp file whose path
+/// is wired into `--security-opt seccomp=`. The returned [`tempfile::TempDir`]
+/// guard MUST outlive the `docker run`: Docker reads the file when it
+/// launches the container, so dropping the dir early would unlink it
+/// mid-run. On any I/O error this returns `None` and the run proceeds
+/// under Docker's built-in default profile rather than failing the
+/// advisory channel.
+fn materialize_seccomp_profile() -> Option<(tempfile::TempDir, PathBuf)> {
+    let dir = tempfile::tempdir().ok()?;
+    let path = dir.path().join("seccomp.json");
+    std::fs::write(&path, SECCOMP_PROFILE_JSON).ok()?;
+    Some((dir, path))
 }
 
 /// Unique isolated-network name for one recorded run.
@@ -164,6 +194,17 @@ fn run_with_executor(
 
     let mut policy = SandboxPolicy::hardened(mount_dir_for(target));
     policy.runtime = runtime;
+    policy.image = executor::content_addressed_image_tag();
+    let _seccomp_guard = match materialize_seccomp_profile() {
+        Some((dir, path)) => {
+            policy.seccomp_profile = Some(path);
+            Some(dir)
+        }
+        None => {
+            tracing::warn!("could not materialize sandbox seccomp profile; using Docker's default");
+            None
+        }
+    };
     if !executor.ensure_image(&policy.image)? {
         return Ok(None);
     }
@@ -457,6 +498,117 @@ mod tests {
             .any(|f| f.rule_id == "SANDBOX_NETWORK_CONNECT"
                 && f.match_value.contains("c2.invalid")
                 && f.match_value.contains("stolen=token")));
+    }
+
+    /// # Contract
+    /// The embedded seccomp profile is observation-preserving: it allows
+    /// by default (so untrusted code runs far enough to be observed),
+    /// denies the curated escape/kernel-attack primitives via `ERRNO`
+    /// (not `KILL`, so the attempt stays observable), and never denies
+    /// `ptrace` (the observer needs it) or `clone` (process-spawn
+    /// observation needs it).
+    #[test]
+    fn seccomp_profile_is_observation_safe() {
+        let v: serde_json::Value = serde_json::from_str(SECCOMP_PROFILE_JSON)
+            .expect("embedded seccomp profile must be valid JSON");
+        assert_eq!(v["defaultAction"], "SCMP_ACT_ALLOW");
+        let rule = &v["syscalls"][0];
+        assert_eq!(rule["action"], "SCMP_ACT_ERRNO", "must observe, not KILL");
+        let denied: Vec<&str> = rule["names"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n.as_str().unwrap())
+            .collect();
+        for primitive in [
+            "io_uring_setup",
+            "userfaultfd",
+            "bpf",
+            "mount",
+            "kexec_load",
+        ] {
+            assert!(denied.contains(&primitive), "must deny {primitive}");
+        }
+        assert!(!denied.contains(&"ptrace"), "observer needs ptrace");
+        assert!(!denied.contains(&"clone"), "process-spawn needs clone");
+    }
+
+    /// # Contract
+    /// Materializing the profile yields a real file containing exactly the
+    /// embedded JSON, ready to wire into `--security-opt seccomp=`.
+    #[test]
+    fn materialize_seccomp_profile_writes_the_embedded_json() {
+        let (_guard, path) = materialize_seccomp_profile().expect("temp write succeeds");
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, SECCOMP_PROFILE_JSON);
+    }
+
+    struct CapturingExecutor {
+        last_args: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl SandboxExecutor for CapturingExecutor {
+        fn capabilities(&self) -> SandboxCapabilities {
+            SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            }
+        }
+        fn ensure_image(&self, _tag: &str) -> Result<bool> {
+            Ok(true)
+        }
+        fn run(&self, docker_args: &[String], _timeout: Duration) -> Result<RawRun> {
+            *self.last_args.borrow_mut() = docker_args.to_vec();
+            Ok(RawRun {
+                stdout:
+                    r#"{"behaviors":[{"class":"process_spawn","detail":"x","source":"script"}]}"#
+                        .to_string(),
+                timed_out: false,
+            })
+        }
+        fn run_recorded(
+            &self,
+            sandbox_args: &[String],
+            _network: &str,
+            _proxy_alias: &str,
+            _image: &str,
+            _timeout: Duration,
+        ) -> Result<executor::RecordedRun> {
+            *self.last_args.borrow_mut() = sandbox_args.to_vec();
+            Ok(executor::RecordedRun {
+                raw: RawRun {
+                    stdout: "{}".to_string(),
+                    timed_out: false,
+                },
+                proxy_log: String::new(),
+            })
+        }
+    }
+
+    /// # Contract (end-to-end)
+    /// A real run wires the custom seccomp profile and the
+    /// content-addressed image tag into the `docker run` argument vector —
+    /// not the ambiguous `:latest`, and never `seccomp=unconfined`.
+    #[test]
+    fn run_path_wires_seccomp_and_content_tag() {
+        let exec = CapturingExecutor {
+            last_args: std::cell::RefCell::new(Vec::new()),
+        };
+        run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None)
+            .unwrap()
+            .expect("a behavior must produce a report");
+        let args = exec.last_args.borrow();
+        let seccomp = args
+            .iter()
+            .find(|a| a.starts_with("seccomp="))
+            .expect("seccomp profile must be wired");
+        assert!(seccomp.ends_with("seccomp.json"), "got {seccomp}");
+        assert!(!args.iter().any(|a| a.contains("unconfined")));
+        assert!(
+            args.contains(&executor::content_addressed_image_tag()),
+            "content-addressed image tag must be used"
+        );
+        assert!(!args.iter().any(|a| a.ends_with(":latest")));
     }
 
     /// # Contract (live, requires Docker)

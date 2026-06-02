@@ -1,0 +1,58 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "archMap": [],
+  "architectures": [
+    "SCMP_ARCH_X86_64",
+    "SCMP_ARCH_X86",
+    "SCMP_ARCH_X32",
+    "SCMP_ARCH_AARCH64",
+    "SCMP_ARCH_ARM"
+  ],
+  "syscalls": [
+    {
+      "names": [
+        "mount",
+        "umount2",
+        "pivot_root",
+        "chroot",
+        "mount_setattr",
+        "open_tree",
+        "move_mount",
+        "fsopen",
+        "fsconfig",
+        "fsmount",
+        "fspick",
+        "kexec_load",
+        "kexec_file_load",
+        "reboot",
+        "init_module",
+        "finit_module",
+        "delete_module",
+        "bpf",
+        "perf_event_open",
+        "io_uring_setup",
+        "io_uring_enter",
+        "io_uring_register",
+        "userfaultfd",
+        "swapon",
+        "swapoff",
+        "setns",
+        "unshare",
+        "add_key",
+        "keyctl",
+        "request_key",
+        "acct",
+        "quotactl",
+        "nfsservctl",
+        "_sysctl",
+        "modify_ldt",
+        "ioperm",
+        "iopl",
+        "process_vm_writev"
+      ],
+      "action": "SCMP_ACT_ERRNO",
+      "errnoRet": 1,
+      "comment": "Container-escape and kernel-attack primitives with no legitimate analysis value. ERRNO (not KILL) so strace still records the attempt as a signal. ptrace and clone are intentionally absent: the observer needs ptrace, and process-spawn observation needs clone."
+    }
+  ]
+}
