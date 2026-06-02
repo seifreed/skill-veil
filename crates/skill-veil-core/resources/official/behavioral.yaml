@@ -181,7 +181,7 @@ rules:
     severity: critical
     confidence: 0.90
     when: !regex
-      pattern: "(?is)(fetch|read|follow|execute|run|curl|wget|download).{0,80}(https?://|raw\\.githubusercontent|pastebin|gist\\.github|moltpad).{0,120}(instruction|prompt|readme|\\.md\\b|command|heartbeat|next.?step|playbook)"
+      pattern: "(?is)\\b(?:fetch|read|follow|execute|run|curl|wget|download)\\b.{0,80}(?:https?://|raw\\.githubusercontent|pastebin|gist\\.github|moltpad).{0,120}(?:instruction|prompt|readme|\\.md\\b|command|heartbeat|next.?step|playbook)"
     action: block
     reason: "Skill instructs the agent to fetch and execute remote instructions — remote control vector"
     shield:
