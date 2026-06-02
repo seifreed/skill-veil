@@ -372,6 +372,7 @@ pub(crate) fn run_scan(
             &args.path,
             !args.sandbox_allow_runc,
             args.sandbox_record_network,
+            args.llm_provider.as_deref(),
         ) {
             Ok(report) => report,
             Err(err) => {

@@ -91,13 +91,16 @@ fn mount_dir_for(target: &Path) -> PathBuf {
 }
 
 /// Run the dynamic sandbox against `target` using the production Docker
-/// executor. `require_gvisor` rejects the weaker runc fallback.
+/// executor. `require_gvisor` rejects the weaker runc fallback;
+/// `llm_provider_override` (the `--llm-provider` value) selects which
+/// configured provider drives the instrumented agent.
 pub(crate) fn evaluate_against_target(
     target: &Path,
     require_gvisor: bool,
     record_network: bool,
+    llm_provider_override: Option<&str>,
 ) -> Result<Option<SandboxReport>> {
-    let agent_llm = build_agent_llm();
+    let agent_llm = build_agent_llm(llm_provider_override);
     run_with_executor(
         target,
         require_gvisor,
@@ -131,11 +134,18 @@ fn unique_network_name() -> String {
 }
 
 /// Build the instrumented-agent LLM from the project's existing config
-/// (`~/.skill-veil.toml [llm]`). Returns `None` — so the agent pass is
-/// skipped — when no LLM is configured or the provider can't be built.
-fn build_agent_llm() -> Option<Box<dyn AgentLlm>> {
+/// (`~/.skill-veil.toml [llm]`), applying the `--llm-provider` override so
+/// the agent channel honours it exactly like the NOVA `llm:` channel.
+/// Returns `None` — so the agent pass is skipped — when no LLM is
+/// configured, the override is invalid, or the provider can't be built.
+fn build_agent_llm(provider_override_raw: Option<&str>) -> Option<Box<dyn AgentLlm>> {
     let cfg = crate::config::UnifiedConfig::load().ok()?;
-    let llm_section = cfg.llm?;
+    let mut llm_section = cfg.llm?;
+    let provider_override =
+        crate::config::resolve_llm_provider_override(provider_override_raw).ok()?;
+    if let Some(kind) = provider_override {
+        llm_section.apply_provider_override(kind);
+    }
     let provider = crate::llm::providers::build_provider(&llm_section).ok()?;
     Some(Box::new(agent::ProviderAgentLlm::new(
         std::sync::Arc::from(provider),
@@ -627,7 +637,7 @@ mod tests {
             "#!/bin/sh\n             cat /etc/passwd > /dev/null 2>&1\n             echo evil >> /root/.bashrc 2>/dev/null || true\n             python3 -c \"import socket; s=socket.socket(); s.settimeout(2);              s.connect(('198.51.100.23',8080))\" 2>/dev/null || true\n",
         )
         .unwrap();
-        let report = evaluate_against_target(tmp.path(), false, false)
+        let report = evaluate_against_target(tmp.path(), false, false, None)
             .unwrap()
             .expect("Docker must be available when running with --ignored");
         let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
