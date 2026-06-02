@@ -47,12 +47,10 @@ OPENAT = re.compile(r'openat?\([^,]*,\s*"([^"]+)"(?:,\s*([A-Z_|]+))?')
 def main():
     args = set(sys.argv[1:])
     behaviors = []
+    # The container observer covers script execution only; the
+    # instrumented agent runs host-side (no container, mocked tools).
     if "--scripts" in args or not args:
         behaviors.extend(run_scripts())
-    if "--agent" in args:
-        # The instrumented-agent harness is a later phase; emit nothing
-        # rather than fabricate behavior.
-        print("observe: --agent not yet implemented in this image", file=sys.stderr)
     truncated = len(behaviors) > MAX_BEHAVIORS
     json.dump(
         {"behaviors": behaviors[:MAX_BEHAVIORS], "timed_out": False, "truncated": truncated},

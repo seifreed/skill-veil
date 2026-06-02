@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 /// A class of observed runtime behavior. The serialized snake_case names
 /// are the contract between the in-container observer and this parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BehaviorClass {
     /// Outbound network connection attempt (recorded or blocked).
