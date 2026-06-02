@@ -27,6 +27,13 @@ const GEN_CA_PY: &str = include_str!("image/gen_ca.py");
 /// [`content_addressed_image_tag`]).
 const IMAGE_REPO: &str = "skill-veil-sandbox";
 
+/// Port the recording proxy listens on (matches `proxy.py`'s default).
+const PROXY_PORT: u16 = 8080;
+
+/// `docker inspect` Go template yielding the container's IPv4 on its
+/// (single) attached network.
+const CONTAINER_IP_TEMPLATE: &str = "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}";
+
 /// Image tag derived from the SHA-256 of the embedded build context.
 ///
 /// `ensure_image` only skips the build when *this* exact tag already
@@ -182,11 +189,34 @@ impl SandboxExecutor for DockerExecutor {
             .status()
             .context("starting recording proxy")?
             .success();
-        // Give the proxy a moment to bind before the sandbox connects.
+        // Point the sandbox's *_PROXY env at the proxy's IP rather than a
+        // network alias: under gVisor's netstack the container cannot reach
+        // Docker's embedded DNS resolver, so an alias would not resolve and
+        // the proxy would silently capture nothing. The IP is known only
+        // after the proxy container starts, which is why the policy leaves
+        // the proxy env to the executor.
+        let mut sandbox_args = sandbox_args.to_vec();
         if proxy_started {
+            // Give the proxy a moment to bind before the sandbox connects.
             thread::sleep(Duration::from_millis(700));
+            if let Some(ip) = container_ip(&proxy_name) {
+                let url = format!("http://{ip}:{PROXY_PORT}");
+                let insert_at = sandbox_args
+                    .iter()
+                    .position(|a| a == "run")
+                    .map_or(0, |i| i + 1);
+                sandbox_args.splice(
+                    insert_at..insert_at,
+                    [
+                        "--env".to_string(),
+                        format!("HTTP_PROXY={url}"),
+                        "--env".to_string(),
+                        format!("HTTPS_PROXY={url}"),
+                    ],
+                );
+            }
         }
-        let raw_result = self.spawn_and_wait(sandbox_args, timeout);
+        let raw_result = self.spawn_and_wait(&sandbox_args, timeout);
         let proxy_log = Command::new("docker")
             .args(["logs", &proxy_name])
             .output()
@@ -248,6 +278,18 @@ impl DockerExecutor {
             }
         }
     }
+}
+
+/// The container's IPv4 on its attached network, or `None` if it cannot
+/// be determined (the recorded run then proceeds with no proxy env: on the
+/// `--internal` network outbound attempts simply fail, observably).
+fn container_ip(name: &str) -> Option<String> {
+    let output = Command::new("docker")
+        .args(["inspect", "-f", CONTAINER_IP_TEMPLATE, name])
+        .output()
+        .ok()?;
+    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!ip.is_empty()).then_some(ip)
 }
 
 fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<()> {

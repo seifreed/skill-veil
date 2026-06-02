@@ -224,8 +224,6 @@ fn run_with_executor(
         let network = unique_network_name();
         policy.network = NetworkPolicy::RecordingProxy {
             network: network.clone(),
-            http_proxy: "http://proxy:8080".to_string(),
-            https_proxy: "http://proxy:8080".to_string(),
         };
         let args = policy.to_docker_run_args(&cmd);
         let recorded = executor.run_recorded(&args, &network, "proxy", &policy.image, timeout)?;

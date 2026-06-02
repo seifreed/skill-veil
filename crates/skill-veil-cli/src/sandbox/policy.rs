@@ -85,13 +85,11 @@ pub(crate) enum NetworkPolicy {
     /// observably (strace records the `connect()`), nothing leaves.
     Disabled,
     /// Attach to an isolated `--internal` bridge whose only peer is the
-    /// recording proxy; HTTP(S) clients are pointed at it via `*_PROXY`
-    /// env so the proxy captures destination + payload and blocks egress.
-    RecordingProxy {
-        network: String,
-        http_proxy: String,
-        https_proxy: String,
-    },
+    /// recording proxy. The policy only renders the network attachment;
+    /// the executor injects the `*_PROXY` env pointing at the proxy's IP
+    /// once the proxy container is up (its IP isn't known until then, and
+    /// an alias would not resolve under gVisor's netstack).
+    RecordingProxy { network: String },
 }
 
 /// The full isolation contract for one sandbox run.
@@ -148,17 +146,9 @@ impl SandboxPolicy {
                 args.push("--network".into());
                 args.push("none".into());
             }
-            NetworkPolicy::RecordingProxy {
-                network,
-                http_proxy,
-                https_proxy,
-            } => {
+            NetworkPolicy::RecordingProxy { network } => {
                 args.push("--network".into());
                 args.push(network.clone());
-                args.push("--env".into());
-                args.push(format!("HTTP_PROXY={http_proxy}"));
-                args.push("--env".into());
-                args.push(format!("HTTPS_PROXY={https_proxy}"));
             }
         }
         args.push("--read-only".into());
@@ -339,24 +329,26 @@ mod tests {
     }
 
     /// # Contract
-    /// The recording-proxy policy attaches the isolated bridge and points
-    /// outbound HTTP(S) at the proxy via `*_PROXY` env — never the real
-    /// network.
+    /// The recording-proxy policy attaches the isolated bridge instead of
+    /// `--network none`. The `*_PROXY` env is NOT rendered here — the
+    /// executor injects it from the proxy's IP once the proxy is up (an
+    /// alias would not resolve under gVisor's netstack).
     #[test]
-    fn recording_proxy_routes_through_isolated_bridge() {
+    fn recording_proxy_attaches_isolated_bridge_without_proxy_env() {
         let mut policy = hardened();
         policy.network = NetworkPolicy::RecordingProxy {
             network: "skill-veil-sbx-net".to_string(),
-            http_proxy: "http://proxy:8080".to_string(),
-            https_proxy: "http://proxy:8080".to_string(),
         };
         let a = policy.to_docker_run_args(&["/observe".to_string()]);
         assert_eq!(
             value_after(&a, "--network").as_deref(),
             Some("skill-veil-sbx-net")
         );
-        assert!(a.iter().any(|x| x == "HTTP_PROXY=http://proxy:8080"));
-        assert!(a.iter().any(|x| x == "HTTPS_PROXY=http://proxy:8080"));
+        assert!(
+            !a.iter()
+                .any(|x| x.starts_with("HTTP_PROXY=") || x.starts_with("HTTPS_PROXY=")),
+            "proxy env is injected by the executor, not the policy"
+        );
     }
 
     /// # Contract (negative)
