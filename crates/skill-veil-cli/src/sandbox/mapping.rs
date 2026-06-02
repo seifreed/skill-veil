@@ -178,6 +178,31 @@ mod tests {
     }
 
     /// # Contract
+    /// The privilege-change and DNS-query classes — now actively emitted by
+    /// the enriched observer (setuid-to-root / capset / namespace / ptrace /
+    /// runtime-socket connects, and port-53 connects) — map to their stable
+    /// rule ids under the privilege-escalation and exfiltration categories.
+    #[test]
+    fn privilege_change_and_dns_query_map_to_stable_rule_ids() {
+        let observation = SandboxObservation {
+            behaviors: vec![
+                obs(
+                    BehaviorClass::PrivilegeChange,
+                    "unix-socket: /var/run/docker.sock",
+                ),
+                obs(BehaviorClass::DnsQuery, "8.8.8.8:53"),
+            ],
+            timed_out: false,
+            truncated: false,
+        };
+        let findings = observation_to_findings(&observation, Path::new("pkg/run.sh"));
+        assert_eq!(findings[0].rule_id, "SANDBOX_PRIVILEGE_CHANGE");
+        assert_eq!(findings[0].category, ThreatCategory::PrivilegeEscalation);
+        assert_eq!(findings[1].rule_id, "SANDBOX_DNS_QUERY");
+        assert_eq!(findings[1].category, ThreatCategory::DataExfiltration);
+    }
+
+    /// # Contract
     /// An empty observation yields no findings.
     #[test]
     fn empty_observation_yields_no_findings() {

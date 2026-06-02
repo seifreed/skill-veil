@@ -8,6 +8,13 @@ ptrace); no eBPF. Emits a single JSON document on stdout:
 
     {"behaviors": [{"class": ..., "detail": ..., "source": "script"}],
      "timed_out": false, "truncated": false}
+
+Coverage: outbound INET connections (network_connect / dns_query),
+process spawns (execve), sensitive reads, persistence and other writes,
+and privilege-change attempts (setuid-family to root, capset, namespace
+manipulation, ptrace, and connects to the container-runtime socket).
+Privilege calls blocked by the seccomp profile still appear here because
+strace records the attempt before the kernel returns EPERM.
 """
 import glob
 import json
@@ -19,7 +26,11 @@ import sys
 SKILL_DIR = "/skill"
 PER_SCRIPT_TIMEOUT_SECS = 20
 MAX_BEHAVIORS = 500
-TRACE_SYSCALLS = "connect,execve,openat,open"
+TRACE_SYSCALLS = (
+    "connect,execve,openat,open,"
+    "setuid,setreuid,setresuid,setgid,setregid,setresgid,"
+    "capset,setns,unshare,ptrace"
+)
 
 SENSITIVE_READ = re.compile(
     r"/etc/(passwd|shadow|sudoers)|/\.aws/|/\.ssh/|id_rsa|/\.env\b|credentials|\.netrc"
@@ -40,8 +51,21 @@ CONNECT_INET = re.compile(
     r'connect\(\d+,\s*\{sa_family=AF_INET6?,\s*sin6?_port=htons\((\d+)\),\s*'
     r'(?:sin6?_addr=inet_(?:addr|pton)\([^,]*"([^"]+)"\)|inet_pton\([^"]*"([^"]+)")'
 )
+CONNECT_UNIX = re.compile(r'connect\(\d+,\s*\{sa_family=AF_UNIX,\s*sun_path="([^"]+)"')
+# Docker's embedded DNS resolver — infra noise, never the skill's intent.
+DOCKER_RESOLVER = "127.0.0.11"
+# Connecting to the container runtime's control socket is a classic escape
+# attempt, not ordinary egress.
+RUNTIME_SOCKET = re.compile(r"docker\.sock|containerd.*\.sock|crio\.sock|podman\.sock")
 EXECVE = re.compile(r'execve\("([^"]+)",\s*\[([^\]]*)\]')
 OPENAT = re.compile(r'openat?\([^,]*,\s*"([^"]+)"(?:,\s*([A-Z_|]+))?')
+# capset / namespace / ptrace: no legitimate use from a skill script.
+PRIV_ALWAYS = re.compile(r"\b(capset|setns|unshare|ptrace)\((.*?)\)\s*=")
+# setuid-family escalation specifically toward root (first arg 0); a
+# benign privilege *drop* to a higher uid is not flagged.
+PRIV_ROOT = re.compile(
+    r"\b(setuid|setreuid|setresuid|setgid|setregid|setresgid)\((0[^)]*)\)"
+)
 
 
 def main():
@@ -102,7 +126,24 @@ def parse_trace(path, behaviors, seen, script):
         if m:
             port = m.group(1)
             host = m.group(2) or m.group(3) or "?"
-            add(behaviors, seen, "network_connect", f"{host}:{port}")
+            if host == DOCKER_RESOLVER:
+                continue
+            klass = "dns_query" if port == "53" else "network_connect"
+            add(behaviors, seen, klass, f"{host}:{port}")
+            continue
+        m = CONNECT_UNIX.search(line)
+        if m:
+            path_arg = m.group(1)
+            if RUNTIME_SOCKET.search(path_arg):
+                add(behaviors, seen, "privilege_change", f"unix-socket: {path_arg}")
+            continue
+        m = PRIV_ALWAYS.search(line)
+        if m:
+            add(behaviors, seen, "privilege_change", f"{m.group(1)}({m.group(2)[:80]})")
+            continue
+        m = PRIV_ROOT.search(line)
+        if m:
+            add(behaviors, seen, "privilege_change", f"{m.group(1)}({m.group(2)[:80]})")
             continue
         m = EXECVE.search(line)
         if m:
