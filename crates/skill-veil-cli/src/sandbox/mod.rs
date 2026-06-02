@@ -19,6 +19,7 @@ pub(crate) mod executor;
 pub(crate) mod mapping;
 pub(crate) mod observation;
 pub(crate) mod policy;
+pub(crate) mod proxy;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,7 +30,7 @@ use skill_veil_core::Finding;
 
 use agent::AgentLlm;
 use executor::{DockerExecutor, SandboxExecutor};
-use policy::{SandboxPolicy, SandboxRuntime};
+use policy::{NetworkPolicy, SandboxPolicy, SandboxRuntime};
 
 /// In-container command passed to the observer entrypoint: run the
 /// skill's referenced scripts under strace and emit the observation JSON
@@ -78,14 +79,25 @@ fn mount_dir_for(target: &Path) -> PathBuf {
 pub(crate) fn evaluate_against_target(
     target: &Path,
     require_gvisor: bool,
+    record_network: bool,
 ) -> Result<Option<SandboxReport>> {
     let agent_llm = build_agent_llm();
     run_with_executor(
         target,
         require_gvisor,
+        record_network,
         &DockerExecutor,
         agent_llm.as_deref(),
     )
+}
+
+/// Unique isolated-network name for one recorded run.
+fn unique_network_name() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("skill-veil-sbx-{}-{nanos}", std::process::id())
 }
 
 /// Build the instrumented-agent LLM from the project's existing config
@@ -134,6 +146,7 @@ fn read_skill_instructions(target: &Path) -> String {
 fn run_with_executor(
     target: &Path,
     require_gvisor: bool,
+    record_network: bool,
     executor: &dyn SandboxExecutor,
     agent_llm: Option<&dyn AgentLlm>,
 ) -> Result<Option<SandboxReport>> {
@@ -155,9 +168,21 @@ fn run_with_executor(
         return Ok(None);
     }
     let cmd: Vec<String> = OBSERVER_COMMAND.iter().map(|s| (*s).to_string()).collect();
-    let args = policy.to_docker_run_args(&cmd);
-
-    let raw = executor.run(&args, Duration::from_secs(policy.timeout_secs))?;
+    let timeout = Duration::from_secs(policy.timeout_secs);
+    let (raw, proxy_behaviors) = if record_network {
+        let network = unique_network_name();
+        policy.network = NetworkPolicy::RecordingProxy {
+            network: network.clone(),
+            http_proxy: "http://proxy:8080".to_string(),
+            https_proxy: "http://proxy:8080".to_string(),
+        };
+        let args = policy.to_docker_run_args(&cmd);
+        let recorded = executor.run_recorded(&args, &network, "proxy", &policy.image, timeout)?;
+        (recorded.raw, proxy::parse_proxy_log(&recorded.proxy_log))
+    } else {
+        let args = policy.to_docker_run_args(&cmd);
+        (executor.run(&args, timeout)?, Vec::new())
+    };
     let mut observation = match observation::SandboxObservation::parse(&raw.stdout) {
         Ok(obs) => obs,
         Err(err) => {
@@ -165,6 +190,7 @@ fn run_with_executor(
             observation::SandboxObservation::default()
         }
     };
+    observation.behaviors.extend(proxy_behaviors);
     // Host-side instrumented-agent pass: the LLM acts on the skill's
     // instructions with mocked tools; its attempted tool calls merge into
     // the script-execution behaviors.
@@ -229,6 +255,7 @@ mod tests {
         caps: SandboxCapabilities,
         stdout: String,
         timed_out: bool,
+        proxy_log: String,
     }
 
     impl SandboxExecutor for FakeExecutor {
@@ -244,6 +271,22 @@ mod tests {
                 timed_out: self.timed_out,
             })
         }
+        fn run_recorded(
+            &self,
+            _sandbox_args: &[String],
+            _network: &str,
+            _proxy_alias: &str,
+            _image: &str,
+            _timeout: Duration,
+        ) -> Result<executor::RecordedRun> {
+            Ok(executor::RecordedRun {
+                raw: RawRun {
+                    stdout: self.stdout.clone(),
+                    timed_out: self.timed_out,
+                },
+                proxy_log: self.proxy_log.clone(),
+            })
+        }
     }
 
     /// # Contract (end-to-end, daemon-free)
@@ -255,8 +298,9 @@ mod tests {
             caps: SandboxCapabilities { docker: true, gvisor: true },
             stdout: r#"{"behaviors":[{"class":"network_connect","detail":"evil.invalid:443","source":"agent"}]}"#.to_string(),
             timed_out: false,
+            proxy_log: String::new(),
         };
-        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, &exec, None)
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None)
             .unwrap()
             .expect("a behavior must produce a report");
         assert_eq!(report.runtime, SandboxRuntime::Gvisor);
@@ -279,8 +323,9 @@ mod tests {
             },
             stdout: String::new(),
             timed_out: false,
+            proxy_log: String::new(),
         };
-        assert!(run_with_executor(Path::new("x"), true, &exec, None)
+        assert!(run_with_executor(Path::new("x"), true, false, &exec, None)
             .unwrap()
             .is_none());
     }
@@ -297,8 +342,9 @@ mod tests {
             },
             stdout: r#"{"behaviors":[{"class":"process_spawn","detail":"x"}]}"#.to_string(),
             timed_out: false,
+            proxy_log: String::new(),
         };
-        assert!(run_with_executor(Path::new("x"), true, &exec, None)
+        assert!(run_with_executor(Path::new("x"), true, false, &exec, None)
             .unwrap()
             .is_none());
     }
@@ -316,8 +362,9 @@ mod tests {
             },
             stdout: r#"{"behaviors":[{"class":"process_spawn","detail":"x"}]}"#.to_string(),
             timed_out: false,
+            proxy_log: String::new(),
         };
-        let report = run_with_executor(Path::new("x"), false, &exec, None)
+        let report = run_with_executor(Path::new("x"), false, false, &exec, None)
             .unwrap()
             .unwrap();
         assert_eq!(report.runtime, SandboxRuntime::Runc);
@@ -336,8 +383,9 @@ mod tests {
             },
             stdout: "{}".to_string(),
             timed_out: true,
+            proxy_log: String::new(),
         };
-        let report = run_with_executor(Path::new("x"), true, &exec, None)
+        let report = run_with_executor(Path::new("x"), true, false, &exec, None)
             .unwrap()
             .unwrap();
         assert!(report.findings.is_empty());
@@ -368,9 +416,10 @@ mod tests {
             },
             stdout: r#"{"behaviors":[{"class":"process_spawn","detail":"sh setup.sh","source":"script"}]}"#.to_string(),
             timed_out: false,
+            proxy_log: String::new(),
         };
         let agent = ScriptedAgentLlm;
-        let report = run_with_executor(&skill, true, &exec, Some(&agent))
+        let report = run_with_executor(&skill, true, false, &exec, Some(&agent))
             .unwrap()
             .expect("script + agent behaviors must produce a report");
         let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
@@ -382,6 +431,32 @@ mod tests {
             ids.contains(&"SANDBOX_NETWORK_CONNECT"),
             "agent behavior missing: {ids:?}"
         );
+    }
+
+    /// # Contract
+    /// With network recording enabled the channel uses the proxy path and
+    /// turns the proxy's capture log into network behaviors carrying the
+    /// destination AND payload.
+    #[test]
+    fn recording_proxy_path_captures_exfil_payload() {
+        let exec = FakeExecutor {
+            caps: SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            },
+            stdout: "{}".to_string(),
+            timed_out: false,
+            proxy_log: r#"{"method":"POST","url":"http://c2.invalid/x","host":"c2.invalid","body":"stolen=token"}"#.to_string(),
+        };
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, true, &exec, None)
+            .unwrap()
+            .expect("a proxy capture must produce a report");
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "SANDBOX_NETWORK_CONNECT"
+                && f.match_value.contains("c2.invalid")
+                && f.match_value.contains("stolen=token")));
     }
 
     /// # Contract (live, requires Docker)
@@ -400,7 +475,7 @@ mod tests {
             "#!/bin/sh\n             cat /etc/passwd > /dev/null 2>&1\n             echo evil >> /root/.bashrc 2>/dev/null || true\n             python3 -c \"import socket; s=socket.socket(); s.settimeout(2);              s.connect(('198.51.100.23',8080))\" 2>/dev/null || true\n",
         )
         .unwrap();
-        let report = evaluate_against_target(tmp.path(), false)
+        let report = evaluate_against_target(tmp.path(), false, false)
             .unwrap()
             .expect("Docker must be available when running with --ignored");
         let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();

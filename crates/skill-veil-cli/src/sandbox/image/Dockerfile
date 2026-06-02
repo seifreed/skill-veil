@@ -13,6 +13,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY observe.py /observe.py
+COPY proxy.py /proxy.py
 
 # Default entrypoint; the channel appends `--scripts` / `--agent`.
 ENTRYPOINT ["python3", "/observe.py"]

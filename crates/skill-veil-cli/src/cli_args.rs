@@ -686,6 +686,13 @@ pub struct ScanArgs {
     /// Without this flag, `--dynamic` requires gVisor and otherwise skips.
     #[arg(long, default_value_t = false)]
     pub sandbox_allow_runc: bool,
+    /// Route the dynamic sandbox's outbound HTTP(S) through a
+    /// recording-and-blocking proxy on an isolated bridge instead of
+    /// disabling the network. Captures the exfil destination AND (for
+    /// plain HTTP) the payload, while still blocking real egress. Requires
+    /// `--dynamic`.
+    #[arg(long, default_value_t = false)]
+    pub sandbox_record_network: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]

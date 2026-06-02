@@ -368,7 +368,11 @@ pub(crate) fn run_scan(
     // is required (no silent fallback to the weaker runc kernel boundary).
     #[cfg(feature = "sandbox")]
     let sandbox_report = if args.dynamic {
-        match crate::sandbox::evaluate_against_target(&args.path, !args.sandbox_allow_runc) {
+        match crate::sandbox::evaluate_against_target(
+            &args.path,
+            !args.sandbox_allow_runc,
+            args.sandbox_record_network,
+        ) {
             Ok(report) => report,
             Err(err) => {
                 if !quiet {

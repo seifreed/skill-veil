@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 /// build the image on first use without shipping separate files.
 const DOCKERFILE: &str = include_str!("image/Dockerfile");
 const OBSERVE_PY: &str = include_str!("image/observe.py");
+const PROXY_PY: &str = include_str!("image/proxy.py");
 
 /// What the host can provide for sandboxing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,14 @@ pub(crate) struct RawRun {
     pub(crate) timed_out: bool,
 }
 
+/// Outcome of a recorded run: the sandbox run plus the recording proxy's
+/// raw capture log (one JSON object per intercepted request).
+#[derive(Debug, Clone)]
+pub(crate) struct RecordedRun {
+    pub(crate) raw: RawRun,
+    pub(crate) proxy_log: String,
+}
+
 /// Drives container execution. Implemented by [`DockerExecutor`] in
 /// production and by a fake in tests.
 pub(crate) trait SandboxExecutor {
@@ -47,6 +56,18 @@ pub(crate) trait SandboxExecutor {
     /// return the captured stdout. The container is killed if it exceeds
     /// the timeout.
     fn run(&self, docker_args: &[String], timeout: Duration) -> Result<RawRun>;
+    /// Run `docker <sandbox_args>` on an isolated `--internal` network with
+    /// a recording proxy reachable as `proxy_alias`, returning the run plus
+    /// the proxy's capture log. The network and proxy are torn down even on
+    /// failure.
+    fn run_recorded(
+        &self,
+        sandbox_args: &[String],
+        network: &str,
+        proxy_alias: &str,
+        image: &str,
+        timeout: Duration,
+    ) -> Result<RecordedRun>;
 }
 
 /// Production executor that shells out to the host `docker` binary.
@@ -90,6 +111,7 @@ impl SandboxExecutor for DockerExecutor {
         let context = tempfile::tempdir().context("creating sandbox image build context")?;
         write_file(context.path(), "Dockerfile", DOCKERFILE)?;
         write_file(context.path(), "observe.py", OBSERVE_PY)?;
+        write_file(context.path(), "proxy.py", PROXY_PY)?;
         let status = Command::new("docker")
             .arg("build")
             .args(["-t", tag])
@@ -100,6 +122,62 @@ impl SandboxExecutor for DockerExecutor {
     }
 
     fn run(&self, docker_args: &[String], timeout: Duration) -> Result<RawRun> {
+        self.spawn_and_wait(docker_args, timeout)
+    }
+
+    fn run_recorded(
+        &self,
+        sandbox_args: &[String],
+        network: &str,
+        proxy_alias: &str,
+        image: &str,
+        timeout: Duration,
+    ) -> Result<RecordedRun> {
+        let _ = Command::new("docker")
+            .args(["network", "create", "--internal", network])
+            .output()
+            .context("creating isolated sandbox network")?;
+        let proxy_name = format!("{network}-proxy");
+        let proxy_started = Command::new("docker")
+            .args(["run", "-d", "--rm", "--name", &proxy_name])
+            .args(["--network", network, "--network-alias", proxy_alias])
+            .args(["--user", "65534:65534", "--read-only", "--cap-drop", "ALL"])
+            .args([
+                "--security-opt",
+                "no-new-privileges",
+                "--entrypoint",
+                "python3",
+            ])
+            .arg(image)
+            .arg("/proxy.py")
+            .status()
+            .context("starting recording proxy")?
+            .success();
+        // Give the proxy a moment to bind before the sandbox connects.
+        if proxy_started {
+            thread::sleep(Duration::from_millis(700));
+        }
+        let raw_result = self.spawn_and_wait(sandbox_args, timeout);
+        let proxy_log = Command::new("docker")
+            .args(["logs", &proxy_name])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default();
+        let _ = Command::new("docker")
+            .args(["rm", "-f", &proxy_name])
+            .output();
+        let _ = Command::new("docker")
+            .args(["network", "rm", network])
+            .output();
+        Ok(RecordedRun {
+            raw: raw_result?,
+            proxy_log,
+        })
+    }
+}
+
+impl DockerExecutor {
+    fn spawn_and_wait(&self, docker_args: &[String], timeout: Duration) -> Result<RawRun> {
         // Name the container so a watcher thread can stop it on timeout.
         // Killing the `docker` CLI child alone would NOT stop the
         // container (it runs in the daemon), so an explicit `docker kill`

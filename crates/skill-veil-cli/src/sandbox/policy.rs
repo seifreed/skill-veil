@@ -76,11 +76,28 @@ impl SandboxRuntime {
     }
 }
 
+/// How the sandboxed container may reach the network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NetworkPolicy {
+    /// No connectivity (`--network none`). Outbound attempts fail
+    /// observably (strace records the `connect()`), nothing leaves.
+    Disabled,
+    /// Attach to an isolated `--internal` bridge whose only peer is the
+    /// recording proxy; HTTP(S) clients are pointed at it via `*_PROXY`
+    /// env so the proxy captures destination + payload and blocks egress.
+    RecordingProxy {
+        network: String,
+        http_proxy: String,
+        https_proxy: String,
+    },
+}
+
 /// The full isolation contract for one sandbox run.
 #[derive(Debug, Clone)]
 pub(crate) struct SandboxPolicy {
     pub(crate) image: String,
     pub(crate) runtime: SandboxRuntime,
+    pub(crate) network: NetworkPolicy,
     pub(crate) skill_host_dir: PathBuf,
     pub(crate) memory_limit: String,
     pub(crate) cpu_limit: String,
@@ -100,6 +117,7 @@ impl SandboxPolicy {
         Self {
             image: DEFAULT_IMAGE.to_string(),
             runtime: SandboxRuntime::Gvisor,
+            network: NetworkPolicy::Disabled,
             skill_host_dir,
             memory_limit: DEFAULT_MEMORY_LIMIT.to_string(),
             cpu_limit: DEFAULT_CPU_LIMIT.to_string(),
@@ -123,8 +141,24 @@ impl SandboxPolicy {
             args.push(runtime.into());
         }
 
-        args.push("--network".into());
-        args.push("none".into());
+        match &self.network {
+            NetworkPolicy::Disabled => {
+                args.push("--network".into());
+                args.push("none".into());
+            }
+            NetworkPolicy::RecordingProxy {
+                network,
+                http_proxy,
+                https_proxy,
+            } => {
+                args.push("--network".into());
+                args.push(network.clone());
+                args.push("--env".into());
+                args.push(format!("HTTP_PROXY={http_proxy}"));
+                args.push("--env".into());
+                args.push(format!("HTTPS_PROXY={https_proxy}"));
+            }
+        }
         args.push("--read-only".into());
         args.push("--tmpfs".into());
         args.push(format!(
@@ -300,6 +334,27 @@ mod tests {
             !a.iter().any(|x| x.contains("unconfined")),
             "must never disable seccomp"
         );
+    }
+
+    /// # Contract
+    /// The recording-proxy policy attaches the isolated bridge and points
+    /// outbound HTTP(S) at the proxy via `*_PROXY` env — never the real
+    /// network.
+    #[test]
+    fn recording_proxy_routes_through_isolated_bridge() {
+        let mut policy = hardened();
+        policy.network = NetworkPolicy::RecordingProxy {
+            network: "skill-veil-sbx-net".to_string(),
+            http_proxy: "http://proxy:8080".to_string(),
+            https_proxy: "http://proxy:8080".to_string(),
+        };
+        let a = policy.to_docker_run_args(&["/observe".to_string()]);
+        assert_eq!(
+            value_after(&a, "--network").as_deref(),
+            Some("skill-veil-sbx-net")
+        );
+        assert!(a.iter().any(|x| x == "HTTP_PROXY=http://proxy:8080"));
+        assert!(a.iter().any(|x| x == "HTTPS_PROXY=http://proxy:8080"));
     }
 
     /// # Contract (negative)
