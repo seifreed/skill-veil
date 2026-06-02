@@ -95,6 +95,36 @@ jobs:
           path: skill-veil-report.sarif
 
 
+  sandbox-live:
+    # End-to-end exercise of the dynamic-behavior sandbox: builds the
+    # hardened container image (apt + pip) and runs the `#[ignore]`d live
+    # test, which executes a suspicious sample under runc and asserts the
+    # observer captured the network / sensitive-read / persistence
+    # behaviors. gVisor is a `--runtime` swap and not required here. Docker
+    # is preinstalled on ubuntu-latest runners; the image build needs
+    # network for apt + pip.
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Run the live sandbox test
+        env:
+          RUSTFLAGS: -Dwarnings
+        run: >-
+          cargo test -p skill-veil --features sandbox
+          live_runc_sandbox_observes_suspicious_skill -- --ignored
+
   benchmark:
     runs-on: ubuntu-latest
 

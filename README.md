@@ -386,6 +386,9 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--fail-on <mode>` | CI diff failure mode (`new-active` or `new-blocking`) |
 | `--dashboard-output` | Write benchmark history dashboard |
 | `--osv` | Query OSV.dev for known CVEs in the package's pinned dependencies (opt-in, network; also via `SKILL_VEIL_OSV=1` or `[osv] enable = true`). Advisory only — never changes the verdict |
+| `--dynamic` | Run the dynamic-behavior sandbox: execute the skill's scripts and an instrumented agent inside a hardened, gVisor-isolated container and record what they actually do at runtime. EXECUTES untrusted code; needs `--features sandbox` + Docker (+ gVisor). Advisory only — see [Dynamic behavior sandbox](#dynamic-behavior-sandbox---dynamic) |
+| `--sandbox-allow-runc` | Permit the sandbox to run under the default `runc` runtime when gVisor (`runsc`) is unavailable. WEAKER isolation (host kernel shared); without it `--dynamic` requires gVisor and otherwise skips |
+| `--sandbox-record-network` | Route the sandbox's outbound HTTP(S) through a recording-and-blocking proxy on an isolated bridge instead of disabling the network; captures the exfil destination AND payload (HTTPS is MITM-decrypted) while still blocking egress |
 | `--no-vt-enrich` | Skip VT enrichment even when `~/.skill-veil.toml` provides an apikey |
 | `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
 | `--no-promptintel-enrich` | Skip the offline PromptIntel feed-cache lookup |
@@ -397,6 +400,61 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--no-update-check` | Skip the once-per-day GitHub query that notifies you when newer rule sources are available (also via `SKILL_VEIL_NO_UPDATE_CHECK=1`) |
 | `--llm-provider <name>` | Override the active LLM provider for one scan (`ollama`, `lmstudio`, `openai`, `anthropic`, `ollama-cloud`) |
 | `--cache-dir` | Override the base directory for VT, LLM, and PromptIntel enrichment caches |
+
+### Dynamic behavior sandbox (`--dynamic`)
+
+A fourth, opt-in analysis channel that **executes** a skill and records
+what it does at runtime, alongside the static, NOVA, and YARA channels.
+Like NOVA/YARA it is **advisory**: it runs after the verdict and only adds
+`ReviewSignal` findings (`SANDBOX_*`), never inflating the deterministic
+static verdict.
+
+It is gated behind both a build feature and a runtime flag because it runs
+untrusted code:
+
+```bash
+# Build with the sandbox channel
+cargo build --release --features sandbox
+
+# Requires a Docker daemon; gVisor (runsc) for real isolation
+skill-veil scan-package ./suspicious-skill --dynamic
+
+# Capture exfil destination + payload (HTTPS MITM-decrypted), egress blocked
+skill-veil scan-package ./suspicious-skill --dynamic --sandbox-record-network
+
+# Accept the weaker runc runtime when gVisor is unavailable
+skill-veil scan-package ./suspicious-skill --dynamic --sandbox-allow-runc
+```
+
+What runs, and how it is contained:
+
+- **Two observed layers.** The skill's `*.sh` scripts run inside the
+  container under `strace`; an instrumented LLM agent runs host-side with
+  *mocked* tools (it executes nothing real) to surface the
+  prompt-injection / excessive-agency / exfil-via-tool-use surface that
+  script execution alone misses. The agent uses your configured `[llm]`
+  provider and honours `--llm-provider`; with no LLM configured the agent
+  pass is skipped.
+- **Isolation (defense in depth).** gVisor (`runsc`) user-space kernel as
+  the primary boundary; `cap-drop ALL` + `no-new-privileges`; read-only
+  root with a single `noexec,nosuid,nodev` tmpfs; non-root user; memory /
+  CPU / PID / open-file caps; and a custom seccomp profile that additionally
+  blocks escape primitives (io_uring, userfaultfd, bpf, the mount family,
+  module loading, kexec, namespace manipulation). The profile errors rather
+  than kills, so a blocked attempt is still recorded as a signal.
+- **Network.** Disabled by default (`--network none`); outbound attempts
+  still fail observably. With `--sandbox-record-network` the container is
+  routed through a capture-and-block proxy on an isolated `--internal`
+  bridge that decrypts HTTPS (via an image-local throwaway CA) to recover
+  the payload, and never forwards.
+- **Behaviors → findings.** Network connects, DNS queries, process spawns,
+  sensitive-file reads, persistence writes, and privilege-change attempts
+  (setuid-to-root, capset, namespace ops, ptrace, container-socket
+  connects) become `SANDBOX_*` advisory findings attributed to the skill.
+
+Without `--features sandbox`, or when Docker / gVisor is absent, `--dynamic`
+is a no-op with a one-line note — invocations stay flag-compatible across
+build variants.
 
 ---
 
