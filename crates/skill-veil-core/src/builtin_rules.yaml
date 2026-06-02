@@ -1303,7 +1303,7 @@
   severity: critical
   confidence: 0.95
   when: !regex
-    pattern: "(?i)(SOUL\\.md|AGENTS\\.md|PERSONA\\.md|SYSTEM\\.md)|(write|append|inject)\\s*(to|into)\\s*(soul|persona|system\\s*prompt)"
+    pattern: "(?i)(?:\\bwrit|\\bappend|\\binject|\\bmodif|\\bedit|\\boverwrit|\\brewrit|\\bcreat|\\bupdat|\\bpatch|\\binsert|\\badd\\b|\\bsave|\\bpersist|\\becho|\\btee\\b|\\bsed\\b|>>?)[^\\n]{0,40}(?:SOUL|AGENTS|PERSONA|SYSTEM)\\.md|(?:SOUL|AGENTS|PERSONA|SYSTEM)\\.md[^\\n]{0,48}(?:\\boverwrit|\\binject|\\bappend|\\brewrit|\\bmodif|\\bupdat|\\bpersist)|(?:write|append|inject)\\s*(?:to|into)\\s*(?:soul|persona|system\\s*prompt)"
   action: block
   reason: "Cognitive rootkit - modification of persistent agent instruction files"
   shield:
