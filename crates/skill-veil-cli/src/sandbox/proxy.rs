@@ -2,9 +2,12 @@
 //!
 //! The proxy (`image/proxy.py`) writes one JSON object per intercepted
 //! request to stdout, collected via `docker logs`. Each becomes a
-//! `network_connect` behavior carrying the destination and, for plain
-//! HTTP, the payload the skill tried to send — the exfil *data*, not just
-//! the destination an unproxied `connect()` would reveal.
+//! `network_connect` behavior carrying the destination and the payload
+//! the skill tried to send — the exfil *data*, not just the destination
+//! an unproxied `connect()` would reveal. HTTPS is MITM-decrypted by the
+//! proxy, so its captures carry the URL and body too; only when the TLS
+//! interception fails does an entry fall back to the destination host
+//! alone.
 
 use serde::Deserialize;
 
@@ -92,12 +95,26 @@ mod tests {
     }
 
     /// # Contract
-    /// An HTTPS CONNECT capture (no payload, no MITM) yields the
-    /// destination host.
+    /// A MITM-decrypted HTTPS capture carries the `https://` URL AND the
+    /// payload — the proxy recovers the exfil data over TLS, not just the
+    /// destination.
     #[test]
-    fn connect_capture_yields_destination_host() {
-        let log =
-            r#"{"method":"CONNECT","url":"evil.invalid:443","host":"evil.invalid:443","body":""}"#;
+    fn https_mitm_capture_includes_url_and_payload() {
+        let log = r#"{"method":"POST","url":"https://c2.invalid/drop","host":"c2.invalid","body":"token=AKIA123"}"#;
+        let behaviors = parse_proxy_log(log);
+        assert_eq!(behaviors.len(), 1);
+        assert_eq!(behaviors[0].class, BehaviorClass::NetworkConnect);
+        assert!(behaviors[0].detail.contains("https://c2.invalid/drop"));
+        assert!(behaviors[0].detail.contains("token=AKIA123"));
+    }
+
+    /// # Contract
+    /// When TLS interception fails the proxy still emits the CONNECT
+    /// destination host (the `tls_error` field is ignored by the parser),
+    /// so the destination is never lost.
+    #[test]
+    fn connect_fallback_yields_destination_host() {
+        let log = r#"{"method":"CONNECT","url":"evil.invalid:443","host":"evil.invalid:443","body":"","tls_error":"pinned"}"#;
         let behaviors = parse_proxy_log(log);
         assert_eq!(behaviors.len(), 1);
         assert!(behaviors[0].detail.contains("evil.invalid:443"));

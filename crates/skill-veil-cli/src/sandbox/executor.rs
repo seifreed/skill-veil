@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 const DOCKERFILE: &str = include_str!("image/Dockerfile");
 const OBSERVE_PY: &str = include_str!("image/observe.py");
 const PROXY_PY: &str = include_str!("image/proxy.py");
+const GEN_CA_PY: &str = include_str!("image/gen_ca.py");
 
 /// Repository name for the sandbox image. The concrete tag is derived
 /// from the embedded build context's content hash (see
@@ -37,7 +38,7 @@ const IMAGE_REPO: &str = "skill-veil-sandbox";
 pub(crate) fn content_addressed_image_tag() -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY] {
+    for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY, GEN_CA_PY] {
         hasher.update(part.as_bytes());
         hasher.update([0u8]);
     }
@@ -136,6 +137,7 @@ impl SandboxExecutor for DockerExecutor {
         write_file(context.path(), "Dockerfile", DOCKERFILE)?;
         write_file(context.path(), "observe.py", OBSERVE_PY)?;
         write_file(context.path(), "proxy.py", PROXY_PY)?;
+        write_file(context.path(), "gen_ca.py", GEN_CA_PY)?;
         let status = Command::new("docker")
             .arg("build")
             .args(["-t", tag])
@@ -166,6 +168,9 @@ impl SandboxExecutor for DockerExecutor {
             .args(["run", "-d", "--rm", "--name", &proxy_name])
             .args(["--network", network, "--network-alias", proxy_alias])
             .args(["--user", "65534:65534", "--read-only", "--cap-drop", "ALL"])
+            // The MITM proxy writes per-host leaf certs for `ssl.load_cert_chain`;
+            // root is read-only, so give it a noexec scratch tmpfs.
+            .args(["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"])
             .args([
                 "--security-opt",
                 "no-new-privileges",
@@ -282,7 +287,7 @@ mod tests {
         use sha2::{Digest, Sha256};
         let tag = content_addressed_image_tag();
         let mut hasher = Sha256::new();
-        for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY] {
+        for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY, GEN_CA_PY] {
             hasher.update(part.as_bytes());
             hasher.update([0u8]);
         }
@@ -290,12 +295,12 @@ mod tests {
         assert_eq!(tag, expected);
 
         let mut perturbed = Sha256::new();
-        perturbed.update(DOCKERFILE.as_bytes());
-        perturbed.update([0u8]);
-        perturbed.update(OBSERVE_PY.as_bytes());
-        perturbed.update([0u8]);
-        perturbed.update(b"different proxy\0");
+        for part in [DOCKERFILE, OBSERVE_PY, PROXY_PY] {
+            perturbed.update(part.as_bytes());
+            perturbed.update([0u8]);
+        }
+        perturbed.update(b"different ca generator\0");
         let other = format!("{IMAGE_REPO}:sv{}", hex::encode(&perturbed.finalize()[..6]));
-        assert_ne!(tag, other, "a changed proxy must change the tag");
+        assert_ne!(tag, other, "a changed CA generator must change the tag");
     }
 }

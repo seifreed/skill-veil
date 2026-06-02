@@ -30,9 +30,11 @@
 //! - Network disabled (`--network none`): the container reaches neither
 //!   the host network nor the internet. Outbound attempts still fail
 //!   observably (the in-container observer records the `connect()`), so
-//!   exfil intent is captured without permitting the traffic. A
-//!   recording-proxy mode (capture-and-block on an isolated bridge) is a
-//!   planned follow-up and lands together with its proxy sidecar.
+//!   exfil intent is captured without permitting the traffic. The
+//!   recording-proxy mode ([`NetworkPolicy::RecordingProxy`]) instead
+//!   routes HTTP(S) through a capture-and-block proxy on an isolated
+//!   `--internal` bridge, recovering the destination AND payload
+//!   (HTTPS is MITM-decrypted) while still blocking egress.
 //!
 //! gVisor is the recommended runtime. [`SandboxRuntime::Runc`] is
 //! supported for hosts without gVisor but is explicitly weaker (shared
