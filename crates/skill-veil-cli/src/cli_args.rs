@@ -131,6 +131,11 @@ pub struct AdjudicationEvalArgs {
 }
 
 #[derive(Args, Clone)]
+// `propagate_version` pushes the global `--version` flag into every
+// subcommand; this command instead exposes `--version <tag>` as a real
+// argument, so the auto flag must be disabled to avoid a name collision
+// (clap panics on it otherwise).
+#[command(disable_version_flag = true)]
 pub struct InitArgs {
     /// Pin to a specific release tag (e.g. `v0.1.0`). Default: resolve
     /// the latest stable release via the GitHub `releases/latest`
@@ -145,6 +150,10 @@ pub struct InitArgs {
 }
 
 #[derive(Args, Clone)]
+// See `InitArgs`: `--version <tag>` is a real argument here, so the
+// propagated global `--version` flag must be disabled to avoid the clap
+// duplicate-argument panic.
+#[command(disable_version_flag = true)]
 pub struct RulesUpdateArgs {
     /// Pin to a specific release tag instead of the latest.
     #[arg(long)]
@@ -954,6 +963,18 @@ pub enum RecommendedActionArg {
 mod tests {
     use super::*;
     use clap::Parser;
+
+    /// # Contract
+    /// The whole clap command tree is internally consistent. `debug_assert`
+    /// catches definition bugs at test time instead of panicking at runtime
+    /// — e.g. a subcommand exposing its own `--version <tag>` argument while
+    /// `propagate_version` also pushes the global `--version` flag in (which
+    /// previously made `skill-veil init` panic on startup).
+    #[test]
+    fn cli_command_tree_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
 
     /// # Contract
     ///
