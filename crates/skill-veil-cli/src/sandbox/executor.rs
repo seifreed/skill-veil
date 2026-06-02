@@ -7,12 +7,18 @@
 //! gracefully (skip, with a note) when Docker or the gVisor runtime is
 //! absent, rather than failing the scan.
 
+use std::io::Write as _;
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
+
+/// The sandbox container build context, embedded so `skill-veil` can
+/// build the image on first use without shipping separate files.
+const DOCKERFILE: &str = include_str!("image/Dockerfile");
+const OBSERVE_PY: &str = include_str!("image/observe.py");
 
 /// What the host can provide for sandboxing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +40,9 @@ pub(crate) struct RawRun {
 /// production and by a fake in tests.
 pub(crate) trait SandboxExecutor {
     fn capabilities(&self) -> SandboxCapabilities;
+    /// Ensure the sandbox image `tag` is available, building it from the
+    /// embedded context if absent. Returns `true` when the image is ready.
+    fn ensure_image(&self, tag: &str) -> Result<bool>;
     /// Run `docker <docker_args>`, enforcing a wall-clock `timeout`, and
     /// return the captured stdout. The container is killed if it exceeds
     /// the timeout.
@@ -67,6 +76,27 @@ impl SandboxExecutor for DockerExecutor {
                 .map(|o| String::from_utf8_lossy(&o.stdout).contains("runsc"))
                 .unwrap_or(false);
         SandboxCapabilities { docker, gvisor }
+    }
+
+    fn ensure_image(&self, tag: &str) -> Result<bool> {
+        let present = Command::new("docker")
+            .args(["image", "inspect", tag])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if present {
+            return Ok(true);
+        }
+        let context = tempfile::tempdir().context("creating sandbox image build context")?;
+        write_file(context.path(), "Dockerfile", DOCKERFILE)?;
+        write_file(context.path(), "observe.py", OBSERVE_PY)?;
+        let status = Command::new("docker")
+            .arg("build")
+            .args(["-t", tag])
+            .arg(context.path())
+            .status()
+            .context("running docker build for the sandbox image")?;
+        Ok(status.success())
     }
 
     fn run(&self, docker_args: &[String], timeout: Duration) -> Result<RawRun> {
@@ -111,4 +141,13 @@ impl SandboxExecutor for DockerExecutor {
             }
         }
     }
+}
+
+fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<()> {
+    let path = dir.join(name);
+    let mut file =
+        std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
 }

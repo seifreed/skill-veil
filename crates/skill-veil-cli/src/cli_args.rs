@@ -680,6 +680,12 @@ pub struct ScanArgs {
     /// when Docker/gVisor is absent, it is a no-op with a one-line note.
     #[arg(long, default_value_t = false)]
     pub dynamic: bool,
+    /// Allow the dynamic sandbox to run under the default `runc` runtime
+    /// when gVisor (`runsc`) is unavailable. WEAKER isolation: the host
+    /// kernel is shared, so a container escape attacks the host directly.
+    /// Without this flag, `--dynamic` requires gVisor and otherwise skips.
+    #[arg(long, default_value_t = false)]
+    pub sandbox_allow_runc: bool,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]
