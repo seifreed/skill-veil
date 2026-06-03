@@ -40,7 +40,10 @@ pub(crate) fn manifest_unpinned_dep_finding(
         .severity(Severity::Low)
         .action(RecommendedAction::Log)
         .evidence_kind(EvidenceKind::Context)
-        .artifact(ArtifactKind::PackageManifest, Some(artifact_path.to_string()))
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
         .matched_on(MatchTarget::ReferencedFile {
             path: artifact_path.to_string(),
         })
@@ -67,7 +70,10 @@ pub(crate) fn manifest_parse_failure_finding(
         .matched_on(MatchTarget::ReferencedFile {
             path: artifact_path.to_string(),
         })
-        .artifact(ArtifactKind::PackageManifest, Some(artifact_path.to_string()))
+        .artifact(
+            ArtifactKind::PackageManifest,
+            Some(artifact_path.to_string()),
+        )
         .match_value(detail)
         .reason(reason)
         .build()

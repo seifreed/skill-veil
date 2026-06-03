@@ -235,6 +235,4 @@ mod tests {
         let body = drain_error_body(502, resp);
         assert_eq!(body, "failure-text");
     }
-
-
 }

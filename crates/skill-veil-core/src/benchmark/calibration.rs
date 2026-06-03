@@ -40,7 +40,11 @@ pub(super) fn calibrate_confidence(findings: &[(SampleLabel, Finding)]) -> Calib
         by_evidence_kind: calibration_buckets_by(findings, |f| evidence_key(f.evidence_kind)),
         by_category: calibration_buckets_by(findings, |f| category_key(f.category)),
         by_signal_pair: calibration_buckets_by(findings, |f| {
-            format!("{}+{}", evidence_key(f.evidence_kind), category_key(f.category))
+            format!(
+                "{}+{}",
+                evidence_key(f.evidence_kind),
+                category_key(f.category)
+            )
         }),
     }
 }
