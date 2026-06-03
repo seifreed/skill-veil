@@ -26,6 +26,29 @@ pub(crate) fn dedup_capabilities_by_kind(capabilities: &mut Vec<ArtifactCapabili
     capabilities.dedup_by_key(|c| c.capability);
 }
 
+/// Build the `Log`-severity supply-chain finding emitted when a manifest
+/// dependency resolves to a floating or externally mutable source rather than
+/// a strict pin. `rule_id` and `reason` identify the manifest kind;
+/// `match_value` is the offending dependency spec.
+pub(crate) fn manifest_unpinned_dep_finding(
+    rule_id: &str,
+    artifact_path: &str,
+    match_value: String,
+    reason: &str,
+) -> Finding {
+    Finding::builder(rule_id, ThreatCategory::SupplyChain)
+        .severity(Severity::Low)
+        .action(RecommendedAction::Log)
+        .evidence_kind(EvidenceKind::Context)
+        .artifact(ArtifactKind::PackageManifest, Some(artifact_path.to_string()))
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .match_value(match_value)
+        .reason(reason)
+        .build()
+}
+
 /// Build the `Log`-severity finding emitted when a package manifest fails to
 /// parse. The manifest ships but its structure can't be analyzed, so its
 /// existence is recorded in the audit output rather than silently dropped.

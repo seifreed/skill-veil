@@ -5,9 +5,7 @@
 use std::path::Path;
 
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::Finding;
 use crate::services::artifact_orchestration::manifests::strip_inline_hash_comment;
 use crate::services::artifact_orchestration::ArtifactOrchestratorService;
 
@@ -35,20 +33,12 @@ pub(crate) fn analyze_requirements_txt(path: &Path, content: &str) -> Vec<Findin
         // escaped MANIFEST_REQUIREMENTS_UNPINNED_DEP.
         .filter(|line| !line.contains("==") && !line.contains("~="))
         .map(|line| {
-            Finding::builder(
+            super::super::manifest_unpinned_dep_finding(
                 "MANIFEST_REQUIREMENTS_UNPINNED_DEP",
-                ThreatCategory::SupplyChain,
+                &artifact_path,
+                line.to_string(),
+                "Python requirement is not strictly pinned",
             )
-            .severity(Severity::Low)
-            .action(RecommendedAction::Log)
-            .evidence_kind(EvidenceKind::Context)
-            .matched_on(MatchTarget::ReferencedFile {
-                path: artifact_path.clone(),
-            })
-            .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-            .match_value(line)
-            .reason("Python requirement is not strictly pinned")
-            .build()
         })
         .collect()
 }

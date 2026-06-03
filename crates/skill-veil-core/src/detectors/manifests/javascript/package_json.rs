@@ -66,22 +66,12 @@ pub(crate) fn analyze_package_json(
             };
 
             if !has_lockfile && is_unpinned_npm_version(version_str) {
-                findings.push(
-                    Finding::builder(
-                        "MANIFEST_PACKAGE_JSON_UNPINNED_DEP",
-                        ThreatCategory::SupplyChain,
-                    )
-                    .severity(Severity::Low)
-                    .action(RecommendedAction::Log)
-                    .evidence_kind(EvidenceKind::Context)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.clone(),
-                    })
-                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                    .match_value(format!("{name}@{version_str}"))
-                    .reason("Manifest dependency is not strictly pinned")
-                    .build(),
-                );
+                findings.push(super::super::manifest_unpinned_dep_finding(
+                    "MANIFEST_PACKAGE_JSON_UNPINNED_DEP",
+                    &artifact_path,
+                    format!("{name}@{version_str}"),
+                    "Manifest dependency is not strictly pinned",
+                ));
             }
         }
     }

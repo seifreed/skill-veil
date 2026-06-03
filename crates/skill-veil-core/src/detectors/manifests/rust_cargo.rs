@@ -3,9 +3,7 @@ use std::path::{Path, PathBuf};
 use toml::{Table as TomlTable, Value as TomlValue};
 
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::Finding;
 use crate::services::artifact_orchestration::ArtifactOrchestratorService;
 
 const CARGO_DEPENDENCY_SECTIONS: &[&str] =
@@ -125,22 +123,12 @@ fn cargo_unpinned_dep_finding(
     artifact_path: &str,
 ) -> Option<Finding> {
     let match_value = cargo_unpinned_dep_match_value(section, name, dep)?;
-    Some(
-        Finding::builder("MANIFEST_CARGO_UNPINNED_DEP", ThreatCategory::SupplyChain)
-            .severity(Severity::Low)
-            .action(RecommendedAction::Log)
-            .evidence_kind(EvidenceKind::Context)
-            .artifact(
-                ArtifactKind::PackageManifest,
-                Some(artifact_path.to_string()),
-            )
-            .matched_on(MatchTarget::ReferencedFile {
-                path: artifact_path.to_string(),
-            })
-            .match_value(match_value)
-            .reason("Cargo dependency is not strictly pinned")
-            .build(),
-    )
+    Some(super::manifest_unpinned_dep_finding(
+        "MANIFEST_CARGO_UNPINNED_DEP",
+        artifact_path,
+        match_value,
+        "Cargo dependency is not strictly pinned",
+    ))
 }
 
 fn cargo_unpinned_dep_match_value(section: &str, name: &str, dep: &TomlValue) -> Option<String> {

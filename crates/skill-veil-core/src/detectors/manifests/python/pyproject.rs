@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 use toml::Value as TomlValue;
 
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact};
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::Finding;
 use crate::services::artifact_orchestration::ArtifactOrchestratorService;
 
 use super::{parse_python_dep_name, PYTHON_EXEC_DEPS, PYTHON_NETWORK_DEPS};
@@ -77,23 +75,12 @@ pub(crate) fn analyze_pyproject_toml(
 }
 
 fn pyproject_unpinned_dep_finding(artifact_path: &str, match_value: String) -> Finding {
-    Finding::builder(
+    super::super::manifest_unpinned_dep_finding(
         "MANIFEST_PYPROJECT_UNPINNED_DEP",
-        ThreatCategory::SupplyChain,
+        artifact_path,
+        match_value,
+        "pyproject dependency is not strictly pinned",
     )
-    .severity(Severity::Low)
-    .action(RecommendedAction::Log)
-    .evidence_kind(EvidenceKind::Context)
-    .artifact(
-        ArtifactKind::PackageManifest,
-        Some(artifact_path.to_string()),
-    )
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .match_value(match_value)
-    .reason("pyproject dependency is not strictly pinned")
-    .build()
 }
 
 fn is_unpinned_pep621_dependency(dependency: &str) -> bool {
