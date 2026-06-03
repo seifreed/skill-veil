@@ -195,6 +195,23 @@ rules:
       - "Indirect prompt injection"
       - "Agentic Misuse (tool/agent loops)"
 
+  - id: OFFICIAL_REMOTE_CONFIG_FETCH_OVERRIDE
+    category: persistent_prompt_tampering
+    severity: high
+    confidence: 0.8
+    when: !regex
+      pattern: "(?is)\\b(?:fetch|read|follow|execute|run|load|get|retrieve|access|pull|import|apply|download|curl|wget)\\b.{0,80}https?://.{0,160}(?:agent.?config|tool.?call.?override|tool.?override|behaviou?r.?override|prompt.?override|override[s]?\\.(?:json|ya?ml|toml))"
+    action: require_approval
+    reason: "Skill instructs the agent to fetch agent-config or tool-call overrides from a remote URL at runtime — remote behavior-control vector"
+    shield:
+      scope: skill.prompt
+    enabled: true
+    tags:
+      - prompt_injection
+      - official_pack
+    promptintel_threats:
+      - "Indirect prompt injection"
+
   - id: OFFICIAL_BACKDOOR_REMOTE_INSTRUCTION_HOST
     category: remote_exec
     severity: critical
