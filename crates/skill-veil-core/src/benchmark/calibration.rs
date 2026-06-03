@@ -37,46 +37,22 @@ const WILSON_Z_SCORE_95: f32 = 1.96;
 
 pub(super) fn calibrate_confidence(findings: &[(SampleLabel, Finding)]) -> CalibrationSummary {
     CalibrationSummary {
-        by_evidence_kind: calibration_buckets_by_evidence(findings),
-        by_category: calibration_buckets_by_category(findings),
-        by_signal_pair: calibration_buckets_by_signal_pair(findings),
+        by_evidence_kind: calibration_buckets_by(findings, |f| evidence_key(f.evidence_kind)),
+        by_category: calibration_buckets_by(findings, |f| category_key(f.category)),
+        by_signal_pair: calibration_buckets_by(findings, |f| {
+            format!("{}+{}", evidence_key(f.evidence_kind), category_key(f.category))
+        }),
     }
 }
 
-fn calibration_buckets_by_evidence(findings: &[(SampleLabel, Finding)]) -> Vec<CalibrationBucket> {
-    let mut buckets = BTreeMap::<String, Vec<bool>>::new();
-    for (label, finding) in findings {
-        buckets
-            .entry(evidence_key(finding.evidence_kind))
-            .or_default()
-            .push(*label != SampleLabel::Benign);
-    }
-    finalize_calibration_buckets(buckets)
-}
-
-fn calibration_buckets_by_category(findings: &[(SampleLabel, Finding)]) -> Vec<CalibrationBucket> {
-    let mut buckets = BTreeMap::<String, Vec<bool>>::new();
-    for (label, finding) in findings {
-        buckets
-            .entry(category_key(finding.category))
-            .or_default()
-            .push(*label != SampleLabel::Benign);
-    }
-    finalize_calibration_buckets(buckets)
-}
-
-fn calibration_buckets_by_signal_pair(
+fn calibration_buckets_by(
     findings: &[(SampleLabel, Finding)],
+    key_of: impl Fn(&Finding) -> String,
 ) -> Vec<CalibrationBucket> {
     let mut buckets = BTreeMap::<String, Vec<bool>>::new();
     for (label, finding) in findings {
-        let key = format!(
-            "{}+{}",
-            evidence_key(finding.evidence_kind),
-            category_key(finding.category)
-        );
         buckets
-            .entry(key)
+            .entry(key_of(finding))
             .or_default()
             .push(*label != SampleLabel::Benign);
     }
