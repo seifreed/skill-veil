@@ -350,22 +350,7 @@ fn add_inferred_relations<F: FileSystemProvider>(
 }
 
 fn sibling_package_manifests<F: FileSystemProvider>(fs_provider: &F, path: &Path) -> Vec<PathBuf> {
-    const MANIFEST_NAMES: &[&str] = &[
-        "package.json",
-        "mcp.json",
-        "mcp.yaml",
-        "mcp.yml",
-        "requirements.txt",
-        "pyproject.toml",
-        "cargo.toml",
-        "dockerfile",
-        "docker-compose.yml",
-        "docker-compose.yaml",
-        "makefile",
-        "gnumakefile",
-        ".npmrc",
-        "pip.conf",
-    ];
+    use crate::artifact_names::MANIFEST_NAMES;
 
     let mut manifests = fs_provider
         .list_files(path, "*", false)

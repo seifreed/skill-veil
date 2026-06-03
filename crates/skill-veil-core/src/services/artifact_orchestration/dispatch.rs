@@ -26,16 +26,7 @@ pub(crate) const INSTRUCTION_NAMES: &[&str] = &[
     "persona.md",
     "soul.md",
 ];
-const LOCKFILE_NAMES: &[&str] = &[
-    "package-lock.json",
-    "npm-shrinkwrap.json",
-    "cargo.lock",
-    "poetry.lock",
-    "pipfile.lock",
-    "uv.lock",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-];
+use crate::artifact_names::LOCKFILE_NAMES;
 
 pub(super) fn analyze(
     service: &ArtifactOrchestratorService,

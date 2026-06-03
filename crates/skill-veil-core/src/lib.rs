@@ -59,6 +59,7 @@
 pub mod adapters;
 pub mod analyzer;
 pub mod artifact_graph;
+pub(crate) mod artifact_names;
 mod artifact_taint;
 pub mod benchmark;
 mod deceptive_docs;

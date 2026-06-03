@@ -19,46 +19,12 @@ use super::classification::{
 };
 use super::{FileDiscoveryService, MAX_DISCOVERY_DEPTH};
 
-/// Filenames recognised as package manifests by
-/// [`FileDiscoveryService::discover_package_manifests`]. Lifted to a module-
-/// level constant (instead of nested inside the discovery method) so that
-/// [`FileDiscoveryService::discover_package_data_files`] can exclude these
-/// filenames from data-file results — without the exclusion, files like
-/// `docker-compose.yaml` and `mcp.yaml` (which match the data-file glob
-/// `*.yaml` AND the manifest name list) appear in BOTH discovery streams,
-/// producing duplicate artifact entries in the artifact graph and
-/// double-weighting any finding attached to them.
-const MANIFEST_NAMES: &[&str] = &[
-    "package.json",
-    "mcp.json",
-    "mcp.yaml",
-    "mcp.yml",
-    "requirements.txt",
-    "pyproject.toml",
-    "cargo.toml",
-    "dockerfile",
-    "docker-compose.yml",
-    "docker-compose.yaml",
-    "makefile",
-    "gnumakefile",
-    ".npmrc",
-    "pip.conf",
-];
-
-/// Filenames recognised as lockfiles. Same dedup contract as
-/// [`MANIFEST_NAMES`]: lifted to module scope so data-file discovery can
-/// avoid double-counting `pnpm-lock.yaml` (matches `*.yaml` glob) and
-/// similar overlaps.
-const LOCKFILE_NAMES: &[&str] = &[
-    "package-lock.json",
-    "cargo.lock",
-    "poetry.lock",
-    "uv.lock",
-    "pipfile.lock",
-    "yarn.lock",
-    "pnpm-lock.yaml",
-    "npm-shrinkwrap.json",
-];
+// `MANIFEST_NAMES` / `LOCKFILE_NAMES` are the canonical sets in
+// `crate::artifact_names`. `discover_package_data_files` excludes these names
+// from data-file results so a file like `docker-compose.yaml` or
+// `pnpm-lock.yaml` (which also matches the `*.yaml` data-file glob) is not
+// double-counted across both discovery streams.
+use crate::artifact_names::{LOCKFILE_NAMES, MANIFEST_NAMES};
 
 /// `true` when `path`'s lowercased filename matches an entry in
 /// [`MANIFEST_NAMES`] or [`LOCKFILE_NAMES`]. Used to filter the data-file
