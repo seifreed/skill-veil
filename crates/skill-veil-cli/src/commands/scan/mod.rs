@@ -10,8 +10,8 @@ use crate::{
 use anyhow::{Context, Result};
 use nova_llm_eval::ProviderLlmEvaluator;
 use skill_veil_core::{
-    Finding, RegexPatternMatcher, ScanOptions, ScanResult, ScanTargetMode, Scanner,
-    StdFileSystemProvider,
+    Finding, PackageScanResult, RegexPatternMatcher, ScanOptions, ScanResult, ScanTargetMode,
+    Scanner, StdFileSystemProvider,
 };
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -252,12 +252,12 @@ pub(crate) fn run_scan(
     let options = ScanOptions {
         min_severity: args.min_severity.map(Into::into),
         fail_on: args.fail_on.map(Into::into),
-        rules_dir: args.rules_dir,
+        rules_dir: args.rules_dir.clone(),
         profile: args.profile.map(Into::into),
-        baseline_path: args.baseline,
-        waivers_path: args.waivers,
-        policy_path: args.policy,
-        disposition_path: args.disposition,
+        baseline_path: args.baseline.clone(),
+        waivers_path: args.waivers.clone(),
+        policy_path: args.policy.clone(),
+        disposition_path: args.disposition.clone(),
         recursive: !args.no_recursive,
         target_mode,
         strict_rules: args.strict_rules,
@@ -274,134 +274,13 @@ pub(crate) fn run_scan(
     let scanner = Scanner::with_std_adapters(options).context("Failed to initialize scanner")?;
     let mut scan_result = scanner.scan(&args.path).context("Failed to scan path")?;
 
-    // NOVA evaluation. Done ONCE; the report feeds two consumers:
-    //   (a) findings injected into `scan_result` so JSON / SARIF /
-    //       text output surface NOVA hits as first-class Findings.
-    //   (b) the trailing `--- NOVA rule matches ---` text block
-    //       printed after enrichment for human-readable summary.
-    // Verdict / risk_score are NOT recomputed — NOVA is a community
-    // pack we do not yet pin against the benchmark corpus, so its
-    // findings carry SignalClass::ReviewSignal which by mapping
-    // contract does not inflate the existing calibration. The
-    // verdict_snapshot debug_assert below still passes because the
-    // snapshot only fingerprints (package_id, verdict, risk_score).
-    let nova_report = if args.no_nova {
-        None
-    } else {
-        // Build the provider-backed NOVA `llm:` evaluator iff:
-        //   1. The user opted in with `--nova-llm`; and
-        //   2. `~/.skill-veil.toml` (or env vars) carries an `[llm]`
-        //      section the provider chain can build from.
-        // Either gate failing falls back to `NotYetWiredLlm` so the
-        // scan keeps running and any rule whose `condition:` requires
-        // `llm.` surfaces under `skipped_capabilities` with the
-        // existing operator note.
-        let nova_llm_eval = if args.nova_llm {
-            build_nova_llm_eval(args.llm_provider.as_deref(), quiet)
-        } else {
-            None
-        };
-        let llm_eval_ref = nova_llm_eval
-            .as_deref()
-            .map(|e| e as &dyn skill_veil_core::nova::LlmEvaluator);
-        // Native semantics runs by default; `--no-nova-semantics` opts
-        // out. It is still ultimately gated by the `nova-semantics`
-        // build feature: when the feature is off,
-        // `build_nova_semantic_eval` returns None and the scan keeps
-        // running with `SkippedCapability::Semantics` surfaced for any
-        // rule that needed the semantic channel — the Skipped → false
-        // collapse is preserved, so no rule fires on partial evidence.
-        let nova_sem_eval = if args.no_nova_semantics {
-            None
-        } else {
-            build_nova_semantic_eval(quiet)
-        };
-        let sem_eval_ref = nova_sem_eval
-            .as_deref()
-            .map(|e| e as &dyn skill_veil_core::nova::SemanticEvaluator);
-        match nova_run::evaluate_against_target(
-            &args.path,
-            args.cache_dir.as_deref(),
-            llm_eval_ref,
-            sem_eval_ref,
-        ) {
-            Ok(r) => r,
-            Err(err) => {
-                if !quiet {
-                    eprintln!("warning: NOVA evaluation skipped: {err:#}");
-                }
-                None
-            }
-        }
-    };
-    if let Some(report) = &nova_report {
-        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
-    }
+    let nova_report = evaluate_nova_channel(&args, quiet, &mut scan_result);
 
-    // YARA channel (gated behind the `yara` build feature). Mirrors NOVA:
-    // a post-verdict pass that loads the installed `.yar`/`.yara` pack and
-    // scans the same artifacts, injecting matches as first-class Findings.
-    // It never recomputes the verdict — see the `verdict_snapshot` assert
-    // below, which is taken AFTER this injection.
     #[cfg(feature = "yara")]
-    let yara_report = if args.no_yara {
-        None
-    } else {
-        match yara_run::evaluate_against_target(&args.path, args.cache_dir.as_deref()) {
-            Ok(report) => report,
-            Err(err) => {
-                if !quiet {
-                    eprintln!("warning: YARA evaluation skipped: {err:#}");
-                }
-                None
-            }
-        }
-    };
-    #[cfg(feature = "yara")]
-    if let Some(report) = &yara_report {
-        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
-    }
+    let yara_report = evaluate_yara_channel(&args, quiet, &mut scan_result);
 
-    // Dynamic-behavior sandbox (gated behind the `sandbox` build feature
-    // and the `--dynamic` flag — it EXECUTES untrusted code). Like NOVA /
-    // YARA it runs post-verdict and only injects advisory findings; gVisor
-    // is required (no silent fallback to the weaker runc kernel boundary).
     #[cfg(feature = "sandbox")]
-    let sandbox_report = if args.sandbox_detonate_agent {
-        match crate::sandbox::evaluate_detonation_against_target(
-            &args.path,
-            !args.sandbox_allow_runc,
-        ) {
-            Ok(report) => report,
-            Err(err) => {
-                if !quiet {
-                    eprintln!("warning: agent detonation skipped: {err:#}");
-                }
-                None
-            }
-        }
-    } else if args.dynamic {
-        match crate::sandbox::evaluate_against_target(
-            &args.path,
-            !args.sandbox_allow_runc,
-            args.sandbox_record_network,
-            args.llm_provider.as_deref(),
-        ) {
-            Ok(report) => report,
-            Err(err) => {
-                if !quiet {
-                    eprintln!("warning: dynamic sandbox skipped: {err:#}");
-                }
-                None
-            }
-        }
-    } else {
-        None
-    };
-    #[cfg(feature = "sandbox")]
-    if let Some(report) = &sandbox_report {
-        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
-    }
+    let sandbox_report = evaluate_sandbox_channel(&args, quiet, &mut scan_result);
     #[cfg(not(feature = "sandbox"))]
     if (args.dynamic || args.sandbox_detonate_agent) && !quiet {
         eprintln!(
@@ -431,10 +310,10 @@ pub(crate) fn run_scan(
 
     let output_content = format_results(&scan_result.results, args.format, text_options)?;
 
-    if let Some(output_path) = args.output {
-        write_scan_output(&output_path, &output_content)?;
+    if let Some(output_path) = args.output.as_deref() {
+        write_scan_output(output_path, &output_content)?;
         if !quiet {
-            eprintln!("Output written to: {}", terminal_path(&output_path));
+            eprintln!("Output written to: {}", terminal_path(output_path));
         }
     } else {
         print!("{}", output_content);
@@ -460,143 +339,13 @@ pub(crate) fn run_scan(
         })
         .collect();
 
-    if !args.no_vt_enrich {
-        if let Some(vt_block) = vt::try_enrich_with_vt(
-            &scan_result,
-            &args.path,
-            args.vt_submit_unknown,
-            args.cache_dir.as_deref(),
-            quiet,
-        )? {
-            print!("{vt_block}");
-        }
-    }
+    run_read_only_enrichments(&scan_result, &args, quiet)?;
 
-    if let Some(osv_block) =
-        crate::osv::try_enrich_with_osv(&scan_result, args.osv, args.cache_dir.as_deref(), quiet)?
-    {
-        print!("{osv_block}");
-    }
+    let adjudicated = run_taint_adjudication_stage(&scan_result, &args, &filter_options, quiet)?;
+    let fp_outcome = run_fp_review_stage(&scan_result, &args, &filter_options, quiet)?;
 
-    if let Some(abandoned_block) = crate::abandoned::try_enrich_with_abandoned(
-        &scan_result,
-        args.abandoned,
-        args.cache_dir.as_deref(),
-        quiet,
-    )? {
-        print!("{abandoned_block}");
-    }
-
-    if !args.no_llm_enrich {
-        let llm_provider_override = resolve_llm_provider_override(args.llm_provider.as_deref())?;
-        if let Some(llm_block) = llm::try_enrich_with_llm(
-            &scan_result,
-            &args.path,
-            llm_provider_override,
-            args.cache_dir.as_deref(),
-            quiet,
-        )? {
-            print!("{llm_block}");
-        }
-    }
-
-    // ADR 0029 + its symmetric FN upgrade: gated LLM adjudication.
-    // Each direction is independently opt-in (default OFF) and
-    // contradictory with --no-llm-enrich (it needs LLM access). Works
-    // on clones only — `scan_result` is never mutated, so the
-    // `verdict_snapshot` debug-assert below stays valid. Affects ONLY
-    // this appended block + the exit code.
-    let adjudicate_any = args.llm_adjudicate_taint || args.llm_adjudicate_upgrade;
-    let adjudicated = if adjudicate_any && !args.no_llm_enrich {
-        match crate::llm::taint_adjudication::run_adjudication(
-            &scan_result,
-            &args.path,
-            args.cache_dir.as_deref(),
-            &filter_options,
-            quiet,
-            args.llm_adjudicate_taint,
-            args.llm_adjudicate_upgrade,
-        )? {
-            Some(outcome) => {
-                print!("{}", outcome.report_block);
-                Some(outcome)
-            }
-            None => None,
-        }
-    } else {
-        if adjudicate_any && args.no_llm_enrich && !quiet {
-            eprintln!(
-                "LLM adjudication skipped: --llm-adjudicate-taint / \
-                 --llm-adjudicate-upgrade need LLM access but --no-llm-enrich was set"
-            );
-        }
-        None
-    };
-
-    // LLM false-positive review. Works on clones, never affects the
-    // core verdict / risk score / structured payload, so the
-    // `verdict_snapshot` assert below stays valid. In advisory mode it
-    // is report-only; with `--llm-fp-adjudicate` it additionally softens
-    // the exit code for benign-consensus Suspicious packages via
-    // `package_fail_overrides` (composed with the taint adjudication
-    // below). The text block is suppressed for non-text formats; the
-    // machine-readable form is the opt-in JSON sidecar.
-    let fp_review_on = args.llm_fp_review || args.llm_fp_adjudicate;
-    let fp_outcome = if fp_review_on && !args.no_llm_enrich {
-        let outcome = crate::llm::fp_review::run_fp_review(
-            &scan_result,
-            &args.path,
-            args.cache_dir.as_deref(),
-            &filter_options,
-            quiet,
-            fp_review_on,
-            args.llm_fp_adjudicate,
-        )?;
-        if let Some(outcome) = &outcome {
-            if !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text) {
-                print!("{}", outcome.report_block);
-            }
-            if let Some(out) = args.llm_fp_review_out.as_deref() {
-                let json = crate::llm::fp_review::to_json(outcome)?;
-                write_scan_output(out, &json)?;
-                if !quiet {
-                    eprintln!("FP review written to: {}", terminal_path(out));
-                }
-            }
-        }
-        outcome
-    } else {
-        if fp_review_on && args.no_llm_enrich && !quiet {
-            eprintln!(
-                "LLM FP review skipped: --llm-fp-review / --llm-fp-adjudicate need LLM \
-                 access but --no-llm-enrich was set"
-            );
-        }
-        None
-    };
-
-    if !args.no_promptintel_enrich {
-        if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
-            &scan_result,
-            &args.path,
-            args.cache_dir.as_deref(),
-            quiet,
-        )? {
-            print!("{pi_block}");
-        }
-    }
-
-    // Cross-skill artifact overlap. Advisory, CLI-local, report-only: it
-    // reads files and hashes them but never touches the scan result, so
-    // the `verdict_snapshot` assert below stays valid. Text format only —
-    // it would pollute the structured payload.
-    if args.check_overlap && matches!(args.format, crate::cli_args::OutputFormat::Text) {
-        if let Some(block) = crate::overlap::try_check_overlap(&scan_result, true, quiet) {
-            if !quiet {
-                print!("{block}");
-            }
-        }
-    }
+    run_promptintel_enrichment(&scan_result, &args, quiet)?;
+    check_artifact_overlap(&scan_result, &args, quiet);
 
     // The text block is operator-friendly noise; suppress it for
     // JSON / SARIF / Shield output where it would pollute the
@@ -639,34 +388,346 @@ pub(crate) fn run_scan(
         "enrichment must never modify our verdict or risk_score"
     );
 
-    // Scan-level I/O errors are surfaced as warnings on stderr above. The
-    // exit code only reflects the user-configured severity threshold via
-    // `--fail-on` (resolved per-result by the filter service); a single
-    // unreadable file must not unconditionally fail a scan when the user
-    // asked for `--fail-on High` and no qualifying findings fired.
-    //
-    // Both LLM adjudications expose per-package exit-code overrides for the
-    // packages they changed (taint: Malicious; FP adjudicate: Suspicious —
-    // disjoint classes). A package absent from both maps keeps its original
-    // `should_fail`. With neither map populated this is byte-identical to
-    // the legacy `any(should_fail)`, and equals the taint-only
-    // `effective_should_fail` when only taint ran.
+    Ok(compute_should_fail(
+        &scan_result,
+        adjudicated.as_ref(),
+        fp_outcome.as_ref(),
+    ))
+}
+
+/// Run the NOVA community-rule channel and inject its hits as first-class
+/// findings on `scan_result`.
+///
+/// Done ONCE; the returned report feeds two consumers — the injected findings
+/// (so JSON/SARIF/text surface NOVA hits) and the trailing text block rendered
+/// later. Verdict / risk_score are NOT recomputed: NOVA findings carry
+/// `SignalClass::ReviewSignal`, which by mapping contract does not inflate the
+/// existing calibration, so the `verdict_snapshot` debug-assert still holds.
+fn evaluate_nova_channel(
+    args: &ScanArgs,
+    quiet: bool,
+    scan_result: &mut PackageScanResult,
+) -> Option<nova_run::NovaScanReport> {
+    if args.no_nova {
+        return None;
+    }
+    // The provider-backed `llm:` evaluator is built iff the user opted in with
+    // `--nova-llm` and `~/.skill-veil.toml` (or env) carries an `[llm]` section;
+    // either gate failing falls back to `NotYetWiredLlm` so any rule needing
+    // `llm.` surfaces under `skipped_capabilities` instead of firing.
+    let nova_llm_eval = if args.nova_llm {
+        build_nova_llm_eval(args.llm_provider.as_deref(), quiet)
+    } else {
+        None
+    };
+    let llm_eval_ref = nova_llm_eval
+        .as_deref()
+        .map(|e| e as &dyn skill_veil_core::nova::LlmEvaluator);
+    // Native semantics runs by default (`--no-nova-semantics` opts out), still
+    // gated by the `nova-semantics` build feature: with the feature off,
+    // `build_nova_semantic_eval` returns None and rules needing the semantic
+    // channel surface `SkippedCapability::Semantics` (Skipped → false preserved).
+    let nova_sem_eval = if args.no_nova_semantics {
+        None
+    } else {
+        build_nova_semantic_eval(quiet)
+    };
+    let sem_eval_ref = nova_sem_eval
+        .as_deref()
+        .map(|e| e as &dyn skill_veil_core::nova::SemanticEvaluator);
+    let report = match nova_run::evaluate_against_target(
+        &args.path,
+        args.cache_dir.as_deref(),
+        llm_eval_ref,
+        sem_eval_ref,
+    ) {
+        Ok(r) => r,
+        Err(err) => {
+            if !quiet {
+                eprintln!("warning: NOVA evaluation skipped: {err:#}");
+            }
+            None
+        }
+    };
+    if let Some(report) = &report {
+        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
+    }
+    report
+}
+
+/// Run the YARA channel and inject its hits as first-class findings. Mirrors
+/// NOVA: a post-verdict pass over the same artifacts that never recomputes the
+/// verdict (the `verdict_snapshot` assert is taken after this injection).
+#[cfg(feature = "yara")]
+fn evaluate_yara_channel(
+    args: &ScanArgs,
+    quiet: bool,
+    scan_result: &mut PackageScanResult,
+) -> Option<yara_run::YaraScanReport> {
+    if args.no_yara {
+        return None;
+    }
+    let report = match yara_run::evaluate_against_target(&args.path, args.cache_dir.as_deref()) {
+        Ok(report) => report,
+        Err(err) => {
+            if !quiet {
+                eprintln!("warning: YARA evaluation skipped: {err:#}");
+            }
+            None
+        }
+    };
+    if let Some(report) = &report {
+        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
+    }
+    report
+}
+
+/// Run the dynamic-behavior sandbox (gated behind `--dynamic` /
+/// `--sandbox-detonate-agent` — it EXECUTES untrusted code) and inject advisory
+/// findings. gVisor is required unless `--sandbox-allow-runc` is set; like
+/// NOVA/YARA it never recomputes the verdict.
+#[cfg(feature = "sandbox")]
+fn evaluate_sandbox_channel(
+    args: &ScanArgs,
+    quiet: bool,
+    scan_result: &mut PackageScanResult,
+) -> Option<crate::sandbox::SandboxReport> {
+    let report = if args.sandbox_detonate_agent {
+        match crate::sandbox::evaluate_detonation_against_target(
+            &args.path,
+            !args.sandbox_allow_runc,
+        ) {
+            Ok(report) => report,
+            Err(err) => {
+                if !quiet {
+                    eprintln!("warning: agent detonation skipped: {err:#}");
+                }
+                None
+            }
+        }
+    } else if args.dynamic {
+        match crate::sandbox::evaluate_against_target(
+            &args.path,
+            !args.sandbox_allow_runc,
+            args.sandbox_record_network,
+            args.llm_provider.as_deref(),
+        ) {
+            Ok(report) => report,
+            Err(err) => {
+                if !quiet {
+                    eprintln!("warning: dynamic sandbox skipped: {err:#}");
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if let Some(report) = &report {
+        attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
+    }
+    report
+}
+
+/// Run the read-only enrichment channels (VT, OSV, abandoned-package, LLM) that
+/// take an immutable `scan_result` and only print a trailing text block. None
+/// may touch the verdict / risk score — the `verdict_snapshot` assert enforces
+/// this in debug builds.
+fn run_read_only_enrichments(
+    scan_result: &PackageScanResult,
+    args: &ScanArgs,
+    quiet: bool,
+) -> Result<()> {
+    if !args.no_vt_enrich {
+        if let Some(vt_block) = vt::try_enrich_with_vt(
+            scan_result,
+            &args.path,
+            args.vt_submit_unknown,
+            args.cache_dir.as_deref(),
+            quiet,
+        )? {
+            print!("{vt_block}");
+        }
+    }
+
+    if let Some(osv_block) =
+        crate::osv::try_enrich_with_osv(scan_result, args.osv, args.cache_dir.as_deref(), quiet)?
+    {
+        print!("{osv_block}");
+    }
+
+    if let Some(abandoned_block) = crate::abandoned::try_enrich_with_abandoned(
+        scan_result,
+        args.abandoned,
+        args.cache_dir.as_deref(),
+        quiet,
+    )? {
+        print!("{abandoned_block}");
+    }
+
+    if !args.no_llm_enrich {
+        let llm_provider_override = resolve_llm_provider_override(args.llm_provider.as_deref())?;
+        if let Some(llm_block) = llm::try_enrich_with_llm(
+            scan_result,
+            &args.path,
+            llm_provider_override,
+            args.cache_dir.as_deref(),
+            quiet,
+        )? {
+            print!("{llm_block}");
+        }
+    }
+    Ok(())
+}
+
+/// ADR 0029 + its symmetric FN upgrade: gated LLM taint adjudication. Each
+/// direction is independently opt-in (default OFF) and needs LLM access, so it
+/// is contradictory with `--no-llm-enrich`. Works on clones only — never
+/// mutates `scan_result` — and affects only its printed block plus the exit
+/// code via the returned outcome's `package_fail_overrides`.
+fn run_taint_adjudication_stage(
+    scan_result: &PackageScanResult,
+    args: &ScanArgs,
+    filter_options: &ScanOptions,
+    quiet: bool,
+) -> Result<Option<crate::llm::taint_adjudication::AdjudicationOutcome>> {
+    let adjudicate_any = args.llm_adjudicate_taint || args.llm_adjudicate_upgrade;
+    if adjudicate_any && !args.no_llm_enrich {
+        match crate::llm::taint_adjudication::run_adjudication(
+            scan_result,
+            &args.path,
+            args.cache_dir.as_deref(),
+            filter_options,
+            quiet,
+            args.llm_adjudicate_taint,
+            args.llm_adjudicate_upgrade,
+        )? {
+            Some(outcome) => {
+                print!("{}", outcome.report_block);
+                Ok(Some(outcome))
+            }
+            None => Ok(None),
+        }
+    } else {
+        if adjudicate_any && args.no_llm_enrich && !quiet {
+            eprintln!(
+                "LLM adjudication skipped: --llm-adjudicate-taint / \
+                 --llm-adjudicate-upgrade need LLM access but --no-llm-enrich was set"
+            );
+        }
+        Ok(None)
+    }
+}
+
+/// LLM false-positive review. Works on clones, never affects the core verdict /
+/// risk score / structured payload. Advisory by default; with
+/// `--llm-fp-adjudicate` it additionally softens the exit code for
+/// benign-consensus Suspicious packages via the returned `package_fail_overrides`.
+/// The text block is text-format only; the machine-readable form is the opt-in
+/// JSON sidecar.
+fn run_fp_review_stage(
+    scan_result: &PackageScanResult,
+    args: &ScanArgs,
+    filter_options: &ScanOptions,
+    quiet: bool,
+) -> Result<Option<crate::llm::fp_review::FpReviewOutcome>> {
+    let fp_review_on = args.llm_fp_review || args.llm_fp_adjudicate;
+    if fp_review_on && !args.no_llm_enrich {
+        let outcome = crate::llm::fp_review::run_fp_review(
+            scan_result,
+            &args.path,
+            args.cache_dir.as_deref(),
+            filter_options,
+            quiet,
+            fp_review_on,
+            args.llm_fp_adjudicate,
+        )?;
+        if let Some(outcome) = &outcome {
+            if !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text) {
+                print!("{}", outcome.report_block);
+            }
+            if let Some(out) = args.llm_fp_review_out.as_deref() {
+                let json = crate::llm::fp_review::to_json(outcome)?;
+                write_scan_output(out, &json)?;
+                if !quiet {
+                    eprintln!("FP review written to: {}", terminal_path(out));
+                }
+            }
+        }
+        Ok(outcome)
+    } else {
+        if fp_review_on && args.no_llm_enrich && !quiet {
+            eprintln!(
+                "LLM FP review skipped: --llm-fp-review / --llm-fp-adjudicate need LLM \
+                 access but --no-llm-enrich was set"
+            );
+        }
+        Ok(None)
+    }
+}
+
+/// PromptIntel enrichment channel: opt-in-by-default-when-configured, prints a
+/// trailing block, never touches `scan_result`.
+fn run_promptintel_enrichment(
+    scan_result: &PackageScanResult,
+    args: &ScanArgs,
+    quiet: bool,
+) -> Result<()> {
+    if !args.no_promptintel_enrich {
+        if let Some(pi_block) = promptintel::try_enrich_with_promptintel(
+            scan_result,
+            &args.path,
+            args.cache_dir.as_deref(),
+            quiet,
+        )? {
+            print!("{pi_block}");
+        }
+    }
+    Ok(())
+}
+
+/// Cross-skill artifact overlap. Advisory, CLI-local, report-only: it reads and
+/// hashes files but never touches `scan_result`. Text format only — it would
+/// pollute the structured payload otherwise.
+fn check_artifact_overlap(scan_result: &PackageScanResult, args: &ScanArgs, quiet: bool) {
+    if args.check_overlap && matches!(args.format, crate::cli_args::OutputFormat::Text) {
+        if let Some(block) = crate::overlap::try_check_overlap(scan_result, true, quiet) {
+            if !quiet {
+                print!("{block}");
+            }
+        }
+    }
+}
+
+/// Compute the process exit-code boolean. The exit code reflects the
+/// user-configured `--fail-on` threshold (resolved per-result by the filter
+/// service); a single unreadable file must not unconditionally fail a scan.
+///
+/// Both LLM adjudications expose per-package exit-code overrides for the
+/// packages they changed (taint: Malicious; FP adjudicate: Suspicious —
+/// disjoint classes). A package absent from both maps keeps its original
+/// `should_fail`; with neither populated this is byte-identical to the legacy
+/// `any(should_fail)`.
+fn compute_should_fail(
+    scan_result: &PackageScanResult,
+    adjudicated: Option<&crate::llm::taint_adjudication::AdjudicationOutcome>,
+    fp_outcome: Option<&crate::llm::fp_review::FpReviewOutcome>,
+) -> bool {
     let mut fail_overrides: std::collections::BTreeMap<usize, bool> =
         std::collections::BTreeMap::new();
-    if let Some(o) = &adjudicated {
+    if let Some(o) = adjudicated {
         fail_overrides.extend(o.package_fail_overrides.iter().map(|(&i, &f)| (i, f)));
     }
-    if let Some(o) = &fp_outcome {
+    if let Some(o) = fp_outcome {
         for (&i, &f) in &o.package_fail_overrides {
             fail_overrides.entry(i).or_insert(f);
         }
     }
-    let should_fail = scan_result
+    scan_result
         .results
         .iter()
         .enumerate()
-        .any(|(i, r)| *fail_overrides.get(&i).unwrap_or(&r.should_fail));
-    Ok(should_fail)
+        .any(|(i, r)| *fail_overrides.get(&i).unwrap_or(&r.should_fail))
 }
 
 /// Attaches a post-scan channel's findings (NOVA, YARA) to the `ScanResult`
