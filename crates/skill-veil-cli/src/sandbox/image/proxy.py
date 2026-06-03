@@ -8,8 +8,9 @@ minted from an image-local throwaway CA so the exfiltrated payload is
 recovered, not just the destination host.
 
 Selective forwarding (agent-detonation mode): hosts matching
-``SV_PROXY_ALLOWLIST`` (comma-separated substrings) are FORWARDED to the
-real upstream -- a raw CONNECT tunnel for HTTPS (no MITM, no capture) and a
+``SV_PROXY_ALLOWLIST`` (comma-separated domains; an entry matches that exact
+host or any subdomain of it -- NOT an arbitrary substring) are FORWARDED to
+the real upstream -- a raw CONNECT tunnel for HTTPS (no MITM, no capture) and a
 pass-through for plain HTTP -- so a real coding agent inside the sandbox
 can reach its model gateway while the skill-under-analysis's own traffic
 (everything NOT on the allowlist) is still captured and blocked. The
@@ -37,13 +38,26 @@ CA_CERT = "/sv-ca/ca.crt"
 CA_KEY = "/sv-ca/ca.key"
 ALLOWLIST = [h.strip() for h in os.environ.get("SV_PROXY_ALLOWLIST", "").split(",") if h.strip()]
 
-with open(CA_KEY, "rb") as _f:
-    _CA_KEY = serialization.load_pem_private_key(_f.read(), password=None)
-with open(CA_CERT, "rb") as _f:
-    _CA_CERT = x509.load_pem_x509_certificate(_f.read())
-
 _leaf_cache = {}
 _leaf_lock = threading.Lock()
+_ca_pair = None
+_ca_lock = threading.Lock()
+
+
+def _ca():
+    # Load the throwaway CA lazily on first MITM cert mint rather than at import,
+    # so the module is importable (e.g. for `--self-test`) without the
+    # image-local /sv-ca key material present.
+    global _ca_pair
+    if _ca_pair is None:
+        with _ca_lock:
+            if _ca_pair is None:
+                with open(CA_KEY, "rb") as f:
+                    key = serialization.load_pem_private_key(f.read(), password=None)
+                with open(CA_CERT, "rb") as f:
+                    cert = x509.load_pem_x509_certificate(f.read())
+                _ca_pair = (key, cert)
+    return _ca_pair
 
 
 def emit(entry):
@@ -52,11 +66,22 @@ def emit(entry):
 
 
 def is_allowlisted(host):
-    h = (host or "").split(":")[0].lower()
-    return any(allowed.lower() in h for allowed in ALLOWLIST)
+    # Match on a domain boundary, not an arbitrary substring: an allowlist
+    # entry of `githubusercontent.com` must NOT match an attacker-registered
+    # `evil-githubusercontent.com`, or the malware-under-analysis could pick a
+    # name containing an allowlisted token to have its C2 egress silently
+    # forwarded (uncaptured) instead of blocked. A host matches iff it equals
+    # the entry or is a true subdomain of it. Trailing FQDN dots are stripped.
+    h = (host or "").split(":")[0].lower().rstrip(".")
+    for allowed in ALLOWLIST:
+        a = allowed.lower().strip(".")
+        if a and (h == a or h.endswith("." + a)):
+            return True
+    return False
 
 
 def leaf_cert_for(host):
+    ca_key, ca_cert = _ca()
     with _leaf_lock:
         cached = _leaf_cache.get(host)
         if cached:
@@ -66,13 +91,13 @@ def leaf_cert_for(host):
         cert = (
             x509.CertificateBuilder()
             .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]))
-            .issuer_name(_CA_CERT.subject)
+            .issuer_name(ca_cert.subject)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(days=1))
             .not_valid_after(now + timedelta(days=3650))
             .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
-            .sign(_CA_KEY, hashes.SHA256())
+            .sign(ca_key, hashes.SHA256())
         )
         cdir = tempfile.mkdtemp()
         cpath = os.path.join(cdir, "leaf.crt")
@@ -217,6 +242,26 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def _self_test():
+    # Contract for is_allowlisted: exact host or true subdomain only; never a
+    # bare substring. Run with `python3 proxy.py --self-test` (the image has no
+    # pytest harness; this keeps the egress-boundary contract executable).
+    global ALLOWLIST
+    ALLOWLIST = ["github.com", "githubusercontent.com", "registry.npmjs.org"]
+    must_allow = ["github.com", "raw.githubusercontent.com", "registry.npmjs.org",
+                  "GITHUB.COM", "api.github.com:443", "github.com."]
+    must_block = ["evil-githubusercontent.com", "github.com.attacker.tld",
+                  "notgithub.com", "registry.npmjs.org.evil.com", "", "evil.com"]
+    for host in must_allow:
+        assert is_allowlisted(host), f"should allow {host!r}"
+    for host in must_block:
+        assert not is_allowlisted(host), f"should block {host!r}"
+    print("proxy is_allowlisted self-test: OK")
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        _self_test()
+        sys.exit(0)
     port = int(os.environ.get("SV_PROXY_PORT", "8080"))
     ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
