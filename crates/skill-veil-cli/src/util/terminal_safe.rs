@@ -69,9 +69,45 @@ fn is_invisible_format(c: char) -> bool {
     )
 }
 
+/// Maximum number of bytes of an HTTP error response body that an API
+/// client embeds into a `*Error::HttpStatus` value. A hostile or
+/// misbehaving gateway can return multi-kilobyte HTML/script payloads;
+/// capping at construction keeps every downstream consumer
+/// (`tracing::warn!`, `eprintln!`, structured-output formatters) bounded.
+pub(crate) const ERROR_BODY_MAX_BYTES: usize = 512;
+
+/// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
+/// UTF-8 char boundary, appending `"...[truncated]"` when shortened.
+///
+/// The body is first run through [`sanitise_for_terminal`] so the capped
+/// string is safe to print to an operator TTY. Shared by the VT, LLM, and
+/// PromptIntel API clients so the error-body bound has one implementation.
+pub(crate) fn truncate_error_body(body: String) -> String {
+    let body = sanitise_for_terminal(&body);
+    if body.len() <= ERROR_BODY_MAX_BYTES {
+        debug_assert!(
+            !body.chars().any(|c| c.is_control()),
+            "error bodies must be terminal-safe"
+        );
+        return body;
+    }
+    let mut end = ERROR_BODY_MAX_BYTES;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = String::with_capacity(end + 14);
+    out.push_str(&body[..end]);
+    out.push_str("...[truncated]");
+    debug_assert!(
+        !out.chars().any(|c| c.is_control()),
+        "error bodies must be terminal-safe"
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::sanitise_for_terminal;
+    use super::{sanitise_for_terminal, truncate_error_body, ERROR_BODY_MAX_BYTES};
 
     /// Contract: bare ASCII control characters (`\x1b`, `\x07`, `\x00`,
     /// etc.) MUST be replaced with `?` so a crafted skill cannot clear
@@ -168,5 +204,68 @@ mod tests {
         assert_eq!(cleaned, "hi??");
         // Printable Unicode (accents, CJK) is untouched.
         assert_eq!(sanitise_for_terminal("café 日本"), "café 日本");
+    }
+
+    /// Contract: a body shorter than [`ERROR_BODY_MAX_BYTES`] is preserved
+    /// verbatim so the cap doesn't silently shorten ordinary API error
+    /// messages — operator diagnostics need the gateway's actual hint when
+    /// it's already small.
+    #[test]
+    fn truncate_keeps_short_payloads_intact() {
+        let body = "quota exceeded for this hour".to_string();
+        assert_eq!(truncate_error_body(body.clone()), body);
+    }
+
+    /// Contract: error bodies are terminal-safe before they become a
+    /// `*Error::HttpStatus`; enrichment prints those errors to stderr when
+    /// the remote side fails.
+    #[test]
+    fn truncate_sanitises_control_bytes() {
+        let body = "gateway \x1b[2J\x1b[Hfake ok".to_string();
+
+        let cleaned = truncate_error_body(body);
+
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("gateway "));
+    }
+
+    /// Contract: a body longer than [`ERROR_BODY_MAX_BYTES`] is truncated
+    /// with a visible suffix. An attacker-controlled MITM (or a gateway
+    /// outage page) could otherwise push multi-KB HTML into operator logs
+    /// and terminals. The cap is enforced at the producer so every
+    /// downstream consumer inherits the bound.
+    #[test]
+    fn truncate_caps_long_payloads_with_suffix() {
+        let huge = "Y".repeat(ERROR_BODY_MAX_BYTES * 4);
+        let truncated = truncate_error_body(huge);
+        assert!(
+            truncated.len() <= ERROR_BODY_MAX_BYTES + "...[truncated]".len(),
+            "truncated body must be capped, got len={}",
+            truncated.len()
+        );
+        assert!(
+            truncated.ends_with("...[truncated]"),
+            "truncated body must carry the suffix; got tail: {:?}",
+            &truncated[truncated.len().saturating_sub(20)..]
+        );
+    }
+
+    /// Contract: truncation never splits a multi-byte UTF-8 character. The
+    /// `is_char_boundary` walk-back guards against `String` slicing panicking
+    /// when `ERROR_BODY_MAX_BYTES` lands inside a codepoint; an off-by-one
+    /// would corrupt the diagnostic string and crash a downstream JSON parser
+    /// that re-reads it.
+    #[test]
+    fn truncate_respects_utf8_char_boundary() {
+        // 4-byte UTF-8 char (U+1F600 grinning face) repeated until the body
+        // exceeds the cap, so the byte cap never falls cleanly on a char
+        // boundary at offsets like 511.
+        let body = "\u{1F600}".repeat(200);
+        assert!(body.len() > ERROR_BODY_MAX_BYTES);
+        let truncated = truncate_error_body(body);
+        let _ = std::str::from_utf8(truncated.as_bytes())
+            .expect("truncated body must remain valid UTF-8");
+        assert!(truncated.ends_with("...[truncated]"));
+        assert!(truncated.len() < ERROR_BODY_MAX_BYTES + 32);
     }
 }

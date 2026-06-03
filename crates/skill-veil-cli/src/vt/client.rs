@@ -9,7 +9,7 @@
 
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::terminal_safe::truncate_error_body;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -31,13 +31,6 @@ const INITIAL_BACKOFF_MS: u64 = 2_000;
 const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 60;
 const DOWNLOAD_HTTP_TIMEOUT_SECS: u64 = 300;
 
-/// Cap on the bytes from a VT error body that we keep for embedding in
-/// `VtError::HttpStatus { body }`. VT gateways return multi-kilobyte HTML
-/// pages on 5xx, and a hostile MITM can return arbitrarily large bodies.
-/// Anything beyond this point is truncation noise for operator diagnostics,
-/// so we drop it before it reaches log aggregators or operator terminals.
-const ERROR_BODY_MAX_BYTES: usize = 512;
-
 /// Hard ceiling for a single VT file download. VT's largest sample size is
 /// 650 MiB (per the public quota table); 768 MiB leaves headroom for that
 /// edge while preventing a hostile/misconfigured CDN or MITM from streaming
@@ -52,31 +45,6 @@ pub(crate) const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
 /// `MAX_RESPONSE_BODY_BYTES` (10 MiB). VT JSON responses are typically under
 /// 100 KiB; 10 MiB is a generous ceiling that covers large report objects.
 const MAX_JSON_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
-
-/// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes, ending on a
-/// UTF-8 char boundary, appending `"...[truncated]"` when shortened.
-fn truncate_error_body(body: String) -> String {
-    let body = sanitise_for_terminal(&body);
-    if body.len() <= ERROR_BODY_MAX_BYTES {
-        debug_assert!(
-            !body.chars().any(|c| c.is_control()),
-            "VT error bodies must be terminal-safe"
-        );
-        return body;
-    }
-    let mut end = ERROR_BODY_MAX_BYTES;
-    while end > 0 && !body.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut out = String::with_capacity(end + 14);
-    out.push_str(&body[..end]);
-    out.push_str("...[truncated]");
-    debug_assert!(
-        !out.chars().any(|c| c.is_control()),
-        "VT error bodies must be terminal-safe"
-    );
-    out
-}
 
 /// Drain `resp` into a string for embedding in an error.
 ///
@@ -749,7 +717,7 @@ mod redirect_tests {
 }
 
 #[cfg(test)]
-mod truncate_error_body_tests {
+mod read_response_with_cap_tests {
     use super::*;
 
     fn response_with_body(body: &str) -> ureq::Response {
@@ -760,52 +728,6 @@ mod truncate_error_body_tests {
         )
         .parse()
         .expect("synthetic response must parse")
-    }
-
-    /// Contract: a body shorter than [`ERROR_BODY_MAX_BYTES`] is preserved
-    /// verbatim. Pins the no-truncate branch so the cap doesn't silently
-    /// shorten ordinary VT error messages (operator diagnostics need
-    /// the gateway's actual hint when it's already small).
-    #[test]
-    fn truncate_keeps_short_payloads_intact() {
-        let body = "VT quota exceeded for this hour".to_string();
-        assert_eq!(truncate_error_body(body.clone()), body);
-    }
-
-    /// Contract: VT error bodies are terminal-safe before they become
-    /// `VtError::HttpStatus`; scan enrichment prints those errors to
-    /// stderr when VT is configured but the remote side fails.
-    #[test]
-    fn truncate_sanitises_control_bytes() {
-        let body = "VT gateway \x1b[2J\x1b[Hfake ok".to_string();
-
-        let cleaned = truncate_error_body(body);
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(cleaned.contains("VT gateway "));
-    }
-
-    /// Contract: a body longer than [`ERROR_BODY_MAX_BYTES`] is truncated
-    /// with a visible suffix. Pre-fix `VtError::HttpStatus` embedded the
-    /// full body uncapped, so an attacker-controlled MITM (or a VT gateway
-    /// outage page) could push multi-KB HTML into operator logs and
-    /// terminals. The cap is enforced at the producer (`drain_error_body`)
-    /// so every downstream consumer (`tracing::warn`, `eprintln!`,
-    /// structured-output formatters) inherits the bound.
-    #[test]
-    fn truncate_caps_long_payloads_with_suffix() {
-        let huge = "Y".repeat(ERROR_BODY_MAX_BYTES * 4);
-        let truncated = truncate_error_body(huge);
-        assert!(
-            truncated.len() <= ERROR_BODY_MAX_BYTES + "...[truncated]".len(),
-            "truncated body must be capped, got len={}",
-            truncated.len()
-        );
-        assert!(
-            truncated.ends_with("...[truncated]"),
-            "truncated body must carry the suffix; got tail: {:?}",
-            &truncated[truncated.len().saturating_sub(20)..]
-        );
     }
 
     /// Contract: a VT JSON response exactly at the byte cap is accepted.

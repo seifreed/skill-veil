@@ -11,7 +11,7 @@ use super::config::PromptIntelConfig;
 use super::types::{
     FeedResponse, PromptListEnvelope, ReportListEnvelope, ReportSubmissionResponse,
 };
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::terminal_safe::truncate_error_body;
 use std::io::{self, Read};
 use std::time::Duration;
 use thiserror::Error;
@@ -33,13 +33,6 @@ const INITIAL_BACKOFF_MS: u64 = 1_500;
 /// ceiling that still prevents a hostile/misconfigured endpoint from
 /// causing OOM by streaming an unbounded body into memory.
 const MAX_JSON_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
-
-/// Cap on the bytes from a PromptIntel error body that we keep for
-/// embedding in `PromptIntelError::HttpStatus { body }`. Anything beyond
-/// this point is truncation noise for diagnostics; capping the slice
-/// also prevents a hostile gateway from pushing large blobs into
-/// operator logs.
-const ERROR_BODY_MAX_BYTES: usize = 512;
 
 #[derive(Debug, Error)]
 pub(crate) enum PromptIntelError {
@@ -308,31 +301,6 @@ fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String> {
     })
 }
 
-/// Truncate `body` to at most [`ERROR_BODY_MAX_BYTES`] bytes on a UTF-8
-/// boundary, appending `"...[truncated]"` when shortened.
-fn truncate_error_body(body: String) -> String {
-    let body = sanitise_for_terminal(&body);
-    if body.len() <= ERROR_BODY_MAX_BYTES {
-        debug_assert!(
-            !body.chars().any(|c| c.is_control()),
-            "PromptIntel error bodies must be terminal-safe"
-        );
-        return body;
-    }
-    let mut end = ERROR_BODY_MAX_BYTES;
-    while end > 0 && !body.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut out = String::with_capacity(end + 14);
-    out.push_str(&body[..end]);
-    out.push_str("...[truncated]");
-    debug_assert!(
-        !out.chars().any(|c| c.is_control()),
-        "PromptIntel error bodies must be terminal-safe"
-    );
-    out
-}
-
 /// Drain `resp` into a string for embedding in an error. Mirrors the
 /// shape used by the VT and LLM clients so an operator who has
 /// debugged one error format already understands the others.
@@ -383,50 +351,6 @@ mod tests {
         )
         .parse()
         .expect("synthetic response must parse")
-    }
-
-    /// Contract: the truncator MUST NOT split a multi-byte UTF-8 char.
-    /// Pre-design check: we use `is_char_boundary` to walk back to a
-    /// valid boundary; an off-by-one would corrupt the diagnostic
-    /// string and crash any downstream JSON parser that re-reads it.
-    #[test]
-    fn truncate_error_body_respects_utf8_boundary() {
-        // 4-byte UTF-8 char (U+1F600 grinning face) repeated until the
-        // body exceeds the cap. Each char is 4 bytes, so the byte cap
-        // never falls cleanly on a char boundary at offsets like 511.
-        let body = "\u{1F600}".repeat(200);
-        assert!(body.len() > ERROR_BODY_MAX_BYTES);
-        let truncated = truncate_error_body(body);
-        // Round-trip through `from_utf8` to prove validity. If the
-        // truncator split a char boundary, this would surface as a
-        // parse error rather than a silent corruption.
-        let _ = std::str::from_utf8(truncated.as_bytes())
-            .expect("truncated body must remain valid UTF-8");
-        assert!(truncated.ends_with("...[truncated]"));
-        assert!(truncated.len() < ERROR_BODY_MAX_BYTES + 32);
-    }
-
-    /// Contract: bodies under the cap are passed through unchanged so
-    /// `Display` of `PromptIntelError::HttpStatus` shows the full upstream
-    /// message verbatim.
-    #[test]
-    fn truncate_error_body_passes_short_bodies_through() {
-        let short = "short error".to_string();
-        assert_eq!(truncate_error_body(short.clone()), short);
-    }
-
-    /// Contract: PromptIntel error bodies are terminal-safe before they
-    /// become `PromptIntelError::HttpStatus`; feed/report commands print
-    /// those errors through `Display` when the API rejects a request.
-    #[test]
-    fn truncate_error_body_sanitises_control_bytes() {
-        let body = "PromptIntel \x1b]8;;https://evil.invalid\x07click\x1b]8;;\x07".to_string();
-
-        let cleaned = truncate_error_body(body);
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(!cleaned.contains('\x07'));
-        assert!(cleaned.contains("PromptIntel "));
     }
 
     /// Contract: a PromptIntel JSON response exactly at the byte cap is
