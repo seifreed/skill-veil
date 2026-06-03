@@ -9,6 +9,7 @@
 //! standard verdict pipeline.
 
 use crate::analyzer::SkillDocument;
+use crate::detectors::scripts::looks_like_script;
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, SignalClass,
     ThreatCategory,
@@ -239,7 +240,7 @@ fn detect_contradictions(
     only_claims: &[ClaimKind],
 ) -> Vec<DetectedContradiction> {
     let mut out = Vec::new();
-    if !is_executable_artifact(artifact) {
+    if !looks_like_script(artifact) {
         return out;
     }
     for entry in &tables().entries {
@@ -305,34 +306,6 @@ fn locate_line(content: &str, byte_offset: usize) -> Option<usize> {
         }
     }
     Some(line)
-}
-
-fn is_executable_artifact(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "sh" | "bash"
-            | "zsh"
-            | "ksh"
-            | "fish"
-            | "py"
-            | "ps1"
-            | "psm1"
-            | "psd1"
-            | "js"
-            | "cjs"
-            | "mjs"
-            | "ts"
-            | "mts"
-            | "cts"
-            | "rb"
-            | "pl"
-            | "go"
-            | "rs"
-            | "php"
-    )
 }
 
 /// Public entry point. Returns one `Finding` per `(claim, contradicting
@@ -618,7 +591,7 @@ mod tests {
 
     #[test]
     fn contradiction_in_markdown_only_is_ignored() {
-        // is_executable_artifact() must filter out .md files so that example
+        // looks_like_script() must filter out .md files so that example
         // code blocks in documentation don't trigger the detector.
         let d = doc("# X\n\nNo network access.");
         let supporting = vec![(
@@ -860,38 +833,5 @@ mod tests {
             finding.line_number.is_some(),
             "supporting artifact contradiction must carry a concrete line number",
         );
-    }
-
-    /// Contract: `is_executable_artifact` MUST recognise KornShell,
-    /// Z-shell, Fish, PowerShell modules, Go, Rust, and PHP extensions.
-    /// Pre-fix only `sh | bash | py | ps1 | js | cjs | mjs | ts | rb | pl`
-    /// were accepted, so a `.ksh` or `.zsh` script that contradicts a
-    /// safety claim would not be checked for deceptive documentation at all.
-    #[test]
-    fn is_executable_artifact_covers_all_script_extensions() {
-        let extensions = [
-            "sh", "bash", "zsh", "ksh", "fish", "py", "ps1", "psm1", "psd1", "js", "cjs", "mjs",
-            "ts", "mts", "cts", "rb", "pl", "go", "rs", "php",
-        ];
-        for ext in extensions {
-            let path = std::path::PathBuf::from(format!("/tmp/script.{ext}"));
-            assert!(
-                is_executable_artifact(&path),
-                ".{ext} MUST be recognised as an executable artifact",
-            );
-        }
-    }
-
-    /// Contract: `is_executable_artifact` MUST NOT match non-executable
-    /// extensions like `.md`, `.txt`, `.json`, `.yaml`.
-    #[test]
-    fn is_executable_artifact_rejects_non_script_extensions() {
-        for ext in ["md", "txt", "json", "yaml", "yml", "toml", "xml", "csv"] {
-            let path = std::path::PathBuf::from(format!("/tmp/file.{ext}"));
-            assert!(
-                !is_executable_artifact(&path),
-                ".{ext} must NOT be classified as executable artifact",
-            );
-        }
     }
 }

@@ -1,6 +1,7 @@
 use super::{manifests, scripts, ArtifactLink, ArtifactOrchestratorService};
 use crate::analyzer::SkillDocument;
 use crate::artifact_graph::ArtifactCapabilityFact;
+use crate::detectors::scripts::looks_like_script;
 use crate::detectors::{lockfiles, mcp};
 use crate::findings::Finding;
 use std::path::{Path, PathBuf};
@@ -221,78 +222,4 @@ pub(crate) fn is_prompt_pack_document(path: &Path) -> bool {
                 .and_then(|parent| parent.file_name())
                 .and_then(|value| value.to_str())
                 .is_some_and(|name| name.eq_ignore_ascii_case("prompts")))
-}
-
-pub(super) fn looks_like_script(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref(),
-        Some(
-            "sh" | "bash"
-                | "zsh"
-                | "ksh"
-                | "fish"
-                | "ps1"
-                | "psm1"
-                | "psd1"
-                | "py"
-                | "js"
-                | "ts"
-                | "mjs"
-                | "cjs"
-                | "mts"
-                | "cts"
-                | "rb"
-                | "pl"
-                | "rs"
-                | "go"
-                | "php"
-        )
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Contract: `looks_like_script` MUST recognise PowerShell module
-    /// (`.psm1`) and data (`.psd1`) extensions. Pre-fix only `.ps1` was
-    /// accepted, so `.psm1` files escaped script analysis entirely.
-    #[test]
-    fn looks_like_script_accepts_powershell_variants() {
-        for ext in ["ps1", "psm1", "psd1"] {
-            let path = std::path::PathBuf::from(format!("/pkg/module.{ext}"));
-            assert!(
-                looks_like_script(&path),
-                ".{ext} MUST be recognised as a script extension",
-            );
-        }
-    }
-
-    /// Contract: `looks_like_script` MUST recognise all shell variants
-    /// including KornShell (`.ksh`) and Fish (`.fish`).
-    #[test]
-    fn looks_like_script_accepts_all_shell_variants() {
-        for ext in ["sh", "bash", "zsh", "ksh", "fish"] {
-            let path = std::path::PathBuf::from(format!("/pkg/script.{ext}"));
-            assert!(
-                looks_like_script(&path),
-                ".{ext} MUST be recognised as a script extension",
-            );
-        }
-    }
-
-    /// Contract: `looks_like_script` MUST NOT match non-script extensions.
-    #[test]
-    fn looks_like_script_rejects_non_script_extensions() {
-        for ext in ["md", "txt", "json", "yaml", "toml", "xml", "csv"] {
-            let path = std::path::PathBuf::from(format!("/pkg/file.{ext}"));
-            assert!(
-                !looks_like_script(&path),
-                ".{ext} must NOT be classified as a script extension",
-            );
-        }
-    }
 }
