@@ -9,6 +9,9 @@ ignore = [
     "RUSTSEC-2023-0071",
     # bincode 2.0.1 (transitive via yara-x) — unmaintained, no alternative in yara-x
     "RUSTSEC-2025-0141",
+    # paste 1.0.15 (transitive via fastembed → tokenizers / macro_rules_attribute)
+    # — author archived the crate; no safe upgrade available upstream.
+    "RUSTSEC-2024-0436",
 ]
 
 [licenses]
@@ -25,6 +28,13 @@ allow = [
     "Zlib",
     "0BSD",
     "LGPL-2.1-or-later",
+    # Permissive, GPL-3.0-compatible licenses on transitive deps:
+    # ISC (ring, hmac-sha256 via rustls/ort) — functionally MIT-equivalent;
+    # MPL-2.0 (option-ext via dirs) — file-level weak copyleft, GPL-compatible;
+    # CDLA-Permissive-2.0 (webpki-roots via ureq) — permissive CA-bundle data license.
+    "ISC",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]
