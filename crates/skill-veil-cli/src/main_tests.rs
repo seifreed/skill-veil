@@ -27,6 +27,15 @@ fn make_temp_rules_dir() -> PathBuf {
     dir
 }
 
+fn make_finding(id: &str) -> skill_veil_core::Finding {
+    skill_veil_core::Finding::builder(id, ThreatCategory::Generic)
+        .matched_on(MatchTarget::Document)
+        .match_value("payload")
+        .reason("test")
+        .action(RecommendedAction::Log)
+        .build()
+}
+
 /// # Contract
 ///
 /// Runtime errors are the final CLI terminal boundary and may include
@@ -938,15 +947,6 @@ fn format_dataset_verdicts_text_full_includes_detailed_fields() {
 /// first 4 of the 5-budget, leaving 1 for supporting).
 #[test]
 fn format_text_output_finding_limit_is_a_per_package_budget() {
-    fn make_finding(id: &str) -> skill_veil_core::Finding {
-        skill_veil_core::Finding::builder(id, ThreatCategory::Generic)
-            .matched_on(MatchTarget::Document)
-            .match_value("payload")
-            .reason("test")
-            .action(RecommendedAction::Log)
-            .build()
-    }
-
     let primary = vec![
         make_finding("RULE_PRIMARY_1"),
         make_finding("RULE_PRIMARY_2"),
@@ -1076,15 +1076,6 @@ fn format_text_output_finding_limit_is_a_per_package_budget() {
 /// operator opted into full output.
 #[test]
 fn format_text_output_finding_limit_none_renders_every_finding() {
-    fn make_finding(id: &str) -> skill_veil_core::Finding {
-        skill_veil_core::Finding::builder(id, ThreatCategory::Generic)
-            .matched_on(MatchTarget::Document)
-            .match_value("payload")
-            .reason("test")
-            .action(RecommendedAction::Log)
-            .build()
-    }
-
     let primary = vec![make_finding("RULE_P_1"), make_finding("RULE_P_2")];
     let supporting = vec![make_finding("RULE_S_1"), make_finding("RULE_S_2")];
 
