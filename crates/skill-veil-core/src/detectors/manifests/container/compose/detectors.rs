@@ -68,26 +68,13 @@ fn yaml_nesting_depth(value: &serde_yaml::Value) -> usize {
 /// the manifest's existence — and our inability to analyze it — is recorded
 /// in the audit output instead of being swallowed.
 pub(super) fn parse_failure_finding(artifact_path: &str, err: &str) -> Finding {
-    Finding::builder(
+    crate::detectors::manifests::manifest_parse_failure_finding(
         "MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE",
-        ThreatCategory::Generic,
-    )
-    .severity(Severity::Low)
-    .action(RecommendedAction::Log)
-    .evidence_kind(EvidenceKind::Context)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::PackageManifest,
-        Some(artifact_path.to_string()),
-    )
-    .match_value(err.to_string())
-    .reason(
+        artifact_path,
+        err.to_string(),
         "docker-compose manifest is not valid YAML; capability and \
          volume/env analyses cannot run against this file",
     )
-    .build()
 }
 
 pub(super) fn detect_latest_image_tag(

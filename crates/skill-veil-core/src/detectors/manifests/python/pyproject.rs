@@ -188,10 +188,7 @@ pub(crate) fn pyproject_toml_capabilities(content: &str) -> Vec<ArtifactCapabili
             ));
         }
     }
-    // `dedup_by_key` only collapses adjacent runs; deps emit interleaved
-    // capabilities, so sort first.
-    capabilities.sort_by_key(|c| c.capability);
-    capabilities.dedup_by_key(|c| c.capability);
+    super::super::dedup_capabilities_by_kind(&mut capabilities);
     capabilities
 }
 
@@ -223,23 +220,13 @@ pub(crate) fn pyproject_expected_lockfiles(content: &str) -> Vec<&'static str> {
 /// the contract pinned by `MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE` in
 /// `detectors/manifests/container/compose/detectors.rs`.
 fn pyproject_parse_failure_finding(artifact_path: &str, err: &toml::de::Error) -> Finding {
-    Finding::builder("MANIFEST_PYPROJECT_PARSE_FAILURE", ThreatCategory::Generic)
-        .severity(Severity::Low)
-        .action(RecommendedAction::Log)
-        .evidence_kind(EvidenceKind::Context)
-        .matched_on(MatchTarget::ReferencedFile {
-            path: artifact_path.to_string(),
-        })
-        .artifact(
-            ArtifactKind::PackageManifest,
-            Some(artifact_path.to_string()),
-        )
-        .match_value(err.to_string())
-        .reason(
-            "pyproject manifest is not valid TOML; dependency-pinning and \
-             lockfile analyses cannot run against this file",
-        )
-        .build()
+    super::super::manifest_parse_failure_finding(
+        "MANIFEST_PYPROJECT_PARSE_FAILURE",
+        artifact_path,
+        err.to_string(),
+        "pyproject manifest is not valid TOML; dependency-pinning and \
+         lockfile analyses cannot run against this file",
+    )
 }
 
 #[cfg(test)]

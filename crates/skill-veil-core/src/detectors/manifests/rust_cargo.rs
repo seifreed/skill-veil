@@ -83,10 +83,7 @@ pub(crate) fn cargo_toml_capabilities(content: &str) -> Vec<ArtifactCapabilityFa
             }
         }
     });
-    // `dedup_by_key` only collapses adjacent runs; crates emit interleaved
-    // capabilities (e.g. reqwest, nix, hyper, duct), so sort first.
-    capabilities.sort_by_key(|c| c.capability);
-    capabilities.dedup_by_key(|c| c.capability);
+    super::dedup_capabilities_by_kind(&mut capabilities);
     capabilities
 }
 
@@ -194,23 +191,13 @@ fn cargo_dependency_match_value(section: &str, name: &str, spec: &str) -> String
 /// dependency pinning, lockfile expectations, and capability inference
 /// cannot run against it.
 fn cargo_toml_parse_failure_finding(artifact_path: &str, err: &toml::de::Error) -> Finding {
-    Finding::builder("MANIFEST_CARGO_PARSE_FAILURE", ThreatCategory::Generic)
-        .severity(Severity::Low)
-        .action(RecommendedAction::Log)
-        .evidence_kind(EvidenceKind::Context)
-        .matched_on(MatchTarget::ReferencedFile {
-            path: artifact_path.to_string(),
-        })
-        .artifact(
-            ArtifactKind::PackageManifest,
-            Some(artifact_path.to_string()),
-        )
-        .match_value(err.to_string())
-        .reason(
-            "Cargo manifest is not valid TOML; dependency-pinning and \
-             lockfile analyses cannot run against this file",
-        )
-        .build()
+    super::manifest_parse_failure_finding(
+        "MANIFEST_CARGO_PARSE_FAILURE",
+        artifact_path,
+        err.to_string(),
+        "Cargo manifest is not valid TOML; dependency-pinning and \
+         lockfile analyses cannot run against this file",
+    )
 }
 
 /// Whether a Cargo dependency `version` string is a strict pin to one

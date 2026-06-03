@@ -87,10 +87,7 @@ pub(crate) fn requirements_txt_capabilities(content: &str) -> Vec<ArtifactCapabi
             ));
         }
     }
-    // `dedup_by_key` only collapses adjacent runs; deps emit interleaved
-    // capabilities (e.g. requests, fabric, httpx, invoke), so sort first.
-    capabilities.sort_by_key(|c| c.capability);
-    capabilities.dedup_by_key(|c| c.capability);
+    super::super::dedup_capabilities_by_kind(&mut capabilities);
     capabilities
 }
 

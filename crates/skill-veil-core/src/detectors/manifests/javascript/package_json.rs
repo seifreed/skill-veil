@@ -255,26 +255,13 @@ fn is_exact_npm_version_pin(version: &str) -> bool {
 /// contract pinned by `MANIFEST_DOCKER_COMPOSE_PARSE_FAILURE` in
 /// `detectors/manifests/container/compose/detectors.rs`.
 fn package_json_parse_failure_finding(artifact_path: &str, err: &serde_json::Error) -> Finding {
-    Finding::builder(
+    super::super::manifest_parse_failure_finding(
         "MANIFEST_PACKAGE_JSON_PARSE_FAILURE",
-        ThreatCategory::Generic,
-    )
-    .severity(Severity::Low)
-    .action(RecommendedAction::Log)
-    .evidence_kind(EvidenceKind::Context)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::PackageManifest,
-        Some(artifact_path.to_string()),
-    )
-    .match_value(err.to_string())
-    .reason(
+        artifact_path,
+        err.to_string(),
         "package.json manifest is not valid JSON; install-hook, bin-exposure \
          and dependency analyses cannot run against this file",
     )
-    .build()
 }
 
 /// Whether `package.json`'s `bin` field exposes at least one executable.
