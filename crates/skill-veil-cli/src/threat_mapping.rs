@@ -57,7 +57,7 @@ impl ThreatMapping {
     /// `rule_id_or_prefix -> [label, ...]`. YAML is a superset of JSON, so
     /// a single YAML parse accepts both.
     pub(crate) fn load(path: &Path) -> Result<Self> {
-        let text = std::fs::read_to_string(path)
+        let text = crate::util::bounded_read::read_operator_text_file(path)
             .with_context(|| format!("reading threat-mapping file {}", path.display()))?;
         let raw: BTreeMap<String, Vec<String>> = serde_yaml::from_str(&text)
             .with_context(|| format!("parsing threat-mapping file {}", path.display()))?;

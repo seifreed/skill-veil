@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use skill_veil_core::PackageScanResult;
 
 use crate::util::terminal_safe::sanitise_for_terminal;
@@ -66,10 +65,9 @@ fn find_overlaps(packages: &[(String, Vec<(String, String)>)]) -> Vec<OverlapGro
 }
 
 fn hash_file(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(&bytes);
-    Some(format!("{:x}", hasher.finalize()))
+    crate::util::hash::sha256_file_with_cap(path, MAX_HASH_FILE_BYTES)
+        .ok()
+        .flatten()
 }
 
 /// Bounded recursive walk of a package root, returning `(path, hash)` for
