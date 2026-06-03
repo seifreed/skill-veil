@@ -19,6 +19,10 @@ const HTTP_TIMEOUT_SECS: u64 = 30;
 const MAX_ADDITIONAL_ATTEMPTS: u32 = 2;
 const INITIAL_BACKOFF_MS: u64 = 1_000;
 const MAX_ADVISORY_ID_LEN: usize = 128;
+/// Cap on an OSV API response body. A compromised or misbehaving endpoint
+/// could otherwise stream an unbounded body into memory; every other API
+/// client in this crate bounds its response the same way.
+const MAX_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub(super) enum OsvError {
@@ -120,9 +124,7 @@ impl OsvClient {
             let outcome = send();
             match outcome.map_err(|boxed| *boxed) {
                 Ok(resp) => {
-                    return resp
-                        .into_json::<T>()
-                        .map_err(|e| OsvError::Decode(e.to_string()));
+                    return decode_json_with_cap(resp, MAX_RESPONSE_BYTES);
                 }
                 Err(ureq::Error::Status(status, _)) => {
                     // Retry only on rate-limit / server errors.
@@ -148,9 +150,49 @@ impl OsvClient {
     }
 }
 
+/// Read an OSV response body with a size cap, then decode it as JSON. Bounds
+/// the body before allocation so a hostile or misbehaving endpoint cannot
+/// stream an unbounded payload into memory, matching the other API clients.
+fn decode_json_with_cap<T: serde::de::DeserializeOwned>(
+    resp: ureq::Response,
+    cap: u64,
+) -> Result<T, OsvError> {
+    let body = crate::util::bounded_read::read_response_with_cap(resp, cap)
+        .map_err(|e| OsvError::Decode(e.to_string()))?;
+    serde_json::from_str::<T>(&body).map_err(|e| OsvError::Decode(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn response_with_body(body: &str) -> ureq::Response {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .parse()
+        .expect("synthetic response must parse")
+    }
+
+    /// Contract: a normal OSV response under the cap decodes as JSON. Guards
+    /// the capped read path against breaking ordinary decoding.
+    #[test]
+    fn decode_json_with_cap_accepts_body_under_cap() {
+        let value: serde_json::Value =
+            decode_json_with_cap(response_with_body("{\"ok\":true}"), 1024).unwrap();
+        assert_eq!(value["ok"], serde_json::Value::Bool(true));
+    }
+
+    /// Contract: a body larger than the cap is rejected before JSON decoding,
+    /// so a hostile endpoint cannot exhaust memory through the OSV channel.
+    #[test]
+    fn decode_json_with_cap_rejects_body_over_cap() {
+        let err = decode_json_with_cap::<serde_json::Value>(response_with_body("{\"x\":12345}"), 4)
+            .expect_err("oversized OSV body must be rejected before decode");
+        assert!(matches!(err, OsvError::Decode(_)));
+    }
 
     #[test]
     fn advisory_id_validation_accepts_real_ids_and_rejects_url_shaping() {
