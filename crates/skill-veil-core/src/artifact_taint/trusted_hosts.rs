@@ -219,7 +219,7 @@ pub(super) fn is_documentation_or_reserved_host(endpoint: &str) -> bool {
     false
 }
 
-fn is_loopback_ipv4(host: &str) -> bool {
+pub(super) fn is_loopback_ipv4(host: &str) -> bool {
     if !is_ipv4_literal(host) {
         return false;
     }

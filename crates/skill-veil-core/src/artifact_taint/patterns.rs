@@ -1,7 +1,9 @@
 use crate::artifact_graph::{ArtifactEdge, EndpointKind};
 use crate::detectors::scripts::references_dotenv_file;
 
-use super::trusted_hosts::{extract_host, is_documentation_or_reserved_host, parse_endpoint_url};
+use super::trusted_hosts::{
+    extract_host, is_documentation_or_reserved_host, is_loopback_ipv4, parse_endpoint_url,
+};
 
 pub(super) fn looks_like_secret_target(target: &str) -> bool {
     let lower = target.to_ascii_lowercase();
@@ -213,20 +215,6 @@ pub(super) fn looks_like_local_endpoint(endpoint: &str) -> bool {
         || matches!(host.as_str(), "::1" | "[::1]")
         || host.ends_with(".local")
         || host.ends_with(".internal")
-}
-
-fn is_loopback_ipv4(host: &str) -> bool {
-    if !host.starts_with("127.") {
-        return false;
-    }
-    let mut octets = 0;
-    for part in host.split('.') {
-        if part.is_empty() || part.parse::<u8>().is_err() {
-            return false;
-        }
-        octets += 1;
-    }
-    octets == 4
 }
 
 pub(super) fn looks_like_registry_url(url: &str) -> bool {
