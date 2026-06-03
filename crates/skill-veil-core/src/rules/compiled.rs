@@ -84,55 +84,6 @@ fn folded_char_count(ch: char) -> usize {
     }
 }
 
-pub(super) fn artifact_kind_for_document(doc: &SkillDocument) -> ArtifactKind {
-    let file_name = doc
-        .path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::to_ascii_lowercase);
-    match file_name.as_deref() {
-        Some("mcp.json" | "mcp.yaml" | "mcp.yml") => ArtifactKind::McpServerManifest,
-        Some(
-            "package.json"
-            | "requirements.txt"
-            | "pyproject.toml"
-            | "cargo.toml"
-            | "dockerfile"
-            | "docker-compose.yml"
-            | "docker-compose.yaml"
-            | "makefile"
-            | ".npmrc"
-            | "pip.conf",
-        ) => ArtifactKind::PackageManifest,
-        Some(
-            "package-lock.json"
-            | "cargo.lock"
-            | "poetry.lock"
-            | "uv.lock"
-            | "pipfile.lock"
-            | "yarn.lock"
-            | "pnpm-lock.yaml"
-            | "npm-shrinkwrap.json",
-        ) => ArtifactKind::Lockfile,
-        Some("agents.md" | "claude.md" | "system.md" | "persona.md" | "soul.md") => {
-            ArtifactKind::AgentInstruction
-        }
-        Some(name) if name.ends_with(".prompt.md") => ArtifactKind::PromptPackDocument,
-        Some("skill.md") => ArtifactKind::SkillDocument,
-        Some(name) if name.ends_with(".skill.md") => ArtifactKind::SkillDocument,
-        _ if doc
-            .path
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("prompts")) =>
-        {
-            ArtifactKind::PromptPackDocument
-        }
-        _ => ArtifactKind::ReferencedArtifact,
-    }
-}
-
 impl CompiledRule {
     /// Compile a rule for matching
     ///
@@ -653,7 +604,7 @@ impl CompiledRule {
         doc: &SkillDocument,
         findings: &mut Vec<Finding>,
     ) -> bool {
-        let artifact_kind = artifact_kind_for_document(doc);
+        let artifact_kind = crate::artifact_kind_for_path(&doc.path);
         if kinds.contains(&artifact_kind) {
             findings.push(self.create_finding(
                 MatchTarget::Document,
