@@ -135,6 +135,29 @@ pub(super) const TRUSTED_API_HOSTS: &[&str] = &[
     "api.telegram.org",
     "api.spotify.com",
     "api.youtube.com",
+    // Categorical non-exfiltration destinations: public package
+    // registries and app stores are read-only distribution endpoints —
+    // a credential POSTed "to" PyPI or the App Store cannot be
+    // exfiltrated there, so a secret→registry taint edge is noise, not
+    // a data-loss vector. Distinct from the API hosts above (which are
+    // trusted because they own the credential); these are trusted
+    // because the destination is structurally incapable of receiving an
+    // exfiltrated secret.
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "*.npmjs.com",
+    "npmjs.org",
+    "crates.io",
+    "static.crates.io",
+    "rubygems.org",
+    "pkg.go.dev",
+    "proxy.golang.org",
+    "packagist.org",
+    "repo.maven.apache.org",
+    "repo1.maven.org",
+    "apps.apple.com",
+    "itunes.apple.com",
 ];
 
 /// RFC2606 / RFC6761 reserved hostnames and TLDs that document
@@ -626,6 +649,38 @@ mod tests {
             assert!(
                 is_trusted_api_host(host),
                 "expected {host} to be on allowlist",
+            );
+        }
+    }
+
+    /// # Contract
+    /// Public package registries and app stores are read-only
+    /// distribution endpoints — a secret cannot be exfiltrated *to*
+    /// them — so a secret→registry taint edge is noise, not data loss.
+    /// They are trusted destinations; a credential-bearing host (a
+    /// webhook, pastebin, or attacker domain) is not and must stay
+    /// untrusted.
+    #[test]
+    fn allowlist_includes_categorical_non_exfil_destinations() {
+        for host in [
+            "https://pypi.org/simple/requests/",
+            "https://files.pythonhosted.org/packages/x.whl",
+            "https://registry.npmjs.org/left-pad",
+            "https://crates.io/api/v1/crates/serde",
+            "https://rubygems.org/gems/rails",
+            "https://pkg.go.dev/golang.org/x/net",
+            "https://apps.apple.com/app/id123",
+        ] {
+            assert!(is_trusted_api_host(host), "expected {host} trusted");
+        }
+        for host in [
+            "https://hooks.evil-c2.example/collect",
+            "https://pastebin.com/raw/abc",
+            "https://pypi.org.attacker.test/steal",
+        ] {
+            assert!(
+                !is_trusted_api_host(host),
+                "exfil-capable host must stay untrusted: {host}"
             );
         }
     }
