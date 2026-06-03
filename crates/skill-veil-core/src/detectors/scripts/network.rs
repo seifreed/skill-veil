@@ -6,7 +6,7 @@ use crate::findings::{
 };
 
 use super::dotenv::references_dotenv_file;
-use super::match_helpers::original_match_str;
+use super::match_helpers::{findings_from_pattern_table, FindingSpec};
 use super::patterns::REMOTE_BINARY_PATTERNS;
 
 pub(crate) fn detect_remote_binary_downloads(
@@ -14,29 +14,18 @@ pub(crate) fn detect_remote_binary_downloads(
     original: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    for (rule_id, regex) in REMOTE_BINARY_PATTERNS.iter() {
-        for matched in regex.find_matches(lower) {
-            let evidence = original_match_str(original, lower, &matched);
-            findings.push(
-                Finding::builder(*rule_id, ThreatCategory::SupplyChain)
-                    .severity(Severity::High)
-                    .action(RecommendedAction::RequireApproval)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.to_string(),
-                    })
-                    .artifact(
-                        ArtifactKind::ReferencedArtifact,
-                        Some(artifact_path.to_string()),
-                    )
-                    .match_value(evidence)
-                    .reason("Script downloads a remote script or binary payload")
-                    .build(),
-            );
-        }
-    }
-    findings
+    findings_from_pattern_table(
+        &REMOTE_BINARY_PATTERNS,
+        lower,
+        original,
+        artifact_path,
+        FindingSpec {
+            category: ThreatCategory::SupplyChain,
+            severity: Severity::High,
+            action: RecommendedAction::RequireApproval,
+            reason: "Script downloads a remote script or binary payload",
+        },
+    )
 }
 
 /// Window of lines (from a read-secret line) inside which a network egress

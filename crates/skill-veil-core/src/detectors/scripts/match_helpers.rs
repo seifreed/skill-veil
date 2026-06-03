@@ -2,7 +2,60 @@
 //! lowercased content with the original-cased source for evidence
 //! presentation.
 
-use crate::ports::PatternMatch;
+use crate::findings::{
+    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
+};
+use crate::ports::{CompiledPattern, PatternMatch};
+
+/// The per-detector scalars that distinguish one script-pattern emission from
+/// another. Everything else in the loop is invariant (see
+/// [`findings_from_pattern_table`]).
+#[derive(Clone, Copy)]
+pub(super) struct FindingSpec {
+    pub(super) category: ThreatCategory,
+    pub(super) severity: Severity,
+    pub(super) action: RecommendedAction,
+    pub(super) reason: &'static str,
+}
+
+/// Emit one `Finding` per regex match across a `(rule_id, pattern)` table.
+///
+/// Shared by the script detectors (`network`, `persistence`, `exec`) whose
+/// emission loop is otherwise identical: every match against the lowercased
+/// `lower` becomes a `Behavior` finding on the referenced artifact, with the
+/// original-cased evidence preserved via [`original_match_str`]. Callers that
+/// select the table by language do so before calling.
+pub(super) fn findings_from_pattern_table(
+    table: &[(&str, CompiledPattern)],
+    lower: &str,
+    original: &str,
+    artifact_path: &str,
+    spec: FindingSpec,
+) -> Vec<Finding> {
+    let mut findings = Vec::new();
+    for (rule_id, regex) in table {
+        for matched in regex.find_matches(lower) {
+            let evidence = original_match_str(original, lower, &matched);
+            findings.push(
+                Finding::builder(*rule_id, spec.category)
+                    .severity(spec.severity)
+                    .action(spec.action)
+                    .evidence_kind(EvidenceKind::Behavior)
+                    .matched_on(MatchTarget::ReferencedFile {
+                        path: artifact_path.to_string(),
+                    })
+                    .artifact(
+                        ArtifactKind::ReferencedArtifact,
+                        Some(artifact_path.to_string()),
+                    )
+                    .match_value(evidence)
+                    .reason(spec.reason)
+                    .build(),
+            );
+        }
+    }
+    findings
+}
 
 /// Extract the byte slice from `original` that corresponds to a port-typed
 /// match produced against the lowercased content.

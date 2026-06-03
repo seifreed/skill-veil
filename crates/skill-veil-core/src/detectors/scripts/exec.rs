@@ -9,7 +9,7 @@ use crate::detectors::patterns::{
     line_contains_command_token, line_invokes_powershell_expression_alias,
 };
 
-use super::match_helpers::original_match_str;
+use super::match_helpers::{findings_from_pattern_table, FindingSpec};
 use super::patterns::{
     NODE_INJECTION_PATTERNS, POWERSHELL_INJECTION_PATTERNS, PYTHON_INJECTION_PATTERNS,
     SHELL_INJECTION_PATTERNS,
@@ -409,26 +409,18 @@ pub(crate) fn detect_injection_patterns(
         "ps1" | "psm1" | "psd1" => &POWERSHELL_INJECTION_PATTERNS,
         _ => &[],
     };
-    let mut findings = Vec::new();
-    for (rule_id, regex) in patterns {
-        for matched in regex.find_matches(lower) {
-            let evidence = original_match_str(original, lower, &matched);
-            findings.push(
-                Finding::builder(*rule_id, ThreatCategory::RemoteExec)
-                    .severity(Severity::High)
-                    .action(RecommendedAction::RequireApproval)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.to_string(),
-                    })
-                    .artifact(ArtifactKind::ReferencedArtifact, Some(artifact_path.to_string()))
-                    .match_value(evidence)
-                    .reason("Script contains an execution sink that appears to be influenced by variable or user-controlled input")
-                    .build(),
-            );
-        }
-    }
-    findings
+    findings_from_pattern_table(
+        patterns,
+        lower,
+        original,
+        artifact_path,
+        FindingSpec {
+            category: ThreatCategory::RemoteExec,
+            severity: Severity::High,
+            action: RecommendedAction::RequireApproval,
+            reason: "Script contains an execution sink that appears to be influenced by variable or user-controlled input",
+        },
+    )
 }
 
 #[cfg(test)]

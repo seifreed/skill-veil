@@ -7,7 +7,7 @@ use crate::findings::{
 
 use crate::detectors::patterns::line_contains_command_token;
 
-use super::match_helpers::original_match_str;
+use super::match_helpers::{findings_from_pattern_table, FindingSpec};
 use super::patterns::DEFERRED_PATTERNS;
 
 const SHELL_PERSISTENCE_WRITE_TOKENS: &[&str] = &["echo", "printf", "cat", "tee"];
@@ -24,29 +24,18 @@ pub(crate) fn detect_deferred_execution(
     original: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    let mut findings = Vec::new();
-    for (rule_id, regex) in DEFERRED_PATTERNS.iter() {
-        for matched in regex.find_matches(lower) {
-            let evidence = original_match_str(original, lower, &matched);
-            findings.push(
-                Finding::builder(*rule_id, ThreatCategory::PrivilegeEscalation)
-                    .severity(Severity::Medium)
-                    .action(RecommendedAction::Block)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.to_string(),
-                    })
-                    .artifact(
-                        ArtifactKind::ReferencedArtifact,
-                        Some(artifact_path.to_string()),
-                    )
-                    .match_value(evidence)
-                    .reason("Script configures deferred execution or persistence")
-                    .build(),
-            );
-        }
-    }
-    findings
+    findings_from_pattern_table(
+        &DEFERRED_PATTERNS,
+        lower,
+        original,
+        artifact_path,
+        FindingSpec {
+            category: ThreatCategory::PrivilegeEscalation,
+            severity: Severity::Medium,
+            action: RecommendedAction::Block,
+            reason: "Script configures deferred execution or persistence",
+        },
+    )
 }
 
 pub(crate) fn detect_powershell_persistence(
