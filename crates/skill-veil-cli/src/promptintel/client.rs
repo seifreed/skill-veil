@@ -125,17 +125,43 @@ impl PromptIntelClient {
     }
 
     fn get_json_with_meta(&self, url: &str) -> Result<(String, ResponseMeta)> {
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-        let mut attempts_remaining = MAX_ADDITIONAL_ATTEMPTS;
-        loop {
-            let response = self
-                .agent
+        self.execute_with_retry(|| {
+            self.agent
                 .get(url)
                 .set("Authorization", &format!("Bearer {}", self.config.apikey))
                 .set("Accept", "application/json")
                 .set("User-Agent", USER_AGENT)
-                .call();
-            match response {
+                .call()
+                .map_err(Box::new)
+        })
+    }
+
+    fn post_json_with_meta(&self, url: &str, body_json: &str) -> Result<(String, ResponseMeta)> {
+        self.execute_with_retry(|| {
+            self.agent
+                .post(url)
+                .set("Authorization", &format!("Bearer {}", self.config.apikey))
+                .set("Accept", "application/json")
+                .set("Content-Type", "application/json")
+                .set("User-Agent", USER_AGENT)
+                .send_string(body_json)
+                .map_err(Box::new)
+        })
+    }
+
+    /// Drive `request` to a JSON body + [`ResponseMeta`], retrying 429 and 5xx
+    /// with exponential backoff up to [`MAX_ADDITIONAL_ATTEMPTS`] times. Other
+    /// 4xx statuses are operator-fixable, so they fail immediately — the same
+    /// body would re-trip the same validation. Shared by the GET and POST
+    /// helpers, which differ only in how they build the request.
+    fn execute_with_retry(
+        &self,
+        request: impl Fn() -> std::result::Result<ureq::Response, Box<ureq::Error>>,
+    ) -> Result<(String, ResponseMeta)> {
+        let mut backoff_ms = INITIAL_BACKOFF_MS;
+        let mut attempts_remaining = MAX_ADDITIONAL_ATTEMPTS;
+        loop {
+            match request().map_err(|boxed| *boxed) {
                 Ok(resp) => {
                     let status = resp.status();
                     if !(200..300).contains(&status) {
@@ -164,65 +190,6 @@ impl PromptIntelClient {
                     if attempts_remaining > 0 {
                         tracing::warn!(
                             "PromptIntel transport error, sleeping {}ms before retry: {}",
-                            backoff_ms,
-                            t
-                        );
-                        std::thread::sleep(Duration::from_millis(backoff_ms));
-                        backoff_ms = backoff_ms.saturating_mul(2);
-                        attempts_remaining -= 1;
-                        continue;
-                    }
-                    return Err(PromptIntelError::Transport(t.to_string()));
-                }
-            }
-        }
-    }
-
-    fn post_json_with_meta(&self, url: &str, body_json: &str) -> Result<(String, ResponseMeta)> {
-        let mut backoff_ms = INITIAL_BACKOFF_MS;
-        let mut attempts_remaining = MAX_ADDITIONAL_ATTEMPTS;
-        loop {
-            let response = self
-                .agent
-                .post(url)
-                .set("Authorization", &format!("Bearer {}", self.config.apikey))
-                .set("Accept", "application/json")
-                .set("Content-Type", "application/json")
-                .set("User-Agent", USER_AGENT)
-                .send_string(body_json);
-            match response {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if !(200..300).contains(&status) {
-                        let body = drain_error_body(status, resp);
-                        return Err(PromptIntelError::HttpStatus { status, body });
-                    }
-                    let meta = ResponseMeta::from_headers(&resp);
-                    return bounded_read_response(resp).map(|body| (body, meta));
-                }
-                Err(ureq::Error::Status(status, resp)) => {
-                    let body = drain_error_body(status, resp);
-                    // 4xx (other than 429) are operator-fixable; do not
-                    // retry — the same body would re-trip the same
-                    // validation. 429 / 5xx are transient enough to
-                    // warrant the existing backoff.
-                    if matches!(status, 429 | 500..=599) && attempts_remaining > 0 {
-                        tracing::warn!(
-                            "PromptIntel POST returned HTTP {} — sleeping {}ms before retry",
-                            status,
-                            backoff_ms
-                        );
-                        std::thread::sleep(Duration::from_millis(backoff_ms));
-                        backoff_ms = backoff_ms.saturating_mul(2);
-                        attempts_remaining -= 1;
-                        continue;
-                    }
-                    return Err(PromptIntelError::HttpStatus { status, body });
-                }
-                Err(ureq::Error::Transport(t)) => {
-                    if attempts_remaining > 0 {
-                        tracing::warn!(
-                            "PromptIntel POST transport error, sleeping {}ms: {}",
                             backoff_ms,
                             t
                         );
