@@ -103,7 +103,7 @@ impl NativeKeywordEvaluator {
         if let Some(rx) = cache.get(&cache_key) {
             return Some(rx.clone());
         }
-        let rx = regex::RegexBuilder::new(pattern)
+        let rx = crate::regex_bounds::bounded_regex_builder(pattern)
             .case_insensitive(!case_sensitive)
             .build()
             .ok()?;

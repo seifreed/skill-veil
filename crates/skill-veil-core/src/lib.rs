@@ -74,6 +74,7 @@ pub(crate) mod path_safety;
 pub(crate) mod patterns;
 pub mod policy;
 pub mod ports;
+pub(crate) mod regex_bounds;
 pub mod rules;
 pub mod scanner;
 mod scanner_execution;

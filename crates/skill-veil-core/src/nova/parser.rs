@@ -474,9 +474,11 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
         }
         let body = &value[1..closing];
         let case_sensitive = !trailing_i; // `/x/` is case-sensitive; `/x/i` is not
-        regex::Regex::new(body).map_err(|source| ParseError::InvalidRegex {
-            pattern: body.to_string(),
-            source,
+        crate::regex_bounds::build_bounded_regex(body).map_err(|source| {
+            ParseError::InvalidRegex {
+                pattern: body.to_string(),
+                source,
+            }
         })?;
         return Ok(KeywordPattern {
             pattern: body.to_string(),
@@ -1308,6 +1310,23 @@ rule InjectDynamicContext
         let rules = parse_rules(body).unwrap();
         assert!(rules[0].keywords["x"].is_regex);
         assert_eq!(rules[0].keywords["x"].pattern, "\\/foo\\/");
+    }
+
+    /// Contract: a keyword regex whose automaton exceeds the shared size cap
+    /// is rejected at parse time (community NOVA packs are attacker-influenced;
+    /// the bound must apply on the NOVA path too, not just the YAML matcher).
+    #[test]
+    fn oversized_keyword_regex_is_rejected() {
+        let body = r#"
+            rule Bomb {
+                keywords:
+                    $x = /a{1000000}{2}/
+                condition:
+                    keywords.$x
+            }
+        "#;
+        let err = parse_rules(body).expect_err("oversized regex must be rejected");
+        assert!(matches!(err, ParseError::InvalidRegex { .. }));
     }
 
     /// Contract: `//` inside a single-quoted keyword literal is pattern

@@ -1,34 +1,10 @@
 //! Pattern matcher implementation using the regex crate
 
 use crate::ports::{Captures, CompiledPattern, PatternError, PatternMatch, PatternMatcher};
-use regex::{Regex, RegexBuilder};
+use crate::regex_bounds::build_bounded_regex;
+use regex::Regex;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
-
-/// Hard upper bound on the compiled NFA size for a single regex pattern,
-/// in bytes. Mitigates ReDoS / state-explosion from user-supplied
-/// rule-pack patterns by bounding the work the regex crate will accept
-/// at compile time. The default in the `regex` crate is 10 MiB; we
-/// tighten to 8 MiB so genuinely-complex curated IOC patterns
-/// (`URL_PATTERN`, multi-MB IOC alternations) still compile while
-/// catastrophic patterns (`a{1000000}{2}`) are rejected.
-const REGEX_NFA_SIZE_LIMIT: usize = 8 * (1 << 20); // 8 MiB
-
-/// Hard upper bound on the lazy DFA cache for a single compiled regex.
-/// Bounds runtime memory growth on adversarial inputs in addition to
-/// `REGEX_NFA_SIZE_LIMIT`, which only bounds compile-time NFA size.
-const REGEX_DFA_SIZE_LIMIT: usize = 8 * (1 << 20); // 8 MiB
-
-/// Compile `pattern` with the size-bounded `RegexBuilder`. Centralising
-/// the construction in one helper means every code path — the cached
-/// trait-method calls and the `compile()` port — applies the same
-/// limits without forgetting one.
-fn build_bounded_regex(pattern: &str) -> Result<Regex, regex::Error> {
-    RegexBuilder::new(pattern)
-        .size_limit(REGEX_NFA_SIZE_LIMIT)
-        .dfa_size_limit(REGEX_DFA_SIZE_LIMIT)
-        .build()
-}
 
 /// Pattern matcher implementation using the regex crate.
 ///
