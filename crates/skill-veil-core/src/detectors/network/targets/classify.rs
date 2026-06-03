@@ -105,8 +105,8 @@ fn classify_url_authority(url: &url::Url) -> Option<NetworkTarget> {
 }
 
 fn classify_domain_host(host: &str) -> Option<NetworkTarget> {
-    let lower = host.trim_end_matches('.').to_ascii_lowercase();
-    if lower == "localhost" || lower.ends_with(".localhost") {
+    let lower = crate::net_util::normalize_host(host);
+    if crate::net_util::host_is_localhost(&lower) {
         Some(NetworkTarget::Localhost)
     } else if RE_INTERNAL_DOMAIN.is_match(&lower) {
         Some(NetworkTarget::InternalDomain)

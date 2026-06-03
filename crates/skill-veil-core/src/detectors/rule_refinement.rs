@@ -86,19 +86,18 @@ fn url_host_is_local(raw: &str) -> bool {
             IpAddr::V4(addr).is_loopback() || addr.is_private() || addr.is_link_local()
         }
         Some(url::Host::Ipv6(addr)) => {
-            addr.is_loopback()
+            crate::net_util::ipv6_is_loopback_or_mapped_loopback(addr)
                 || addr
                     .to_ipv4_mapped()
-                    .is_some_and(|mapped| mapped.is_loopback() || mapped.is_private())
+                    .is_some_and(|mapped| mapped.is_private())
         }
         None => false,
     }
 }
 
 fn host_label_is_local(host: &str) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    host == "localhost"
-        || host.ends_with(".localhost")
+    let host = crate::net_util::normalize_host(host);
+    crate::net_util::host_is_localhost(&host)
         || host.ends_with(".local")
         || host.ends_with(".internal")
 }

@@ -67,6 +67,7 @@ mod detectors;
 pub mod findings;
 mod inline_suppressions;
 pub mod ioc_extraction;
+pub(crate) mod net_util;
 pub mod nova;
 pub(crate) mod path_safety;
 pub(crate) mod patterns;

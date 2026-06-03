@@ -10,7 +10,6 @@
 //! it is satisfied by a flat `&str` and does not need this module's
 //! sectional view.
 
-use std::net::Ipv6Addr;
 use std::path::Path;
 
 use crate::analyzer::SkillDocument;
@@ -420,29 +419,21 @@ fn is_documentation_or_loopback_url(url: &str) -> bool {
     match parsed.host() {
         Some(url::Host::Domain(host)) => is_documentation_or_loopback_host(host),
         Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
-        Some(url::Host::Ipv6(addr)) => ipv6_is_loopback_or_mapped_loopback(addr),
+        Some(url::Host::Ipv6(addr)) => crate::net_util::ipv6_is_loopback_or_mapped_loopback(addr),
         None => false,
     }
 }
 
 fn is_documentation_or_loopback_host(host: &str) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let host = crate::net_util::normalize_host(host);
     matches!(host.as_str(), "example.com" | "example.org" | "example.net")
         || host.ends_with(".example.com")
         || host.ends_with(".example.org")
         || host.ends_with(".example.net")
-        || host == "localhost"
-        || host.ends_with(".localhost")
+        || crate::net_util::host_is_localhost(&host)
         || host.ends_with(".test")
         || host.ends_with(".invalid")
         || host.ends_with(".example")
-}
-
-fn ipv6_is_loopback_or_mapped_loopback(addr: Ipv6Addr) -> bool {
-    addr.is_loopback()
-        || addr
-            .to_ipv4_mapped()
-            .is_some_and(|mapped| mapped.is_loopback())
 }
 
 /// True if any line of `text` contains an exec verb but no URL.
