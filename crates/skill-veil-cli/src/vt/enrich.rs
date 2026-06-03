@@ -178,7 +178,7 @@ pub(crate) fn enrich_iocs(
     }
 
     for domain in &iocs.domains {
-        let key = sha256_of_str(domain);
+        let key = crate::util::hash::sha256_hex(domain.as_bytes());
         let cache_path = cache_file_path(&opts.cache_root, "domains", &key);
         if let Some(fresh) = load_fresh(&cache_path, Duration::days(DOMAIN_CACHE_TTL_DAYS), domain)?
         {
@@ -198,7 +198,7 @@ pub(crate) fn enrich_iocs(
         // the URL path. The directory still segregates by kind so an
         // operator inspecting the cache can tell ips from domains at a
         // glance even if individual entries are no longer human-readable.
-        let key = sha256_of_str(ip);
+        let key = crate::util::hash::sha256_hex(ip.as_bytes());
         let cache_path = cache_file_path(&opts.cache_root, "ips", &key);
         if let Some(fresh) = load_fresh(&cache_path, Duration::days(IP_CACHE_TTL_DAYS), ip)? {
             out.ips.push(fresh);
@@ -211,7 +211,7 @@ pub(crate) fn enrich_iocs(
 
     for url in &iocs.urls {
         // URL cache key: sha256 of canonical URL so filesystem-safe.
-        let key = sha256_of_str(url);
+        let key = crate::util::hash::sha256_hex(url.as_bytes());
         let cache_path = cache_file_path(&opts.cache_root, "urls", &key);
         if let Some(fresh) = load_fresh(&cache_path, Duration::days(URL_CACHE_TTL_DAYS), url)? {
             out.urls.push(fresh);
@@ -412,13 +412,6 @@ fn cache_file_path(root: &Path, kind: &str, key: &str) -> PathBuf {
     root.join(kind).join(format!("{safe}.json"))
 }
 
-fn sha256_of_str(s: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(s.as_bytes());
-    format!("{:x}", h.finalize())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -462,10 +455,10 @@ mod tests {
     /// hashes IP/domain keys with SHA-256 like the URL path already did.
     #[test]
     fn distinct_ipv6_addresses_hash_to_distinct_cache_keys() {
-        let a = sha256_of_str("::1");
-        let b = sha256_of_str("0:0:0:0:0:0:0:1");
-        let c = sha256_of_str("2001:db8::1");
-        let d = sha256_of_str("2001:db8:0:0:0:0:0:1");
+        let a = crate::util::hash::sha256_hex("::1".as_bytes());
+        let b = crate::util::hash::sha256_hex("0:0:0:0:0:0:0:1".as_bytes());
+        let c = crate::util::hash::sha256_hex("2001:db8::1".as_bytes());
+        let d = crate::util::hash::sha256_hex("2001:db8:0:0:0:0:0:1".as_bytes());
         assert_ne!(a, b, "::1 and 0:0:0:0:0:0:0:1 must hash distinctly");
         assert_ne!(
             c, d,
@@ -484,9 +477,9 @@ mod tests {
     /// onto each other by the lossy substitution.
     #[test]
     fn distinct_domains_hash_to_distinct_cache_keys() {
-        let a = sha256_of_str("example.com");
-        let b = sha256_of_str("example_com");
-        let c = sha256_of_str("evil.example.com");
+        let a = crate::util::hash::sha256_hex("example.com".as_bytes());
+        let b = crate::util::hash::sha256_hex("example_com".as_bytes());
+        let c = crate::util::hash::sha256_hex("evil.example.com".as_bytes());
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert_ne!(b, c);

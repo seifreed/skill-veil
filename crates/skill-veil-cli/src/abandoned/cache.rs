@@ -8,7 +8,6 @@
 use super::types::PackageMetadata;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use skill_veil_core::Ecosystem;
 use std::path::{Path, PathBuf};
 
@@ -63,9 +62,10 @@ impl AbandonedCache {
 
     fn path(&self, eco: Ecosystem, name: &str) -> PathBuf {
         let key = format!("{}|{}", eco.osv_name(), name);
-        let mut h = Sha256::new();
-        h.update(key.as_bytes());
-        self.dir.join(format!("{:x}.json", h.finalize()))
+        self.dir.join(format!(
+            "{}.json",
+            crate::util::hash::sha256_hex(key.as_bytes())
+        ))
     }
 }
 

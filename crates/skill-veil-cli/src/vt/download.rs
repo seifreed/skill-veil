@@ -413,6 +413,7 @@ fn ensure_real_dir(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::hash::sha256_hex;
     use crate::vt::types::FileAttributes;
     use tempfile::TempDir;
 
@@ -426,12 +427,6 @@ mod tests {
             fetched_at: "2026-04-27T00:00:00Z".to_string(),
             attributes: FileAttributes::default(),
         }
-    }
-
-    fn sha256_hex(bytes: &[u8]) -> String {
-        let mut h = Sha256::new();
-        h.update(bytes);
-        format!("{:x}", h.finalize())
     }
 
     /// # Contract

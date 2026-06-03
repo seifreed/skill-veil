@@ -14,7 +14,6 @@
 use super::types::ResolvedAdvisory;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use skill_veil_core::Ecosystem;
 use std::path::{Path, PathBuf};
 
@@ -81,11 +80,17 @@ impl OsvCache {
 
     fn query_path(&self, eco: Ecosystem, name: &str, version: &str) -> PathBuf {
         let key = format!("{}|{}|{}", eco.osv_name(), name, version);
-        self.queries_dir.join(format!("{}.json", hash(&key)))
+        self.queries_dir.join(format!(
+            "{}.json",
+            crate::util::hash::sha256_hex(key.as_bytes())
+        ))
     }
 
     fn details_path(&self, id: &str) -> PathBuf {
-        self.details_dir.join(format!("{}.json", hash(id)))
+        self.details_dir.join(format!(
+            "{}.json",
+            crate::util::hash::sha256_hex(id.as_bytes())
+        ))
     }
 
     /// Read a record and return it only if present, parseable, and within TTL.
@@ -135,12 +140,6 @@ impl RecordTimestamp for DetailsRecord {
     fn into_inner(self) -> ResolvedAdvisory {
         self.advisory
     }
-}
-
-fn hash(key: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(key.as_bytes());
-    format!("{:x}", h.finalize())
 }
 
 #[cfg(test)]
