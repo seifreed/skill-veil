@@ -9,6 +9,7 @@
 
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
+use crate::util::bounded_read::read_response_with_cap;
 use crate::util::terminal_safe::truncate_error_body;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
@@ -77,24 +78,6 @@ fn drain_error_body(status: u16, resp: ureq::Response) -> String {
 /// allowing a hostile endpoint to cause OOM.
 fn bounded_read_response(resp: ureq::Response) -> Result<String, io::Error> {
     read_response_with_cap(resp, MAX_JSON_RESPONSE_BYTES)
-}
-
-fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String, io::Error> {
-    let mut buf = String::new();
-    resp.into_reader()
-        .take(cap.saturating_add(1))
-        .read_to_string(&mut buf)?;
-    if buf.len() as u64 > cap {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("response body exceeds {cap} byte limit"),
-        ));
-    }
-    debug_assert!(
-        buf.len() as u64 <= cap,
-        "bounded response reader must reject bodies over the cap"
-    );
-    Ok(buf)
 }
 
 #[derive(Debug, Error)]
@@ -713,40 +696,6 @@ mod redirect_tests {
         );
 
         let _ = server.join();
-    }
-}
-
-#[cfg(test)]
-mod read_response_with_cap_tests {
-    use super::*;
-
-    fn response_with_body(body: &str) -> ureq::Response {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .parse()
-        .expect("synthetic response must parse")
-    }
-
-    /// Contract: a VT JSON response exactly at the byte cap is accepted.
-    #[test]
-    fn bounded_read_response_accepts_body_at_cap() {
-        let body = read_response_with_cap(response_with_body("abcd"), 4).unwrap();
-
-        assert_eq!(body, "abcd");
-    }
-
-    /// Contract: a VT JSON response beyond the cap fails instead of
-    /// returning a truncated prefix that could be parsed as complete
-    /// JSON by a downstream caller.
-    #[test]
-    fn bounded_read_response_rejects_body_over_cap() {
-        let err = read_response_with_cap(response_with_body("abcde"), 4)
-            .expect_err("oversized response must fail");
-
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }
 

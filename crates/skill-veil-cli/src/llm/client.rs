@@ -6,6 +6,7 @@
 //! live in [`post_json_with_retry`].
 
 use super::types::{LlmError, LlmPrompt, LlmRawResponse};
+use crate::util::bounded_read::read_response_with_cap;
 use crate::util::terminal_safe::truncate_error_body;
 use std::time::Duration;
 
@@ -108,25 +109,6 @@ pub(crate) fn bounded_read_response(resp: ureq::Response) -> Result<String, std:
     read_response_with_cap(resp, MAX_RESPONSE_BODY_BYTES)
 }
 
-fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String, std::io::Error> {
-    use std::io::Read;
-    let mut buf = String::new();
-    resp.into_reader()
-        .take(cap.saturating_add(1))
-        .read_to_string(&mut buf)?;
-    if buf.len() as u64 > cap {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("response body exceeds {cap} byte limit"),
-        ));
-    }
-    debug_assert!(
-        buf.len() as u64 <= cap,
-        "bounded response reader must reject bodies over the cap"
-    );
-    Ok(buf)
-}
-
 /// POST a JSON body with authorization headers, parse the response as a
 /// string, and retry on HTTP 429 with exponential backoff. The caller is
 /// responsible for extracting the assistant content from the returned text
@@ -224,16 +206,6 @@ pub(crate) fn openai_compatible_messages_value(prompt: &LlmPrompt) -> serde_json
 mod tests {
     use super::*;
 
-    fn response_with_body(body: &str) -> ureq::Response {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .parse()
-        .expect("synthetic response must parse")
-    }
-
     /// Contract: a readable error body MUST be returned verbatim so the
     /// provider's actual error message reaches `LlmError::HttpStatus { body }`.
     /// Pre-fix the call site used `unwrap_or_default()` which already returned
@@ -264,25 +236,5 @@ mod tests {
         assert_eq!(body, "failure-text");
     }
 
-    /// Contract: a response exactly at the configured byte cap is
-    /// accepted. The reader enforces an upper bound, not a smaller
-    /// transport-specific limit.
-    #[test]
-    fn bounded_read_response_accepts_body_at_cap() {
-        let body = read_response_with_cap(response_with_body("abcd"), 4).unwrap();
-
-        assert_eq!(body, "abcd");
-    }
-
-    /// Contract: a response beyond the byte cap fails instead of
-    /// returning a truncated prefix that downstream JSON parsers might
-    /// accept as complete.
-    #[test]
-    fn bounded_read_response_rejects_body_over_cap() {
-        let err = read_response_with_cap(response_with_body("abcde"), 4)
-            .expect_err("oversized response must fail");
-
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
-    }
 
 }

@@ -6,6 +6,29 @@ use anyhow::{Context, Result};
 
 pub(crate) const MAX_OPERATOR_TEXT_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
+/// Read an HTTP response body into a `String` with a byte cap to prevent
+/// unbounded memory allocation from a compromised or misconfigured endpoint.
+/// Reads one byte past the cap so an over-limit body is rejected rather than
+/// silently truncated into a prefix a downstream JSON parser might accept as
+/// complete. Shared by the VT and LLM API clients.
+pub(crate) fn read_response_with_cap(resp: ureq::Response, cap: u64) -> io::Result<String> {
+    let mut buf = String::new();
+    resp.into_reader()
+        .take(cap.saturating_add(1))
+        .read_to_string(&mut buf)?;
+    if buf.len() as u64 > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("response body exceeds {cap} byte limit"),
+        ));
+    }
+    debug_assert!(
+        buf.len() as u64 <= cap,
+        "bounded response reader must reject bodies over the cap"
+    );
+    Ok(buf)
+}
+
 pub(crate) fn read_operator_text_file(path: &Path) -> Result<String> {
     read_text_file_with_cap(path, MAX_OPERATOR_TEXT_FILE_BYTES)
         .with_context(|| format!("reading {}", path.display()))
@@ -93,6 +116,39 @@ fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    fn response_with_body(body: &str) -> ureq::Response {
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .parse()
+        .expect("synthetic response must parse")
+    }
+
+    /// # Contract
+    ///
+    /// A response exactly at the configured byte cap is accepted. The reader
+    /// enforces an upper bound, not a smaller transport-specific limit.
+    #[test]
+    fn read_response_with_cap_accepts_body_at_cap() {
+        let body = read_response_with_cap(response_with_body("abcd"), 4).unwrap();
+
+        assert_eq!(body, "abcd");
+    }
+
+    /// # Contract
+    ///
+    /// A response beyond the byte cap fails instead of returning a truncated
+    /// prefix a downstream JSON parser might accept as complete.
+    #[test]
+    fn read_response_with_cap_rejects_body_over_cap() {
+        let err = read_response_with_cap(response_with_body("abcde"), 4)
+            .expect_err("oversized response must fail");
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
 
     /// # Contract
     ///
