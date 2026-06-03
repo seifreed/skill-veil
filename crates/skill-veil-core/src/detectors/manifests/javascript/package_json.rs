@@ -242,44 +242,7 @@ fn is_unpinned_npm_version(version: &str) -> bool {
 
 fn is_exact_npm_version_pin(version: &str) -> bool {
     let version = version.strip_prefix('=').unwrap_or(version);
-    let (without_build, build) = split_once_optional(version, '+');
-    if build.is_some_and(|value| !is_valid_semver_identifier_list(value)) {
-        return false;
-    }
-    let (core, prerelease) = split_once_optional(without_build, '-');
-    if prerelease.is_some_and(|value| !is_valid_semver_identifier_list(value)) {
-        return false;
-    }
-    let mut parts = core.split('.');
-    let Some(major) = parts.next() else {
-        return false;
-    };
-    let Some(minor) = parts.next() else {
-        return false;
-    };
-    let Some(patch) = parts.next() else {
-        return false;
-    };
-    parts.next().is_none()
-        && [major, minor, patch]
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-}
-
-fn split_once_optional(value: &str, delimiter: char) -> (&str, Option<&str>) {
-    value
-        .split_once(delimiter)
-        .map_or((value, None), |(left, right)| (left, Some(right)))
-}
-
-fn is_valid_semver_identifier_list(value: &str) -> bool {
-    !value.is_empty()
-        && value.split('.').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-        })
+    super::super::version_pin::is_exact_dotted_version_pin(version)
 }
 
 /// A `package.json` whose body fails to parse is suspicious on its own:

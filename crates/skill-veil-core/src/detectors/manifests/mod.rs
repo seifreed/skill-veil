@@ -11,3 +11,4 @@ pub(crate) mod container;
 pub(crate) mod javascript;
 pub(crate) mod python;
 pub(crate) mod rust_cargo;
+pub(crate) mod version_pin;
