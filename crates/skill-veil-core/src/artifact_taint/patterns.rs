@@ -22,6 +22,19 @@ pub(super) fn looks_like_secret_target(target: &str) -> bool {
         "aws_secret_access_key",
         "aws_session_token",
         "openai_api_key",
+        // Other major LLM-provider keys — high-value exfil targets. Each
+        // carries the full `_api_key` suffix, so substring matching cannot
+        // collide with a benign identifier (no module/var is named e.g.
+        // `anthropic_api_key`). A bare `api_key` keyword is deliberately NOT
+        // added: it would flag benign third-party keys (Stripe, weather, …).
+        "anthropic_api_key",
+        "claude_api_key",
+        "groq_api_key",
+        "mistral_api_key",
+        "deepseek_api_key",
+        "gemini_api_key",
+        "cohere_api_key",
+        "xai_api_key",
         "github_token",
         "gh_token",
         "google_application_credentials",
@@ -281,6 +294,46 @@ mod tests {
         assert!(!has_word_boundary("tokenizer", "token"));
         assert!(!has_word_boundary("mytoken", "token"));
         assert!(!has_word_boundary("token1", "token"));
+    }
+
+    /// # Contract
+    /// LLM-provider API keys are secret-source targets so the taint engine
+    /// can flag a file-based key flowing to a network sink. The full
+    /// `<provider>_api_key` form is specific enough not to collide with
+    /// benign identifiers.
+    #[test]
+    fn looks_like_secret_target_matches_llm_provider_keys() {
+        for target in [
+            "ANTHROPIC_API_KEY",
+            "groq_api_key",
+            "config/mistral_api_key.txt",
+            "OPENAI_API_KEY",
+            "~/.ssh/id_rsa",
+        ] {
+            assert!(
+                looks_like_secret_target(target),
+                "{target:?} should be a secret target",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    /// A bare `api_key` keyword is intentionally NOT a match, so benign
+    /// third-party keys and lookalike identifiers do not produce false taint
+    /// edges (which would drop corpus precision).
+    #[test]
+    fn looks_like_secret_target_ignores_generic_and_lookalike_keys() {
+        for target in [
+            "stripe_api_key",
+            "weather_api_key",
+            "tokenizer.json",
+            "config/settings.yaml",
+        ] {
+            assert!(
+                !looks_like_secret_target(target),
+                "{target:?} must not be treated as a secret target",
+            );
+        }
     }
 
     /// # Contract
