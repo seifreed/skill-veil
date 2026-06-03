@@ -44,14 +44,6 @@ pub(super) fn classify(our: Verdict, vt_category: Option<&str>) -> Classificatio
     }
 }
 
-pub(super) fn verdict_label(verdict: Verdict) -> String {
-    match verdict {
-        Verdict::Malicious => "malicious".to_string(),
-        Verdict::Suspicious => "suspicious".to_string(),
-        Verdict::Benign => "benign".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -65,7 +65,7 @@ pub(crate) fn build_summary(
                 );
                 continue;
             };
-            let our_verdict = classify::verdict_label(res.verdict);
+            let our_verdict = res.verdict.to_string();
             let our_risk_score = res.summary.risk_score;
             let our_findings: Vec<String> = res
                 .findings

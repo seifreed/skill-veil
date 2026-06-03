@@ -7,7 +7,6 @@
 //! their rate-limit budget allows.
 
 use crate::promptintel::feed::enrich::{enrich, PromptIntelEnrichment};
-use crate::promptintel::types::PromptSeverity;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::Result;
 use skill_veil_core::PackageScanResult;
@@ -109,7 +108,7 @@ fn format_enrichment(enrichment: &PromptIntelEnrichment) -> String {
         let _ = writeln!(
             out,
             "\n  [{sev}] {action:<16} {id}\n    title       : {title}\n    category    : {category}\n    confidence  : {conf}",
-            sev = severity_label(m.entry.severity),
+            sev = m.entry.severity.as_str(),
             action = format!("{:?}", m.entry.action).to_lowercase(),
             id = sanitise_for_terminal(&m.entry.id),
             title = sanitise_for_terminal(&m.entry.title),
@@ -134,18 +133,10 @@ fn format_enrichment(enrichment: &PromptIntelEnrichment) -> String {
     out
 }
 
-fn severity_label(sev: PromptSeverity) -> &'static str {
-    match sev {
-        PromptSeverity::Critical => "critical",
-        PromptSeverity::High => "high",
-        PromptSeverity::Medium => "medium",
-        PromptSeverity::Low => "low",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::promptintel::types::PromptSeverity;
 
     /// # Contract
     ///

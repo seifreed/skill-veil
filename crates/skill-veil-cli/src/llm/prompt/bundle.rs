@@ -113,14 +113,6 @@ pub(super) struct SerialisedFinding {
     pub line: Option<usize>,
 }
 
-pub(super) fn verdict_label(v: Verdict) -> &'static str {
-    match v {
-        Verdict::Malicious => "malicious",
-        Verdict::Suspicious => "suspicious",
-        Verdict::Benign => "benign",
-    }
-}
-
 fn serialise_finding(f: &Finding) -> SerialisedFinding {
     SerialisedFinding {
         rule_id: f.rule_id.clone(),

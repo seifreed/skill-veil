@@ -5,9 +5,9 @@
 //! artifacts before emitting the prompt.
 
 use super::bundle::{
-    build_manifest_entry, cap_findings_by_severity, cap_iocs, encode_bundle, verdict_label,
-    wrap_untrusted, ManifestEntry, SerialisedArtifact, SerialisedFinding, SkillBundleInput,
-    FINDING_ROW_AVG_CHARS, IOC_ENTRY_CHARS, MANIFEST_ENTRY_OVERHEAD,
+    build_manifest_entry, cap_findings_by_severity, cap_iocs, encode_bundle, wrap_untrusted,
+    ManifestEntry, SerialisedArtifact, SerialisedFinding, SkillBundleInput, FINDING_ROW_AVG_CHARS,
+    IOC_ENTRY_CHARS, MANIFEST_ENTRY_OVERHEAD,
 };
 use super::SYSTEM_PROMPT;
 use crate::llm::types::LlmPrompt;
@@ -62,7 +62,7 @@ pub(crate) fn build_manifest_prompt(
         primary_content: &'a str,
         manifest: &'a [ManifestEntry],
         manifest_truncated_count: usize,
-        our_verdict: &'static str,
+        our_verdict: String,
         our_risk_score: u32,
         our_findings: Vec<SerialisedFinding>,
         findings_truncated_count: usize,
@@ -77,7 +77,7 @@ pub(crate) fn build_manifest_prompt(
         primary_content: &wrapped_primary,
         manifest: &kept,
         manifest_truncated_count: dropped,
-        our_verdict: verdict_label(input.our_verdict),
+        our_verdict: input.our_verdict.to_string(),
         our_risk_score: input.our_risk_score,
         our_findings: capped_findings,
         findings_truncated_count: findings_truncated,
@@ -133,7 +133,7 @@ pub(crate) fn build_followup_prompt(
         primary_content: &'a str,
         requested_files: Vec<SerialisedArtifact>,
         dropped_due_to_budget: Vec<String>,
-        our_verdict: &'static str,
+        our_verdict: String,
         our_risk_score: u32,
         our_findings: Vec<SerialisedFinding>,
         findings_truncated_count: usize,
@@ -154,7 +154,7 @@ pub(crate) fn build_followup_prompt(
             })
             .collect(),
         dropped_due_to_budget: dropped,
-        our_verdict: verdict_label(input.our_verdict),
+        our_verdict: input.our_verdict.to_string(),
         our_risk_score: input.our_risk_score,
         our_findings: capped_findings,
         findings_truncated_count: findings_truncated,
