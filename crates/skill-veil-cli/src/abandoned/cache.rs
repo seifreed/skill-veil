@@ -29,10 +29,7 @@ impl AbandonedCache {
     /// `<cache_dir_override or dirs::cache_dir()>/skill-veil/abandoned`.
     /// Returns `None` when no cache directory can be resolved.
     pub fn new(cache_dir_override: Option<&Path>, ttl_days: i64) -> Option<Self> {
-        let base = match cache_dir_override {
-            Some(p) => p.to_path_buf(),
-            None => dirs::cache_dir()?.join("skill-veil"),
-        };
+        let base = crate::util::cache_io::cache_base_dir(cache_dir_override)?;
         Some(Self {
             dir: base.join("abandoned"),
             ttl: Duration::days(ttl_days.max(1)),

@@ -42,10 +42,7 @@ impl OsvCache {
     /// Returns `None` when no cache directory can be resolved (no override and
     /// no platform cache dir) — the caller then runs uncached.
     pub fn new(cache_dir_override: Option<&Path>, ttl_days: i64) -> Option<Self> {
-        let base = match cache_dir_override {
-            Some(p) => p.to_path_buf(),
-            None => dirs::cache_dir()?.join("skill-veil"),
-        };
+        let base = crate::util::cache_io::cache_base_dir(cache_dir_override)?;
         let root = base.join("osv");
         Some(Self {
             queries_dir: root.join("queries"),

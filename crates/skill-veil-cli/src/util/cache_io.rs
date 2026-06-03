@@ -209,6 +209,17 @@ fn has_single_hardlink(_meta: &Metadata) -> bool {
     true
 }
 
+/// Resolve the on-disk base directory for a skill-veil cache: the explicit
+/// `override_dir` if given, otherwise `<platform cache dir>/skill-veil`.
+/// Returns `None` when no platform cache directory can be resolved — callers
+/// then run uncached rather than failing.
+pub(crate) fn cache_base_dir(override_dir: Option<&Path>) -> Option<std::path::PathBuf> {
+    Some(match override_dir {
+        Some(path) => path.to_path_buf(),
+        None => dirs::cache_dir()?.join("skill-veil"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
