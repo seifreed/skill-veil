@@ -499,6 +499,11 @@ fn collect_raw_findings<F: FileSystemProvider, P: MarkdownParser>(
         &sibling_files,
         Some(doc),
     ));
+    // Native context refinement of regex rule findings the YAML engine cannot
+    // disambiguate (no lookaround / no negation): drop loopback-only MCP
+    // bridges, downgrade curl|bash that the doc warns against. Runs before
+    // taint derivation so dropped findings do not seed taint edges.
+    findings = crate::detectors::rule_refinement::refine_rule_findings(findings, doc);
     let artifact_graph = scanner.build_artifact_graph(doc);
     let taint_findings = crate::artifact_taint::derive_taint_findings(&artifact_graph, &findings);
     // Preserve findings that already have artifact context (e.g., from supporting artifact

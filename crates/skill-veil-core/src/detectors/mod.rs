@@ -21,5 +21,6 @@ pub mod native_ids;
 pub(crate) mod network;
 pub(crate) mod patterns;
 pub(crate) mod permissions;
+pub(crate) mod rule_refinement;
 pub(crate) mod scripts;
 pub(crate) mod typosquat;
