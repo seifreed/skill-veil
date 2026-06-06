@@ -14,6 +14,7 @@
 //! drift the two outputs apart, so the caller should evaluate once
 //! and reuse the report for both.
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -379,7 +380,8 @@ fn validate_opened_regular_file(
     opened_meta: &Metadata,
 ) -> io::Result<()> {
     let latest_meta = regular_file_metadata(path)?;
-    if !same_file_identity(path_meta, opened_meta) || !same_file_identity(&latest_meta, opened_meta)
+    if !opened_file_matches_path(path_meta, opened_meta)
+        || !opened_file_matches_path(&latest_meta, opened_meta)
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -400,28 +402,6 @@ fn non_regular_file_error(path: &Path) -> io::Error {
             path.display()
         ),
     )
-}
-
-#[cfg(unix)]
-fn same_file_identity(a: &Metadata, b: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file_identity(_a: &Metadata, _b: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
 }
 
 fn short(sha: &str) -> &str {

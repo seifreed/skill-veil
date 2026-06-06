@@ -91,24 +91,24 @@ fn regular_text_file_metadata(path: &Path) -> io::Result<Metadata> {
 }
 
 #[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
+pub(crate) fn has_single_hardlink(meta: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     meta.nlink() == 1
 }
 
 #[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
+pub(crate) fn has_single_hardlink(_meta: &Metadata) -> bool {
     true
 }
 
 #[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
+pub(crate) fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
 }
 
 #[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
+pub(crate) fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
     true
 }
 

@@ -5,6 +5,7 @@ use crate::llm::enrich::{
     enrich_scan_result as llm_enrich_scan_result, LlmEnrichOptions, LlmEnrichment,
     LlmPackageResult, LlmStatus, PreparedBundle,
 };
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use skill_veil_core::PackageScanResult;
@@ -419,28 +420,6 @@ fn regular_llm_input_metadata(path: &Path) -> io::Result<Metadata> {
         ));
     }
     Ok(meta)
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 fn format_llm_enrichment(e: &LlmEnrichment) -> String {

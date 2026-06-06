@@ -17,6 +17,7 @@
 //! enrichment — it just costs one extra round-trip while the corrupt
 //! file gets overwritten on success.
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use anyhow::{anyhow, Context, Result};
 use std::fs::{File, Metadata};
 use std::io::{self, Read, Write};
@@ -185,28 +186,6 @@ fn read_cache_reader_with_cap(
         "cache reader must reject streams over the cap"
     );
     Ok(Some(buf))
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
 }
 
 /// Resolve the on-disk base directory for a skill-veil cache: the explicit

@@ -10,6 +10,7 @@
 
 use super::corpus::IndexEntry;
 use super::types::PromptSeverity;
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -516,28 +517,6 @@ fn regular_index_file_metadata(path: &Path) -> io::Result<Metadata> {
         ));
     }
     Ok(meta)
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]

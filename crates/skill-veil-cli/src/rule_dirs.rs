@@ -9,6 +9,7 @@
 //!
 //! [`ScanOptions::runtime_overlay_dirs`]: skill_veil_core::ScanOptions::runtime_overlay_dirs
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -188,28 +189,6 @@ fn is_real_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
         .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
         .unwrap_or(false)
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]

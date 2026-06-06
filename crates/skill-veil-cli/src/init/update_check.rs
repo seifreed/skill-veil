@@ -12,8 +12,8 @@
 //! - The TTL can be widened via `SKILL_VEIL_UPDATE_CHECK_TTL_SECS`
 //!   (env-only, no flag — this is power-user territory).
 
+use crate::util::bounded_read::has_single_hardlink;
 use anyhow::Result;
-use std::fs::Metadata;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -213,17 +213,6 @@ fn read_string_bounded(reader: impl Read, cap: u64) -> Result<String> {
 
 fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]

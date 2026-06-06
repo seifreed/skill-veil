@@ -6,6 +6,7 @@
 //! dir. We reject every such entry up-front and only extract regular
 //! files whose normalised path stays strictly inside `dest_dir`.
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
 use std::fs::{File, Metadata, OpenOptions};
@@ -244,28 +245,6 @@ fn path_is_inside(child: &Path, parent: &Path) -> bool {
         current = p.parent();
     }
     false
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]

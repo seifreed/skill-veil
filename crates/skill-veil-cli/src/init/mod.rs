@@ -28,8 +28,8 @@ pub(crate) mod nova;
 pub(crate) mod update_check;
 mod verify;
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use anyhow::{anyhow, Context, Result};
-use std::fs::Metadata;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -411,28 +411,6 @@ pub(super) fn is_missing_path(path: &Path) -> Result<bool> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
         Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
     }
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 fn create_install_root(install_root: &Path) -> Result<()> {

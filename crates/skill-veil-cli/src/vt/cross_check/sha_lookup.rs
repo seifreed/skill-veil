@@ -9,6 +9,7 @@
 //! 3. Hash the primary artifact on disk (last resort; only meaningful
 //!    for direct-file corpora).
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use std::fs::{File, Metadata};
@@ -179,28 +180,6 @@ fn regular_hash_file_metadata(path: &Path) -> Result<Metadata> {
         )
     }
     Ok(meta)
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]

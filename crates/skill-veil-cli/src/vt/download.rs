@@ -6,6 +6,7 @@
 //! are idempotent: reports are reused only when their payload SHA matches the
 //! filename, and samples are skipped only after their bytes hash to that SHA.
 
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use std::fs::{File, Metadata};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -345,28 +346,6 @@ fn sha256_file_with_cap(mut file: File, max_bytes: u64) -> std::io::Result<Optio
         "sample cache verifier must reject streams over the cap"
     );
     Ok(Some(format!("{:x}", hasher.finalize())))
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 fn ensure_existing_child_stays_in_base(base: &Path, child: &Path) -> Result<()> {

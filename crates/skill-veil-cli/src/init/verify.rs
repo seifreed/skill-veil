@@ -18,6 +18,7 @@
 //! that signature verification alone would miss.
 
 use super::manifest::Manifest;
+use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use anyhow::{anyhow, bail, Context, Result};
 use ed25519_dalek::{Signature, Verifier};
 use sha2::{Digest, Sha256};
@@ -283,28 +284,6 @@ fn walk_collect(root: &Path, dir: &Path, out: &mut BTreeSet<String>) -> Result<(
         }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn has_single_hardlink(meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    meta.nlink() == 1
-}
-
-#[cfg(not(unix))]
-fn has_single_hardlink(_meta: &Metadata) -> bool {
-    true
-}
-
-#[cfg(unix)]
-fn opened_file_matches_path(opened: &Metadata, path_meta: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    opened.dev() == path_meta.dev() && opened.ino() == path_meta.ino()
-}
-
-#[cfg(not(unix))]
-fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata) -> bool {
-    true
 }
 
 #[cfg(test)]
