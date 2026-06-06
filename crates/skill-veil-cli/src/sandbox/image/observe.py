@@ -35,7 +35,7 @@ PER_SCRIPT_TIMEOUT_SECS = 15
 MAX_BEHAVIORS = 500
 MAX_SCRIPTS = 12
 TRACE_SYSCALLS = (
-    "connect,execve,openat,open,"
+    "connect,sendto,sendmsg,execve,openat,open,"
     "setuid,setreuid,setresuid,setgid,setregid,setresgid,"
     "capset,setns,unshare,ptrace"
 )
@@ -76,6 +76,16 @@ CONNECT_INET = re.compile(
     r'(?:sin6?_addr=inet_(?:addr|pton)\([^,]*"([^"]+)"\)|inet_pton\([^"]*"([^"]+)")'
 )
 CONNECT_UNIX = re.compile(r'connect\(\d+,\s*\{sa_family=AF_UNIX,\s*sun_path="([^"]+)"')
+# Connectionless egress: a SOCK_DGRAM socket never calls connect(), it passes
+# the destination inline to sendto()/sendmsg() (the latter wraps it in
+# msg_name={...}). Without this, UDP C2 / exfil and UDP/53 DNS-tunnel egress
+# produced no network behavior at all. The sockaddr renders identically to
+# connect(), so the same host/port sub-pattern is reused after the buffer args.
+SENDTO_INET = re.compile(
+    r'send(?:to|msg)\(.*?\{sa_family=AF_INET6?,\s*sin6?_port=htons\((\d+)\),\s*'
+    r'(?:sin6_flowinfo=htonl\(\d+\),\s*)?'
+    r'(?:sin6?_addr=inet_(?:addr|pton)\([^,]*"([^"]+)"\)|inet_pton\([^"]*"([^"]+)")'
+)
 DOCKER_RESOLVER = "127.0.0.11"
 RUNTIME_SOCKET = re.compile(r"docker\.sock|containerd.*\.sock|crio\.sock|podman\.sock")
 EXECVE = re.compile(r'execve\("([^"]+)",\s*\[([^\]]*)\]')
@@ -166,7 +176,9 @@ def parse_trace(path, behaviors, seen, script):
     for line in handle:
         if len(behaviors) > MAX_BEHAVIORS:
             break
-        m = CONNECT_INET.search(line)
+        # connect() and the connectionless sendto()/sendmsg() share the same
+        # sockaddr rendering and capture groups (port, host).
+        m = CONNECT_INET.search(line) or SENDTO_INET.search(line)
         if m:
             port = m.group(1)
             host = m.group(2) or m.group(3) or "?"
@@ -242,7 +254,22 @@ def _self_test():
     assert mo and mo.group(1) == "/root/.bashrc", "plain open() path must parse"
     moa = OPENAT.search('[pid 99] openat(AT_FDCWD, "/etc/passwd", O_RDONLY) = 3')
     assert moa and moa.group(1) == "/etc/passwd", "openat() path must parse"
-    print("observe CONNECT_INET/OPENAT self-test: OK")
+
+    # Contract for SENDTO_INET: connectionless UDP egress (a SOCK_DGRAM socket
+    # never calls connect()) must still yield host+port, or UDP C2 / DNS-tunnel
+    # exfil is invisible.
+    udp = ('sendto(3, "exfil", 5, 0, {sa_family=AF_INET, sin_port=htons(9999), '
+           'sin_addr=inet_addr("198.51.100.23")}, 16) = 5')
+    ms = SENDTO_INET.search(udp)
+    assert ms and ms.group(1) == "9999" and (ms.group(2) or ms.group(3)) == "198.51.100.23", \
+        "sendto() UDP egress must parse host+port"
+    udp6 = ('sendmsg(4, {msg_name={sa_family=AF_INET6, sin6_port=htons(53), '
+            'sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2606:4700::1", &sin6_addr), '
+            'sin6_scope_id=0}, msg_namelen=28, msg_iov=[...]}, 0) = 30')
+    m6 = SENDTO_INET.search(udp6)
+    assert m6 and m6.group(1) == "53" and (m6.group(2) or m6.group(3)) == "2606:4700::1", \
+        "sendmsg() IPv6 egress must parse host+port"
+    print("observe CONNECT_INET/OPENAT/SENDTO_INET self-test: OK")
 
 
 if __name__ == "__main__":
