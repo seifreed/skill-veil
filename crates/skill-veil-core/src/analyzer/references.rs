@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 /// super-linear (a denial-of-service on a single `scan-file`).
 const MAX_REFERENCED_FILES: usize = 1024;
 
-const SCRIPT_EXTENSIONS: &[&str] = &["sh", "py", "ps1", "js", "ts", "rb", "pl"];
-const ALL_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl|exe|bin|dll";
+const SCRIPT_EXTENSIONS: &[&str] = &["sh", "py", "ps1", "js", "ts", "rb", "pl", "bat", "cmd"];
+const ALL_EXT_PATTERN: &str = "sh|py|ps1|js|ts|rb|pl|bat|cmd|exe|bin|dll";
 
 /// Trailing characters stripped from a captured reference before
 /// resolution: markdown/shell punctuation that the greedy capture

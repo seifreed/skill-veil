@@ -79,6 +79,8 @@ pub(crate) fn looks_like_script(path: &Path) -> bool {
                 | "go"
                 | "rs"
                 | "php"
+                | "bat"
+                | "cmd"
         )
     )
 }
@@ -95,7 +97,7 @@ mod looks_like_script_tests {
     fn looks_like_script_covers_all_script_extensions() {
         for ext in [
             "sh", "bash", "zsh", "ksh", "fish", "ps1", "psm1", "psd1", "py", "js", "cjs", "mjs",
-            "ts", "mts", "cts", "rb", "pl", "go", "rs", "php",
+            "ts", "mts", "cts", "rb", "pl", "go", "rs", "php", "bat", "cmd",
         ] {
             let path = PathBuf::from(format!("/pkg/file.{ext}"));
             assert!(
