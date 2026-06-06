@@ -23,7 +23,7 @@ pub(crate) fn detect_remote_binary_downloads(
             category: ThreatCategory::SupplyChain,
             severity: Severity::High,
             action: RecommendedAction::RequireApproval,
-            reason: "Script downloads a remote script or binary payload",
+            reason: "Script downloads or decodes a remote or embedded script or binary payload",
         },
     )
 }

