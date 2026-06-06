@@ -296,16 +296,7 @@ impl SandboxExecutor for DockerExecutor {
             proxy_ip = container_ip_on(&proxy_name, network);
             if let Some(ip) = &proxy_ip {
                 let url = format!("http://{ip}:{PROXY_PORT}");
-                let insert_at = args.iter().position(|a| a == "run").map_or(0, |i| i + 1);
-                args.splice(
-                    insert_at..insert_at,
-                    [
-                        "--env".to_string(),
-                        format!("HTTP_PROXY={url}"),
-                        "--env".to_string(),
-                        format!("HTTPS_PROXY={url}"),
-                    ],
-                );
+                insert_after_run(&mut args, proxy_env_args(&url));
             }
         }
         let raw_result = self.spawn_and_wait(&args, timeout);
@@ -373,19 +364,7 @@ impl SandboxExecutor for DockerExecutor {
             thread::sleep(Duration::from_millis(700));
             if let Some(ip) = container_ip(&proxy_name) {
                 let url = format!("http://{ip}:{PROXY_PORT}");
-                let insert_at = sandbox_args
-                    .iter()
-                    .position(|a| a == "run")
-                    .map_or(0, |i| i + 1);
-                sandbox_args.splice(
-                    insert_at..insert_at,
-                    [
-                        "--env".to_string(),
-                        format!("HTTP_PROXY={url}"),
-                        "--env".to_string(),
-                        format!("HTTPS_PROXY={url}"),
-                    ],
-                );
+                insert_after_run(&mut sandbox_args, proxy_env_args(&url));
             }
         }
         let raw_result = self.spawn_and_wait(&sandbox_args, timeout);
@@ -415,8 +394,7 @@ impl DockerExecutor {
         // is the only correct way to enforce the wall-clock bound.
         let name = Self::unique_container_name();
         let mut args = docker_args.to_vec();
-        let insert_at = args.iter().position(|a| a == "run").map_or(0, |i| i + 1);
-        args.splice(insert_at..insert_at, ["--name".to_string(), name.clone()]);
+        insert_after_run(&mut args, ["--name".to_string(), name.clone()]);
 
         let (tx, rx) = mpsc::channel();
         let run_args = args.clone();
@@ -456,12 +434,7 @@ impl DockerExecutor {
 /// be determined (the recorded run then proceeds with no proxy env: on the
 /// `--internal` network outbound attempts simply fail, observably).
 fn container_ip(name: &str) -> Option<String> {
-    let output = Command::new("docker")
-        .args(["inspect", "-f", CONTAINER_IP_TEMPLATE, name])
-        .output()
-        .ok()?;
-    let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!ip.is_empty()).then_some(ip)
+    container_ip_with_template(name, CONTAINER_IP_TEMPLATE)
 }
 
 /// The container's IPv4 on a SPECIFIC network. The detonation proxy is
@@ -470,12 +443,32 @@ fn container_ip(name: &str) -> Option<String> {
 /// happens to yield first.
 fn container_ip_on(name: &str, network: &str) -> Option<String> {
     let template = format!(r#"{{{{(index .NetworkSettings.Networks "{network}").IPAddress}}}}"#);
+    container_ip_with_template(name, &template)
+}
+
+fn container_ip_with_template(name: &str, template: &str) -> Option<String> {
     let output = Command::new("docker")
-        .args(["inspect", "-f", &template, name])
+        .args(["inspect", "-f", template, name])
         .output()
         .ok()?;
     let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!ip.is_empty()).then_some(ip)
+}
+
+/// Splices `extra` into a `docker` argv immediately after the `run`
+/// subcommand, so flags land before the image/command positionals.
+fn insert_after_run(args: &mut Vec<String>, extra: impl IntoIterator<Item = String>) {
+    let insert_at = args.iter().position(|a| a == "run").map_or(0, |i| i + 1);
+    args.splice(insert_at..insert_at, extra);
+}
+
+fn proxy_env_args(url: &str) -> [String; 4] {
+    [
+        "--env".to_string(),
+        format!("HTTP_PROXY={url}"),
+        "--env".to_string(),
+        format!("HTTPS_PROXY={url}"),
+    ]
 }
 
 fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<()> {
