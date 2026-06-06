@@ -10,6 +10,7 @@
 //! [`ScanOptions::runtime_overlay_dirs`]: skill_veil_core::ScanOptions::runtime_overlay_dirs
 
 use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
+use crate::util::secure_fs::is_real_dir;
 use std::fs::{File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -183,12 +184,6 @@ fn is_safe_release_version(version: &str) -> bool {
         && bytes
             .iter()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-}
-
-fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

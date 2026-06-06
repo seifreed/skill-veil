@@ -1,3 +1,4 @@
+use crate::util::secure_fs::is_real_dir;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -575,12 +576,6 @@ fn ensure_real_dir(path: &Path) -> Result<()> {
     } else {
         anyhow::bail!("{} is not a real directory", path.display())
     }
-}
-
-fn is_real_dir(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
-        .unwrap_or(false)
 }
 
 fn remove_existing_cache_dir(path: &Path) -> Result<()> {

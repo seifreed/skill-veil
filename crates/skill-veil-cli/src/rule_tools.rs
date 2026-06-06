@@ -1,4 +1,5 @@
 use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
+use crate::util::secure_fs::is_real_dir;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -186,12 +187,6 @@ fn is_rule_yaml_file(entry: &walkdir::DirEntry) -> bool {
 fn has_yaml_extension(path: &Path) -> bool {
     path.extension()
         .map(|ext| ext == "yaml" || ext == "yml")
-        .unwrap_or(false)
-}
-
-fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
         .unwrap_or(false)
 }
 

@@ -42,6 +42,17 @@ pub(crate) fn create_dir_secure(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// `true` when `path` is a directory and not a symlink. Uses
+/// `symlink_metadata` so a symlink pointing at a directory is rejected —
+/// callers rely on this to refuse following an attacker-planted symlink to
+/// a directory outside the intended tree. Any stat error (missing path,
+/// permission denied) maps to `false`.
+pub(crate) fn is_real_dir(path: &Path) -> bool {
+    std::fs::symlink_metadata(path)
+        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
 fn reject_symlink_components(path: &Path) -> io::Result<()> {
     for ancestor in path.ancestors() {
         if ancestor.as_os_str().is_empty() {

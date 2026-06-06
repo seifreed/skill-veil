@@ -3,6 +3,7 @@
 //! Reads every `*.json` entry, parses it into a `CachedReport`, and keys it
 //! by **lowercase** SHA-256 — see `load_reports` invariant comment.
 
+use crate::util::secure_fs::is_real_dir;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -74,12 +75,6 @@ pub(super) fn load_reports(reports_dir: &Path) -> Result<BTreeMap<String, Cached
 fn report_filename_sha(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     super::sha_lookup::is_sha256_hex(stem).then(|| stem.to_string())
-}
-
-fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.is_symlink())
-        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 //! Wiring for the `skill-veil vt …` subcommand family.
 
+use crate::util::secure_fs::is_real_dir;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -144,12 +145,6 @@ fn cross_check_scan_root(dataset_dir: &Path) -> PathBuf {
     } else {
         dataset_dir.to_path_buf()
     }
-}
-
-fn is_real_dir(path: &Path) -> bool {
-    std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.is_symlink())
-        .unwrap_or(false)
 }
 
 fn build_client() -> Result<VtClient> {
