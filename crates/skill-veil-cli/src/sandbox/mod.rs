@@ -290,6 +290,20 @@ pub(crate) fn evaluate_detonation_against_target(
     run_detonation_with_executor(target, require_gvisor, &DockerExecutor)
 }
 
+/// True when `detail` is a strace-recorded `host:port` connection target
+/// whose host is exactly the recording proxy's IP — the agent→proxy
+/// analysis hop to drop. A substring test would also discard a real
+/// direct-to-IP connection to a sibling container address (Docker hands out
+/// adjacent IPs, so `172.18.0.20:443` contains `172.18.0.2`) and any proxy
+/// capture whose `body=` payload echoes the proxy IP, silently hiding genuine
+/// egress. Proxy captures carry an HTTP-method prefix (`POST …`, `CONNECT …`),
+/// so their host token never equals a bare IP and they are never dropped here.
+fn is_proxy_hop(detail: &str, proxy_ip: &str) -> bool {
+    detail.rsplit_once(':').is_some_and(|(host, port)| {
+        host == proxy_ip && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+    })
+}
+
 fn run_detonation_with_executor(
     target: &Path,
     require_gvisor: bool,
@@ -361,7 +375,9 @@ fn run_detonation_with_executor(
     // skill's own destination — drop those hops. The skill's real
     // destinations survive via the proxy capture log (real host + payload).
     if let Some(ip) = det.proxy_ip.as_deref() {
-        observation.behaviors.retain(|b| !b.detail.contains(ip));
+        observation
+            .behaviors
+            .retain(|b| !is_proxy_hop(&b.detail, ip));
     }
     let mut findings = mapping::observation_to_findings(&observation, target);
     findings.extend(behavior_rules::BehaviorRuleSet::embedded().evaluate(&observation, target));
@@ -827,6 +843,79 @@ mod tests {
             .any(|f| f.rule_id == "SANDBOX_NETWORK_CONNECT"
                 && f.match_value.contains("c2.invalid")
                 && f.match_value.contains("stolen=secret")));
+    }
+
+    /// # Contract
+    /// The proxy-hop filter drops a strace connection ONLY when its target
+    /// host equals the proxy IP exactly. A direct-to-IP egress to a sibling
+    /// container address (Docker assigns adjacent IPs, so the proxy IP is a
+    /// substring of the sibling) is a real behavior and must survive.
+    #[test]
+    fn sibling_ip_egress_is_not_filtered_as_proxy_hop() {
+        let proxy_ip = "172.18.0.2";
+        assert!(
+            is_proxy_hop("172.18.0.2:8080", proxy_ip),
+            "exact proxy host:port is a hop"
+        );
+        assert!(
+            !is_proxy_hop("172.18.0.20:443", proxy_ip),
+            "sibling-container direct-to-IP egress must NOT be filtered"
+        );
+        assert!(
+            !is_proxy_hop("172.18.0.200:1337", proxy_ip),
+            "another sibling with the proxy IP as a prefix must survive"
+        );
+    }
+
+    /// # Contract (negative)
+    /// A proxy-captured exfil whose payload echoes the proxy IP (e.g. the
+    /// skill exfiltrates `ip addr` output) carries an HTTP-method prefix, so
+    /// its host token never equals the bare proxy IP — the whole finding,
+    /// real C2 destination and stolen payload, must be kept.
+    #[test]
+    fn proxy_capture_payload_echoing_proxy_ip_is_kept() {
+        let proxy_ip = "172.18.0.2";
+        assert!(
+            !is_proxy_hop("POST https://c2.invalid/x body=gw=172.18.0.2", proxy_ip),
+            "proxy capture must never be dropped by the hop filter"
+        );
+        assert!(
+            !is_proxy_hop("CONNECT 172.18.0.2:443", proxy_ip),
+            "method-prefixed capture host token is not the bare IP"
+        );
+    }
+
+    /// # Contract (end-to-end)
+    /// A direct-to-IP C2 connection to a sibling container address survives
+    /// detonation filtering and surfaces as a finding, even though the proxy
+    /// IP is a textual prefix of the sibling's address.
+    #[test]
+    fn detonation_keeps_sibling_ip_egress() {
+        let exec = DetonatingExecutor {
+            stdout: r#"{"behaviors":[
+                {"class":"network_connect","detail":"172.18.0.2:8080","source":"script"},
+                {"class":"network_connect","detail":"172.18.0.20:4444","source":"script"}
+            ]}"#
+            .to_string(),
+            proxy_log: String::new(),
+            proxy_ip: Some("172.18.0.2".to_string()),
+        };
+        let report = run_detonation_with_executor(Path::new("pkg/SKILL.md"), true, &exec)
+            .unwrap()
+            .expect("sibling-IP egress must produce a report");
+        let details: Vec<&str> = report
+            .findings
+            .iter()
+            .map(|f| f.match_value.as_str())
+            .collect();
+        assert!(
+            !details.iter().any(|d| d.contains("172.18.0.2:8080")),
+            "agent→proxy hop must be filtered: {details:?}"
+        );
+        assert!(
+            details.iter().any(|d| d.contains("172.18.0.20:4444")),
+            "direct-to-sibling-IP C2 must survive: {details:?}"
+        );
     }
 
     /// # Contract
