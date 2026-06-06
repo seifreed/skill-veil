@@ -16,7 +16,20 @@ fn script_language_for(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) const MCP_NAMES: &[&str] = &["mcp.json", "mcp.yaml", "mcp.yml"];
+pub(crate) const MCP_NAMES: &[&str] = &[
+    "mcp.json",
+    "mcp.yaml",
+    "mcp.yml",
+    // Real-world MCP server configs ship under these canonical names too:
+    // `.mcp.json` (Claude Code / VS Code project config) and
+    // `claude_desktop_config.json` (Claude Desktop). Pre-fix only the bare
+    // `mcp.*` names routed to the structural MCP detector, so a malicious
+    // server config under its real filename evaded every MCP_* check and the
+    // verdict fell to benign. (`.vscode/mcp.json` is already covered: dispatch
+    // matches on the lowercased basename, which is `mcp.json`.)
+    ".mcp.json",
+    "claude_desktop_config.json",
+];
 pub(crate) const DOCKER_COMPOSE_NAMES: &[&str] = &["docker-compose.yml", "docker-compose.yaml"];
 pub(crate) const TOML_ARTIFACT_NAMES: &[&str] = &["cargo.toml", "pyproject.toml"];
 pub(crate) const INSTRUCTION_NAMES: &[&str] = &[

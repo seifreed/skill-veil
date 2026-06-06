@@ -125,7 +125,9 @@ pub fn artifact_kind_for_path(path: &Path) -> ArtifactKind {
         .map(str::to_ascii_lowercase);
 
     match file_name.as_deref() {
-        Some("mcp.json" | "mcp.yaml" | "mcp.yml") => ArtifactKind::McpServerManifest,
+        Some(name) if crate::services::MCP_NAMES.contains(&name) => {
+            ArtifactKind::McpServerManifest
+        }
         Some(
             "cargo.lock"
             | "poetry.lock"
@@ -202,6 +204,8 @@ pub(crate) fn sibling_files<F: FileSystemProvider>(fs_provider: &F, path: &Path)
         "mcp.json",
         "mcp.yaml",
         "mcp.yml",
+        ".mcp.json",
+        "claude_desktop_config.json",
         "yarn.lock",
         "pnpm-lock.yaml",
     ];

@@ -13,6 +13,8 @@ pub(crate) const MANIFEST_NAMES: &[&str] = &[
     "mcp.json",
     "mcp.yaml",
     "mcp.yml",
+    ".mcp.json",
+    "claude_desktop_config.json",
     "requirements.txt",
     "pyproject.toml",
     "cargo.toml",
