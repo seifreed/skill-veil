@@ -1102,7 +1102,8 @@ fn check_refs(expr: &ConditionExpr, rule: &NovaRule) -> Result<(), ParseError> {
             }
             Ok(())
         }
-        ConditionExpr::Wildcard { .. } | ConditionExpr::Literal(_) => Ok(()),
+        ConditionExpr::Wildcard { section } => reject_empty_section_wildcard(*section, rule),
+        ConditionExpr::Literal(_) => Ok(()),
         ConditionExpr::Not(inner) => check_refs(inner, rule),
         ConditionExpr::And(items) | ConditionExpr::Or(items) => {
             for item in items {
@@ -1111,10 +1112,32 @@ fn check_refs(expr: &ConditionExpr, rule: &NovaRule) -> Result<(), ParseError> {
             Ok(())
         }
         ConditionExpr::Quantified { target, .. } => match target.as_ref() {
-            QuantifierTarget::SectionWildcard(_) => Ok(()),
+            QuantifierTarget::SectionWildcard(section) => {
+                reject_empty_section_wildcard(*section, rule)
+            }
             QuantifierTarget::Inner(inner) => check_refs(inner, rule),
         },
     }
+}
+
+/// Reject a wildcard / `<n> of <section>.*` whose section declares no
+/// patterns. Such a target is vacuously `false`, so under `not` it inverts to
+/// `true` and the rule fires on every body with zero evidence. Mirrors the
+/// dangling-`Reference` and no-prefix-match `PrefixWildcard` rejections so a
+/// wildcard over an empty section is a parse error, not a silent always-match.
+fn reject_empty_section_wildcard(section: Section, rule: &NovaRule) -> Result<(), ParseError> {
+    let is_empty = match section {
+        Section::Keywords => rule.keywords.is_empty(),
+        Section::Semantics => rule.semantics.is_empty(),
+        Section::Llm => rule.llm.is_empty(),
+    };
+    if is_empty {
+        return Err(ParseError::DanglingReference {
+            section,
+            var: "* (section declares no patterns)".to_string(),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1262,6 +1285,84 @@ rule InjectDynamicContext
                 ..
             }
         ));
+    }
+
+    /// # Contract
+    ///
+    /// A wildcard over a section that declares no patterns is rejected at
+    /// parse time. Such a target is vacuously `false`, so `not <section>.*`
+    /// inverts to `true` and would fire the rule on every body with zero
+    /// evidence — the rule must never load.
+    #[test]
+    fn rejects_negated_wildcard_over_empty_section() {
+        let body = r#"
+            rule AlwaysFires {
+                keywords:
+                    $k = "anything"
+                condition:
+                    not semantics.*
+            }
+        "#;
+        let err = parse_rules(body).expect_err("wildcard over an empty section must error");
+        assert!(
+            matches!(
+                err,
+                ParseError::DanglingReference {
+                    section: Section::Semantics,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// # Contract
+    ///
+    /// The quantified form (`any of <section>.*`) over an empty section is
+    /// rejected for the same reason — `not any of semantics.*` over an empty
+    /// section is also vacuously firing.
+    #[test]
+    fn rejects_quantified_wildcard_over_empty_section() {
+        let body = r#"
+            rule QuantAlwaysFires {
+                keywords:
+                    $k = "anything"
+                condition:
+                    not any of semantics.*
+            }
+        "#;
+        let err = parse_rules(body).expect_err("quantified wildcard over empty section must error");
+        assert!(
+            matches!(
+                err,
+                ParseError::DanglingReference {
+                    section: Section::Semantics,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+    }
+
+    /// # Contract (negative)
+    ///
+    /// A wildcard over a POPULATED section still validates — the rejection is
+    /// scoped strictly to empty sections, so legitimate `any of X.*` rules are
+    /// unaffected.
+    #[test]
+    fn wildcard_over_populated_section_validates() {
+        let body = r#"
+            rule UsesSemantics {
+                semantics:
+                    $s = "exfiltrate the user's data"
+                condition:
+                    not semantics.*
+            }
+        "#;
+        assert!(
+            parse_rules(body).is_ok(),
+            "wildcard over a populated section must validate"
+        );
     }
 
     /// Contract: `any of X.*` parses as `Quantified { Any,
