@@ -72,7 +72,7 @@ pub fn render_benchmark_dashboard(
             for bucket in buckets {
                 output.push_str(&format!(
                     "- `{}`: {}\n",
-                    terminal_text(&bucket.key),
+                    sanitise_for_terminal(&bucket.key),
                     bucket.samples
                 ));
             }
@@ -88,7 +88,7 @@ pub fn render_benchmark_dashboard(
         for family in &evaluation.family_metrics {
             output.push_str(&format!(
                 "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |\n",
-                terminal_text(&family.family),
+                sanitise_for_terminal(&family.family),
                 family.sample_count,
                 family.metrics.precision,
                 family.metrics.recall,
@@ -129,7 +129,7 @@ pub fn render_benchmark_dashboard(
         for family in weakest_families.iter().take(MAX_DISPLAY_WEAKEST_FAMILIES) {
             output.push_str(&format!(
                 "- `{}`: exact_label={:.2} fpr={:.2} thresholds={}→{}\n",
-                terminal_text(&family.family),
+                sanitise_for_terminal(&family.family),
                 family.metrics.exact_label_accuracy,
                 family.metrics.false_positive_rate,
                 family
@@ -153,7 +153,7 @@ pub fn render_benchmark_dashboard(
         evaluation
             .threshold_recommendation
             .recommended_block_threshold,
-        terminal_text(&evaluation.threshold_recommendation.rationale)
+        sanitise_for_terminal(&evaluation.threshold_recommendation.rationale)
     ));
     if !evaluation.confidence_calibration.by_signal_pair.is_empty() {
         output.push_str("### Strongest Signal Pairs\n\n");
@@ -165,7 +165,7 @@ pub fn render_benchmark_dashboard(
         {
             output.push_str(&format!(
                 "- `{}`: findings={} observed_precision={:.2} recommended_confidence={:.2}\n",
-                terminal_text(&bucket.key),
+                sanitise_for_terminal(&bucket.key),
                 bucket.findings,
                 bucket.observed_precision,
                 bucket.recommended_confidence
@@ -183,7 +183,7 @@ pub fn render_benchmark_dashboard(
     for entry in &history.releases {
         output.push_str(&format!(
             "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {} |\n",
-            terminal_text(&entry.release_id),
+            sanitise_for_terminal(&entry.release_id),
             entry.generated_at.format("%Y-%m-%d"),
             entry.metrics.precision,
             entry.metrics.recall,
@@ -223,7 +223,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
         evaluation
             .threshold_recommendation
             .recommended_block_threshold,
-        terminal_text(&evaluation.threshold_recommendation.rationale)
+        sanitise_for_terminal(&evaluation.threshold_recommendation.rationale)
     ));
     if !evaluation.family_metrics.is_empty() {
         output.push_str("## Family Recommendations\n\n");
@@ -234,7 +234,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
         for family in &evaluation.family_metrics {
             output.push_str(&format!(
                 "| {} | {} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |\n",
-                terminal_text(&family.family),
+                sanitise_for_terminal(&family.family),
                 family.sample_count,
                 family.metrics.precision,
                 family.metrics.recall,
@@ -248,7 +248,10 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
         }
         output.push('\n');
         for family in &evaluation.family_metrics {
-            output.push_str(&format!("### {}\n\n", terminal_text(&family.family)));
+            output.push_str(&format!(
+                "### {}\n\n",
+                sanitise_for_terminal(&family.family)
+            ));
             output.push_str(&format!(
                 "- Samples: {}\n- Precision: {:.2}\n- Recall: {:.2}\n- False positive rate: {:.2}\n- Exact label accuracy: {:.2}\n- Recommended thresholds: approval {} block {}\n- Rationale: {}\n\n",
                 family.sample_count,
@@ -258,7 +261,7 @@ pub fn render_benchmark_tuning_report(evaluation: &CorpusEvaluation) -> String {
                 family.metrics.exact_label_accuracy,
                 family.threshold_recommendation.recommended_approval_threshold,
                 family.threshold_recommendation.recommended_block_threshold,
-                terminal_text(&family.threshold_recommendation.rationale)
+                sanitise_for_terminal(&family.threshold_recommendation.rationale)
             ));
         }
     }
@@ -336,7 +339,7 @@ fn append_coverage_buckets(output: &mut String, evaluation: &CorpusEvaluation) {
         for bucket in buckets {
             output.push_str(&format!(
                 "  - {}={}\n",
-                terminal_text(&bucket.key),
+                sanitise_for_terminal(&bucket.key),
                 bucket.samples
             ));
         }
@@ -364,7 +367,7 @@ fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
     for family in &populated_families {
         output.push_str(&format!(
             "  - {}: samples={} precision={:.2} recall={:.2} fpr={:.2} exact_label={:.2} thresholds={}→{}\n",
-            terminal_text(&family.family),
+            sanitise_for_terminal(&family.family),
             family.sample_count,
             family.metrics.precision,
             family.metrics.recall,
@@ -392,7 +395,7 @@ fn append_family_metrics(output: &mut String, evaluation: &CorpusEvaluation) {
     for family in weakest_families.iter().take(MAX_DISPLAY_WEAKEST_FAMILIES) {
         output.push_str(&format!(
             "  - {}: exact_label={:.2} fpr={:.2}\n",
-            terminal_text(&family.family),
+            sanitise_for_terminal(&family.family),
             family.metrics.exact_label_accuracy,
             family.metrics.false_positive_rate
         ));
@@ -406,10 +409,6 @@ fn append_dedup_line(output: &mut String, evaluation: &CorpusEvaluation) {
         evaluation.deduplication.unique_findings,
         evaluation.deduplication.duplicates_removed
     ));
-}
-
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
 }
 
 #[cfg(test)]

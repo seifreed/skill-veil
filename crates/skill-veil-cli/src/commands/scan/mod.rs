@@ -294,7 +294,7 @@ pub(crate) fn run_scan(
             eprintln!(
                 "Warning: Failed to scan {}: {}",
                 terminal_path(&err_entry.path),
-                terminal_text(&err_entry.error)
+                sanitise_for_terminal(&err_entry.error)
             );
         }
     }
@@ -827,17 +827,13 @@ fn longest_prefix_index<'a>(
     best_idx
 }
 
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
-}
-
 fn write_scan_output(output_path: &Path, output_content: &str) -> Result<()> {
     write_output_file_atomic(output_path, output_content.as_bytes())
         .context("Failed to write output file")
 }
 
 fn terminal_path(path: &Path) -> String {
-    terminal_text(&path.display().to_string())
+    sanitise_for_terminal(&path.display().to_string())
 }
 
 #[cfg(test)]

@@ -9,12 +9,8 @@ use crate::color::ColorMode;
 use crate::util::terminal_safe::sanitise_for_terminal;
 use std::path::Path;
 
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
-}
-
 fn terminal_path(path: &Path) -> String {
-    terminal_text(&path.display().to_string())
+    sanitise_for_terminal(&path.display().to_string())
 }
 
 pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOptions) -> String {
@@ -28,7 +24,10 @@ pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOpti
             options.color.heading("===")
         ));
         if let Some(package_id) = &result.metadata.package_id {
-            output.push_str(&format!("Package ID: {}\n", terminal_text(package_id)));
+            output.push_str(&format!(
+                "Package ID: {}\n",
+                sanitise_for_terminal(package_id)
+            ));
         }
         output.push_str(&format!(
             "Verdict: {}\n",
@@ -109,7 +108,7 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
             reason.scope,
             reason.category,
             reason.signal_class,
-            terminal_text(&reason.rationale)
+            sanitise_for_terminal(&reason.rationale)
         ));
     }
 
@@ -149,7 +148,7 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
                     .hygiene_summary
                     .top_rules
                     .iter()
-                    .map(|rule| terminal_text(rule))
+                    .map(|rule| sanitise_for_terminal(rule))
                     .collect::<Vec<_>>()
                     .join(",")
             }
@@ -184,7 +183,7 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
                     .blast_radius_summary
                     .factors
                     .iter()
-                    .map(|factor| terminal_text(factor))
+                    .map(|factor| sanitise_for_terminal(factor))
                     .collect::<Vec<_>>()
                     .join(",")
             ));
@@ -203,7 +202,7 @@ fn append_verdict_reasons(output: &mut String, result: &ScanResult) {
                     .network_targets
                     .iter()
                     .take(MAX_DISPLAY_NETWORK_TARGETS)
-                    .map(|target| terminal_text(target))
+                    .map(|target| sanitise_for_terminal(target))
                     .collect::<Vec<_>>()
                     .join(",")
             ));
@@ -275,23 +274,26 @@ fn append_findings(
         output.push_str(&format!(
             "  {} {} ({})\n",
             color.severity_label(finding.severity),
-            color.rule(terminal_text(&finding.rule_id)),
+            color.rule(sanitise_for_terminal(&finding.rule_id)),
             finding.category
         ));
-        output.push_str(&format!("      {}\n", terminal_text(&finding.reason)));
+        output.push_str(&format!(
+            "      {}\n",
+            sanitise_for_terminal(&finding.reason)
+        ));
         output.push_str(&format!(
             "      Remediation: {}\n",
-            terminal_text(&finding.remediation)
+            sanitise_for_terminal(&finding.remediation)
         ));
         output.push_str(&format!(
             "      Match: \"{}\"\n",
-            terminal_text(&finding.match_value),
+            sanitise_for_terminal(&finding.match_value),
         ));
         output.push_str(&format!("      Evidence: {}\n", finding.evidence_kind));
         output.push_str(&format!("      Action: {}\n", finding.recommended_action));
         output.push_str(&format!("      Artifact: {}", finding.artifact_kind));
         if let Some(path) = &finding.artifact_path {
-            output.push_str(&format!(" ({})", terminal_text(path)));
+            output.push_str(&format!(" ({})", sanitise_for_terminal(path)));
         }
         output.push('\n');
         if let Some(line) = finding.line_number {
@@ -312,7 +314,7 @@ fn append_findings(
 fn append_policy_reasons(output: &mut String, result: &ScanResult) {
     output.push_str("  Policy precedence:\n");
     for stage in &result.policy_audit.precedence_order {
-        output.push_str(&format!("    - {}\n", terminal_text(stage)));
+        output.push_str(&format!("    - {}\n", sanitise_for_terminal(stage)));
     }
 
     if result.summary.action_triggers.is_empty() {
@@ -323,8 +325,8 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
             output.push_str(&format!(
                 "    - {} via {}: {}\n",
                 trigger.action,
-                terminal_text(&trigger.factor),
-                terminal_text(&trigger.rationale)
+                sanitise_for_terminal(&trigger.factor),
+                sanitise_for_terminal(&trigger.rationale)
             ));
         }
     }
@@ -335,7 +337,7 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for policy in &context_policies {
             output.push_str(&format!(
                 "    - {} => {}\n",
-                terminal_text(
+                sanitise_for_terminal(
                     serde_json::to_string(&policy.context)
                         .unwrap_or_else(|_| "\"unknown\"".to_string())
                         .trim_matches('"')
@@ -350,10 +352,10 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for applied in &result.policy_audit.applied_overrides {
             output.push_str(&format!(
                 "    - {}: {} -> {} ({})\n",
-                terminal_text(&applied.rule_id),
+                sanitise_for_terminal(&applied.rule_id),
                 applied.original_action,
                 applied.effective_action,
-                terminal_text(&applied.reason)
+                sanitise_for_terminal(&applied.reason)
             ));
         }
     }
@@ -379,9 +381,9 @@ fn append_policy_reasons(output: &mut String, result: &ScanResult) {
         for note in &result.verdict_report.calibration_notes {
             output.push_str(&format!(
                 "    - {} [{}]: {}\n",
-                terminal_text(&note.rule_id),
+                sanitise_for_terminal(&note.rule_id),
                 note.effect,
-                terminal_text(&note.rationale)
+                sanitise_for_terminal(&note.rationale)
             ));
         }
     }
@@ -497,7 +499,7 @@ fn append_top_factors(output: &mut String, results: &[ScanResult]) {
     for (factor, contribution) in ranked_factors.into_iter().take(MAX_DISPLAY_TOP_FACTORS) {
         output.push_str(&format!(
             "  - {} ({})\n",
-            terminal_text(&factor),
+            sanitise_for_terminal(&factor),
             contribution
         ));
     }
@@ -524,7 +526,7 @@ fn append_top_triggers(output: &mut String, results: &[ScanResult]) {
     {
         output.push_str(&format!(
             "  - {} ({} file(s))\n",
-            terminal_text(&factor),
+            sanitise_for_terminal(&factor),
             count
         ));
     }
@@ -557,7 +559,7 @@ fn append_context_coverage(output: &mut String, results: &[ScanResult]) {
     for (context, count) in ranked_contexts {
         output.push_str(&format!(
             "  - {} ({} file(s))\n",
-            terminal_text(&context),
+            sanitise_for_terminal(&context),
             count
         ));
     }

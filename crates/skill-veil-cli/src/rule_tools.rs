@@ -497,7 +497,7 @@ pub fn format_rules_validation_text(report: &RulesValidationReport) -> String {
     output.push_str("--- Rules Validation ---\n");
     output.push_str(&format!(
         "Directory: {}\nPack files: {}\nTotal rules: {}\nValid: {}\n",
-        terminal_text(&report.rules_dir),
+        sanitise_for_terminal(&report.rules_dir),
         report.pack_files,
         report.total_rules,
         report.valid
@@ -505,31 +505,31 @@ pub fn format_rules_validation_text(report: &RulesValidationReport) -> String {
     if !report.schema_versions.is_empty() {
         output.push_str("Schema versions:\n");
         for version in &report.schema_versions {
-            output.push_str(&format!("  - {}\n", terminal_text(version)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(version)));
         }
     }
     if !report.pack_names.is_empty() {
         output.push_str("Pack names:\n");
         for name in &report.pack_names {
-            output.push_str(&format!("  - {}\n", terminal_text(name)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(name)));
         }
     }
     if !report.pack_kinds.is_empty() {
         output.push_str("Pack kinds:\n");
         for kind in &report.pack_kinds {
-            output.push_str(&format!("  - {}\n", terminal_text(kind)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(kind)));
         }
     }
     if !report.duplicate_rule_ids.is_empty() {
         output.push_str("Duplicate rule IDs:\n");
         for rule_id in &report.duplicate_rule_ids {
-            output.push_str(&format!("  - {}\n", terminal_text(rule_id)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(rule_id)));
         }
     }
     if !report.issues.is_empty() {
         output.push_str("Issues:\n");
         for issue in &report.issues {
-            output.push_str(&format!("  - {}\n", terminal_text(issue)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(issue)));
         }
     }
     output
@@ -540,7 +540,7 @@ pub fn format_rule_pack_info_text(info: &RulePackInfo) -> String {
     output.push_str("--- Rule Pack Info ---\n");
     output.push_str(&format!(
         "Directory: {}\nPack files: {}\nTotal rules: {}\nEnabled: {}\nDisabled: {}\n",
-        terminal_text(&info.rules_dir),
+        sanitise_for_terminal(&info.rules_dir),
         info.pack_files,
         info.total_rules,
         info.enabled_rules,
@@ -549,44 +549,48 @@ pub fn format_rule_pack_info_text(info: &RulePackInfo) -> String {
     if !info.schema_versions.is_empty() {
         output.push_str("Schema versions:\n");
         for version in &info.schema_versions {
-            output.push_str(&format!("  - {}\n", terminal_text(version)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(version)));
         }
     }
     if !info.pack_names.is_empty() {
         output.push_str("Pack names:\n");
         for name in &info.pack_names {
-            output.push_str(&format!("  - {}\n", terminal_text(name)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(name)));
         }
     }
     if !info.pack_kinds.is_empty() {
         output.push_str("Pack kinds:\n");
         for kind in &info.pack_kinds {
-            output.push_str(&format!("  - {}\n", terminal_text(kind)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(kind)));
         }
     }
     if !info.by_severity.is_empty() {
         output.push_str("By severity:\n");
         for (severity, count) in &info.by_severity {
-            output.push_str(&format!("  - {}: {}\n", terminal_text(severity), count));
+            output.push_str(&format!(
+                "  - {}: {}\n",
+                sanitise_for_terminal(severity),
+                count
+            ));
         }
     }
     if !info.by_category.is_empty() {
         output.push_str("By category:\n");
         for (category, count) in &info.by_category {
-            output.push_str(&format!("  - {}: {}\n", terminal_text(category), count));
+            output.push_str(&format!(
+                "  - {}: {}\n",
+                sanitise_for_terminal(category),
+                count
+            ));
         }
     }
     if !info.tags.is_empty() {
         output.push_str("Tags:\n");
         for tag in &info.tags {
-            output.push_str(&format!("  - {}\n", terminal_text(tag)));
+            output.push_str(&format!("  - {}\n", sanitise_for_terminal(tag)));
         }
     }
     output
-}
-
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
 }
 
 fn collect_pack_metadata(

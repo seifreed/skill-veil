@@ -59,7 +59,7 @@ fn record(args: DispositionRecordArgs) -> Result<()> {
     save_overlay(&args.file, &overlay)?;
     println!(
         "recorded disposition for {} ({} total records)",
-        terminal_text(&args.rule_id),
+        sanitise_for_terminal(&args.rule_id),
         overlay.records.len()
     );
     Ok(())
@@ -76,9 +76,9 @@ fn list(args: DispositionListArgs) -> Result<()> {
         println!(
             "{} {} {:?} {}",
             r.recorded_at.to_rfc3339(),
-            terminal_text(&r.rule_id),
+            sanitise_for_terminal(&r.rule_id),
             r.analyst_disposition,
-            terminal_text(&r.finding_fingerprint)
+            sanitise_for_terminal(&r.finding_fingerprint)
         );
     }
     Ok(())
@@ -90,7 +90,7 @@ fn stats(args: DispositionStatsArgs) -> Result<()> {
     let allowlist = learned_allowlist(&overlay);
     println!(
         "disposition overlay: {}",
-        terminal_text(&args.file.display().to_string())
+        sanitise_for_terminal(&args.file.display().to_string())
     );
     println!("  records: {}", overlay.records.len());
     if deltas.is_empty() {
@@ -104,7 +104,7 @@ fn stats(args: DispositionStatsArgs) -> Result<()> {
         } else {
             ""
         };
-        println!("    {}: {delta:+.4}{mark}", terminal_text(rule));
+        println!("    {}: {delta:+.4}{mark}", sanitise_for_terminal(rule));
     }
     Ok(())
 }
@@ -115,10 +115,6 @@ pub(crate) fn run_disposition(action: DispositionAction) -> Result<()> {
         DispositionAction::List(a) => list(a),
         DispositionAction::Stats(a) => stats(a),
     }
-}
-
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
 }
 
 #[cfg(test)]
@@ -193,13 +189,5 @@ mod tests {
             disposition_of(DispositionVerdictArg::Benign),
             Disposition::Benign
         );
-    }
-
-    #[test]
-    fn terminal_text_removes_disposition_control_sequences() {
-        let cleaned = terminal_text("RULE\x1b]8;;https://evil.invalid\x07click");
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(!cleaned.contains('\x07'));
     }
 }

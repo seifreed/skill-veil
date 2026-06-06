@@ -342,7 +342,11 @@ fn review(args: GoldReviewArgs) -> Result<()> {
     let yaml = serde_yaml::to_string(&m).context("failed to serialise gold manifest")?;
     write_output_file_atomic(&args.manifest, yaml.as_bytes())
         .with_context(|| format!("failed to write {}", args.manifest.display()))?;
-    println!("adjudicated {} → {:?}", terminal_text(&args.id), label);
+    println!(
+        "adjudicated {} → {:?}",
+        sanitise_for_terminal(&args.id),
+        label
+    );
     Ok(())
 }
 
@@ -354,12 +358,8 @@ pub(crate) fn run_gold(action: GoldAction) -> Result<()> {
     }
 }
 
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
-}
-
 fn terminal_path(path: &Path) -> String {
-    terminal_text(&path.display().to_string())
+    sanitise_for_terminal(&path.display().to_string())
 }
 
 #[cfg(test)]
@@ -404,14 +404,6 @@ mod tests {
                 "{bad:?} must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn terminal_text_removes_gold_status_control_sequences() {
-        let cleaned = terminal_text("sample\x1b]8;;https://evil.invalid\x07click");
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(!cleaned.contains('\x07'));
     }
 
     #[test]

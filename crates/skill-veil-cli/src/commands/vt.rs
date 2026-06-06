@@ -67,7 +67,7 @@ fn run_report(args: VtReportArgs) -> Result<()> {
         None => {
             eprintln!(
                 "VT has no report for {} (404 — file unknown to VirusTotal)",
-                terminal_text(&args.sha256)
+                sanitise_for_terminal(&args.sha256)
             );
             return Ok(());
         }
@@ -157,26 +157,14 @@ fn build_client() -> Result<VtClient> {
     Ok(VtClient::new(config))
 }
 
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
-}
-
 fn terminal_path(path: &Path) -> String {
-    terminal_text(&path.display().to_string())
+    sanitise_for_terminal(&path.display().to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{cross_check_scan_root, terminal_path, terminal_text};
+    use super::{cross_check_scan_root, terminal_path};
     use std::path::PathBuf;
-
-    #[test]
-    fn terminal_text_removes_vt_status_control_sequences() {
-        let cleaned = terminal_text("hash\x1b]8;;https://evil.invalid\x07click");
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(!cleaned.contains('\x07'));
-    }
 
     #[test]
     fn terminal_path_removes_vt_status_control_sequences() {

@@ -188,18 +188,18 @@ pub(crate) fn render_markdown(summary: &CrossCheckSummary) -> String {
             let findings = pkg
                 .our_findings
                 .iter()
-                .map(|finding| terminal_text(finding))
+                .map(|finding| sanitise_for_terminal(finding))
                 .collect::<Vec<_>>()
                 .join(",");
             let _ = writeln!(
                 out,
                 "- `{}` — our={} risk={}  vt={}  findings={}",
-                terminal_text(&pkg.sha256),
-                terminal_text(&pkg.our_verdict),
+                sanitise_for_terminal(&pkg.sha256),
+                sanitise_for_terminal(&pkg.our_verdict),
                 pkg.our_risk_score,
                 pkg.vt_verdict
                     .as_deref()
-                    .map(terminal_text)
+                    .map(sanitise_for_terminal)
                     .unwrap_or_else(|| "?".to_string()),
                 findings
             );
@@ -245,14 +245,14 @@ fn render_missed_section(
     }
     let _ = writeln!(out, "\n## {} ({})\n", heading, pkgs.len());
     for pkg in pkgs {
-        let _ = writeln!(out, "### `{}`", terminal_text(&pkg.sha256));
+        let _ = writeln!(out, "### `{}`", sanitise_for_terminal(&pkg.sha256));
         if let Some(name) = &pkg.meaningful_name {
-            let _ = writeln!(out, "- **name**: {}", terminal_text(name));
+            let _ = writeln!(out, "- **name**: {}", sanitise_for_terminal(name));
         }
         let _ = writeln!(
             out,
             "- **our verdict**: {} (risk {})",
-            terminal_text(&pkg.our_verdict),
+            sanitise_for_terminal(&pkg.our_verdict),
             pkg.our_risk_score
         );
         if pkg.our_findings.is_empty() {
@@ -261,26 +261,22 @@ fn render_missed_section(
             let findings = pkg
                 .our_findings
                 .iter()
-                .map(|finding| terminal_text(finding))
+                .map(|finding| sanitise_for_terminal(finding))
                 .collect::<Vec<_>>()
                 .join(", ");
             let _ = writeln!(out, "- **our findings**: {findings}");
         }
         if let Some(v) = &pkg.vt_verdict {
-            let _ = writeln!(out, "- **VT verdict**: {}", terminal_text(v));
+            let _ = writeln!(out, "- **VT verdict**: {}", sanitise_for_terminal(v));
         }
         if let Some(analysis) = &pkg.vt_analysis {
             let _ = writeln!(out, "\n**VT Code Insight analysis:**\n");
             for line in analysis.lines() {
-                let _ = writeln!(out, "> {}", terminal_text(line));
+                let _ = writeln!(out, "> {}", sanitise_for_terminal(line));
             }
             let _ = writeln!(out);
         }
     }
-}
-
-fn terminal_text(value: &str) -> String {
-    sanitise_for_terminal(value)
 }
 
 #[cfg(test)]
