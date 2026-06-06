@@ -473,7 +473,15 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
             });
         }
         let body = &value[1..closing];
-        let case_sensitive = !trailing_i; // `/x/` is case-sensitive; `/x/i` is not
+        // Upstream NOVA defaults EVERY keyword pattern (regex and literal) to
+        // case-INSENSITIVE; the `/i` suffix is the explicit-but-redundant form,
+        // not what controls case. A bare `/abc/` therefore matches `ABC` too.
+        // Pre-fix this branch made bare regexes case-SENSITIVE (only `/i` was
+        // insensitive), so capitalised injection/malware keywords evaded every
+        // NOVA keyword-regex rule that omitted `/i` — and it disagreed with the
+        // string-literal branch below, which is already case-insensitive.
+        // (`trailing_i` still drives `closing` above so the suffix is stripped.)
+        let case_sensitive = false;
         crate::regex_bounds::build_bounded_regex(body).map_err(|source| {
             ParseError::InvalidRegex {
                 pattern: body.to_string(),
@@ -1440,12 +1448,16 @@ rule Second {
         }
     }
 
+    /// Contract: keyword regexes default to case-INSENSITIVE, matching
+    /// upstream NOVA. Both the bare `/abc/` and the explicit `/abc/i` forms
+    /// yield `case_sensitive == false`; the suffix is stripped from the body
+    /// either way.
     #[test]
-    fn keyword_regex_with_body_parses() {
-        let cs = parse_keyword_value("/abc/").unwrap();
-        assert!(cs.is_regex && cs.case_sensitive && cs.pattern == "abc");
-        let ci = parse_keyword_value("/abc/i").unwrap();
-        assert!(ci.is_regex && !ci.case_sensitive && ci.pattern == "abc");
+    fn keyword_regex_with_body_parses_case_insensitive() {
+        let bare = parse_keyword_value("/abc/").unwrap();
+        assert!(bare.is_regex && !bare.case_sensitive && bare.pattern == "abc");
+        let explicit = parse_keyword_value("/abc/i").unwrap();
+        assert!(explicit.is_regex && !explicit.case_sensitive && explicit.pattern == "abc");
         // `//` and `//i` are empty (body-present, length 0) regexes — valid.
         assert!(parse_keyword_value("//").unwrap().pattern.is_empty());
         assert!(parse_keyword_value("//i").unwrap().pattern.is_empty());
