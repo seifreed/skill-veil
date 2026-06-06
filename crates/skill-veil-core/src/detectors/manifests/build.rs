@@ -1,5 +1,5 @@
 use crate::artifact_graph::{ArtifactCapability, ArtifactCapabilityFact, ArtifactRelation};
-use crate::detectors::patterns::line_invokes_shell_or_interpreter;
+use crate::detectors::patterns::{line_invokes_shell_or_interpreter, scan_command_token};
 use crate::findings::{
     ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
 };
@@ -112,50 +112,39 @@ fn makefile_has_remote_download(lower_line: &str) -> bool {
 }
 
 fn command_token_with_boundary(lower_line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = lower_line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            lower_line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        let make_prefix_ok = matches!(before, Some(b'@' | b'-' | b'+'))
-            && lower_line
-                .as_bytes()
-                .get(..abs_pos)
-                .is_some_and(|prefix| prefix.iter().all(|b| matches!(b, b'@' | b'-' | b'+')));
-        let left_ok = before.is_none()
-            || make_prefix_ok
-            || matches!(
-                before,
-                Some(b' ')
-                    | Some(b'\t')
-                    | Some(b'|')
-                    | Some(b';')
-                    | Some(b'&')
-                    | Some(b'/')
-                    | Some(b'(')
-                    | Some(b'"')
-                    | Some(b'\'')
-                    | Some(b'`')
-            );
-        let after = lower_line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
+    scan_command_token(
+        lower_line,
+        token,
+        |prefix, before| {
+            let make_prefix_ok = matches!(before, Some(b'@' | b'-' | b'+'))
+                && prefix.bytes().all(|b| matches!(b, b'@' | b'-' | b'+'));
+            before.is_none()
+                || make_prefix_ok
+                || matches!(
+                    before,
+                    Some(b' ')
+                        | Some(b'\t')
+                        | Some(b'|')
+                        | Some(b';')
+                        | Some(b'&')
+                        | Some(b'/')
+                        | Some(b'(')
+                        | Some(b'"')
+                        | Some(b'\'')
+                        | Some(b'`')
+                )
+        },
+        |after| {
+            after.is_empty()
+                || after.starts_with(' ')
+                || after.starts_with('\t')
+                || after.starts_with('|')
+                || after.starts_with(';')
+                || after.starts_with('&')
+                || after.starts_with('>')
+                || after.starts_with('<')
+        },
+    )
 }
 
 #[cfg(test)]

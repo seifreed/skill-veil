@@ -212,7 +212,19 @@ fn is_shell_assignment(token: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
+/// Scans `line` for `token`, returning `true` at the first occurrence
+/// whose neighbours satisfy both boundary predicates. `left_ok` receives
+/// the prefix preceding the match and the byte immediately before it
+/// (`None` at line start); `right_ok` receives the suffix after the
+/// match. The byte-indexing scan and its UTF-8 boundary handling live
+/// here once so the command-token detectors share one tested loop and
+/// supply only their context-specific boundary char sets.
+pub(crate) fn scan_command_token(
+    line: &str,
+    token: &str,
+    left_ok: impl Fn(&str, Option<&u8>) -> bool,
+    right_ok: impl Fn(&str) -> bool,
+) -> bool {
     let mut start = 0;
     while let Some(pos) = line[start..].find(token) {
         let abs_pos = start + pos;
@@ -222,51 +234,64 @@ pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
         } else {
             None
         };
-        let left_ok = before.is_none()
-            || matches!(
-                before,
-                Some(b' ')
-                    | Some(b'\t')
-                    | Some(b'|')
-                    | Some(b';')
-                    | Some(b'&')
-                    | Some(b'/')
-                    // Windows path separator: a fully-qualified
-                    // `c:\windows\system32\curl.exe` must not defeat the
-                    // token (the basename helpers already split on `\`).
-                    | Some(b'\\')
-                    | Some(b'(')
-                    | Some(b'"')
-                    | Some(b'\'')
-                    | Some(b'`')
-            );
         let after = line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('(')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<')
-            // A quote / close-paren / comma / bracket closes the token in
-            // array-style invocations like `spawn("curl",["-d",sec,url])`
-            // — without these, the egress / persistence / install-hook
-            // detectors that share this helper missed the exfil shape.
-            || after.starts_with('"')
-            || after.starts_with('\'')
-            || after.starts_with('`')
-            || after.starts_with(')')
-            || after.starts_with(',')
-            || after.starts_with(']')
-            || after.starts_with('}');
-        if left_ok && right_ok {
+        if left_ok(&line[..abs_pos], before) && right_ok(after) {
             return true;
         }
         start = token_end;
     }
     false
+}
+
+pub(crate) fn line_contains_command_token(line: &str, token: &str) -> bool {
+    scan_command_token(
+        line,
+        token,
+        |_, before| {
+            before.is_none()
+                || matches!(
+                    before,
+                    Some(b' ')
+                        | Some(b'\t')
+                        | Some(b'|')
+                        | Some(b';')
+                        | Some(b'&')
+                        | Some(b'/')
+                        // Windows path separator: a fully-qualified
+                        // `c:\windows\system32\curl.exe` must not defeat
+                        // the token (the basename helpers already split
+                        // on `\`).
+                        | Some(b'\\')
+                        | Some(b'(')
+                        | Some(b'"')
+                        | Some(b'\'')
+                        | Some(b'`')
+                )
+        },
+        |after| {
+            after.is_empty()
+                || after.starts_with(' ')
+                || after.starts_with('\t')
+                || after.starts_with('(')
+                || after.starts_with('|')
+                || after.starts_with(';')
+                || after.starts_with('&')
+                || after.starts_with('>')
+                || after.starts_with('<')
+                // A quote / close-paren / comma / bracket closes the
+                // token in array-style invocations like
+                // `spawn("curl",["-d",sec,url])` — without these, the
+                // egress / persistence / install-hook detectors that
+                // share this helper missed the exfil shape.
+                || after.starts_with('"')
+                || after.starts_with('\'')
+                || after.starts_with('`')
+                || after.starts_with(')')
+                || after.starts_with(',')
+                || after.starts_with(']')
+                || after.starts_with('}')
+        },
+    )
 }
 
 pub(crate) fn line_invokes_powershell_expression_alias(line: &str) -> bool {

@@ -8,6 +8,7 @@ use crate::findings::{
 use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
+use crate::detectors::patterns::scan_command_token;
 use crate::services::artifact_orchestration::manifests::strip_inline_hash_comment;
 
 use super::image_uses_mutable_latest;
@@ -226,50 +227,42 @@ fn token_basename(token: &str) -> &str {
 /// `python -m urllib.request` which is the same download vector as
 /// `python -m urllib`.
 fn token_with_boundary(lower_line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = lower_line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            lower_line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        // Tokens that start with a space (e.g. " nc") carry their own
-        // left boundary. Otherwise, the character before the token must
-        // be a word boundary.
-        let left_ok = token.starts_with(' ')
-            || before.is_none()
-            || matches!(
-                before,
-                Some(b' ')
-                    | Some(b'\t')
-                    | Some(b'|')
-                    | Some(b';')
-                    | Some(b'&')
-                    | Some(b'/')
-                    | Some(b'(')
-                    | Some(b'"')
-                    | Some(b'\'')
-                    | Some(b'`')
-            );
-        let after = lower_line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('(')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('.')
-            || after.starts_with(':');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
+    scan_command_token(
+        lower_line,
+        token,
+        |_, before| {
+            // Tokens that start with a space (e.g. " nc") carry their own
+            // left boundary. Otherwise, the character before the token
+            // must be a word boundary.
+            token.starts_with(' ')
+                || before.is_none()
+                || matches!(
+                    before,
+                    Some(b' ')
+                        | Some(b'\t')
+                        | Some(b'|')
+                        | Some(b';')
+                        | Some(b'&')
+                        | Some(b'/')
+                        | Some(b'(')
+                        | Some(b'"')
+                        | Some(b'\'')
+                        | Some(b'`')
+                )
+        },
+        |after| {
+            after.is_empty()
+                || after.starts_with(' ')
+                || after.starts_with('\t')
+                || after.starts_with('(')
+                || after.starts_with('|')
+                || after.starts_with(';')
+                || after.starts_with('&')
+                || after.starts_with('>')
+                || after.starts_with('.')
+                || after.starts_with(':')
+        },
+    )
 }
 
 #[cfg(test)]

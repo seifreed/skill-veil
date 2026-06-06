@@ -6,7 +6,7 @@ use crate::findings::{
 };
 
 use crate::detectors::patterns::{
-    line_contains_command_token, line_invokes_powershell_expression_alias,
+    line_contains_command_token, line_invokes_powershell_expression_alias, scan_command_token,
 };
 
 use super::match_helpers::{findings_from_pattern_table, FindingSpec};
@@ -210,53 +210,45 @@ pub(crate) fn detect_node_process_exec(
 }
 
 fn command_token_with_boundary(line: &str, token: &str) -> bool {
-    let mut start = 0;
-    while let Some(pos) = line[start..].find(token) {
-        let abs_pos = start + pos;
-        let token_end = abs_pos + token.len();
-        let before = if abs_pos > 0 {
-            line.as_bytes().get(abs_pos - 1)
-        } else {
-            None
-        };
-        let left_ok = before.is_none()
-            || matches!(
-                before,
-                Some(b' ')
-                    | Some(b'\t')
-                    | Some(b'|')
-                    | Some(b';')
-                    | Some(b'&')
-                    | Some(b'/')
-                    | Some(b'(')
-                    | Some(b'\'')
-                    | Some(b'"')
-                    | Some(b'`')
-            );
-        let after = line.get(token_end..).unwrap_or("");
-        let right_ok = after.is_empty()
-            || after.starts_with(' ')
-            || after.starts_with('\t')
-            || after.starts_with('(')
-            || after.starts_with('|')
-            || after.starts_with(';')
-            || after.starts_with('&')
-            || after.starts_with('>')
-            || after.starts_with('<')
-            // Quote/comma/paren close the token in the canonical Node
-            // shell-spawn idiom `spawn('sh', ['-c', …])` — without these
-            // the interpreter token failed the boundary check and the
-            // finding was de-escalated from Block to Log.
-            || after.starts_with('\'')
-            || after.starts_with('"')
-            || after.starts_with(',')
-            || after.starts_with(')');
-        if left_ok && right_ok {
-            return true;
-        }
-        start = token_end;
-    }
-    false
+    scan_command_token(
+        line,
+        token,
+        |_, before| {
+            before.is_none()
+                || matches!(
+                    before,
+                    Some(b' ')
+                        | Some(b'\t')
+                        | Some(b'|')
+                        | Some(b';')
+                        | Some(b'&')
+                        | Some(b'/')
+                        | Some(b'(')
+                        | Some(b'\'')
+                        | Some(b'"')
+                        | Some(b'`')
+                )
+        },
+        |after| {
+            after.is_empty()
+                || after.starts_with(' ')
+                || after.starts_with('\t')
+                || after.starts_with('(')
+                || after.starts_with('|')
+                || after.starts_with(';')
+                || after.starts_with('&')
+                || after.starts_with('>')
+                || after.starts_with('<')
+                // Quote/comma/paren close the token in the canonical Node
+                // shell-spawn idiom `spawn('sh', ['-c', …])` — without
+                // these the interpreter token failed the boundary check
+                // and the finding was de-escalated from Block to Log.
+                || after.starts_with('\'')
+                || after.starts_with('"')
+                || after.starts_with(',')
+                || after.starts_with(')')
+        },
+    )
 }
 
 pub(crate) fn detect_python_exec_network(
