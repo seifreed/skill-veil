@@ -170,7 +170,7 @@ fn run_report_submit(args: PromptIntelReportSubmitArgs) -> Result<()> {
         response
             .id
             .as_deref()
-            .map(terminal_field)
+            .map(sanitise_for_terminal)
             .unwrap_or_else(|| "(server returned no id)".to_string())
     );
     Ok(())
@@ -213,7 +213,7 @@ fn run_report_list(args: PromptIntelReportListArgs) -> Result<()> {
                     "[{sev:<8}] {action:<16} {id}  {title}",
                     sev = entry.severity.as_str(),
                     action = format!("{:?}", entry.action).to_lowercase(),
-                    id = terminal_field(&entry.id),
+                    id = sanitise_for_terminal(&entry.id),
                     title = terminal_snippet(&entry.title, 70),
                 );
             }
@@ -253,7 +253,7 @@ fn run_feed_list(args: PromptIntelFeedListArgs) -> Result<()> {
                     "[{sev:<8}] {action:<16} {id}  {title}",
                     sev = entry.severity.as_str(),
                     action = format!("{:?}", entry.action).to_lowercase(),
-                    id = terminal_field(&entry.id),
+                    id = sanitise_for_terminal(&entry.id),
                     title = terminal_snippet(&entry.title, 70),
                 );
             }
@@ -371,10 +371,6 @@ fn read_report_draft_with_cap(path: &Path, cap: u64) -> Result<ReportDraft> {
         .with_context(|| format!("parsing report draft as JSON: {}", path.display()))
 }
 
-fn terminal_field(value: &str) -> String {
-    sanitise_for_terminal(value)
-}
-
 fn terminal_snippet(value: &str, max_chars: usize) -> String {
     let truncated = value.chars().take(max_chars).collect::<String>();
     sanitise_for_terminal(&truncated)
@@ -383,8 +379,7 @@ fn terminal_snippet(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        detection_below_gate, read_report_draft_with_cap, resolve_cache_root_from, terminal_field,
-        terminal_snippet,
+        detection_below_gate, read_report_draft_with_cap, resolve_cache_root_from, terminal_snippet,
     };
     use crate::promptintel::cross_check::CrossCheckSummary;
     use std::path::PathBuf;
@@ -472,14 +467,6 @@ mod tests {
         let resolved = resolve_cache_root_from(Some(override_dir.clone()), None).unwrap();
 
         assert_eq!(resolved, override_dir);
-    }
-
-    #[test]
-    fn terminal_field_removes_promptintel_control_sequences() {
-        let cleaned = terminal_field("id-\x1b]8;;https://evil.invalid\x07click");
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(!cleaned.contains('\x07'));
     }
 
     #[test]
