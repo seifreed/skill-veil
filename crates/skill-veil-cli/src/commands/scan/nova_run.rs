@@ -15,6 +15,7 @@
 //! and reuse the report for both.
 
 use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
+use crate::util::hash::short_sha;
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -166,7 +167,7 @@ pub(crate) fn render_text_block(report: &NovaScanReport) -> String {
     out.push_str("\n--- NOVA rule matches ---\n");
     out.push_str(&format!(
         "  pack:    nova-rules @ {}  ({} rules, {} files scanned)\n",
-        short(&report.install.commit_sha),
+        short_sha(&report.install.commit_sha),
         report.rule_count,
         report.body_count,
     ));
@@ -402,14 +403,6 @@ fn non_regular_file_error(path: &Path) -> io::Error {
             path.display()
         ),
     )
-}
-
-fn short(sha: &str) -> &str {
-    if sha.len() >= 7 {
-        &sha[..7]
-    } else {
-        sha
-    }
 }
 
 #[cfg(test)]

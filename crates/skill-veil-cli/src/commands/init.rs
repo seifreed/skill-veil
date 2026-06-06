@@ -7,6 +7,7 @@
 
 use crate::cli_args::{InitArgs, OutputFormat, RulesStatusArgs, RulesUpdateArgs};
 use crate::init;
+use crate::util::hash::short_sha;
 use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 use anyhow::{Context, Result};
 
@@ -37,14 +38,6 @@ pub(crate) fn run_init(args: InitArgs) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn short_sha(sha: &str) -> &str {
-    if sha.len() >= 7 {
-        &sha[..7]
-    } else {
-        sha
-    }
 }
 
 pub(crate) fn run_rules_update(args: RulesUpdateArgs) -> Result<()> {

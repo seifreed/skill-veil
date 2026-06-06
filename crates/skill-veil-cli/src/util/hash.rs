@@ -42,9 +42,27 @@ pub(crate) fn sha256_file_with_cap(path: &Path, cap: u64) -> std::io::Result<Opt
     Ok(Some(format!("{:x}", hasher.finalize())))
 }
 
+/// First seven characters of a SHA / commit hash for display, never
+/// splitting a UTF-8 codepoint. Shared by the rule-update notifier and the
+/// init / NOVA status output so the "short SHA" form has one definition.
+pub(crate) fn short_sha(sha: &str) -> &str {
+    let end = sha.char_indices().nth(7).map_or(sha.len(), |(idx, _)| idx);
+    &sha[..end]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Contract: takes the first seven characters and never slices across a
+    /// UTF-8 boundary (commit SHAs are ASCII, but the helper must stay
+    /// panic-free on arbitrary input).
+    #[test]
+    fn short_sha_takes_seven_chars_utf8_safe() {
+        assert_eq!(short_sha("abcdefghi"), "abcdefg");
+        assert_eq!(short_sha("åååååååå"), "ååååååå");
+        assert_eq!(short_sha("abc"), "abc");
+    }
 
     #[test]
     fn sha256_hex_matches_known_vectors() {

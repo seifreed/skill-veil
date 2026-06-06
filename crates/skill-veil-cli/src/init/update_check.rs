@@ -13,6 +13,7 @@
 //!   (env-only, no flag — this is power-user territory).
 
 use crate::util::bounded_read::has_single_hardlink;
+use crate::util::hash::short_sha;
 use anyhow::Result;
 use std::io::Read;
 use std::path::Path;
@@ -211,10 +212,6 @@ fn read_string_bounded(reader: impl Read, cap: u64) -> Result<String> {
     Ok(body)
 }
 
-fn short_sha(sha: &str) -> String {
-    sha.chars().take(7).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,13 +363,6 @@ mod tests {
         ] {
             assert!(validate_nova_sha(bad).is_err(), "{bad:?} must be rejected");
         }
-    }
-
-    /// Contract: SHA shortening is character-boundary safe.
-    #[test]
-    fn short_sha_is_utf8_boundary_safe() {
-        assert_eq!(short_sha("abcdefghi"), "abcdefg");
-        assert_eq!(short_sha("åååååååå"), "ååååååå");
     }
 
     /// Contract: GitHub update-check JSON bodies are bounded before
