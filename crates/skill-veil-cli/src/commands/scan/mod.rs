@@ -529,6 +529,17 @@ fn evaluate_sandbox_channel(
     report
 }
 
+/// Whether operator-facing trailing text blocks (VT / OSV / abandoned / LLM /
+/// PromptIntel enrichment, taint adjudication) may be written to stdout.
+/// Structured formats (JSON / SARIF / Shield / HTML) carry a machine-parseable
+/// payload on the same stream that a trailing text block would corrupt — a CI
+/// gate then fails to parse the report and may read it as "no findings",
+/// passing a malicious package. So these blocks are emitted only for the
+/// human-readable Text format, matching the NOVA / YARA / FP-review gating.
+fn text_block_allowed(format: crate::cli_args::OutputFormat) -> bool {
+    matches!(format, crate::cli_args::OutputFormat::Text)
+}
+
 /// Run the read-only enrichment channels (VT, OSV, abandoned-package, LLM) that
 /// take an immutable `scan_result` and only print a trailing text block. None
 /// may touch the verdict / risk score — the `verdict_snapshot` assert enforces
@@ -538,6 +549,14 @@ fn run_read_only_enrichments(
     args: &ScanArgs,
     quiet: bool,
 ) -> Result<()> {
+    // The enrichment blocks are operator-friendly text. Printing them to the
+    // stdout that already carries a JSON / SARIF / Shield / HTML payload makes
+    // that payload unparseable — a CI gate that parses the report then reads it
+    // as "no findings", silently passing a malicious package. Gate the prints
+    // on the Text format, exactly like the NOVA / YARA / FP-review blocks. The
+    // enrichment is still computed (so `--vt-submit-unknown` still submits); only
+    // the trailing text is suppressed for structured formats.
+    let render_block = text_block_allowed(args.format);
     if !args.no_vt_enrich {
         if let Some(vt_block) = vt::try_enrich_with_vt(
             scan_result,
@@ -546,14 +565,18 @@ fn run_read_only_enrichments(
             args.cache_dir.as_deref(),
             quiet,
         )? {
-            print!("{vt_block}");
+            if render_block {
+                print!("{vt_block}");
+            }
         }
     }
 
     if let Some(osv_block) =
         crate::osv::try_enrich_with_osv(scan_result, args.osv, args.cache_dir.as_deref(), quiet)?
     {
-        print!("{osv_block}");
+        if render_block {
+            print!("{osv_block}");
+        }
     }
 
     if let Some(abandoned_block) = crate::abandoned::try_enrich_with_abandoned(
@@ -562,7 +585,9 @@ fn run_read_only_enrichments(
         args.cache_dir.as_deref(),
         quiet,
     )? {
-        print!("{abandoned_block}");
+        if render_block {
+            print!("{abandoned_block}");
+        }
     }
 
     if !args.no_llm_enrich {
@@ -574,7 +599,9 @@ fn run_read_only_enrichments(
             args.cache_dir.as_deref(),
             quiet,
         )? {
-            print!("{llm_block}");
+            if render_block {
+                print!("{llm_block}");
+            }
         }
     }
     Ok(())
@@ -603,7 +630,12 @@ fn run_taint_adjudication_stage(
             args.llm_adjudicate_upgrade,
         )? {
             Some(outcome) => {
-                print!("{}", outcome.report_block);
+                // Gate the text block on the Text format so it never corrupts a
+                // JSON/SARIF stdout payload; the exit-code override in `outcome`
+                // is returned regardless of format.
+                if text_block_allowed(args.format) {
+                    print!("{}", outcome.report_block);
+                }
                 Ok(Some(outcome))
             }
             None => Ok(None),
@@ -680,7 +712,10 @@ fn run_promptintel_enrichment(
             args.cache_dir.as_deref(),
             quiet,
         )? {
-            print!("{pi_block}");
+            // Text-only: this block would corrupt a structured stdout payload.
+            if text_block_allowed(args.format) {
+                print!("{pi_block}");
+            }
         }
     }
     Ok(())
@@ -808,10 +843,31 @@ fn terminal_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli_args::{Cli, Commands};
+    use crate::cli_args::{Cli, Commands, OutputFormat};
     use clap::Parser;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    /// Contract: trailing operator text blocks (VT/OSV/LLM/PromptIntel
+    /// enrichment, taint adjudication) print ONLY for the Text format. Every
+    /// structured format keeps stdout payload-only so a CI gate can parse the
+    /// report — a leaked text block makes JSON/SARIF unparseable, which many
+    /// wrappers read as "no findings" and pass a malicious package.
+    #[test]
+    fn structured_formats_suppress_trailing_text_blocks() {
+        assert!(text_block_allowed(OutputFormat::Text));
+        for (format, name) in [
+            (OutputFormat::Json, "json"),
+            (OutputFormat::Sarif, "sarif"),
+            (OutputFormat::Shield, "shield"),
+            (OutputFormat::Html, "html"),
+        ] {
+            assert!(
+                !text_block_allowed(format),
+                "{name} is a structured format and must not print trailing text blocks",
+            );
+        }
+    }
 
     /// Contract: a NOVA hit on a non-entrypoint file in a multi-package
     /// scan is attributed to the package that contains it (longest shared
