@@ -100,12 +100,35 @@ impl YaraEngine {
     }
 
     /// Compile the currently loaded rules.
+    ///
+    /// A single unparseable rule file is skipped (and logged) rather than
+    /// aborting the whole pack: the historical `?`-on-first-error caused one
+    /// malformed community/local `.yar` to silently disable EVERY loaded rule,
+    /// so the advisory YARA channel produced zero findings for the run. Only
+    /// when every source fails (and at least one was loaded) is `Compile`
+    /// returned, so a wholesale failure is still surfaced.
     pub fn compile(&mut self) -> Result<(), YaraError> {
         let mut compiler = yara_x::Compiler::new();
+        let mut compiled_any = false;
+        let mut first_error: Option<String> = None;
         for (path, source) in &self.source_chunks {
-            compiler
-                .add_source(source.as_str())
-                .map_err(|err| YaraError::Compile(format!("{}: {err}", path.display())))?;
+            match compiler.add_source(source.as_str()) {
+                Ok(_) => compiled_any = true,
+                Err(err) => {
+                    let detail = format!("{}: {err}", path.display());
+                    tracing::warn!("skipping unparseable YARA rule file {detail}");
+                    if first_error.is_none() {
+                        first_error = Some(detail);
+                    }
+                }
+            }
+        }
+        if !compiled_any && !self.source_chunks.is_empty() {
+            return Err(YaraError::Compile(format!(
+                "all {} YARA rule file(s) failed to parse; first: {}",
+                self.source_chunks.len(),
+                first_error.as_deref().unwrap_or("unknown")
+            )));
         }
         let rules = compiler.build();
         self.rules = Some(rules);
@@ -225,6 +248,50 @@ rule TEST_REMOTE_EXEC {{
         assert_eq!(findings[0].rule_id, "TEST_REMOTE_EXEC");
         assert_eq!(findings[0].category, ThreatCategory::RemoteExec);
         assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    /// Contract: one unparseable rule file is skipped, not fatal — the other
+    /// loaded rules still compile and match. A single malformed `.yar` must not
+    /// silently disable the entire YARA channel.
+    #[test]
+    fn one_unparseable_rule_file_does_not_disable_the_pack() {
+        let fs = crate::adapters::StdFileSystemProvider::new();
+        let mut good = tempfile::NamedTempFile::new().unwrap();
+        writeln!(
+            good,
+            "rule GOOD_RULE {{ meta: severity = \"high\" category = \"remote_exec\" \
+             strings: $a = \"curl | bash\" condition: $a }}"
+        )
+        .unwrap();
+        let mut bad = tempfile::NamedTempFile::new().unwrap();
+        writeln!(bad, "rule BROKEN {{ this is not valid yara").unwrap();
+
+        let mut engine = YaraEngine::new().unwrap();
+        engine.load_rules_file(&fs, good.path()).unwrap();
+        engine.load_rules_file(&fs, bad.path()).unwrap();
+        engine.compile().unwrap();
+
+        let findings = engine.scan(b"curl | bash").unwrap();
+        assert!(
+            findings.iter().any(|f| f.rule_id == "GOOD_RULE"),
+            "a valid rule must still match despite an unparseable sibling; got {findings:?}",
+        );
+    }
+
+    /// Contract: when EVERY rule file fails to parse, the wholesale failure is
+    /// still surfaced as a `Compile` error rather than silently building an
+    /// empty ruleset.
+    #[test]
+    fn all_unparseable_rule_files_surface_compile_error() {
+        let fs = crate::adapters::StdFileSystemProvider::new();
+        let mut bad = tempfile::NamedTempFile::new().unwrap();
+        writeln!(bad, "rule BROKEN {{ not valid").unwrap();
+        let mut engine = YaraEngine::new().unwrap();
+        engine.load_rules_file(&fs, bad.path()).unwrap();
+        assert!(
+            matches!(engine.compile(), Err(YaraError::Compile(_))),
+            "an all-unparseable pack must still surface a Compile error",
+        );
     }
 
     struct ReversedYaraFs {

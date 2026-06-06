@@ -69,6 +69,10 @@ NOISE_WRITE = re.compile(
 
 CONNECT_INET = re.compile(
     r'connect\(\d+,\s*\{sa_family=AF_INET6?,\s*sin6?_port=htons\((\d+)\),\s*'
+    # AF_INET6 renders `sin6_flowinfo=htonl(0), ` between the port and the
+    # address; without this optional segment every IPv6 connect() was missed,
+    # so IPv6 C2 / exfil produced no network_connect behavior.
+    r'(?:sin6_flowinfo=htonl\(\d+\),\s*)?'
     r'(?:sin6?_addr=inet_(?:addr|pton)\([^,]*"([^"]+)"\)|inet_pton\([^"]*"([^"]+)")'
 )
 CONNECT_UNIX = re.compile(r'connect\(\d+,\s*\{sa_family=AF_UNIX,\s*sun_path="([^"]+)"')
@@ -202,5 +206,31 @@ def parse_trace(path, behaviors, seen, script):
                     add(behaviors, seen, "file_write", target)
 
 
+def _self_test():
+    # Contract for CONNECT_INET: capture host + port for both AF_INET and
+    # AF_INET6 connect() lines. AF_INET6 carries an extra
+    # `sin6_flowinfo=htonl(0), ` field between the port and the address; without
+    # tolerating it every IPv6 connect was missed and IPv6 egress was invisible.
+    # Run with `python3 observe.py --self-test` (the image has no pytest harness;
+    # this keeps the egress-observation contract executable).
+    ipv4 = ('connect(5, {sa_family=AF_INET, sin_port=htons(443), '
+            'sin_addr=inet_addr("203.0.113.7")}, 16) = 0')
+    ipv6 = ('connect(6, {sa_family=AF_INET6, sin6_port=htons(8443), '
+            'sin6_flowinfo=htonl(0), inet_pton(AF_INET6, "2606:4700::6810:85e5", '
+            '&sin6_addr), sin6_scope_id=0}, 28) = 0')
+    m4 = CONNECT_INET.search(ipv4)
+    assert m4 and m4.group(1) == "443" and (m4.group(2) or m4.group(3)) == "203.0.113.7", \
+        "AF_INET connect must parse host+port"
+    m6 = CONNECT_INET.search(ipv6)
+    assert m6 and m6.group(1) == "8443" and (m6.group(2) or m6.group(3)) == "2606:4700::6810:85e5", \
+        "AF_INET6 connect must parse host+port"
+    assert not CONNECT_INET.search("connect(7, {sa_family=AF_UNIX, sun_path=\"/x\"}, 12)"), \
+        "AF_UNIX must not match the INET parser"
+    print("observe CONNECT_INET self-test: OK")
+
+
 if __name__ == "__main__":
+    if "--self-test" in sys.argv:
+        _self_test()
+        sys.exit(0)
     main()
