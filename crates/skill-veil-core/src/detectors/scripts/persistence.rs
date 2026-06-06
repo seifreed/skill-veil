@@ -1,13 +1,13 @@
 //! Detectors covering deferred / scheduled / boot-time execution and
 //! sentinel writes that establish persistence.
 
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::{Finding, RecommendedAction, Severity, ThreatCategory};
 
 use crate::detectors::patterns::line_contains_command_token;
 
-use super::match_helpers::{findings_from_pattern_table, FindingSpec};
+use super::match_helpers::{
+    findings_from_pattern_table, referenced_artifact_behavior_finding, FindingSpec,
+};
 use super::patterns::DEFERRED_PATTERNS;
 
 const SHELL_PERSISTENCE_WRITE_TOKENS: &[&str] = &["echo", "printf", "cat", "tee"];
@@ -51,23 +51,15 @@ pub(crate) fn detect_powershell_persistence(
     {
         return Vec::new();
     }
-    vec![Finding::builder(
+    vec![referenced_artifact_behavior_finding(
         "SCRIPT_POWERSHELL_PERSISTENCE",
         ThreatCategory::PrivilegeEscalation,
-    )
-    .severity(Severity::High)
-    .action(RecommendedAction::RequireApproval)
-    .evidence_kind(EvidenceKind::Behavior)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::ReferencedArtifact,
-        Some(artifact_path.to_string()),
-    )
-    .match_value("registry/scheduled task persistence")
-    .reason("PowerShell script configures persistence via registry or scheduled tasks")
-    .build()]
+        Severity::High,
+        RecommendedAction::RequireApproval,
+        artifact_path,
+        "registry/scheduled task persistence",
+        "PowerShell script configures persistence via registry or scheduled tasks",
+    )]
 }
 
 pub(crate) fn detect_shell_persistence_write(
@@ -80,23 +72,15 @@ pub(crate) fn detect_shell_persistence_write(
     {
         return Vec::new();
     }
-    vec![Finding::builder(
+    vec![referenced_artifact_behavior_finding(
         "SCRIPT_SHELL_PERSISTENCE_WRITE",
         ThreatCategory::PrivilegeEscalation,
-    )
-    .severity(Severity::High)
-    .action(RecommendedAction::RequireApproval)
-    .evidence_kind(EvidenceKind::Behavior)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::ReferencedArtifact,
-        Some(artifact_path.to_string()),
-    )
-    .match_value("shell persistence write")
-    .reason("Shell script writes to startup or system configuration paths")
-    .build()]
+        Severity::High,
+        RecommendedAction::RequireApproval,
+        artifact_path,
+        "shell persistence write",
+        "Shell script writes to startup or system configuration paths",
+    )]
 }
 
 fn is_shell_persistence_write_line(line: &str) -> bool {

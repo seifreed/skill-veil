@@ -1,9 +1,9 @@
 //! Detectors covering secret / credential / sensitive-system-state access
 //! in Python and Node scripts.
 
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::{Finding, RecommendedAction, Severity, ThreatCategory};
+
+use super::match_helpers::referenced_artifact_behavior_finding;
 
 pub(crate) fn detect_python_secret_system_access(
     content_lower: &str,
@@ -29,23 +29,15 @@ pub(crate) fn detect_python_secret_system_access(
     {
         return Vec::new();
     }
-    vec![Finding::builder(
+    vec![referenced_artifact_behavior_finding(
         "SCRIPT_PYTHON_SECRET_OR_SYSTEM_ACCESS",
         ThreatCategory::CredentialExposure,
-    )
-    .severity(Severity::Medium)
-    .action(RecommendedAction::RequireApproval)
-    .evidence_kind(EvidenceKind::Behavior)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::ReferencedArtifact,
-        Some(artifact_path.to_string()),
-    )
-    .match_value("python secret/system access")
-    .reason("Python script reads environment variables, home paths, or system files")
-    .build()]
+        Severity::Medium,
+        RecommendedAction::RequireApproval,
+        artifact_path,
+        "python secret/system access",
+        "Python script reads environment variables, home paths, or system files",
+    )]
 }
 
 pub(crate) fn detect_node_secret_fs_access(
@@ -73,23 +65,15 @@ pub(crate) fn detect_node_secret_fs_access(
     // `Verdict::Malicious` for any benign script reading e.g.
     // `process.env.AUTH_API_URL`. Mirrors the Python sibling
     // `detect_python_secret_system_access` which uses the same action.
-    vec![Finding::builder(
+    vec![referenced_artifact_behavior_finding(
         "SCRIPT_NODE_SECRET_OR_FS_ACCESS",
         ThreatCategory::CredentialExposure,
-    )
-    .severity(Severity::Medium)
-    .action(RecommendedAction::RequireApproval)
-    .evidence_kind(EvidenceKind::Behavior)
-    .matched_on(MatchTarget::ReferencedFile {
-        path: artifact_path.to_string(),
-    })
-    .artifact(
-        ArtifactKind::ReferencedArtifact,
-        Some(artifact_path.to_string()),
-    )
-    .match_value("process.env/fs access")
-    .reason("Node script accesses environment variables or sensitive filesystem paths")
-    .build()]
+        Severity::Medium,
+        RecommendedAction::RequireApproval,
+        artifact_path,
+        "process.env/fs access",
+        "Node script accesses environment variables or sensitive filesystem paths",
+    )]
 }
 
 #[cfg(test)]

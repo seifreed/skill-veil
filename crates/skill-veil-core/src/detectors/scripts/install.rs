@@ -1,10 +1,10 @@
 //! Supply-chain detectors that examine package-install commands. The
 //! current detector targets typosquatted global installs of agent assets.
 
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::{Finding, RecommendedAction, Severity, ThreatCategory};
 use crate::lazy_pattern;
+
+use super::match_helpers::referenced_artifact_behavior_finding;
 
 // Bounded-whitespace install pattern. The pre-fix shape
 // `(?:-g\s+|--global\s+|--force\s+)+` paired `\s+` (which devours
@@ -83,27 +83,15 @@ pub(crate) fn detect_typosquatted_install(
         for expected in TYPOSQUAT_KNOWN_GOOD {
             let dist = levenshtein_capped(name, expected, 2);
             if (1..=2).contains(&dist) {
-                findings.push(
-                    Finding::builder(
-                        "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT",
-                        ThreatCategory::SupplyChain,
-                    )
-                    .severity(Severity::Critical)
-                    .action(RecommendedAction::Block)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.to_string(),
-                    })
-                    .artifact(
-                        ArtifactKind::ReferencedArtifact,
-                        Some(artifact_path.to_string()),
-                    )
-                    .match_value(format!("{name} ≈ {expected} (lev={dist})"))
-                    .reason(
-                        "Globally installed package name is 1-2 characters off a known agent asset — typosquat",
-                    )
-                    .build(),
-                );
+                findings.push(referenced_artifact_behavior_finding(
+                    "SCRIPT_SUPPLY_CHAIN_TYPOSQUAT",
+                    ThreatCategory::SupplyChain,
+                    Severity::Critical,
+                    RecommendedAction::Block,
+                    artifact_path,
+                    format!("{name} ≈ {expected} (lev={dist})"),
+                    "Globally installed package name is 1-2 characters off a known agent asset — typosquat",
+                ));
                 break;
             }
         }

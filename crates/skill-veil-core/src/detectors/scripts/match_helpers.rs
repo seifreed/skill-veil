@@ -36,25 +36,49 @@ pub(super) fn findings_from_pattern_table(
     for (rule_id, regex) in table {
         for matched in regex.find_matches(lower) {
             let evidence = original_match_str(original, lower, &matched);
-            findings.push(
-                Finding::builder(*rule_id, spec.category)
-                    .severity(spec.severity)
-                    .action(spec.action)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.to_string(),
-                    })
-                    .artifact(
-                        ArtifactKind::ReferencedArtifact,
-                        Some(artifact_path.to_string()),
-                    )
-                    .match_value(evidence)
-                    .reason(spec.reason)
-                    .build(),
-            );
+            findings.push(referenced_artifact_behavior_finding(
+                *rule_id,
+                spec.category,
+                spec.severity,
+                spec.action,
+                artifact_path,
+                evidence,
+                spec.reason,
+            ));
         }
     }
     findings
+}
+
+/// Build a single fixed-shape `Behavior` finding scoped to a referenced
+/// artifact. The spine — `EvidenceKind::Behavior`, a
+/// `MatchTarget::ReferencedFile`, and a `ReferencedArtifact` scope keyed
+/// on `artifact_path` — is shared with [`findings_from_pattern_table`];
+/// this serves the script detectors that emit one finding from a
+/// non-regex predicate rather than one per regex match.
+pub(super) fn referenced_artifact_behavior_finding(
+    rule_id: impl Into<String>,
+    category: ThreatCategory,
+    severity: Severity,
+    action: RecommendedAction,
+    artifact_path: &str,
+    match_value: impl Into<String>,
+    reason: impl Into<String>,
+) -> Finding {
+    Finding::builder(rule_id, category)
+        .severity(severity)
+        .action(action)
+        .evidence_kind(EvidenceKind::Behavior)
+        .matched_on(MatchTarget::ReferencedFile {
+            path: artifact_path.to_string(),
+        })
+        .artifact(
+            ArtifactKind::ReferencedArtifact,
+            Some(artifact_path.to_string()),
+        )
+        .match_value(match_value)
+        .reason(reason)
+        .build()
 }
 
 /// Extract the byte slice from `original` that corresponds to a port-typed

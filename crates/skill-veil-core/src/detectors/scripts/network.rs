@@ -1,12 +1,12 @@
 //! Detectors covering remote downloads and secret-exfiltration data flows.
 
 use crate::detectors::patterns::line_contains_command_token;
-use crate::findings::{
-    ArtifactKind, EvidenceKind, Finding, MatchTarget, RecommendedAction, Severity, ThreatCategory,
-};
+use crate::findings::{Finding, RecommendedAction, Severity, ThreatCategory};
 
 use super::dotenv::references_dotenv_file;
-use super::match_helpers::{findings_from_pattern_table, FindingSpec};
+use super::match_helpers::{
+    findings_from_pattern_table, referenced_artifact_behavior_finding, FindingSpec,
+};
 use super::patterns::REMOTE_BINARY_PATTERNS;
 
 pub(crate) fn detect_remote_binary_downloads(
@@ -177,27 +177,15 @@ pub(crate) fn detect_file_secret_to_network_flow(
                 .any(|v| follow_line.contains(v))
                 || line_contains_network_command(follow_line)
             {
-                return vec![
-                    Finding::builder(
-                        "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW",
-                        ThreatCategory::DataExfiltration,
-                    )
-                    .severity(Severity::Critical)
-                    .action(RecommendedAction::Block)
-                    .evidence_kind(EvidenceKind::Behavior)
-                    .matched_on(MatchTarget::ReferencedFile {
-                        path: artifact_path.to_string(),
-                    })
-                    .artifact(
-                        ArtifactKind::ReferencedArtifact,
-                        Some(artifact_path.to_string()),
-                    )
-                    .match_value("secret-file read followed by network egress")
-                    .reason(
-                        "Script reads a secret-bearing file and then sends data over the network within the same function/scope — exfiltration",
-                    )
-                    .build(),
-                ];
+                return vec![referenced_artifact_behavior_finding(
+                    "SCRIPT_FILE_SECRET_TO_NETWORK_FLOW",
+                    ThreatCategory::DataExfiltration,
+                    Severity::Critical,
+                    RecommendedAction::Block,
+                    artifact_path,
+                    "secret-file read followed by network egress",
+                    "Script reads a secret-bearing file and then sends data over the network within the same function/scope — exfiltration",
+                )];
             }
         }
     }
