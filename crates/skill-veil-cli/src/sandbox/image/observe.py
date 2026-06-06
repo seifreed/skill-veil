@@ -67,25 +67,24 @@ NOISE_WRITE = re.compile(
     r"/__pycache__/|\.pyc(?:\.|$)|^/usr/|^/lib/|^/lib64/|^/proc/|^/sys/|^/dev/|/etc/ld\.so"
 )
 
-CONNECT_INET = re.compile(
-    r'connect\(\d+,\s*\{sa_family=AF_INET6?,\s*sin6?_port=htons\((\d+)\),\s*'
-    # AF_INET6 renders `sin6_flowinfo=htonl(0), ` between the port and the
-    # address; without this optional segment every IPv6 connect() was missed,
-    # so IPv6 C2 / exfil produced no network_connect behavior.
+# connect() and the connectionless sendto()/sendmsg() render the INET
+# sockaddr identically, so the host/port sub-pattern (capture 1 = port,
+# captures 2/3 = address) is shared. AF_INET6 renders
+# `sin6_flowinfo=htonl(0), ` between the port and the address; without this
+# optional segment every IPv6 egress was missed, so IPv6 C2 / exfil produced
+# no network behavior.
+_SOCKADDR_INET = (
+    r'\{sa_family=AF_INET6?,\s*sin6?_port=htons\((\d+)\),\s*'
     r'(?:sin6_flowinfo=htonl\(\d+\),\s*)?'
     r'(?:sin6?_addr=inet_(?:addr|pton)\([^,]*"([^"]+)"\)|inet_pton\([^"]*"([^"]+)")'
 )
+CONNECT_INET = re.compile(r'connect\(\d+,\s*' + _SOCKADDR_INET)
 CONNECT_UNIX = re.compile(r'connect\(\d+,\s*\{sa_family=AF_UNIX,\s*sun_path="([^"]+)"')
 # Connectionless egress: a SOCK_DGRAM socket never calls connect(), it passes
 # the destination inline to sendto()/sendmsg() (the latter wraps it in
 # msg_name={...}). Without this, UDP C2 / exfil and UDP/53 DNS-tunnel egress
-# produced no network behavior at all. The sockaddr renders identically to
-# connect(), so the same host/port sub-pattern is reused after the buffer args.
-SENDTO_INET = re.compile(
-    r'send(?:to|msg)\(.*?\{sa_family=AF_INET6?,\s*sin6?_port=htons\((\d+)\),\s*'
-    r'(?:sin6_flowinfo=htonl\(\d+\),\s*)?'
-    r'(?:sin6?_addr=inet_(?:addr|pton)\([^,]*"([^"]+)"\)|inet_pton\([^"]*"([^"]+)")'
-)
+# produced no network behavior at all.
+SENDTO_INET = re.compile(r'send(?:to|msg)\(.*?' + _SOCKADDR_INET)
 DOCKER_RESOLVER = "127.0.0.11"
 RUNTIME_SOCKET = re.compile(r"docker\.sock|containerd.*\.sock|crio\.sock|podman\.sock")
 EXECVE = re.compile(r'execve\("([^"]+)",\s*\[([^\]]*)\]')
