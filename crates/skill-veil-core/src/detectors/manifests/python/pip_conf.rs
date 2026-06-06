@@ -50,19 +50,38 @@ fn pip_conf_key_in(line: &str, expected: &[&str]) -> bool {
 pub(crate) fn analyze_pip_conf(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings: Vec<_> = pip_conf_significant_lines(content)
-        .filter(|line| pip_conf_key_is(line, "extra-index-url"))
-        .map(|line| {
-            Finding::builder("MANIFEST_PIP_CONF_EXTRA_INDEX", ThreatCategory::SupplyChain)
-                .severity(Severity::Medium)
-                .action(RecommendedAction::RequireApproval)
-                .evidence_kind(EvidenceKind::Context)
-                .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
-                .matched_on(MatchTarget::ReferencedFile {
-                    path: artifact_path.clone(),
-                })
-                .match_value(line)
-                .reason("pip configuration adds an extra package index")
-                .build()
+        .filter_map(|line| {
+            // `index-url` *replaces* the default PyPI index; `extra-index-url`
+            // only adds a secondary one. Both are dependency-confusion vectors,
+            // but the replacement form is the stronger signal — pre-fix only
+            // the additive form raised a finding, so a malicious-registry
+            // pin via `index-url` passed silently.
+            let (rule_id, reason) = if pip_conf_key_is(line, "index-url") {
+                (
+                    "MANIFEST_PIP_CONF_INDEX_URL",
+                    "pip configuration replaces the default package index",
+                )
+            } else if pip_conf_key_is(line, "extra-index-url") {
+                (
+                    "MANIFEST_PIP_CONF_EXTRA_INDEX",
+                    "pip configuration adds an extra package index",
+                )
+            } else {
+                return None;
+            };
+            Some(
+                Finding::builder(rule_id, ThreatCategory::SupplyChain)
+                    .severity(Severity::Medium)
+                    .action(RecommendedAction::RequireApproval)
+                    .evidence_kind(EvidenceKind::Context)
+                    .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
+                    .matched_on(MatchTarget::ReferencedFile {
+                        path: artifact_path.clone(),
+                    })
+                    .match_value(line)
+                    .reason(reason)
+                    .build(),
+            )
         })
         .collect();
 
@@ -274,6 +293,30 @@ client-cert = /tmp/client.pem
         assert!(capability_present(&caps, ArtifactCapability::SecretAccess));
         assert!(relation_target_present(&links, "package-index"));
         assert!(relation_target_present(&links, "client-cert"));
+    }
+
+    /// Contract: `index-url` (full default-index replacement) raises a
+    /// supply-chain finding, not only the additive `extra-index-url` form.
+    #[test]
+    fn pip_conf_flags_index_url_replacement() {
+        let content = "[global]\nindex-url = https://attacker.example/simple\n";
+        let findings = analyze_pip_conf(std::path::Path::new("/pkg/pip.conf"), content);
+        assert!(
+            finding_present(&findings, "MANIFEST_PIP_CONF_INDEX_URL"),
+            "index-url replacement must fire; got {findings:?}",
+        );
+    }
+
+    /// Contract: a lookalike `*-index-url` key must not raise the index-url
+    /// finding.
+    #[test]
+    fn pip_conf_index_url_lookalike_does_not_fire() {
+        let content = "[global]\nnot-index-url = https://internal.example/simple\n";
+        let findings = analyze_pip_conf(std::path::Path::new("/pkg/pip.conf"), content);
+        assert!(
+            !finding_present(&findings, "MANIFEST_PIP_CONF_INDEX_URL"),
+            "lookalike index-url key must not fire; got {findings:?}",
+        );
     }
 
     /// Contract: directive detection is key-exact. Lookalike keys must not

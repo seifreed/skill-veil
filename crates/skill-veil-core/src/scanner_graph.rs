@@ -125,9 +125,7 @@ pub fn artifact_kind_for_path(path: &Path) -> ArtifactKind {
         .map(str::to_ascii_lowercase);
 
     match file_name.as_deref() {
-        Some(name) if crate::services::MCP_NAMES.contains(&name) => {
-            ArtifactKind::McpServerManifest
-        }
+        Some(name) if crate::services::MCP_NAMES.contains(&name) => ArtifactKind::McpServerManifest,
         Some(
             "cargo.lock"
             | "poetry.lock"

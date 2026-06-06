@@ -1,5 +1,6 @@
-//! `.npmrc` detector: surfaces embedded `_authToken=` credentials and
-//! custom registries pointing at non-default endpoints.
+//! `.npmrc` detector: surfaces embedded registry credentials (`_authToken`,
+//! and the legacy basic-auth `_password` / `_auth`) and custom registries
+//! pointing at non-default endpoints.
 
 use std::path::Path;
 
@@ -17,6 +18,19 @@ fn npmrc_code_lines(content: &str) -> impl Iterator<Item = &str> {
         .lines()
         .map(|line| strip_inline_ini_comment(line).trim())
         .filter(|line| !line.is_empty())
+}
+
+/// npm registry credential assignment keys. `_authToken` is the modern bearer
+/// form; `_password` (base64 password) and `_auth` (base64 `user:pass`) are the
+/// legacy basic-auth forms — all three embed a registry credential. The `=` is
+/// part of each token so `_auth=` does not also match inside `_authtoken=`.
+const NPMRC_CREDENTIAL_TOKENS: &[&str] = &["_authtoken=", "_password=", "_auth="];
+
+fn npmrc_line_embeds_credential(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    NPMRC_CREDENTIAL_TOKENS
+        .iter()
+        .any(|token| lower.contains(token))
 }
 
 fn redact_npmrc_auth_token(line: &str) -> String {
@@ -60,7 +74,7 @@ fn is_default_npm_registry(value: &str) -> bool {
 pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
     let artifact_path = path.display().to_string();
     let mut findings: Vec<_> = npmrc_code_lines(content)
-        .filter(|line| line.to_ascii_lowercase().contains("_authtoken="))
+        .filter(|line| npmrc_line_embeds_credential(line))
         .map(|line| {
             Finding::builder(
                 "MANIFEST_NPMRC_EMBEDDED_TOKEN",
@@ -74,7 +88,7 @@ pub(crate) fn analyze_npmrc(path: &Path, content: &str) -> Vec<Finding> {
             })
             .artifact(ArtifactKind::PackageManifest, Some(artifact_path.clone()))
             .match_value(redact_npmrc_auth_token(line))
-            .reason("npm configuration embeds an authentication token")
+            .reason("npm configuration embeds a registry authentication credential")
             .build()
         })
         .collect();
@@ -105,8 +119,7 @@ pub(crate) fn npmrc_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> {
     let mut has_token = false;
     let mut has_registry = false;
     for line in npmrc_code_lines(content) {
-        let lower = line.to_ascii_lowercase();
-        if !has_token && lower.contains("_authtoken=") {
+        if !has_token && npmrc_line_embeds_credential(line) {
             has_token = true;
         }
         if !has_registry && npmrc_registry_directive(line).is_some() {
@@ -132,8 +145,7 @@ pub(crate) fn npmrc_relations(content: &str) -> Vec<ArtifactLink> {
     let mut has_token = false;
     let mut has_registry = false;
     for line in npmrc_code_lines(content) {
-        let lower = line.to_ascii_lowercase();
-        if !has_token && lower.contains("_authtoken=") {
+        if !has_token && npmrc_line_embeds_credential(line) {
             has_token = true;
         }
         if !has_registry && npmrc_registry_directive(line).is_some() {
@@ -203,6 +215,42 @@ mod tests {
             !findings[0].match_value.contains(';'),
             "match_value must not include the inline `;` comment portion; got {:?}",
             findings[0].match_value,
+        );
+    }
+
+    /// Contract: legacy npm basic-auth credentials (`_password`, `_auth`) are
+    /// embedded registry credentials just like `_authToken` and must raise the
+    /// same finding with the value redacted.
+    #[test]
+    fn analyze_npmrc_detects_legacy_basic_auth_credentials() {
+        for (key, value) in [("_password", "czNjcmV0"), ("_auth", "dXNlcjpwYXNz")] {
+            let content = format!("//registry.npmjs.org/:{key}={value}\n");
+            let path = std::path::Path::new("/pkg/.npmrc");
+            let findings = analyze_npmrc(path, &content);
+            assert!(
+                finding_present(&findings, "MANIFEST_NPMRC_EMBEDDED_TOKEN"),
+                "legacy {key} credential must fire; got {findings:?}",
+            );
+            assert!(
+                !findings[0].match_value.contains(value),
+                "credential value must be redacted; got {:?}",
+                findings[0].match_value,
+            );
+            let caps = npmrc_capabilities(&content);
+            assert!(capability_present(&caps, ArtifactCapability::SecretAccess));
+        }
+    }
+
+    /// Contract (negative): a benign key whose name merely contains `auth`
+    /// (e.g. `always-auth`) is not a credential assignment and must not fire.
+    #[test]
+    fn analyze_npmrc_ignores_non_credential_auth_keys() {
+        let content = "always-auth=true\n";
+        let path = std::path::Path::new("/pkg/.npmrc");
+        let findings = analyze_npmrc(path, content);
+        assert!(
+            !finding_present(&findings, "MANIFEST_NPMRC_EMBEDDED_TOKEN"),
+            "always-auth=true is not an embedded credential; got {findings:?}",
         );
     }
 
