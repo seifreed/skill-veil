@@ -331,6 +331,192 @@ fn is_host_network_mode(network_mode: &str) -> bool {
     matches!(network_mode, "host" | "service:host")
 }
 
+/// Host-namespace share keys. `pid: host` joins the host PID namespace
+/// (enabling `nsenter` into host PID 1 → host root); `ipc: host` shares the
+/// host IPC namespace (shared-memory access to host processes). `service:` /
+/// `container:` targets are not host shares.
+const HOST_NAMESPACE_KEYS: &[&str] = &["pid", "ipc"];
+
+pub(super) fn detect_host_namespace(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    HOST_NAMESPACE_KEYS
+        .iter()
+        .filter_map(|key| {
+            let mode = mapping
+                .get(serde_yaml::Value::String((*key).to_string()))
+                .and_then(serde_yaml::Value::as_str)?;
+            (mode.trim() == "host").then(|| {
+                Finding::builder(
+                    "MANIFEST_DOCKER_COMPOSE_HOST_NAMESPACE",
+                    ThreatCategory::PrivilegeEscalation,
+                )
+                .severity(Severity::Medium)
+                .action(RecommendedAction::RequireApproval)
+                .evidence_kind(EvidenceKind::Behavior)
+                .matched_on(MatchTarget::ReferencedFile {
+                    path: artifact_path.to_string(),
+                })
+                .artifact(
+                    ArtifactKind::PackageManifest,
+                    Some(artifact_path.to_string()),
+                )
+                .match_value(format!("{service_name}: {key}=host"))
+                .reason("docker-compose service shares a host namespace (pid/ipc), enabling escape to host processes")
+                .build()
+            })
+        })
+        .collect()
+}
+
+pub(super) fn detect_unconfined_security_opt(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let Some(opts) = mapping
+        .get(serde_yaml::Value::String("security_opt".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Vec::new();
+    };
+    opts.iter()
+        .filter_map(serde_yaml::Value::as_str)
+        .filter(|opt| security_opt_is_unconfined(opt))
+        .map(|opt| {
+            Finding::builder(
+                "MANIFEST_DOCKER_COMPOSE_UNCONFINED",
+                ThreatCategory::PrivilegeEscalation,
+            )
+            .severity(Severity::Medium)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .artifact(
+                ArtifactKind::PackageManifest,
+                Some(artifact_path.to_string()),
+            )
+            .match_value(format!("{service_name}: security_opt={opt}"))
+            .reason("docker-compose service disables its seccomp/AppArmor sandbox (unconfined)")
+            .build()
+        })
+        .collect()
+}
+
+/// `seccomp`/`apparmor` set to `unconfined` (via `:` or `=`). A custom profile
+/// path or the hardening `no-new-privileges:true` must NOT match.
+fn security_opt_is_unconfined(opt: &str) -> bool {
+    let lower = opt.to_ascii_lowercase();
+    (lower.starts_with("seccomp") || lower.starts_with("apparmor")) && lower.contains("unconfined")
+}
+
+/// Raw host device prefixes that grant direct hardware access (whole-disk,
+/// physical memory, I/O ports). Deliberately excludes common benign device
+/// mappings such as GPUs (`/dev/dri`, `/dev/nvidia*`) and sound (`/dev/snd`).
+const DANGEROUS_HOST_DEVICE_PREFIXES: &[&str] = &[
+    "/dev/mem",
+    "/dev/kmem",
+    "/dev/port",
+    "/dev/sd",
+    "/dev/hd",
+    "/dev/nvme",
+    "/dev/vd",
+    "/dev/xvd",
+    "/dev/disk",
+    "/dev/loop",
+];
+
+pub(super) fn detect_host_devices(
+    service_name: &str,
+    mapping: &serde_yaml::Mapping,
+    artifact_path: &str,
+) -> Vec<Finding> {
+    let Some(devices) = mapping
+        .get(serde_yaml::Value::String("devices".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+    else {
+        return Vec::new();
+    };
+    devices
+        .iter()
+        .filter_map(device_host_path)
+        .filter(|host_path| is_dangerous_host_device(host_path))
+        .map(|host_path| {
+            Finding::builder(
+                "MANIFEST_DOCKER_COMPOSE_HOST_DEVICE",
+                ThreatCategory::PrivilegeEscalation,
+            )
+            .severity(Severity::High)
+            .action(RecommendedAction::RequireApproval)
+            .evidence_kind(EvidenceKind::Behavior)
+            .matched_on(MatchTarget::ReferencedFile {
+                path: artifact_path.to_string(),
+            })
+            .artifact(
+                ArtifactKind::PackageManifest,
+                Some(artifact_path.to_string()),
+            )
+            .match_value(format!("{service_name}: {host_path}"))
+            .reason("docker-compose service maps a raw host disk/memory device into the container")
+            .build()
+        })
+        .collect()
+}
+
+/// Extract the host-side path of a compose `devices` entry. Short syntax is
+/// `"HOST:CONTAINER[:perms]"`; long syntax is `{source: HOST, target: ...}`.
+fn device_host_path(value: &serde_yaml::Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.split(':').next().unwrap_or(s).trim().to_string());
+    }
+    value
+        .as_mapping()
+        .and_then(|m| m.get(serde_yaml::Value::String("source".to_string())))
+        .and_then(serde_yaml::Value::as_str)
+        .map(|s| s.trim().to_string())
+}
+
+fn is_dangerous_host_device(host_path: &str) -> bool {
+    let lower = host_path.to_ascii_lowercase();
+    DANGEROUS_HOST_DEVICE_PREFIXES
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+}
+
+/// `true` when a service declares a host-namespace share or disables its
+/// sandbox — used by capability inference to raise `PrivilegedRuntime`, so the
+/// verdict pipeline treats these escapes the same as `privileged: true`.
+pub(super) fn mapping_declares_namespace_or_security_escape(mapping: &serde_yaml::Mapping) -> bool {
+    let host_ns = HOST_NAMESPACE_KEYS.iter().any(|key| {
+        mapping
+            .get(serde_yaml::Value::String((*key).to_string()))
+            .and_then(serde_yaml::Value::as_str)
+            .is_some_and(|mode| mode.trim() == "host")
+    });
+    let unconfined = mapping
+        .get(serde_yaml::Value::String("security_opt".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+        .is_some_and(|opts| {
+            opts.iter()
+                .filter_map(serde_yaml::Value::as_str)
+                .any(security_opt_is_unconfined)
+        });
+    let host_device = mapping
+        .get(serde_yaml::Value::String("devices".to_string()))
+        .and_then(serde_yaml::Value::as_sequence)
+        .is_some_and(|devices| {
+            devices
+                .iter()
+                .filter_map(device_host_path)
+                .any(|host_path| is_dangerous_host_device(&host_path))
+        });
+    host_ns || unconfined || host_device
+}
+
 pub(super) fn detect_env_file(
     service_name: &str,
     mapping: &serde_yaml::Mapping,

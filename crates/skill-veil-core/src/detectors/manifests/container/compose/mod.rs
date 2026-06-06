@@ -19,9 +19,10 @@ use crate::services::artifact_orchestration::{ArtifactLink, ArtifactOrchestrator
 
 use super::volumes::{env_file_has_real_paths, is_sensitive_host_volume, volume_entry_string};
 use detectors::{
-    detect_dangerous_cap_add, detect_env_file, detect_host_network, detect_host_volumes,
-    detect_latest_image_tag, detect_privileged, mapping_declares_dangerous_cap,
-    mapping_declares_host_network, parse_compose_yaml, parse_failure_finding,
+    detect_dangerous_cap_add, detect_env_file, detect_host_devices, detect_host_namespace,
+    detect_host_network, detect_host_volumes, detect_latest_image_tag, detect_privileged,
+    detect_unconfined_security_opt, mapping_declares_dangerous_cap, mapping_declares_host_network,
+    mapping_declares_namespace_or_security_escape, parse_compose_yaml, parse_failure_finding,
 };
 
 pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding> {
@@ -49,6 +50,13 @@ pub(crate) fn analyze_docker_compose(path: &Path, content: &str) -> Vec<Finding>
         ));
         findings.extend(detect_host_volumes(service_name, mapping, &artifact_path));
         findings.extend(detect_host_network(service_name, mapping, &artifact_path));
+        findings.extend(detect_host_namespace(service_name, mapping, &artifact_path));
+        findings.extend(detect_unconfined_security_opt(
+            service_name,
+            mapping,
+            &artifact_path,
+        ));
+        findings.extend(detect_host_devices(service_name, mapping, &artifact_path));
         findings.extend(detect_env_file(service_name, mapping, &artifact_path));
     });
     findings
@@ -103,7 +111,9 @@ pub(crate) fn docker_compose_capabilities(content: &str) -> Vec<ArtifactCapabili
         // `privileged: true` for most container-escape vectors. Without
         // this branch, `cap_add` was silently ignored and the verdict
         // pipeline never escalated.
-        if (privileged || mapping_declares_dangerous_cap(mapping))
+        if (privileged
+            || mapping_declares_dangerous_cap(mapping)
+            || mapping_declares_namespace_or_security_escape(mapping))
             && !capabilities.iter().any(|fact| {
                 fact.capability == ArtifactCapability::PrivilegedRuntime
                     && fact.source == crate::artifact_graph::ArtifactCapabilitySource::Declared
@@ -321,6 +331,103 @@ mod tests {
         assert!(capability_present(
             &caps,
             ArtifactCapability::HostFilesystemAccess
+        ));
+    }
+
+    /// Contract: `pid: host` / `ipc: host` are host-namespace escapes — they
+    /// emit MANIFEST_DOCKER_COMPOSE_HOST_NAMESPACE and escalate PrivilegedRuntime
+    /// the same way `privileged: true` does.
+    #[test]
+    fn docker_compose_host_namespace_fires_finding_and_capability() {
+        for key in ["pid", "ipc"] {
+            let yaml = format!("services:\n  app:\n    image: nginx\n    {key}: host\n");
+            let path = std::path::Path::new("/pkg/docker-compose.yml");
+            let findings = analyze_docker_compose(path, &yaml);
+            assert!(
+                finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_HOST_NAMESPACE"),
+                "{key}: host must fire host-namespace finding; got {findings:?}",
+            );
+            assert!(capability_present(
+                &docker_compose_capabilities(&yaml),
+                ArtifactCapability::PrivilegedRuntime
+            ));
+        }
+    }
+
+    /// Contract (negative): a non-host namespace target (`pid: service:db`) is
+    /// not a host escape and must not fire.
+    #[test]
+    fn docker_compose_host_namespace_skips_service_target() {
+        let yaml = "services:\n  app:\n    image: nginx\n    pid: \"service:db\"\n";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(!finding_present(
+            &findings,
+            "MANIFEST_DOCKER_COMPOSE_HOST_NAMESPACE"
+        ));
+    }
+
+    /// Contract: `security_opt` set to `seccomp:unconfined` / `apparmor:unconfined`
+    /// disables the container sandbox and must fire + escalate.
+    #[test]
+    fn docker_compose_unconfined_security_opt_fires() {
+        let yaml = "services:\n  app:\n    image: nginx\n    security_opt:\n      - seccomp:unconfined\n      - apparmor:unconfined\n";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(finding_present(
+            &findings,
+            "MANIFEST_DOCKER_COMPOSE_UNCONFINED"
+        ));
+        assert!(capability_present(
+            &docker_compose_capabilities(yaml),
+            ArtifactCapability::PrivilegedRuntime
+        ));
+    }
+
+    /// Contract (negative): the hardening option `no-new-privileges:true` is the
+    /// opposite of an escape and must NOT fire.
+    #[test]
+    fn docker_compose_security_opt_hardening_does_not_fire() {
+        let yaml = "services:\n  app:\n    image: nginx\n    security_opt:\n      - no-new-privileges:true\n";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(!finding_present(
+            &findings,
+            "MANIFEST_DOCKER_COMPOSE_UNCONFINED"
+        ));
+        assert!(!capability_present(
+            &docker_compose_capabilities(yaml),
+            ArtifactCapability::PrivilegedRuntime
+        ));
+    }
+
+    /// Contract: mapping a raw host disk/memory device grants direct hardware
+    /// access and must fire MANIFEST_DOCKER_COMPOSE_HOST_DEVICE.
+    #[test]
+    fn docker_compose_host_device_fires_for_raw_disk_and_memory() {
+        for dev in ["/dev/sda:/dev/sda", "/dev/mem:/dev/mem"] {
+            let yaml =
+                format!("services:\n  app:\n    image: nginx\n    devices:\n      - \"{dev}\"\n");
+            let path = std::path::Path::new("/pkg/docker-compose.yml");
+            let findings = analyze_docker_compose(path, &yaml);
+            assert!(
+                finding_present(&findings, "MANIFEST_DOCKER_COMPOSE_HOST_DEVICE"),
+                "{dev} must fire host-device finding; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): a benign GPU device mapping (`/dev/dri`) is common
+    /// and must NOT fire the raw-device finding.
+    #[test]
+    fn docker_compose_host_device_skips_benign_gpu() {
+        let yaml =
+            "services:\n  app:\n    image: nginx\n    devices:\n      - \"/dev/dri:/dev/dri\"\n";
+        let path = std::path::Path::new("/pkg/docker-compose.yml");
+        let findings = analyze_docker_compose(path, yaml);
+        assert!(!finding_present(
+            &findings,
+            "MANIFEST_DOCKER_COMPOSE_HOST_DEVICE"
         ));
     }
 
