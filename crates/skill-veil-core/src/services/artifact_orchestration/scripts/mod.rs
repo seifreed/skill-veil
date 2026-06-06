@@ -302,6 +302,7 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("http://")
         || lower.contains("https://")
         || lower.contains("socket.")
+        || lower.contains("http.client")
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
             ArtifactCapability::NetworkAccess,

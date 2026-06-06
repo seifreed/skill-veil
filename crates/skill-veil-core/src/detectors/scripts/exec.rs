@@ -280,7 +280,8 @@ pub(crate) fn detect_python_exec_network(
         || content_lower.contains("urllib.request")
         || content_lower.contains("urlopen(")
         || content_lower.contains("httpx.")
-        || content_lower.contains("aiohttp");
+        || content_lower.contains("aiohttp")
+        || content_lower.contains("http.client");
     if has_exec && has_network {
         vec![
             Finding::builder("SCRIPT_PYTHON_EXEC_NETWORK", ThreatCategory::RemoteExec)
