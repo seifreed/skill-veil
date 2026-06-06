@@ -198,6 +198,7 @@ pub(crate) fn run_scan_dataset(
     let mut all_results = Vec::new();
     let mut packages_with_failures = 0_usize;
     let mut skipped_packages = 0_usize;
+    let mut hard_failures: Vec<String> = Vec::new();
     for outcome in outcomes {
         match outcome {
             DatasetScanOutcome::Results(pkg_result) => {
@@ -223,6 +224,7 @@ pub(crate) fn run_scan_dataset(
                 if !quiet {
                     eprintln!("Dataset package scan warning: {message}");
                 }
+                hard_failures.push(message);
             }
         }
     }
@@ -358,7 +360,44 @@ pub(crate) fn run_scan_dataset(
     }
 
     let any_failed = dataset_results.iter().any(|result| result.should_fail);
-    Ok(any_failed)
+    dataset_exit_result(&hard_failures, any_failed)
+}
+
+/// Resolve the dataset run's process exit signal.
+///
+/// A package that could not be scanned at all (an I/O or scan error, not a
+/// benign "no skill entrypoint") is a runtime failure that must surface as
+/// exit code 2 — the `Err` arm in `main` — matching both the single-package
+/// `run_scan` path (where `scanner.scan` errors propagate) and the
+/// documented CI contract in `docs/usage-ci.md` §11 (`2` = runtime error,
+/// distinct from `1` = findings over threshold). Treating an unanalyzed
+/// sample as a clean `Ok(false)` (exit 0) is a CI false-negative: a gate
+/// keyed on the exit code reads "clean" for a sample never inspected.
+///
+/// Soft per-artifact errors (`PackageScanResult::errors`) stay advisory and
+/// do NOT force exit 2 — `scanner.scan` returns `Ok` with those collected,
+/// so the single-package path treats them as exit 0/1 and this must match.
+fn dataset_exit_result(hard_failures: &[String], any_finding_failed: bool) -> Result<bool> {
+    if hard_failures.is_empty() {
+        return Ok(any_finding_failed);
+    }
+    const MAX_SHOWN: usize = 5;
+    let shown = hard_failures
+        .iter()
+        .take(MAX_SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    let extra = hard_failures.len().saturating_sub(MAX_SHOWN);
+    let suffix = if extra > 0 {
+        format!(" (+{extra} more)")
+    } else {
+        String::new()
+    };
+    Err(anyhow::anyhow!(
+        "{} dataset package(s) failed to scan: {shown}{suffix}",
+        hard_failures.len()
+    ))
 }
 
 #[cfg(test)]
@@ -373,5 +412,57 @@ mod tests {
     #[test]
     fn default_dataset_scan_options_disable_inline_suppressions() {
         assert!(!default_dataset_scan_options().honor_inline_suppressions);
+    }
+
+    /// # Contract
+    ///
+    /// A package that could not be scanned (a hard scan failure) surfaces as
+    /// a runtime error (`Err` -> exit code 2), never a clean run. This is the
+    /// CI false-negative the dataset path historically had: a sample that was
+    /// never analyzed must not read as exit 0.
+    #[test]
+    fn hard_scan_failure_yields_runtime_error() {
+        let err = dataset_exit_result(&["pkg/a: permission denied".to_string()], false)
+            .expect_err("a hard scan failure must be a runtime error, not a clean run");
+        let msg = err.to_string();
+        assert!(msg.contains("failed to scan"), "{msg}");
+        assert!(msg.contains("pkg/a: permission denied"), "{msg}");
+    }
+
+    /// # Contract
+    ///
+    /// A hard scan failure forces exit 2 even when no successfully-scanned
+    /// package crossed the `--fail-on` threshold — the failure dominates the
+    /// findings boolean.
+    #[test]
+    fn hard_scan_failure_dominates_clean_findings() {
+        assert!(dataset_exit_result(&["x: io".to_string()], false).is_err());
+        assert!(dataset_exit_result(&["x: io".to_string()], true).is_err());
+    }
+
+    /// # Contract (negative)
+    ///
+    /// With no hard scan failures the exit signal is exactly the
+    /// findings-over-threshold boolean: clean -> `Ok(false)` (exit 0),
+    /// findings over threshold -> `Ok(true)` (exit 1). Soft per-artifact
+    /// errors never reach this function, so they cannot force exit 2.
+    #[test]
+    fn no_hard_failure_preserves_findings_boolean() {
+        assert!(!dataset_exit_result(&[], false).expect("clean run is Ok(false)"));
+        assert!(dataset_exit_result(&[], true).expect("over-threshold run is Ok(true)"));
+    }
+
+    /// # Contract
+    ///
+    /// The error message is bounded: many failures are summarised to the
+    /// first few plus a remainder count, so a large corpus cannot emit an
+    /// unbounded error string.
+    #[test]
+    fn many_hard_failures_are_summarised() {
+        let failures: Vec<String> = (0..12).map(|i| format!("pkg/{i}: io")).collect();
+        let err = dataset_exit_result(&failures, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("12 dataset package(s) failed"), "{msg}");
+        assert!(msg.contains("(+7 more)"), "{msg}");
     }
 }
