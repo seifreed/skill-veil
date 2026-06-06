@@ -79,7 +79,14 @@ CONNECT_UNIX = re.compile(r'connect\(\d+,\s*\{sa_family=AF_UNIX,\s*sun_path="([^
 DOCKER_RESOLVER = "127.0.0.11"
 RUNTIME_SOCKET = re.compile(r"docker\.sock|containerd.*\.sock|crio\.sock|podman\.sock")
 EXECVE = re.compile(r'execve\("([^"]+)",\s*\[([^\]]*)\]')
-OPENAT = re.compile(r'openat?\([^,]*,\s*"([^"]+)"(?:,\s*([A-Z_|]+))?')
+# `open` is also enrolled in TRACE_SYSCALLS, and its path is the FIRST
+# argument (`open("/p", FLAGS)`), not the second as in `openat(AT_FDCWD,
+# "/p", FLAGS)`. Two defects dropped every plain `open`: `openat?` parses
+# as "opena" + optional "t" so it never matched the keyword "open" (needs
+# the "a"), and the hard-coded `[^,]*,` assumed the openat 2-arg layout.
+# `open(?:at)?` matches both keywords and the leading fd/dirfd segment is
+# optional so the path parses as arg 1 (open) or arg 2 (openat).
+OPENAT = re.compile(r'open(?:at)?\((?:[^,]*,\s*)?"([^"]+)"(?:,\s*([A-Z_|]+))?')
 PRIV_ALWAYS = re.compile(r"\b(capset|setns|unshare|ptrace)\((.*?)\)\s*=")
 PRIV_ROOT = re.compile(
     r"\b(setuid|setreuid|setresuid|setgid|setregid|setresgid)\((0[^)]*)\)"
@@ -226,7 +233,16 @@ def _self_test():
         "AF_INET6 connect must parse host+port"
     assert not CONNECT_INET.search("connect(7, {sa_family=AF_UNIX, sun_path=\"/x\"}, 12)"), \
         "AF_UNIX must not match the INET parser"
-    print("observe CONNECT_INET self-test: OK")
+
+    # Contract for OPENAT: parse the path from BOTH `open` (path is arg 1) and
+    # `openat` (path is arg 2). A plain `open` to a persistence/sensitive path
+    # must be observable, not dropped because the regex assumed the openat
+    # layout.
+    mo = OPENAT.search('open("/root/.bashrc", O_WRONLY|O_CREAT|O_APPEND) = 3')
+    assert mo and mo.group(1) == "/root/.bashrc", "plain open() path must parse"
+    moa = OPENAT.search('[pid 99] openat(AT_FDCWD, "/etc/passwd", O_RDONLY) = 3')
+    assert moa and moa.group(1) == "/etc/passwd", "openat() path must parse"
+    print("observe CONNECT_INET/OPENAT self-test: OK")
 
 
 if __name__ == "__main__":
