@@ -326,15 +326,27 @@ pub(crate) fn detect_powershell_dynamic_exec(
     language: &str,
     artifact_path: &str,
 ) -> Vec<Finding> {
-    if !matches!(language, "ps1" | "psm1" | "psd1")
-        || !(content_lower.contains("start-process")
+    let dynamic_ps = matches!(language, "ps1" | "psm1" | "psd1")
+        && (content_lower.contains("start-process")
             || content_lower.contains("invoke-expression")
             || content_lower
                 .lines()
-                .any(line_invokes_powershell_expression_alias))
-    {
+                .any(line_invokes_powershell_expression_alias));
+    // `powershell -EncodedCommand <base64>` is obfuscated dynamic execution
+    // regardless of the host script's language -- a `.bat`/`.cmd`/`.sh` wrapper
+    // launching it is the canonical cradle -- so this branch is NOT
+    // language-gated.
+    let encoded_cmd = content_lower
+        .lines()
+        .any(line_invokes_powershell_encoded_command);
+    if !dynamic_ps && !encoded_cmd {
         return Vec::new();
     }
+    let match_value = if encoded_cmd {
+        "powershell -EncodedCommand"
+    } else {
+        "Start-Process/IEX"
+    };
     vec![
         Finding::builder("SCRIPT_POWERSHELL_EXEC", ThreatCategory::RemoteExec)
             .severity(Severity::High)
@@ -347,10 +359,47 @@ pub(crate) fn detect_powershell_dynamic_exec(
                 ArtifactKind::ReferencedArtifact,
                 Some(artifact_path.to_string()),
             )
-            .match_value("Start-Process/IEX")
+            .match_value(match_value)
             .reason("PowerShell script executes commands dynamically")
             .build(),
     ]
+}
+
+/// True when `line` (already lowercased) invokes `powershell`/`pwsh` with an
+/// encoded-command switch (`-enc`/`-e`/`-encodedcommand`, also the `/`-prefixed
+/// form) followed by a base64-shaped argument. The base64 arg requirement
+/// keeps benign switches (`-ExecutionPolicy bypass`, `-Encoding utf8`) out.
+fn line_invokes_powershell_encoded_command(line: &str) -> bool {
+    if !["powershell", "powershell.exe", "pwsh", "pwsh.exe"]
+        .iter()
+        .any(|tok| line_contains_command_token(line, tok))
+    {
+        return false;
+    }
+    let mut tokens = line.split_whitespace().peekable();
+    while let Some(tok) = tokens.next() {
+        let is_enc_switch = matches!(tok.chars().next(), Some('-' | '/'))
+            && matches!(
+                tok.trim_start_matches(['-', '/']),
+                "e" | "en" | "enc" | "ec" | "encodedcommand"
+            );
+        if is_enc_switch && tokens.peek().is_some_and(|arg| looks_base64ish(arg)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// A base64-shaped token: long enough to be an encoded command and drawn only
+/// from the base64 alphabet (after trimming quoting/punctuation). The length
+/// floor avoids matching short benign arguments -- a real `-EncodedCommand`
+/// blob is dozens of characters (UTF-16LE then base64).
+fn looks_base64ish(token: &str) -> bool {
+    let token = token.trim_matches(['"', '\'', '(', ')', ';', ',']);
+    token.len() >= 16
+        && token
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
 }
 
 fn line_invokes_chmod_exec_bit(line: &str) -> bool {
@@ -863,6 +912,43 @@ mod tests {
             assert!(
                 !findings.is_empty(),
                 "{lang}: detect_powershell_dynamic_exec must fire on Invoke-Expression; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract: `powershell -EncodedCommand <base64>` is detected as dynamic
+    /// PowerShell execution in ANY host language (a `.bat`/`.sh` wrapper too),
+    /// not just `.ps1` -- the canonical encoded-command evasion.
+    #[test]
+    fn detect_powershell_dynamic_exec_fires_for_encoded_command_any_language() {
+        let blob = "sqbfafgakabuagualahnacgbpag4adablahiakqbhah2afaa=";
+        let content = format!("powershell -nop -w hidden -enc {blob}\n");
+        let lower = content.to_ascii_lowercase();
+        for lang in ["bat", "cmd", "sh", "ps1"] {
+            let findings = detect_powershell_dynamic_exec(&lower, lang, "/tmp/setup.x");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.rule_id == "SCRIPT_POWERSHELL_EXEC"),
+                "{lang}: powershell -enc must fire SCRIPT_POWERSHELL_EXEC; got {findings:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): benign powershell switches without a base64-shaped
+    /// argument do NOT fire the encoded-command branch.
+    #[test]
+    fn detect_powershell_dynamic_exec_ignores_benign_switches() {
+        for content in [
+            "powershell -ExecutionPolicy Bypass -File setup.ps1\n",
+            "powershell -Encoding utf8 -Command Get-Date\n",
+            "powershell -e bypass\n",
+        ] {
+            let lower = content.to_ascii_lowercase();
+            let findings = detect_powershell_dynamic_exec(&lower, "bat", "/tmp/x.bat");
+            assert!(
+                findings.is_empty(),
+                "benign powershell switch must not fire encoded-command: {content:?}",
             );
         }
     }
