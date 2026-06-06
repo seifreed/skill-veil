@@ -328,6 +328,16 @@ pub(crate) fn script_capabilities(content: &str) -> Vec<ArtifactCapabilityFact> 
         || lower.contains("spawn(")
         || lower.contains("exec(")
         || lower.contains("start-process")
+        // Cross-language process-exec idioms. `exec.Command(` (Go) and
+        // `Command::new(` (Rust) do NOT contain the bare exec-call substring, and
+        // `popen(`/`proc_open(`/`passthru(` (Python os.popen, Ruby IO.popen, PHP)
+        // were uncovered — so a download->exec cradle in those languages never
+        // raised ProcessExecution and the composite never formed.
+        || lower.contains("exec.command(")
+        || lower.contains("command::new(")
+        || lower.contains("popen(")
+        || lower.contains("proc_open(")
+        || lower.contains("passthru(")
         || lower.lines().any(line_invokes_powershell_expression_alias)
     {
         capabilities.push(ArtifactOrchestratorService::observed_capability(
@@ -466,6 +476,15 @@ pub(crate) fn script_relations(content: &str) -> Vec<ArtifactLink> {
         || lower.contains("child_process")
         || lower.contains("os.execvp(")
         || lower.contains("os.execvpe(")
+        // Cross-language process-exec idioms — kept in lockstep with
+        // `script_capabilities` (Go `exec.Command(`, Rust `Command::new(`,
+        // Python/Ruby/PHP `popen(`/`proc_open(`/`passthru(`) so the Executes
+        // edge forms and the download->exec composite is not lost.
+        || lower.contains("exec.command(")
+        || lower.contains("command::new(")
+        || lower.contains("popen(")
+        || lower.contains("proc_open(")
+        || lower.contains("passthru(")
         || lower.lines().any(line_invokes_powershell_expression_alias)
     {
         links.push(ArtifactLink {
@@ -611,6 +630,42 @@ mod tests {
 
     fn relation_target_present(links: &[ArtifactLink], target: &str) -> bool {
         links.iter().any(|link| link.target == target)
+    }
+
+    /// Contract: cross-language process-exec idioms raise ProcessExecution so a
+    /// download->exec cradle in Go/Rust/PHP/Ruby forms the same composite as the
+    /// Python/JS equivalents.
+    #[test]
+    fn script_capabilities_detects_cross_language_process_exec() {
+        for content in [
+            "resp, _ := http.Get(u)\nexec.Command(\"sh\", \"-c\", body).Run()\n",
+            "let out = std::process::Command::new(\"sh\").arg(\"-c\").output();\n",
+            "$h = popen($cmd, 'r');\n",
+            "proc_open($cmd, $d, $p);\n",
+            "passthru($cmd);\n",
+        ] {
+            assert!(
+                capability_present(
+                    &script_capabilities(content),
+                    ArtifactCapability::ProcessExecution
+                ),
+                "process-exec idiom must raise ProcessExecution for {content:?}",
+            );
+        }
+    }
+
+    /// Contract (negative): ordinary words that merely contain an exec-idiom
+    /// substring must not raise ProcessExecution.
+    #[test]
+    fn script_capabilities_skips_exec_idiom_lookalikes() {
+        let content = "let reopener = make_reopen();\n// command line docs\n";
+        assert!(
+            !capability_present(
+                &script_capabilities(content),
+                ArtifactCapability::ProcessExecution
+            ),
+            "lookalike words must not raise ProcessExecution",
+        );
     }
 
     /// Contract: a script invoking `bash install.sh` produces InstallExecution.
