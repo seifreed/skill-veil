@@ -116,7 +116,13 @@ fn is_invisible_format(c: char) -> bool {
             | '\u{115F}'  // Hangul choseong filler
             | '\u{1160}'  // Hangul jungseong filler
             | '\u{3164}'  // Hangul filler
-            | '\u{FFA0}' // halfwidth Hangul filler
+            | '\u{FFA0}'  // halfwidth Hangul filler
+            // Variation Selectors Supplement: invisible code points that carry
+            // arbitrary smuggled bytes after a base character (the 2024
+            // "ASCII smuggling via variation selectors" technique). The basic
+            // selectors U+FE00–FE0F are deliberately NOT included — U+FE0F is
+            // the emoji presentation selector and appears in ordinary text.
+            | '\u{E0100}'..='\u{E01EF}'
     )
 }
 
@@ -297,6 +303,23 @@ mod tests {
         // Family emoji uses ZWJ between non-ASCII pictographs — legitimate.
         assert!(!fired(
             "team: \u{1F468}\u{200d}\u{1F469}\u{200d}\u{1F467}",
+            "UNICODE_INVISIBLE_CHARS"
+        ));
+    }
+
+    #[test]
+    fn variation_selector_supplement_fires() {
+        // U+E0100+ smuggles arbitrary bytes after a base char (2024
+        // ASCII-smuggling technique), invisible to humans inside ASCII text.
+        assert!(fired("please ru\u{E0100}n now", "UNICODE_INVISIBLE_CHARS"));
+    }
+
+    #[test]
+    fn emoji_presentation_selector_does_not_fire() {
+        // U+FE0F (emoji presentation selector) is ubiquitous in legitimate
+        // emoji and must NOT be treated as an invisible-smuggling character.
+        assert!(!fired(
+            "status: ok \u{2764}\u{FE0F}",
             "UNICODE_INVISIBLE_CHARS"
         ));
     }

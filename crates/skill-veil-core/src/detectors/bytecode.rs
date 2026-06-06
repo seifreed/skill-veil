@@ -34,8 +34,17 @@ const PYC_MAGIC_LF: u8 = 0x0a;
 
 /// High-signal byte markers whose presence in a marshalled body indicates
 /// process, network, or dynamic-code primitives. Marshalled `str`/`bytes`
-/// objects store their content verbatim, so a substring scan reaches them.
-/// Deliberately narrow (qualified names, not bare `eval`) to keep noise low.
+/// objects (string literals) store their content verbatim, and bare names
+/// (module names, function names) are stored as individual `co_names` — both
+/// reachable by a substring scan.
+///
+/// NOTE: a *dotted* attribute access (module-dot-method) is NOT stored as the
+/// joined bytes — CPython marshals the module and the attribute as separate
+/// `co_names`. So the dotted markers below only fire when the literal appears in
+/// a string constant; the bare method-name and string-literal markers are what
+/// catch real compiled payloads (base64/hex decode chains, reverse-shell
+/// idioms). Bare names stay specific to avoid substring false positives
+/// (`b64decode`, not `decode`; `mkfifo`, not `open`).
 const SUSPICIOUS_MARKERS: &[&[u8]] = &[
     b"os.system",
     b"subprocess",
@@ -47,6 +56,13 @@ const SUSPICIOUS_MARKERS: &[&[u8]] = &[
     b"socket.socket",
     b"powershell",
     b"pty.spawn",
+    // Bare forms that survive marshalling, plus reverse-shell string literals.
+    b"b64decode",
+    b"b85decode",
+    b"b32decode",
+    b"fromhex",
+    b"/dev/tcp",
+    b"mkfifo",
 ];
 
 /// The fixed shape of one bytecode finding family. Grouping the six
@@ -259,6 +275,29 @@ mod tests {
             "header-region marker must not fire: {:?}",
             ids(&f)
         );
+    }
+
+    /// Contract: bare decode-method names and reverse-shell string literals
+    /// appear verbatim in compiled bytecode (unlike dotted attribute accesses),
+    /// so they fire the suspicious-content signal.
+    #[test]
+    fn realistic_bare_markers_fire_in_marshalled_body() {
+        for marker in [
+            b"b64decode".as_slice(),
+            b"/dev/tcp".as_slice(),
+            b"mkfifo".as_slice(),
+        ] {
+            let mut body = b"hello".to_vec();
+            body.extend_from_slice(marker);
+            let bytes = pyc_with_body(&body);
+            let f = analyze_pyc(&bytes, true, Path::new("x.pyc"));
+            assert!(
+                ids(&f).contains(&BYTECODE_PYC_SUSPICIOUS_CONTENT),
+                "marker {:?} must fire suspicious-content; got {:?}",
+                std::str::from_utf8(marker).unwrap(),
+                ids(&f)
+            );
+        }
     }
 
     #[test]
