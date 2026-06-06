@@ -139,8 +139,26 @@ fn push_dep(
 fn collect_requirements_txt(content: &str, source: &str) -> Vec<ParsedDependency> {
     let mut out = Vec::new();
     for raw in content.lines() {
-        let line = raw.split('#').next().unwrap_or("").trim();
-        if line.is_empty() || line.starts_with('-') || line.contains("://") {
+        let trimmed = raw.trim();
+        // A URL/VCS line still carries a typosquattable package name in the
+        // PEP 508 direct-reference (`name @ https://…`) or `#egg=name` form —
+        // do NOT split on `#` first (that destroys the egg fragment) and do NOT
+        // skip it. The editable flag is stripped so `-e git+…#egg=name` resolves
+        // too. `parse_python_dep_name` is the shared resolver used by the python
+        // manifest detector; version is None for URL/VCS installs.
+        if trimmed.contains("://") {
+            let spec = trimmed
+                .strip_prefix("-e")
+                .or_else(|| trimmed.strip_prefix("--editable"))
+                .unwrap_or(trimmed)
+                .trim();
+            if let Some(name) = crate::detectors::manifests::python::parse_python_dep_name(spec) {
+                push_dep(&mut out, &name, None, Ecosystem::PyPI, source);
+            }
+            continue;
+        }
+        let line = trimmed.split('#').next().unwrap_or("").trim();
+        if line.is_empty() || line.starts_with('-') {
             continue;
         }
         // Cut PEP 508 environment markers and extras.
@@ -217,15 +235,32 @@ fn collect_cargo(content: &str, source: &str) -> Vec<ParsedDependency> {
             continue;
         };
         for (name, spec) in table {
-            let version = match spec {
-                toml::Value::String(s) => exact_semver_pin(s),
-                toml::Value::Table(t) => t
-                    .get("version")
-                    .and_then(toml::Value::as_str)
-                    .and_then(exact_semver_pin),
-                _ => None,
+            // A table spec may rename the crate via `package = "<real>"`; that
+            // is the crate cargo actually fetches from crates.io, so it — not
+            // the local key — is what typosquat/OSV must inspect (the Cargo
+            // analogue of an npm alias).
+            let (resolved_name, version) = match spec {
+                toml::Value::String(s) => (name.as_str(), exact_semver_pin(s)),
+                toml::Value::Table(t) => {
+                    let resolved = t
+                        .get("package")
+                        .and_then(toml::Value::as_str)
+                        .unwrap_or(name);
+                    let version = t
+                        .get("version")
+                        .and_then(toml::Value::as_str)
+                        .and_then(exact_semver_pin);
+                    (resolved, version)
+                }
+                _ => (name.as_str(), None),
             };
-            push_dep(&mut out, name, version, Ecosystem::CratesIo, source);
+            push_dep(
+                &mut out,
+                resolved_name,
+                version,
+                Ecosystem::CratesIo,
+                source,
+            );
         }
     }
     out
@@ -527,5 +562,43 @@ flask = { version = "3.0.0" }
 
         let wild = collect_requirements_txt("flask==1.x\n", "/r.txt");
         assert_eq!(wild[0].version, None, "a wildcard is a range even after ==",);
+    }
+
+    /// Contract: a Cargo `package = "<real>"` rename resolves to the crate
+    /// cargo actually fetches, so typosquat/OSV inspect the real crate, not the
+    /// benign local key. (Cargo analogue of the npm alias resolution.)
+    #[test]
+    fn cargo_package_rename_inventories_real_crate_not_local_key() {
+        let content = "[dependencies]\nmylocal = { version = \"1.0.0\", package = \"reqeusts\" }\n";
+        let deps = collect_cargo(content, "/Cargo.toml");
+        assert!(
+            deps.iter()
+                .any(|d| d.name == "reqeusts" && d.version.as_deref() == Some("1.0.0")),
+            "renamed-to crate must be inventoried; got {:?}",
+            names(&deps),
+        );
+        assert!(
+            !deps.iter().any(|d| d.name == "mylocal"),
+            "the local rename key is not an installed crate",
+        );
+    }
+
+    /// Contract: PEP 508 direct-URL and VCS `#egg=` requirements still carry a
+    /// typosquattable package name — it must reach the inventory, not be
+    /// dropped because the line contains a URL.
+    #[test]
+    fn requirements_url_and_egg_forms_still_inventory_the_name() {
+        for line in [
+            "reqeusts @ https://evil.test/x.whl",
+            "git+https://evil.test/x.git#egg=reqeusts",
+            "-e git+https://evil.test/x.git#egg=reqeusts",
+        ] {
+            let deps = collect_requirements_txt(&format!("{line}\n"), "/r.txt");
+            assert!(
+                deps.iter().any(|d| d.name == "reqeusts"),
+                "URL/egg form must inventory the package name for {line:?}; got {:?}",
+                names(&deps),
+            );
+        }
     }
 }

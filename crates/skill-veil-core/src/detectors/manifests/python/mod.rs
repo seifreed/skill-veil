@@ -55,7 +55,7 @@ pub(super) fn has_python_vcs_prefix(line: &str) -> bool {
 ///
 /// Returns `None` for VCS specs without a recoverable name (no `egg=`,
 /// no PEP 508 prefix) — the caller cannot map those to a known dep.
-pub(super) fn parse_python_dep_name(line: &str) -> Option<String> {
+pub(crate) fn parse_python_dep_name(line: &str) -> Option<String> {
     if let Some(dep_name) = parse_direct_reference_name(line) {
         return Some(dep_name);
     }
