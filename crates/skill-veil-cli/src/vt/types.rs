@@ -100,11 +100,66 @@ pub(crate) struct CrowdsourcedAiResult {
 impl FileAttributes {
     /// Returns the first Code Insight result, if any. Falls back to the first
     /// crowdsourced AI result of any source.
+    ///
+    /// VT marks Code Insight with `category == "code_insight"` (its `source`
+    /// is the model name, e.g. `"palm"`), so the preference keys on
+    /// `category`. Keying on `source == "Code Insight"` never matched real
+    /// reports and silently always took the fallback.
     pub(crate) fn primary_ai_verdict(&self) -> Option<&CrowdsourcedAiResult> {
         self.crowdsourced_ai_results
             .iter()
-            .find(|r| r.source.eq_ignore_ascii_case("Code Insight"))
+            .find(|r| r.category.eq_ignore_ascii_case("code_insight"))
             .or_else(|| self.crowdsourced_ai_results.first())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ai(source: &str, category: &str, verdict: &str) -> CrowdsourcedAiResult {
+        CrowdsourcedAiResult {
+            source: source.to_string(),
+            category: category.to_string(),
+            verdict: verdict.to_string(),
+            analysis: String::new(),
+        }
+    }
+
+    /// # Contract
+    ///
+    /// When several crowdsourced AI results are present, the Code Insight
+    /// verdict (identified by `category == "code_insight"`) is preferred even
+    /// when another source is ordered first — its verdict is what the
+    /// cross-check buckets the sample on.
+    #[test]
+    fn primary_ai_verdict_prefers_code_insight_by_category() {
+        let attrs = FileAttributes {
+            crowdsourced_ai_results: vec![
+                ai("other_model", "noise", "benign"),
+                ai("palm", "code_insight", "malicious"),
+            ],
+            ..Default::default()
+        };
+        let primary = attrs.primary_ai_verdict().expect("a verdict is present");
+        assert_eq!(primary.verdict, "malicious");
+        assert_eq!(primary.source, "palm");
+    }
+
+    /// # Contract (negative)
+    ///
+    /// With no Code Insight result the first available crowdsourced AI result
+    /// is returned, and an empty list yields `None`.
+    #[test]
+    fn primary_ai_verdict_falls_back_then_none() {
+        let attrs = FileAttributes {
+            crowdsourced_ai_results: vec![ai("other_model", "noise", "benign")],
+            ..Default::default()
+        };
+        assert_eq!(attrs.primary_ai_verdict().unwrap().verdict, "benign");
+
+        let empty = FileAttributes::default();
+        assert!(empty.primary_ai_verdict().is_none());
     }
 }
 
