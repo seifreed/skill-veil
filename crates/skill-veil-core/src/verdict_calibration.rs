@@ -404,6 +404,17 @@ fn apply_calibration_rules<'f>(
     (risk_adjustment, notes)
 }
 
+/// `true` when `f` belongs to `group`'s root cause: same artifact scope,
+/// threat category, and signal class. Callers add their own rule-ID
+/// predicate (trigger membership vs. exclusion) on top — this is the shared
+/// group-membership half of every per-group findings filter in this module,
+/// so all sites agree on what "in this group" means.
+fn finding_in_group(f: &Finding, group: &RootCauseGroup, signal_class: SignalClass) -> bool {
+    f.artifact_scope == group.scope
+        && f.category == group.category
+        && f.signal_class == signal_class
+}
+
 /// Apply one calibration rule to one group, updating group state in place.
 ///
 /// Returns the risk delta (negative or zero) and an optional calibration note.
@@ -419,9 +430,7 @@ fn apply_single_rule_to_group<'f>(
     // Check findings directly instead of representative_rules (truncated to
     // MAX_REPRESENTATIVE_RULES, which could exclude calibration-relevant rules).
     let group_matches = findings.iter().any(|f| {
-        f.artifact_scope == group.scope
-            && f.category == group.category
-            && f.signal_class == state.original_signal_class
+        finding_in_group(f, group, state.original_signal_class)
             && rule.trigger_rule_ids.contains(&f.rule_id.as_str())
     });
     if !gate || !group_matches {
@@ -447,9 +456,7 @@ fn apply_single_rule_to_group<'f>(
         let mut rules: Vec<String> = findings
             .iter()
             .filter(|f| {
-                f.artifact_scope == group.scope
-                    && f.category == group.category
-                    && f.signal_class == state.original_signal_class
+                finding_in_group(f, group, state.original_signal_class)
                     && !state.accumulated_exclusions.contains(&f.rule_id.as_str())
             })
             .map(|f| f.rule_id.clone())
@@ -522,9 +529,7 @@ fn recalculate_group_action_excluding(
     let remaining: Vec<_> = findings
         .iter()
         .filter(|f| {
-            f.artifact_scope == group.scope
-                && f.category == group.category
-                && f.signal_class == original_signal_class
+            finding_in_group(f, group, original_signal_class)
                 && !excluded_rule_ids.contains(&f.rule_id.as_str())
         })
         .collect();
