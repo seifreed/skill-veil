@@ -157,6 +157,23 @@ fn collect_requirements_txt(content: &str, source: &str) -> Vec<ParsedDependency
     out
 }
 
+/// Resolve an npm alias spec (`npm:<target>[@<version>]`) to the real package
+/// name and any exact version. The declared dependency key is only a local
+/// alias — the alias *target* is what npm fetches, so it is what typosquat and
+/// OSV must inspect. A scoped target keeps its leading `@scope/` and the
+/// version is split on the following `@`. Returns `None` for non-alias specs.
+fn npm_alias_target(spec: &str) -> Option<(&str, Option<&str>)> {
+    let rest = spec.strip_prefix("npm:")?;
+    let version_at = match rest.strip_prefix('@') {
+        Some(after_scope) => after_scope.find('@').map(|i| i + 1),
+        None => rest.find('@'),
+    };
+    Some(match version_at {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None => (rest, None),
+    })
+}
+
 fn collect_package_json(content: &str, source: &str) -> Vec<ParsedDependency> {
     let mut out = Vec::new();
     let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
@@ -167,8 +184,24 @@ fn collect_package_json(content: &str, source: &str) -> Vec<ParsedDependency> {
             continue;
         };
         for (name, spec) in map {
-            let version = spec.as_str().and_then(exact_semver_pin);
-            push_dep(&mut out, name, version, Ecosystem::Npm, source);
+            let spec_str = spec.as_str();
+            if let Some((target, version)) = spec_str.and_then(npm_alias_target) {
+                push_dep(
+                    &mut out,
+                    target,
+                    version.and_then(exact_semver_pin),
+                    Ecosystem::Npm,
+                    source,
+                );
+            } else {
+                push_dep(
+                    &mut out,
+                    name,
+                    spec_str.and_then(exact_semver_pin),
+                    Ecosystem::Npm,
+                    source,
+                );
+            }
         }
     }
     out
@@ -295,6 +328,53 @@ mod tests {
             None
         );
         assert!(deps.iter().all(|d| d.ecosystem == Ecosystem::Npm));
+    }
+
+    #[test]
+    fn npm_alias_target_parses_scoped_and_versionless() {
+        assert_eq!(
+            npm_alias_target("npm:loadsh@1.0.0"),
+            Some(("loadsh", Some("1.0.0")))
+        );
+        assert_eq!(
+            npm_alias_target("npm:@scope/pkg@2.0.0"),
+            Some(("@scope/pkg", Some("2.0.0")))
+        );
+        assert_eq!(npm_alias_target("npm:lodash"), Some(("lodash", None)));
+        assert_eq!(npm_alias_target("^4.17.21"), None);
+        assert_eq!(npm_alias_target("git+https://example.com/x.git"), None);
+    }
+
+    #[test]
+    fn package_json_resolves_npm_alias_to_installed_target() {
+        let content = r#"{
+          "dependencies": {
+            "utils": "npm:loadsh@1.0.0",
+            "lodash4": "npm:lodash@4.17.21",
+            "scoped": "npm:@acme/pkg@2.0.0",
+            "noversion": "npm:left-pad"
+          }
+        }"#;
+        let deps = collect_package_json(content, "/package.json");
+        // The alias TARGET (the package npm actually installs) is inventoried,
+        // so typosquat/OSV see `loadsh`, not the benign local key `utils`.
+        assert_eq!(
+            deps.iter().find(|d| d.name == "loadsh").unwrap().version,
+            Some("1.0.0".to_string())
+        );
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "lodash" && d.version.as_deref() == Some("4.17.21")));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "@acme/pkg" && d.version.as_deref() == Some("2.0.0")));
+        assert!(deps
+            .iter()
+            .any(|d| d.name == "left-pad" && d.version.is_none()));
+        // The local alias keys are NOT installed packages and must not appear.
+        assert!(!deps
+            .iter()
+            .any(|d| d.name == "utils" || d.name == "scoped" || d.name == "noversion"));
     }
 
     #[test]
