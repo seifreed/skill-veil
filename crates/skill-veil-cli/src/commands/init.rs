@@ -7,9 +7,8 @@
 
 use crate::cli_args::{InitArgs, OutputFormat, RulesStatusArgs, RulesUpdateArgs};
 use crate::init;
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 use anyhow::{Context, Result};
-use std::path::Path;
 
 pub(crate) fn run_init(args: InitArgs) -> Result<()> {
     let outcome = init::run_init(args.version, args.cache_dir)
@@ -105,22 +104,4 @@ pub(crate) fn run_rules_status(args: RulesStatusArgs) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn terminal_path(path: &Path) -> String {
-    sanitise_for_terminal(&path.display().to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::terminal_path;
-    use std::path::PathBuf;
-
-    #[test]
-    fn terminal_path_removes_rules_status_control_sequences() {
-        let path = PathBuf::from("cache\x1b[2J/rules");
-        let cleaned = terminal_path(&path);
-
-        assert!(!cleaned.contains('\x1b'));
-    }
 }

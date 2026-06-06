@@ -22,8 +22,9 @@ use crate::promptintel::feed::{
 };
 use crate::promptintel::types::ReportDraft;
 use crate::util::{
-    bounded_read::read_text_file_with_cap, output_file::write_output_file_atomic,
-    terminal_safe::sanitise_for_terminal,
+    bounded_read::read_text_file_with_cap,
+    output_file::write_output_file_atomic,
+    terminal_safe::{sanitise_for_terminal, terminal_path},
 };
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -374,10 +375,6 @@ fn terminal_field(value: &str) -> String {
     sanitise_for_terminal(value)
 }
 
-fn terminal_path(path: &Path) -> String {
-    terminal_field(&path.display().to_string())
-}
-
 fn terminal_snippet(value: &str, max_chars: usize) -> String {
     let truncated = value.chars().take(max_chars).collect::<String>();
     sanitise_for_terminal(&truncated)
@@ -387,7 +384,7 @@ fn terminal_snippet(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::{
         detection_below_gate, read_report_draft_with_cap, resolve_cache_root_from, terminal_field,
-        terminal_path, terminal_snippet,
+        terminal_snippet,
     };
     use crate::promptintel::cross_check::CrossCheckSummary;
     use std::path::PathBuf;
@@ -483,15 +480,6 @@ mod tests {
 
         assert!(!cleaned.contains('\x1b'));
         assert!(!cleaned.contains('\x07'));
-    }
-
-    #[test]
-    fn terminal_path_removes_promptintel_status_control_sequences() {
-        let path = PathBuf::from("cache\x1b[2J");
-        let cleaned = terminal_path(&path);
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(cleaned.contains("cache?[2J"));
     }
 
     #[test]

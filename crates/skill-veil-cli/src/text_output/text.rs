@@ -6,12 +6,7 @@ use super::limits::{
 };
 use super::TextOutputOptions;
 use crate::color::ColorMode;
-use crate::util::terminal_safe::sanitise_for_terminal;
-use std::path::Path;
-
-fn terminal_path(path: &Path) -> String {
-    sanitise_for_terminal(&path.display().to_string())
-}
+use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 
 pub(crate) fn format_text_output(results: &[ScanResult], options: TextOutputOptions) -> String {
     let mut output = String::new();

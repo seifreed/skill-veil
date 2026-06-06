@@ -14,6 +14,8 @@
 //! already-sanitised content, so they cannot be the entry point for
 //! attacker-controlled escape sequences.
 
+use std::path::Path;
+
 /// Replace any byte the user terminal might interpret as a control
 /// instruction with `?`, leaving printable text intact. The text-output
 /// formatter and the VT enrichment formatter render untrusted document
@@ -132,11 +134,30 @@ pub(crate) fn drain_error_body<E: std::fmt::Display>(
     }
 }
 
+/// Render a filesystem path for terminal display, stripping any control
+/// sequences a crafted path could embed. Shared by every CLI surface that
+/// prints a `Path` to the operator (status lines, "wrote …" messages).
+pub(crate) fn terminal_path(path: &Path) -> String {
+    sanitise_for_terminal(&path.display().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_error_body, sanitise_for_terminal, truncate_error_body, ERROR_BODY_MAX_BYTES,
+        drain_error_body, sanitise_for_terminal, terminal_path, truncate_error_body,
+        ERROR_BODY_MAX_BYTES,
     };
+    use std::path::Path;
+
+    /// Contract: a path carrying a control sequence is sanitised before it
+    /// reaches the operator's terminal — the same TTY-safety guarantee as
+    /// [`sanitise_for_terminal`], applied to a path's display form.
+    #[test]
+    fn terminal_path_strips_control_sequences() {
+        let cleaned = terminal_path(Path::new("out\x1b[2J.json"));
+        assert!(!cleaned.contains('\x1b'));
+        assert!(cleaned.contains("out?[2J.json"));
+    }
 
     /// Contract: bare ASCII control characters (`\x1b`, `\x07`, `\x00`,
     /// etc.) MUST be replaced with `?` so a crafted skill cannot clear

@@ -18,7 +18,7 @@ use skill_veil_core::{GoldCorpusManifest, GoldSample, SampleLabel};
 use crate::cli_args::{GoldAction, GoldBuildArgs, GoldLabelArg, GoldReviewArgs, GoldStatsArgs};
 use crate::util::bounded_read::read_operator_text_file;
 use crate::util::output_file::write_output_file_atomic;
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 use crate::vt::types::CachedReport;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -358,10 +358,6 @@ pub(crate) fn run_gold(action: GoldAction) -> Result<()> {
     }
 }
 
-fn terminal_path(path: &Path) -> String {
-    sanitise_for_terminal(&path.display().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,15 +400,6 @@ mod tests {
                 "{bad:?} must be rejected"
             );
         }
-    }
-
-    #[test]
-    fn terminal_path_removes_gold_status_control_sequences() {
-        let path = Path::new("gold\x1b[2J.yaml");
-        let cleaned = terminal_path(path);
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(cleaned.contains("gold?[2J.yaml"));
     }
 
     /// # Contract

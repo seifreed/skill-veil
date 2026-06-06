@@ -8,7 +8,7 @@ use crate::cli_args::{
     VtAction, VtCrossCheckArgs, VtCrossCheckFormat, VtDownloadArgs, VtReportArgs,
 };
 use crate::util::output_file::write_output_file_atomic;
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 use crate::vt::client::VtClient;
 use crate::vt::config::VtConfig;
 use crate::vt::cross_check::{self, CrossCheckOptions};
@@ -157,23 +157,9 @@ fn build_client() -> Result<VtClient> {
     Ok(VtClient::new(config))
 }
 
-fn terminal_path(path: &Path) -> String {
-    sanitise_for_terminal(&path.display().to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{cross_check_scan_root, terminal_path};
-    use std::path::PathBuf;
-
-    #[test]
-    fn terminal_path_removes_vt_status_control_sequences() {
-        let path = PathBuf::from("out\x1b[2J.json");
-        let cleaned = terminal_path(&path);
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(cleaned.contains("out?[2J.json"));
-    }
+    use super::cross_check_scan_root;
 
     /// # Contract
     ///

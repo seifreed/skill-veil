@@ -2,7 +2,7 @@ use crate::config::{resolve_llm_provider_override, UnifiedConfig};
 use crate::llm::providers::build_provider;
 use crate::text_output::{format_results, TextOutputOptions};
 use crate::util::output_file::write_output_file_atomic;
-use crate::util::terminal_safe::sanitise_for_terminal;
+use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 use crate::{
     cli_args::{ColorChoiceArg, PolicyProfileArg, ScanArgs, ScanPresetArg, SeverityArg},
     color::ColorMode,
@@ -832,10 +832,6 @@ fn write_scan_output(output_path: &Path, output_content: &str) -> Result<()> {
         .context("Failed to write output file")
 }
 
-fn terminal_path(path: &Path) -> String {
-    sanitise_for_terminal(&path.display().to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,15 +907,6 @@ mod tests {
             longest_prefix_index(empty.iter().copied(), Path::new("x.md")),
             None,
         );
-    }
-
-    #[test]
-    fn terminal_path_removes_scan_warning_control_sequences() {
-        let path = PathBuf::from("pkg\x1b[2J/SKILL.md");
-        let cleaned = terminal_path(&path);
-
-        assert!(!cleaned.contains('\x1b'));
-        assert!(cleaned.contains("pkg?[2J"));
     }
 
     /// # Contract
