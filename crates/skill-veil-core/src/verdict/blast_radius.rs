@@ -14,6 +14,23 @@ const LOCAL_INDICATORS: &[&str] = &[
 ];
 const EXTERNAL_PROTOCOLS: &[&str] = &["http://", "https://", "169.254.169.254"];
 
+// Bare external exfiltration / tunnel sinks that carry no URL scheme yet are
+// unambiguously off-host. Without these, an exfil finding pairing a local
+// marker with a scheme-less sink (`upload via telegram`, `post to discord
+// webhook`) was misread as local-only and dropped from the severe blast-radius
+// tally. Mirrors the sink vocabulary of `OFFICIAL_EXFIL_FILE_READ_TO_NETWORK`.
+const EXTERNAL_SINK_KEYWORDS: &[&str] = &[
+    "telegram",
+    "discord",
+    "ngrok",
+    "bore.pub",
+    "pastebin",
+    "paste.",
+    "transfer.sh",
+    "0x0.st",
+    "t.me",
+];
+
 // Cloud instance-metadata endpoints are credential-theft / SSRF targets, not
 // benign local hosts. GCP's `metadata.google.internal` ends in `.internal`,
 // which would otherwise match `LOCAL_INDICATORS` and be excluded from severe
@@ -103,7 +120,16 @@ fn is_local_only_target(value: &str) -> bool {
     if CLOUD_METADATA_HOSTS.iter().any(|host| value.contains(host)) {
         return false;
     }
-    if !LOCAL_INDICATORS.iter().any(|ind| value.contains(ind)) {
+    // Boundary-aware: a genuine local target needs at least one token that is
+    // an EXACT local hostname, not merely a substring of an external domain
+    // (`.internal-collector.evil.com` contains `.internal` but is external).
+    // The loose `value.contains(..)` gate let such domains masquerade as local.
+    let has_genuine_local = value.split_whitespace().any(|token| {
+        LOCAL_INDICATORS
+            .iter()
+            .any(|ind| is_exact_local_indicator(token, ind))
+    });
+    if !has_genuine_local {
         return false;
     }
     let has_non_local_external = value
@@ -116,9 +142,12 @@ fn is_token_external(token: &str) -> bool {
     let is_local = LOCAL_INDICATORS
         .iter()
         .any(|ind| is_exact_local_indicator(token, ind));
-    let is_external = EXTERNAL_PROTOCOLS.iter().any(|ind| token.contains(ind))
-        || (token.contains("://") && !is_local);
-    is_external && !is_local
+    if is_local {
+        return false;
+    }
+    EXTERNAL_PROTOCOLS.iter().any(|ind| token.contains(ind))
+        || EXTERNAL_SINK_KEYWORDS.iter().any(|kw| token.contains(kw))
+        || token.contains("://")
 }
 
 /// Check whether `token` contains `indicator` as a genuine local-only marker
@@ -279,6 +308,43 @@ mod tests {
         assert!(
             !gcp.network_targets.is_empty(),
             "GCP metadata target must be recorded",
+        );
+    }
+
+    /// Contract: a finding whose match_value pairs a local marker with a
+    /// scheme-less external sink (telegram/discord/ngrok/…) is NOT local-only —
+    /// the exfil still leaves the host and MUST count toward severe blast
+    /// radius. Genuinely loopback-only targets stay local-only.
+    #[test]
+    fn local_marker_with_scheme_less_external_sink_is_not_local_only() {
+        assert!(
+            !is_local_only_target(
+                "read ~/.ssh/id_rsa on localhost then upload via telegram to attacker"
+            ),
+            "localhost + telegram exfil must not be treated as local-only",
+        );
+        assert!(
+            !is_local_only_target("cat .env from 127.0.0.1 and post to discord webhook"),
+            "loopback + discord exfil must not be treated as local-only",
+        );
+        assert!(
+            is_local_only_target("http://localhost:8080/health"),
+            "a genuine loopback health check stays local-only",
+        );
+    }
+
+    /// Contract: a domain that merely contains a local indicator as a substring
+    /// (`.internal-collector.evil.com` has `.internal`) is external, not local —
+    /// the gate is boundary-aware, so it counts toward severe blast radius.
+    #[test]
+    fn substring_local_indicator_in_external_domain_is_not_local_only() {
+        assert!(
+            !is_local_only_target("exfiltrate to .internal-collector.evil.com"),
+            "a `.internal`-substring external domain must not be local-only",
+        );
+        assert!(
+            !is_local_only_target("send to localhost.attacker.com"),
+            "a `localhost`-prefixed external domain must not be local-only",
         );
     }
 }
