@@ -10,7 +10,7 @@
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
 use crate::util::bounded_read::read_response_with_cap;
-use crate::util::terminal_safe::truncate_error_body;
+use crate::util::terminal_safe::drain_error_body;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -46,30 +46,6 @@ pub(crate) const MAX_DOWNLOAD_BYTES: u64 = 768 * 1024 * 1024;
 /// `MAX_RESPONSE_BODY_BYTES` (10 MiB). VT JSON responses are typically under
 /// 100 KiB; 10 MiB is a generous ceiling that covers large report objects.
 const MAX_JSON_RESPONSE_BYTES: u64 = 10 * 1024 * 1024;
-
-/// Drain `resp` into a string for embedding in an error.
-///
-/// Mirrors `crate::llm::client::drain_error_body`: pre-fix the call sites
-/// used `unwrap_or_default()`, which silently erased decode/transport
-/// errors and operators saw `VtError::HttpStatus { status, body: "" }`
-/// with no clue why the body was missing (gateway 502s, mid-stream
-/// disconnects). The warning preserves that diagnostic context while
-/// keeping the public error shape unchanged. Bodies are truncated to
-/// [`ERROR_BODY_MAX_BYTES`] so a hostile gateway cannot push large blobs
-/// into operator logs.
-fn drain_error_body(status: u16, resp: ureq::Response) -> String {
-    match bounded_read_response(resp) {
-        Ok(body) => truncate_error_body(body),
-        Err(err) => {
-            tracing::warn!(
-                "VT returned HTTP {} but the response body could not be read: {}",
-                status,
-                err
-            );
-            String::new()
-        }
-    }
-}
 
 /// Read an HTTP response body with a size cap to prevent unbounded memory
 /// allocation from a compromised or misconfigured endpoint. Mirrors the
@@ -345,7 +321,7 @@ impl VtClient {
             .call()
             .map_err(|err| match err {
                 ureq::Error::Status(status, r) => {
-                    let body = drain_error_body(status, r);
+                    let body = drain_error_body("VT", status, bounded_read_response(r));
                     VtError::HttpStatus { status, body }
                 }
                 ureq::Error::Transport(e) => VtError::Network(e.to_string()),
@@ -362,7 +338,7 @@ impl VtClient {
             .map_err(|err| match err {
                 ureq::Error::Status(401 | 403, _) => VtError::Unauthorized,
                 ureq::Error::Status(status, r) => {
-                    let body = drain_error_body(status, r);
+                    let body = drain_error_body("VT", status, bounded_read_response(r));
                     VtError::HttpStatus { status, body }
                 }
                 ureq::Error::Transport(e) => VtError::Network(e.to_string()),
@@ -382,7 +358,7 @@ impl VtClient {
                 .to_string();
             return Ok(DownloadResponse::Redirect(location));
         }
-        let body = drain_error_body(status, resp);
+        let body = drain_error_body("VT", status, bounded_read_response(resp));
         Err(VtError::HttpStatus { status, body })
     }
 
@@ -536,7 +512,7 @@ impl VtClient {
                     // a misrouted gateway.
                     let status = resp.status();
                     if !(200..300).contains(&status) {
-                        let body = drain_error_body(status, resp);
+                        let body = drain_error_body("VT", status, bounded_read_response(resp));
                         return Err(VtError::HttpStatus { status, body });
                     }
                     return Ok(resp);
@@ -555,7 +531,8 @@ impl VtClient {
                             return if status == 429 {
                                 Err(VtError::RateLimited { retries: attempt })
                             } else {
-                                let body = drain_error_body(status, resp);
+                                let body =
+                                    drain_error_body("VT", status, bounded_read_response(resp));
                                 Err(VtError::HttpStatus { status, body })
                             };
                         }
@@ -572,7 +549,7 @@ impl VtClient {
                         attempt += 1;
                         continue;
                     }
-                    let body = drain_error_body(status, resp);
+                    let body = drain_error_body("VT", status, bounded_read_response(resp));
                     return Err(VtError::HttpStatus { status, body });
                 }
                 Err(ureq::Error::Transport(err)) => {

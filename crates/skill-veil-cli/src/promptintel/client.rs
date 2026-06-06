@@ -11,7 +11,7 @@ use super::config::PromptIntelConfig;
 use super::types::{
     FeedResponse, PromptListEnvelope, ReportListEnvelope, ReportSubmissionResponse,
 };
-use crate::util::terminal_safe::truncate_error_body;
+use crate::util::terminal_safe::drain_error_body;
 use std::io::{self, Read};
 use std::time::Duration;
 use thiserror::Error;
@@ -165,14 +165,15 @@ impl PromptIntelClient {
                 Ok(resp) => {
                     let status = resp.status();
                     if !(200..300).contains(&status) {
-                        let body = drain_error_body(status, resp);
+                        let body =
+                            drain_error_body("PromptIntel", status, bounded_read_response(resp));
                         return Err(PromptIntelError::HttpStatus { status, body });
                     }
                     let meta = ResponseMeta::from_headers(&resp);
                     return bounded_read_response(resp).map(|body| (body, meta));
                 }
                 Err(ureq::Error::Status(status, resp)) => {
-                    let body = drain_error_body(status, resp);
+                    let body = drain_error_body("PromptIntel", status, bounded_read_response(resp));
                     if matches!(status, 429 | 500..=599) && attempts_remaining > 0 {
                         tracing::warn!(
                             "PromptIntel returned HTTP {} — sleeping {}ms before retry",
@@ -266,23 +267,6 @@ fn read_response_with_cap(resp: ureq::Response, cap: u64) -> Result<String> {
             format!("PromptIntel response is not valid UTF-8: {e}"),
         ))
     })
-}
-
-/// Drain `resp` into a string for embedding in an error. Mirrors the
-/// shape used by the VT and LLM clients so an operator who has
-/// debugged one error format already understands the others.
-fn drain_error_body(status: u16, resp: ureq::Response) -> String {
-    match bounded_read_response(resp) {
-        Ok(body) => truncate_error_body(body),
-        Err(err) => {
-            tracing::warn!(
-                "PromptIntel returned HTTP {} but the response body could not be read: {}",
-                status,
-                err
-            );
-            String::new()
-        }
-    }
 }
 
 #[cfg(test)]

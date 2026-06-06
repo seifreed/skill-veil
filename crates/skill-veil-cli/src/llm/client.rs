@@ -7,7 +7,7 @@
 
 use super::types::{LlmError, LlmPrompt, LlmRawResponse};
 use crate::util::bounded_read::read_response_with_cap;
-use crate::util::terminal_safe::truncate_error_body;
+use crate::util::terminal_safe::drain_error_body;
 use std::time::Duration;
 
 /// Maximum number of *additional* attempts after the initial request
@@ -75,34 +75,6 @@ pub(crate) fn build_agent(timeout_secs: u64) -> ureq::Agent {
         .build()
 }
 
-/// Drains an HTTP error response into a string for diagnostic reporting.
-///
-/// # Contract
-///
-/// Returns whatever bytes the provider sent in the body, even partial,
-/// truncated to [`ERROR_BODY_MAX_BYTES`] so a hostile or misbehaving gateway
-/// cannot push multi-kilobyte HTML/script payloads into operator logs. If
-/// reading the body itself fails (transport error mid-stream, encoding
-/// issue), emits a `tracing::warn` describing the I/O error and returns an
-/// empty string. The pre-fix code used `unwrap_or_default()`, which silently
-/// erased the underlying error and made debugging provider failures (a
-/// gateway 502, a malformed body) impossible — operators saw
-/// `LlmError::HttpStatus { status, body: "" }` with no clue why the body
-/// was missing. The warning preserves that context.
-fn drain_error_body(status: u16, resp: ureq::Response) -> String {
-    match bounded_read_response(resp) {
-        Ok(body) => truncate_error_body(body),
-        Err(err) => {
-            tracing::warn!(
-                "LLM provider returned HTTP {} but the response body could not be read: {}",
-                status,
-                err
-            );
-            String::new()
-        }
-    }
-}
-
 /// Read an HTTP response body with a size cap to prevent unbounded memory
 /// allocation from a compromised or misconfigured endpoint.
 pub(crate) fn bounded_read_response(resp: ureq::Response) -> Result<String, std::io::Error> {
@@ -147,7 +119,11 @@ pub(crate) fn post_json_with_retry(
                         return if status == 429 {
                             Err(LlmError::RateLimited { retries: attempt })
                         } else {
-                            let body = drain_error_body(status, resp);
+                            let body = drain_error_body(
+                                "LLM provider",
+                                status,
+                                bounded_read_response(resp),
+                            );
                             Err(LlmError::HttpStatus { status, body })
                         };
                     }
@@ -165,7 +141,7 @@ pub(crate) fn post_json_with_retry(
                     attempt += 1;
                     continue;
                 }
-                let body = drain_error_body(status, resp);
+                let body = drain_error_body("LLM provider", status, bounded_read_response(resp));
                 return Err(LlmError::HttpStatus { status, body });
             }
             Err(ureq::Error::Transport(err)) => {
@@ -220,7 +196,7 @@ mod tests {
              upstream-down"
             .parse()
             .expect("synthetic response must parse");
-        let body = drain_error_body(503, resp);
+        let body = drain_error_body("LLM provider", 503, bounded_read_response(resp));
         assert_eq!(body, "upstream-down");
     }
 
@@ -232,7 +208,7 @@ mod tests {
         let resp: ureq::Response = "HTTP/1.1 502 Bad Gateway\r\n\r\nfailure-text"
             .parse()
             .expect("synthetic response must parse");
-        let body = drain_error_body(502, resp);
+        let body = drain_error_body("LLM provider", 502, bounded_read_response(resp));
         assert_eq!(body, "failure-text");
     }
 }

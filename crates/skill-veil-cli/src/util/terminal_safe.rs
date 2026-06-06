@@ -105,9 +105,38 @@ pub(crate) fn truncate_error_body(body: String) -> String {
     out
 }
 
+/// Build the error-body string embedded in a `*Error::HttpStatus` value
+/// from the result of reading a size-capped response body.
+///
+/// On success the body is run through [`truncate_error_body`]; on a read
+/// failure the error is logged — so a gateway 502 / mid-stream disconnect
+/// stays diagnosable instead of surfacing as an empty body with no clue —
+/// and an empty string is returned, keeping the public error shape
+/// unchanged. Shared by the VT, LLM, and PromptIntel clients: `source`
+/// names the client in the log line, and the generic error type accepts
+/// each client's distinct reader error (`std::io::Error` vs
+/// `anyhow::Error`).
+pub(crate) fn drain_error_body<E: std::fmt::Display>(
+    source: &str,
+    status: u16,
+    read: Result<String, E>,
+) -> String {
+    match read {
+        Ok(body) => truncate_error_body(body),
+        Err(err) => {
+            tracing::warn!(
+                "{source} returned HTTP {status} but the response body could not be read: {err}"
+            );
+            String::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{sanitise_for_terminal, truncate_error_body, ERROR_BODY_MAX_BYTES};
+    use super::{
+        drain_error_body, sanitise_for_terminal, truncate_error_body, ERROR_BODY_MAX_BYTES,
+    };
 
     /// Contract: bare ASCII control characters (`\x1b`, `\x07`, `\x00`,
     /// etc.) MUST be replaced with `?` so a crafted skill cannot clear
@@ -248,6 +277,25 @@ mod tests {
             "truncated body must carry the suffix; got tail: {:?}",
             &truncated[truncated.len().saturating_sub(20)..]
         );
+    }
+
+    /// Contract: a successful read drains to the truncated body — the
+    /// success branch must NOT drop the gateway's diagnostic text (the
+    /// VT/LLM/PromptIntel clients rely on the body reaching
+    /// `*Error::HttpStatus`).
+    #[test]
+    fn drain_error_body_returns_truncated_body_on_ok() {
+        let read: Result<String, std::io::Error> = Ok("upstream-down".to_string());
+        assert_eq!(drain_error_body("test", 503, read), "upstream-down");
+    }
+
+    /// Contract: a read failure drains to an empty string (the public error
+    /// shape is unchanged) rather than propagating the read error.
+    #[test]
+    fn drain_error_body_returns_empty_on_read_error() {
+        let read: Result<String, std::io::Error> =
+            Err(std::io::Error::other("mid-stream disconnect"));
+        assert_eq!(drain_error_body("test", 502, read), "");
     }
 
     /// Contract: truncation never splits a multi-byte UTF-8 character. The
