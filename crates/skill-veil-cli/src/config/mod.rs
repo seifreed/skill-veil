@@ -158,14 +158,22 @@ impl LlmConfigSection {
     /// file selection.
     pub(crate) fn apply_provider_override(&mut self, provider: LlmProviderKind) {
         self.provider = provider;
-        self.provider_configs.entry(provider).or_insert_with(|| {
-            let mut params = ProviderParams::default();
-            if let Some(env_key) = provider.resolve_apikey_from_env() {
-                params.api_key = Some(env_key);
-            }
-            params
-        });
+        self.provider_configs
+            .entry(provider)
+            .or_insert_with(|| provider_params_from_env(provider));
     }
+}
+
+/// Synthesise a `ProviderParams` for a provider with no file section,
+/// seeding the API key from the environment when present. Shared by the
+/// CLI provider-override path and `resolve_llm`'s active-entry synthesis so
+/// both honour the documented env-over-file precedence identically.
+pub(crate) fn provider_params_from_env(provider: LlmProviderKind) -> ProviderParams {
+    let mut params = ProviderParams::default();
+    if let Some(env_key) = provider.resolve_apikey_from_env() {
+        params.api_key = Some(env_key);
+    }
+    params
 }
 
 /// Per-provider configuration after resolving CLI overrides + config files.

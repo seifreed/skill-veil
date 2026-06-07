@@ -107,13 +107,9 @@ fn ensure_active_provider_entry(
     configs: &mut BTreeMap<LlmProviderKind, ProviderParams>,
     provider: LlmProviderKind,
 ) {
-    configs.entry(provider).or_insert_with(|| {
-        let mut p = ProviderParams::default();
-        if let Some(env_key) = provider.resolve_apikey_from_env() {
-            p.api_key = Some(env_key);
-        }
-        p
-    });
+    configs
+        .entry(provider)
+        .or_insert_with(|| crate::config::provider_params_from_env(provider));
 }
 
 /// Translate the optional `[llm.limits]` block into runtime limits.
