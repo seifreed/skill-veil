@@ -149,10 +149,7 @@ impl<E: SentenceEmbedder> SemanticEvaluator for CosineSemanticEvaluator<E> {
 }
 
 fn clip_body(body: &str) -> String {
-    if body.chars().count() <= MAX_BODY_CHARS_FOR_EMBEDDING {
-        return body.to_string();
-    }
-    body.chars().take(MAX_BODY_CHARS_FOR_EMBEDDING).collect()
+    crate::util::text::clip_to_chars(body, MAX_BODY_CHARS_FOR_EMBEDDING).0
 }
 
 /// Cosine similarity. Returns `None` if vectors differ in dimension or

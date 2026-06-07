@@ -7,3 +7,4 @@ pub(crate) mod http_status;
 pub(crate) mod output_file;
 pub(crate) mod secure_fs;
 pub(crate) mod terminal_safe;
+pub(crate) mod text;

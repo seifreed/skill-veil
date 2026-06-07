@@ -136,11 +136,7 @@ fn decide(verdict: &MatchVerdict, threshold: f32) -> Outcome {
 }
 
 fn clip_body(body: &str) -> (String, bool) {
-    if body.chars().count() <= MAX_PROMPT_BODY_CHARS {
-        return (body.to_string(), false);
-    }
-    let clipped: String = body.chars().take(MAX_PROMPT_BODY_CHARS).collect();
-    (clipped, true)
+    crate::util::text::clip_to_chars(body, MAX_PROMPT_BODY_CHARS)
 }
 
 /// System prompt isolated from `LlmStatus`-style enrichment prompts so
