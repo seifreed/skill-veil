@@ -466,6 +466,25 @@ pub fn validate_fixture_case(
     Ok(())
 }
 
+/// Append a `Label:` heading followed by one terminal-sanitised `  - item`
+/// line per entry, skipping the heading entirely when there are no items.
+/// Shared by the rules-validation and rule-pack-info text renderers.
+fn append_sanitized_bullet_list<'a>(
+    output: &mut String,
+    label: &str,
+    items: impl IntoIterator<Item = &'a String>,
+) {
+    let mut items = items.into_iter().peekable();
+    if items.peek().is_none() {
+        return;
+    }
+    output.push_str(label);
+    output.push_str(":\n");
+    for item in items {
+        output.push_str(&format!("  - {}\n", sanitise_for_terminal(item)));
+    }
+}
+
 pub fn format_rules_validation_text(report: &RulesValidationReport) -> String {
     let mut output = String::new();
     output.push_str("--- Rules Validation ---\n");
@@ -476,36 +495,15 @@ pub fn format_rules_validation_text(report: &RulesValidationReport) -> String {
         report.total_rules,
         report.valid
     ));
-    if !report.schema_versions.is_empty() {
-        output.push_str("Schema versions:\n");
-        for version in &report.schema_versions {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(version)));
-        }
-    }
-    if !report.pack_names.is_empty() {
-        output.push_str("Pack names:\n");
-        for name in &report.pack_names {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(name)));
-        }
-    }
-    if !report.pack_kinds.is_empty() {
-        output.push_str("Pack kinds:\n");
-        for kind in &report.pack_kinds {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(kind)));
-        }
-    }
-    if !report.duplicate_rule_ids.is_empty() {
-        output.push_str("Duplicate rule IDs:\n");
-        for rule_id in &report.duplicate_rule_ids {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(rule_id)));
-        }
-    }
-    if !report.issues.is_empty() {
-        output.push_str("Issues:\n");
-        for issue in &report.issues {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(issue)));
-        }
-    }
+    append_sanitized_bullet_list(&mut output, "Schema versions", &report.schema_versions);
+    append_sanitized_bullet_list(&mut output, "Pack names", &report.pack_names);
+    append_sanitized_bullet_list(&mut output, "Pack kinds", &report.pack_kinds);
+    append_sanitized_bullet_list(
+        &mut output,
+        "Duplicate rule IDs",
+        &report.duplicate_rule_ids,
+    );
+    append_sanitized_bullet_list(&mut output, "Issues", &report.issues);
     output
 }
 
@@ -520,24 +518,9 @@ pub fn format_rule_pack_info_text(info: &RulePackInfo) -> String {
         info.enabled_rules,
         info.disabled_rules
     ));
-    if !info.schema_versions.is_empty() {
-        output.push_str("Schema versions:\n");
-        for version in &info.schema_versions {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(version)));
-        }
-    }
-    if !info.pack_names.is_empty() {
-        output.push_str("Pack names:\n");
-        for name in &info.pack_names {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(name)));
-        }
-    }
-    if !info.pack_kinds.is_empty() {
-        output.push_str("Pack kinds:\n");
-        for kind in &info.pack_kinds {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(kind)));
-        }
-    }
+    append_sanitized_bullet_list(&mut output, "Schema versions", &info.schema_versions);
+    append_sanitized_bullet_list(&mut output, "Pack names", &info.pack_names);
+    append_sanitized_bullet_list(&mut output, "Pack kinds", &info.pack_kinds);
     if !info.by_severity.is_empty() {
         output.push_str("By severity:\n");
         for (severity, count) in &info.by_severity {
@@ -558,12 +541,7 @@ pub fn format_rule_pack_info_text(info: &RulePackInfo) -> String {
             ));
         }
     }
-    if !info.tags.is_empty() {
-        output.push_str("Tags:\n");
-        for tag in &info.tags {
-            output.push_str(&format!("  - {}\n", sanitise_for_terminal(tag)));
-        }
-    }
+    append_sanitized_bullet_list(&mut output, "Tags", &info.tags);
     output
 }
 
