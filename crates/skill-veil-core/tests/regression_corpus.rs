@@ -1,13 +1,8 @@
-use skill_veil_core::{benchmark::evaluate_corpus, ScanOptions, Scanner, StdFileSystemProvider};
+use skill_veil_core::{benchmark::evaluate_corpus, StdFileSystemProvider};
 use std::path::Path;
 
-fn corpus_scanner() -> Scanner {
-    Scanner::with_std_adapters(ScanOptions {
-        honor_inline_suppressions: false,
-        ..Default::default()
-    })
-    .unwrap()
-}
+mod common;
+use common::corpus_scanner;
 
 #[test]
 fn labeled_corpus_meets_phase1_baseline() {

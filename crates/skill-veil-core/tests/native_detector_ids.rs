@@ -2,8 +2,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::Deserialize;
-use skill_veil_core::{ScanOptions, Scanner, NATIVE_DETECTOR_RULE_IDS};
+use skill_veil_core::NATIVE_DETECTOR_RULE_IDS;
 use tempfile::TempDir;
+
+mod common;
+use common::corpus_scanner;
 
 #[derive(Deserialize)]
 struct Corpus {
@@ -52,14 +55,6 @@ fn hex_decode(raw: &str) -> Vec<u8> {
     digits.chunks_exact(2).map(|p| (p[0] << 4) | p[1]).collect()
 }
 
-fn fixture_scanner() -> Scanner {
-    Scanner::with_std_adapters(ScanOptions {
-        honor_inline_suppressions: false,
-        ..Default::default()
-    })
-    .unwrap()
-}
-
 fn entrypoint_name(artifact: &str) -> &'static str {
     match artifact {
         "skill" => "SKILL.md",
@@ -75,7 +70,7 @@ fn native_detector_ids_match_fixture_corpus() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native_detector_ids.yaml");
     let corpus: Corpus =
         serde_yaml::from_str(&std::fs::read_to_string(&manifest).unwrap()).unwrap();
-    let scanner = fixture_scanner();
+    let scanner = corpus_scanner();
 
     let mut failures = Vec::new();
     let mut positives_seen = BTreeSet::new();

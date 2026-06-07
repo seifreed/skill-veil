@@ -7,16 +7,11 @@
 //! regression baseline (`regression_corpus.rs`) remains separate: the
 //! gold corpus is strictly additive.
 
-use skill_veil_core::{evaluate_gold_corpus, ScanOptions, Scanner, StdFileSystemProvider};
+use skill_veil_core::{evaluate_gold_corpus, StdFileSystemProvider};
 use std::path::PathBuf;
 
-fn corpus_scanner() -> Scanner {
-    Scanner::with_std_adapters(ScanOptions {
-        honor_inline_suppressions: false,
-        ..Default::default()
-    })
-    .unwrap()
-}
+mod common;
+use common::corpus_scanner;
 
 #[test]
 fn gold_corpus_meets_truth_baseline() {
