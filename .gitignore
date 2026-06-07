@@ -55,3 +55,8 @@ benchmarks/.multi-llm-cache*
 /taint-fn-triage.jsonl
 /taint-fp-triage.jsonl
 /results-mal-*.json
+
+# Python bytecode caches (the sandbox image scripts are run via
+# py_compile / --self-test locally; never track the compiled output).
+__pycache__/
+*.pyc
