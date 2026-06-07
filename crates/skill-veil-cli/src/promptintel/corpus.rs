@@ -17,6 +17,7 @@
 
 use super::client::PromptIntelClient;
 use super::types::{Prompt, PromptSeverity};
+use crate::util::secure_fs::ensure_real_dir;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -303,17 +304,6 @@ fn ensure_child_path_stays_in_base(base: &Path, child: &Path) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn ensure_real_dir(path: &Path) -> Result<()> {
-    if std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        Ok(())
-    } else {
-        anyhow::bail!("{} is not a real directory", path.display())
-    }
 }
 
 #[cfg(test)]

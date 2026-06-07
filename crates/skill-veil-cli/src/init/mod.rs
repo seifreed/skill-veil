@@ -29,6 +29,7 @@ pub(crate) mod update_check;
 mod verify;
 
 use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
+use crate::util::secure_fs::ensure_real_dir;
 use anyhow::{anyhow, Context, Result};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -377,17 +378,6 @@ fn remove_existing_install_dir(path: &Path) -> Result<()> {
         ),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
-    }
-}
-
-fn ensure_real_dir(path: &Path) -> Result<()> {
-    if std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        Ok(())
-    } else {
-        anyhow::bail!("{} is not a real directory", path.display())
     }
 }
 

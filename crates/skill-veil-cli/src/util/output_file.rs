@@ -38,7 +38,7 @@ fn output_parent(path: &Path) -> &Path {
 fn ensure_real_output_dir(path: &Path) -> Result<()> {
     let meta = std::fs::symlink_metadata(path)
         .with_context(|| format!("stat output directory {}", path.display()))?;
-    if meta.is_dir() && !meta.file_type().is_symlink() {
+    if crate::util::secure_fs::is_real_dir_meta(&meta) {
         Ok(())
     } else {
         anyhow::bail!("{} is not a real output directory", path.display())

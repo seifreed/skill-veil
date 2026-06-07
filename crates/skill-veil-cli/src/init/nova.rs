@@ -19,6 +19,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::util::secure_fs::ensure_real_dir;
+
 const USER_AGENT: &str = concat!("skill-veil/", env!("CARGO_PKG_VERSION"), " (+nova-init)");
 const HTTP_TIMEOUT_SECS: u64 = 60;
 
@@ -255,17 +257,6 @@ fn stream_reader_to_file(reader: impl Read, url: &str, dest: &Path, cap: u64) ->
         .map_err(|err| err.error)
         .with_context(|| format!("renaming temp file to {}", dest.display()))?;
     Ok(hex::encode(hasher.finalize()))
-}
-
-fn ensure_real_dir(path: &Path) -> Result<()> {
-    if std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
-        .unwrap_or(false)
-    {
-        Ok(())
-    } else {
-        anyhow::bail!("{} is not a real directory", path.display())
-    }
 }
 
 fn read_string_bounded(reader: impl Read, cap: u64) -> Result<String> {

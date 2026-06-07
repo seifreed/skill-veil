@@ -10,6 +10,7 @@
 use super::config::VtConfig;
 use super::types::{FileReportEnvelope, SearchResponse};
 use crate::util::bounded_read::read_response_with_cap;
+use crate::util::http_status::is_retryable_status;
 use crate::util::terminal_safe::drain_error_body;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
@@ -433,8 +434,7 @@ impl VtClient {
     }
 
     fn ensure_real_download_parent(parent: &Path) -> Result<(), VtError> {
-        let meta = std::fs::symlink_metadata(parent)?;
-        if meta.is_dir() && !meta.file_type().is_symlink() {
+        if crate::util::secure_fs::is_real_dir(parent) {
             Ok(())
         } else {
             Err(VtError::Io(io::Error::new(
@@ -521,12 +521,7 @@ impl VtClient {
                     if status == 401 || status == 403 {
                         return Err(VtError::Unauthorized);
                     }
-                    // 429 + 5xx are transient — VT's gateway returns 502/503
-                    // during regional failovers and overload. 4xx other than
-                    // auth indicate a permanent caller error and MUST NOT
-                    // retry.
-                    let is_retryable = status == 429 || (500..600).contains(&status);
-                    if is_retryable {
+                    if is_retryable_status(status) {
                         if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                             return if status == 429 {
                                 Err(VtError::RateLimited { retries: attempt })

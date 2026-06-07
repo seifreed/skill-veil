@@ -1,4 +1,4 @@
-use crate::util::secure_fs::is_real_dir;
+use crate::util::secure_fs::{ensure_real_dir, is_real_dir};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::BTreeSet;
@@ -568,14 +568,6 @@ fn ensure_cache_root_stays_in_dataset(dataset_root: &Path, cache_root: &Path) ->
         );
     }
     Ok(())
-}
-
-fn ensure_real_dir(path: &Path) -> Result<()> {
-    if is_real_dir(path) {
-        Ok(())
-    } else {
-        anyhow::bail!("{} is not a real directory", path.display())
-    }
 }
 
 fn remove_existing_cache_dir(path: &Path) -> Result<()> {

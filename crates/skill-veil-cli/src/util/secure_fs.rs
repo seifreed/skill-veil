@@ -49,8 +49,28 @@ pub(crate) fn create_dir_secure(path: &Path) -> io::Result<()> {
 /// permission denied) maps to `false`.
 pub(crate) fn is_real_dir(path: &Path) -> bool {
     std::fs::symlink_metadata(path)
-        .map(|meta| meta.is_dir() && !meta.file_type().is_symlink())
+        .map(|meta| is_real_dir_meta(&meta))
         .unwrap_or(false)
+}
+
+/// `true` when already-fetched `meta` describes a directory that is not a
+/// symlink. The symlink rejection is load-bearing — callers that have
+/// already stat'd a path (to propagate a contextual error or reuse the
+/// metadata) refuse to follow an attacker-planted symlink into a tree
+/// outside the intended one.
+pub(crate) fn is_real_dir_meta(meta: &std::fs::Metadata) -> bool {
+    meta.is_dir() && !meta.file_type().is_symlink()
+}
+
+/// Error unless `path` is a real directory (see [`is_real_dir`]). Download
+/// and corpus writers call this to refuse a symlinked or non-directory
+/// destination before streaming bytes into it.
+pub(crate) fn ensure_real_dir(path: &Path) -> anyhow::Result<()> {
+    if is_real_dir(path) {
+        Ok(())
+    } else {
+        anyhow::bail!("{} is not a real directory", path.display())
+    }
 }
 
 fn reject_symlink_components(path: &Path) -> io::Result<()> {

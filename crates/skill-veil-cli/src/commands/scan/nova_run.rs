@@ -362,7 +362,7 @@ fn regular_file_metadata(path: &Path) -> io::Result<Metadata> {
 
 fn regular_dir_metadata(path: &Path) -> io::Result<Metadata> {
     let meta = std::fs::symlink_metadata(path)?;
-    if meta.is_dir() && !meta.is_symlink() {
+    if crate::util::secure_fs::is_real_dir_meta(&meta) {
         Ok(meta)
     } else {
         Err(io::Error::new(
