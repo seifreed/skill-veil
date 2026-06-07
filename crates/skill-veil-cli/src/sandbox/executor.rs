@@ -269,19 +269,17 @@ impl SandboxExecutor for DockerExecutor {
             .output()
             .context("creating detonation egress network")?;
         let proxy_name = format!("{network}-proxy");
-        let proxy_started = Command::new("docker")
-            .args(["run", "-d", "--rm", "--name", &proxy_name])
-            .args(["--network", network, "--network-alias", proxy_alias])
-            .args(["--user", "65534:65534", "--read-only", "--cap-drop", "ALL"])
-            .args(["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=32m"])
-            .args(["--security-opt", "no-new-privileges"])
-            .args(["--env", &format!("SV_PROXY_ALLOWLIST={allowlist}")])
-            .args(["--entrypoint", "python3"])
-            .arg(image)
-            .arg("/proxy.py")
-            .status()
-            .context("starting selective detonation proxy")?
-            .success();
+        let proxy_started = proxy_run_command(
+            &proxy_name,
+            network,
+            proxy_alias,
+            image,
+            32,
+            Some(allowlist),
+        )
+        .status()
+        .context("starting selective detonation proxy")?
+        .success();
         // Dual-home the proxy: a second interface with real egress so it
         // can forward the allowlisted hosts upstream. The sandbox stays on
         // the `--internal` net and can reach the internet ONLY through it.
@@ -334,21 +332,7 @@ impl SandboxExecutor for DockerExecutor {
             .output()
             .context("creating isolated sandbox network")?;
         let proxy_name = format!("{network}-proxy");
-        let proxy_started = Command::new("docker")
-            .args(["run", "-d", "--rm", "--name", &proxy_name])
-            .args(["--network", network, "--network-alias", proxy_alias])
-            .args(["--user", "65534:65534", "--read-only", "--cap-drop", "ALL"])
-            // The MITM proxy writes per-host leaf certs for `ssl.load_cert_chain`;
-            // root is read-only, so give it a noexec scratch tmpfs.
-            .args(["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=16m"])
-            .args([
-                "--security-opt",
-                "no-new-privileges",
-                "--entrypoint",
-                "python3",
-            ])
-            .arg(image)
-            .arg("/proxy.py")
+        let proxy_started = proxy_run_command(&proxy_name, network, proxy_alias, image, 16, None)
             .status()
             .context("starting recording proxy")?
             .success();
@@ -469,6 +453,37 @@ fn proxy_env_args(url: &str) -> [String; 4] {
         "--env".to_string(),
         format!("HTTPS_PROXY={url}"),
     ]
+}
+
+/// Build the hardened `docker run` command shared by the detonation and
+/// recording proxy containers: unprivileged user, read-only root with a
+/// noexec scratch tmpfs (proxy.py writes per-host leaf certs there for
+/// `ssl.load_cert_chain`), no new privileges, `python3 /proxy.py`. The
+/// detonation path passes `allowlist`; the recording path passes `None`.
+fn proxy_run_command(
+    proxy_name: &str,
+    network: &str,
+    proxy_alias: &str,
+    image: &str,
+    tmpfs_size_mb: u32,
+    allowlist: Option<&str>,
+) -> Command {
+    let mut cmd = Command::new("docker");
+    cmd.args(["run", "-d", "--rm", "--name", proxy_name])
+        .args(["--network", network, "--network-alias", proxy_alias])
+        .args(["--user", "65534:65534", "--read-only", "--cap-drop", "ALL"])
+        .args([
+            "--tmpfs",
+            &format!("/tmp:rw,noexec,nosuid,nodev,size={tmpfs_size_mb}m"),
+        ])
+        .args(["--security-opt", "no-new-privileges"]);
+    if let Some(list) = allowlist {
+        cmd.args(["--env", &format!("SV_PROXY_ALLOWLIST={list}")]);
+    }
+    cmd.args(["--entrypoint", "python3"])
+        .arg(image)
+        .arg("/proxy.py");
+    cmd
 }
 
 fn write_file(dir: &std::path::Path, name: &str, contents: &str) -> Result<()> {
