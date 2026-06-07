@@ -165,16 +165,7 @@ fn decode_json_with_cap<T: serde::de::DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn response_with_body(body: &str) -> ureq::Response {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .parse()
-        .expect("synthetic response must parse")
-    }
+    use crate::util::test_support::response_with_body;
 
     /// Contract: a normal OSV response under the cap decodes as JSON. Guards
     /// the capped read path against breaking ordinary decoding.

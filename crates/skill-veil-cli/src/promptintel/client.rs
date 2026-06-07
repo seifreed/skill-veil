@@ -251,6 +251,7 @@ fn bounded_read_response(resp: ureq::Response) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_support::response_with_body;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::sync::mpsc;
@@ -271,16 +272,6 @@ mod tests {
         assert_eq!(ResponseMeta::remaining_for(&ok), Some(4));
         let err: std::result::Result<((), ResponseMeta), String> = Err("boom".to_string());
         assert_eq!(ResponseMeta::remaining_for(&err), None);
-    }
-
-    fn response_with_body(body: &str) -> ureq::Response {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .parse()
-        .expect("synthetic response must parse")
     }
 
     /// Contract: a PromptIntel JSON response under the cap is returned as

@@ -115,17 +115,8 @@ pub(crate) fn opened_file_matches_path(_opened: &Metadata, _path_meta: &Metadata
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::test_support::response_with_body;
     use tempfile::TempDir;
-
-    fn response_with_body(body: &str) -> ureq::Response {
-        format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        )
-        .parse()
-        .expect("synthetic response must parse")
-    }
 
     /// # Contract
     ///

@@ -7,4 +7,6 @@ pub(crate) mod http_status;
 pub(crate) mod output_file;
 pub(crate) mod secure_fs;
 pub(crate) mod terminal_safe;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub(crate) mod text;
