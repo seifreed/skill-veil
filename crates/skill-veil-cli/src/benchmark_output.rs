@@ -15,21 +15,9 @@ pub fn render_benchmark_dashboard(
     evaluation: &CorpusEvaluation,
 ) -> String {
     let mut output = String::new();
-    let benign = evaluation
-        .samples
-        .iter()
-        .filter(|sample| sample.verdict == Verdict::Benign)
-        .count();
-    let suspicious = evaluation
-        .samples
-        .iter()
-        .filter(|sample| sample.verdict == Verdict::Suspicious)
-        .count();
-    let malicious = evaluation
-        .samples
-        .iter()
-        .filter(|sample| sample.verdict == Verdict::Malicious)
-        .count();
+    let benign = count_samples(evaluation, Verdict::Benign);
+    let suspicious = count_samples(evaluation, Verdict::Suspicious);
+    let malicious = count_samples(evaluation, Verdict::Malicious);
     let primary_findings: usize = evaluation
         .samples
         .iter()
