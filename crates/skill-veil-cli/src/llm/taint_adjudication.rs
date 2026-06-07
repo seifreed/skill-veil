@@ -387,6 +387,48 @@ fn upgraded_should_fail(filter: &ScanFilterService, result: &ScanResult) -> bool
     filter.should_fail(&adjusted)
 }
 
+/// Collect one verdict vote per provider per package by running
+/// `enrich_scan_result` for each provider in turn. An absent or
+/// unparseable verdict is recorded as `None` so it drops out of BOTH
+/// consensus directions (fail-closed). A provider whose call fails is
+/// logged under `context_label` and skipped. Shared by the taint
+/// adjudication and FP-review consensus passes so they collect votes
+/// identically.
+pub(crate) fn collect_provider_votes(
+    providers: &[LlmProviderKind],
+    inputs: &LlmInputs,
+    filtered: &PackageScanResult,
+    context_label: &str,
+    quiet: bool,
+) -> Vec<Vec<(String, Option<Verdict>)>> {
+    let n = filtered.results.len();
+    let mut votes: Vec<Vec<(String, Option<Verdict>)>> = vec![Vec::new(); n];
+    for kind in providers {
+        let enrichment = match enrich_scan_result(
+            &inputs.section,
+            &inputs.opts(Some(*kind)),
+            filtered,
+            inputs.bundles(),
+        ) {
+            Ok(e) => e,
+            Err(e) => {
+                if !quiet {
+                    eprintln!("{context_label}: provider {} failed: {e:#}", kind.as_str());
+                }
+                continue;
+            }
+        };
+        for (i, pkg) in enrichment.packages.iter().take(n).enumerate() {
+            let v = pkg
+                .verdict
+                .as_ref()
+                .and_then(|lv| parse_provider_verdict(&lv.verdict));
+            votes[i].push((kind.as_str().to_string(), v));
+        }
+    }
+    votes
+}
+
 /// Run the gated, multi-provider LLM adjudication. Composes the
 /// ADR-0029 downgrade (`Malicious → Suspicious`) and its symmetric FN
 /// upgrade (`Suspicious → Malicious`); each is independently opt-in.
@@ -472,34 +514,7 @@ pub(crate) fn run_adjudication(
     //    guarantee holds in BOTH directions: an ambiguous provider can
     //    neither force a downgrade (not a benign vote) nor an upgrade
     //    (not a malicious vote).
-    let n = filtered.results.len();
-    let mut votes: Vec<Vec<(String, Option<Verdict>)>> = vec![Vec::new(); n];
-    for kind in &providers {
-        let enrichment = match enrich_scan_result(
-            &inputs.section,
-            &inputs.opts(Some(*kind)),
-            &filtered,
-            inputs.bundles(),
-        ) {
-            Ok(e) => e,
-            Err(e) => {
-                if !quiet {
-                    eprintln!("LLM adjudication: provider {} failed: {e:#}", kind.as_str());
-                }
-                continue;
-            }
-        };
-        // enrich_scan_result preserves result order (it zips
-        // scan_result.results with bundles), so index alignment is
-        // safe even when package_id is None.
-        for (i, pkg) in enrichment.packages.iter().take(n).enumerate() {
-            let v = pkg
-                .verdict
-                .as_ref()
-                .and_then(|lv| parse_provider_verdict(&lv.verdict));
-            votes[i].push((kind.as_str().to_string(), v));
-        }
-    }
+    let votes = collect_provider_votes(&providers, &inputs, &filtered, "LLM adjudication", quiet);
 
     // 6. Consensus → per-direction changed maps.
     let mut downgraded: BTreeMap<usize, Vec<(String, Option<Verdict>)>> = BTreeMap::new();

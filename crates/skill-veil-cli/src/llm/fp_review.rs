@@ -57,9 +57,8 @@ use skill_veil_core::{
 
 use crate::commands::scan::llm::{prepare_llm_inputs, LlmInputs};
 use crate::config::LlmProviderKind;
-use crate::llm::enrich::enrich_scan_result;
 use crate::llm::taint_adjudication::{
-    parse_provider_verdict, provider_consensus_benign, resolve_consensus_providers,
+    collect_provider_votes, provider_consensus_benign, resolve_consensus_providers,
 };
 use crate::util::terminal_safe::sanitise_for_terminal;
 
@@ -397,31 +396,7 @@ pub(crate) fn run_fp_review(
         return Ok(None);
     }
 
-    let n = filtered.results.len();
-    let mut votes: Vec<Vec<(String, Option<Verdict>)>> = vec![Vec::new(); n];
-    for kind in &providers {
-        let enrichment = match enrich_scan_result(
-            &inputs.section,
-            &inputs.opts(Some(*kind)),
-            &filtered,
-            inputs.bundles(),
-        ) {
-            Ok(e) => e,
-            Err(e) => {
-                if !quiet {
-                    eprintln!("LLM FP review: provider {} failed: {e:#}", kind.as_str());
-                }
-                continue;
-            }
-        };
-        for (i, pkg) in enrichment.packages.iter().take(n).enumerate() {
-            let v = pkg
-                .verdict
-                .as_ref()
-                .and_then(|lv| parse_provider_verdict(&lv.verdict));
-            votes[i].push((kind.as_str().to_string(), v));
-        }
-    }
+    let votes = collect_provider_votes(&providers, &inputs, &filtered, "LLM FP review", quiet);
 
     let filter = ScanFilterService::new(scan_options.clone());
     let mut items = Vec::with_capacity(eligible_idx.len());
