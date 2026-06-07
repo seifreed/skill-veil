@@ -16,7 +16,7 @@ use crate::{
     promptintel::types::{FeedEntry, FeedIoc, FeedIocKind},
     util::{
         cache_io::{read_cache_file_with_cap, MAX_CACHE_FILE_BYTES},
-        secure_fs::create_dir_secure,
+        secure_fs::{create_dir_secure, real_dir_exists_for_read},
     },
 };
 use anyhow::{Context, Result};
@@ -227,18 +227,6 @@ fn prepare_feed_cache_dir(cache_root: &Path) -> Result<PathBuf> {
     let dir = feed_dir(cache_root);
     create_dir_secure(&dir).with_context(|| format!("creating {}", dir.display()))?;
     Ok(dir)
-}
-
-fn real_dir_exists_for_read(path: &Path) -> Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            anyhow::bail!("{} is a symlink", path.display())
-        }
-        Ok(meta) if meta.is_dir() => Ok(true),
-        Ok(_) => anyhow::bail!("{} is not a directory", path.display()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
-    }
 }
 
 fn write_atomic(target: &Path, bytes: Vec<u8>) -> Result<()> {

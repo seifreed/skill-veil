@@ -20,6 +20,7 @@
 //! never mutate existing modes (silent permission changes would fight
 //! with intentional setups like shared CI caches).
 
+use anyhow::Context as _;
 use std::io;
 use std::path::Path;
 
@@ -70,6 +71,22 @@ pub(crate) fn ensure_real_dir(path: &Path) -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!("{} is not a real directory", path.display())
+    }
+}
+
+/// `Ok(true)` when `path` is an existing real directory, `Ok(false)` when it
+/// is absent, and an error when it exists but is a symlink or non-directory.
+/// Read paths use this to refuse following an attacker-planted symlink while
+/// still treating "absent" as a normal first-run condition.
+pub(crate) fn real_dir_exists_for_read(path: &Path) -> anyhow::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            anyhow::bail!("{} is a symlink", path.display())
+        }
+        Ok(meta) if meta.is_dir() => Ok(true),
+        Ok(_) => anyhow::bail!("{} is not a directory", path.display()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
     }
 }
 

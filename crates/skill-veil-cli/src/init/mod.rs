@@ -29,7 +29,7 @@ pub(crate) mod update_check;
 mod verify;
 
 use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
-use crate::util::secure_fs::ensure_real_dir;
+use crate::util::secure_fs::{ensure_real_dir, real_dir_exists_for_read};
 use anyhow::{anyhow, Context, Result};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -425,18 +425,6 @@ fn install_root_for_read(cache_root: &Path) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     Ok(Some(install_root))
-}
-
-fn real_dir_exists_for_read(path: &Path) -> Result<bool> {
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_symlink() => {
-            anyhow::bail!("{} is a symlink", path.display())
-        }
-        Ok(meta) if meta.is_dir() => Ok(true),
-        Ok(_) => anyhow::bail!("{} is not a directory", path.display()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(err) => Err(err).with_context(|| format!("stat {}", path.display())),
-    }
 }
 
 fn resolve_cache_root(override_dir: Option<PathBuf>) -> Result<PathBuf> {
