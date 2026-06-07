@@ -36,6 +36,27 @@ fn make_finding(id: &str) -> skill_veil_core::Finding {
         .build()
 }
 
+/// A `PackageVerdictReport` carrying `verdict` with every other field at its
+/// default. The output-formatting tests vary only the verdict; this keeps the
+/// otherwise-identical 12-field literal in one place.
+fn sample_verdict_report(
+    verdict: skill_veil_core::Verdict,
+) -> skill_veil_core::PackageVerdictReport {
+    skill_veil_core::PackageVerdictReport {
+        verdict,
+        package_health: skill_veil_core::PackageHealth::Healthy,
+        hygiene_summary: skill_veil_core::HygieneSummary::default(),
+        declared_permissions: Vec::new(),
+        effective_capabilities: Vec::new(),
+        blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
+        verdict_reasons: Vec::new(),
+        root_cause_groups: Vec::new(),
+        top_risk_drivers: Vec::new(),
+        calibration_notes: Vec::new(),
+        calibration_risk_adjustment: 0,
+    }
+}
+
 /// # Contract
 ///
 /// Runtime errors are the final CLI terminal boundary and may include
@@ -132,19 +153,7 @@ fn format_text_output_includes_policy_escalation_reasons() {
         supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
         summary,
         verdict: skill_veil_core::Verdict::Malicious,
-        verdict_report: skill_veil_core::PackageVerdictReport {
-            verdict: skill_veil_core::Verdict::Malicious,
-            package_health: skill_veil_core::PackageHealth::Healthy,
-            hygiene_summary: skill_veil_core::HygieneSummary::default(),
-            declared_permissions: Vec::new(),
-            effective_capabilities: Vec::new(),
-            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
-            verdict_reasons: Vec::new(),
-            root_cause_groups: Vec::new(),
-            top_risk_drivers: Vec::new(),
-            calibration_notes: Vec::new(),
-            calibration_risk_adjustment: 0,
-        },
+        verdict_report: sample_verdict_report(skill_veil_core::Verdict::Malicious),
         deduplication_summary: Default::default(),
         artifact_graph: graph,
         profile: None,
@@ -303,19 +312,7 @@ fn format_text_output_quiet_summary_hides_detailed_findings() {
         supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
         summary,
         verdict: skill_veil_core::Verdict::Benign,
-        verdict_report: skill_veil_core::PackageVerdictReport {
-            verdict: skill_veil_core::Verdict::Benign,
-            package_health: skill_veil_core::PackageHealth::Healthy,
-            hygiene_summary: skill_veil_core::HygieneSummary::default(),
-            declared_permissions: Vec::new(),
-            effective_capabilities: Vec::new(),
-            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
-            verdict_reasons: Vec::new(),
-            root_cause_groups: Vec::new(),
-            top_risk_drivers: Vec::new(),
-            calibration_notes: Vec::new(),
-            calibration_risk_adjustment: 0,
-        },
+        verdict_report: sample_verdict_report(skill_veil_core::Verdict::Benign),
         deduplication_summary: Default::default(),
         artifact_graph: ArtifactGraph::new(),
         profile: None,
@@ -397,19 +394,7 @@ fn format_text_output_explain_policy_focuses_on_policy_section() {
         supporting_summary: skill_veil_core::FindingSummary::from_findings(&[]),
         summary,
         verdict: skill_veil_core::Verdict::Malicious,
-        verdict_report: skill_veil_core::PackageVerdictReport {
-            verdict: skill_veil_core::Verdict::Malicious,
-            package_health: skill_veil_core::PackageHealth::Healthy,
-            hygiene_summary: skill_veil_core::HygieneSummary::default(),
-            declared_permissions: Vec::new(),
-            effective_capabilities: Vec::new(),
-            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
-            verdict_reasons: Vec::new(),
-            root_cause_groups: Vec::new(),
-            top_risk_drivers: Vec::new(),
-            calibration_notes: Vec::new(),
-            calibration_risk_adjustment: 0,
-        },
+        verdict_report: sample_verdict_report(skill_veil_core::Verdict::Malicious),
         deduplication_summary: Default::default(),
         artifact_graph: graph,
         profile: None,
@@ -986,19 +971,7 @@ fn format_text_output_finding_limit_is_a_per_package_budget() {
         supporting_summary,
         summary,
         verdict: skill_veil_core::Verdict::Suspicious,
-        verdict_report: skill_veil_core::PackageVerdictReport {
-            verdict: skill_veil_core::Verdict::Suspicious,
-            package_health: skill_veil_core::PackageHealth::Healthy,
-            hygiene_summary: skill_veil_core::HygieneSummary::default(),
-            declared_permissions: Vec::new(),
-            effective_capabilities: Vec::new(),
-            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
-            verdict_reasons: Vec::new(),
-            root_cause_groups: Vec::new(),
-            top_risk_drivers: Vec::new(),
-            calibration_notes: Vec::new(),
-            calibration_risk_adjustment: 0,
-        },
+        verdict_report: sample_verdict_report(skill_veil_core::Verdict::Suspicious),
         deduplication_summary: Default::default(),
         artifact_graph: ArtifactGraph::new(),
         profile: None,
@@ -1105,19 +1078,7 @@ fn format_text_output_finding_limit_none_renders_every_finding() {
         supporting_summary,
         summary,
         verdict: skill_veil_core::Verdict::Suspicious,
-        verdict_report: skill_veil_core::PackageVerdictReport {
-            verdict: skill_veil_core::Verdict::Suspicious,
-            package_health: skill_veil_core::PackageHealth::Healthy,
-            hygiene_summary: skill_veil_core::HygieneSummary::default(),
-            declared_permissions: Vec::new(),
-            effective_capabilities: Vec::new(),
-            blast_radius_summary: skill_veil_core::BlastRadiusSummary::default(),
-            verdict_reasons: Vec::new(),
-            root_cause_groups: Vec::new(),
-            top_risk_drivers: Vec::new(),
-            calibration_notes: Vec::new(),
-            calibration_risk_adjustment: 0,
-        },
+        verdict_report: sample_verdict_report(skill_veil_core::Verdict::Suspicious),
         deduplication_summary: Default::default(),
         artifact_graph: ArtifactGraph::new(),
         profile: None,
