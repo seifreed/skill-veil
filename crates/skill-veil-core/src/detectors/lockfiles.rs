@@ -359,25 +359,31 @@ fn remote_urls_for_json_key(content: &str, key: &str) -> Vec<String> {
     urls
 }
 
-fn collect_remote_urls_for_json_key(value: &Value, key: &str, urls: &mut Vec<String>) {
+fn for_each_json_string<F: FnMut(&str, &str)>(value: &Value, visit: &mut F) {
     match value {
         Value::Object(map) => {
             for (entry_key, entry_value) in map {
-                if entry_key == key {
-                    if let Some(text) = entry_value.as_str() {
-                        urls.extend(extract_http_urls(text));
-                    }
+                if let Some(text) = entry_value.as_str() {
+                    visit(entry_key, text);
                 }
-                collect_remote_urls_for_json_key(entry_value, key, urls);
+                for_each_json_string(entry_value, visit);
             }
         }
         Value::Array(values) => {
             for entry in values {
-                collect_remote_urls_for_json_key(entry, key, urls);
+                for_each_json_string(entry, visit);
             }
         }
         _ => {}
     }
+}
+
+fn collect_remote_urls_for_json_key(value: &Value, key: &str, urls: &mut Vec<String>) {
+    for_each_json_string(value, &mut |entry_key, text| {
+        if entry_key == key {
+            urls.extend(extract_http_urls(text));
+        }
+    });
 }
 
 fn pipfile_lock_sources(content: &str) -> Vec<String> {
@@ -390,26 +396,13 @@ fn pipfile_lock_sources(content: &str) -> Vec<String> {
 }
 
 fn collect_remote_sources_for_json_keys(value: &Value, keys: &[&str], sources: &mut Vec<String>) {
-    match value {
-        Value::Object(map) => {
-            for (entry_key, entry_value) in map {
-                if keys.contains(&entry_key.as_str()) {
-                    if let Some(text) = entry_value.as_str() {
-                        if let Some(source) = remote_dependency_source_match_value(text) {
-                            sources.push(source);
-                        }
-                    }
-                }
-                collect_remote_sources_for_json_keys(entry_value, keys, sources);
+    for_each_json_string(value, &mut |entry_key, text| {
+        if keys.contains(&entry_key) {
+            if let Some(source) = remote_dependency_source_match_value(text) {
+                sources.push(source);
             }
         }
-        Value::Array(values) => {
-            for entry in values {
-                collect_remote_sources_for_json_keys(entry, keys, sources);
-            }
-        }
-        _ => {}
-    }
+    });
 }
 
 #[cfg(test)]
