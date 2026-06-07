@@ -202,15 +202,7 @@ impl FileSystemProvider for StdFileSystemProvider {
                         }
                     }
                     Err(err) if err.depth() == 0 => {
-                        let io_err = err.into_io_error().unwrap_or_else(|| {
-                            io::Error::other("walkdir error without underlying io::Error")
-                        });
-                        return match io_err.kind() {
-                            io::ErrorKind::NotFound => {
-                                Err(FileSystemError::PathNotFound(path.to_path_buf()))
-                            }
-                            _ => Err(FileSystemError::IoError(io_err)),
-                        };
+                        return Err(walkdir_root_error(path, err));
                     }
                     Err(err) => {
                         tracing::warn!("Skipping entry during recursive file listing: {err}");
@@ -348,15 +340,7 @@ impl FileSystemProvider for StdFileSystemProvider {
                     }
                 }
                 Err(err) if err.depth() == 0 => {
-                    let io_err = err.into_io_error().unwrap_or_else(|| {
-                        io::Error::other("walkdir error without underlying io::Error")
-                    });
-                    return match io_err.kind() {
-                        io::ErrorKind::NotFound => {
-                            Err(FileSystemError::PathNotFound(path.to_path_buf()))
-                        }
-                        _ => Err(FileSystemError::IoError(io_err)),
-                    };
+                    return Err(walkdir_root_error(path, err));
                 }
                 Err(err) => {
                     tracing::warn!("Skipping entry during recursive walk: {err}");
@@ -365,6 +349,19 @@ impl FileSystemProvider for StdFileSystemProvider {
         }
         files.sort();
         Ok(files)
+    }
+}
+
+/// Map a depth-0 `walkdir` error (one against the root `path` itself, not a
+/// child entry) to a `FileSystemError`, distinguishing "missing root" from a
+/// generic I/O failure. Shared by the recursive list and walk paths.
+fn walkdir_root_error(path: &Path, err: walkdir::Error) -> FileSystemError {
+    let io_err = err
+        .into_io_error()
+        .unwrap_or_else(|| io::Error::other("walkdir error without underlying io::Error"));
+    match io_err.kind() {
+        io::ErrorKind::NotFound => FileSystemError::PathNotFound(path.to_path_buf()),
+        _ => FileSystemError::IoError(io_err),
     }
 }
 
