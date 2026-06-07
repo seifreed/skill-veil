@@ -102,17 +102,23 @@ PRIV_ROOT = re.compile(
 )
 
 
+def emit_behaviors(behaviors, timed_out):
+    # The single behavior-JSON contract the Rust channel parses, shared by
+    # script-mode (observe) and agent-detonation (detonate imports this).
+    truncated = len(behaviors) > MAX_BEHAVIORS
+    json.dump(
+        {"behaviors": behaviors[:MAX_BEHAVIORS], "timed_out": timed_out, "truncated": truncated},
+        sys.stdout,
+    )
+    sys.stdout.flush()
+
+
 def main():
     args = set(sys.argv[1:])
     behaviors = []
     if "--scripts" in args or not args:
         behaviors.extend(run_scripts())
-    truncated = len(behaviors) > MAX_BEHAVIORS
-    json.dump(
-        {"behaviors": behaviors[:MAX_BEHAVIORS], "timed_out": False, "truncated": truncated},
-        sys.stdout,
-    )
-    sys.stdout.flush()
+    emit_behaviors(behaviors, False)
 
 
 def discover_scripts():

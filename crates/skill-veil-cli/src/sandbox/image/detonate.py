@@ -12,7 +12,6 @@ Reuses ``observe.py``'s trace parser so the behavior JSON contract is
 identical to script-mode. The skill is copied from the read-only mount
 into a writable workdir so the agent (and the skill's setup) can write.
 """
-import json
 import os
 import shutil
 import subprocess
@@ -65,13 +64,7 @@ def main():
         pass
     observe.parse_trace(trace_path, behaviors, seen, "agent")
     behaviors = [b for b in behaviors if not _is_agent_infra(b)]
-    truncated = len(behaviors) > observe.MAX_BEHAVIORS
-    json.dump(
-        {"behaviors": behaviors[:observe.MAX_BEHAVIORS],
-         "timed_out": timed_out, "truncated": truncated},
-        sys.stdout,
-    )
-    sys.stdout.flush()
+    observe.emit_behaviors(behaviors, timed_out)
 
 
 # OpenCode's own bootstrap (downloading/extracting its ripgrep helper,
