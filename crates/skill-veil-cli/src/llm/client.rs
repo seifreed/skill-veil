@@ -7,6 +7,7 @@
 
 use super::types::{LlmError, LlmPrompt, LlmRawResponse};
 use crate::util::bounded_read::read_response_with_cap;
+use crate::util::http_status::is_retryable_status;
 use crate::util::terminal_safe::drain_error_body;
 use std::time::Duration;
 
@@ -108,13 +109,7 @@ pub(crate) fn post_json_with_retry(
                 if status == 401 || status == 403 {
                     return Err(LlmError::Unauthorized);
                 }
-                // 429 (rate limited) and 5xx (server error) are both
-                // transient: a 503 from a model-overloaded gateway is just
-                // as worth retrying as a 429 from quota throttling. 4xx
-                // codes other than auth are caller errors and MUST NOT be
-                // retried — the request will fail the same way every time.
-                let is_retryable = status == 429 || (500..600).contains(&status);
-                if is_retryable {
+                if is_retryable_status(status) {
                     if attempt >= MAX_ADDITIONAL_ATTEMPTS {
                         return if status == 429 {
                             Err(LlmError::RateLimited { retries: attempt })
