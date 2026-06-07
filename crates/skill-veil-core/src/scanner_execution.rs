@@ -304,6 +304,28 @@ pub(crate) fn scan_document_path<F: FileSystemProvider, P: MarkdownParser>(
     })
 }
 
+/// Materialise every supporting artifact that exists and is a regular file,
+/// reading each via the scanner's filesystem provider. I/O errors are logged
+/// under `module` and the artifact is excluded — never silently swallowed.
+fn readable_supporting_artifacts<F: FileSystemProvider, P: MarkdownParser>(
+    scanner: &Scanner<F, P>,
+    doc: &SkillDocument,
+    module: &str,
+) -> Vec<(PathBuf, String)> {
+    let fs = scanner.file_discovery().fs_provider();
+    collect_supporting_artifact_paths(scanner, doc)
+        .into_iter()
+        .filter(|p| fs.exists(p) && fs.is_file(p))
+        .filter_map(|p| match read_text_file_lossy(&p, fs) {
+            Ok((content, _)) => Some((p, content)),
+            Err(e) => {
+                tracing::warn!("{module}: skipping {}: {e}", p.display());
+                None
+            }
+        })
+        .collect()
+}
+
 /// Collect the package's declared dependencies from the primary artifact (when
 /// it is itself a manifest) and every supporting manifest. Pure and offline;
 /// the network-enabled OSV lookup that consumes this lives in the CLI crate.
@@ -325,15 +347,8 @@ fn collect_dependency_inventory<F: FileSystemProvider, P: MarkdownParser>(
     };
     collect(primary_path, primary_content);
 
-    let fs = scanner.file_discovery().fs_provider();
-    for path in collect_supporting_artifact_paths(scanner, doc) {
-        if !(fs.exists(&path) && fs.is_file(&path)) {
-            continue;
-        }
-        match read_text_file_lossy(&path, fs) {
-            Ok((content, _)) => collect(&path, &content),
-            Err(e) => tracing::warn!("dependency-inventory: skipping {}: {e}", path.display()),
-        }
+    for (path, content) in readable_supporting_artifacts(scanner, doc, "dependency-inventory") {
+        collect(&path, &content);
     }
     deps
 }
@@ -520,22 +535,7 @@ fn deceptive_docs_findings<F: FileSystemProvider, P: MarkdownParser>(
     scanner: &Scanner<F, P>,
     doc: &SkillDocument,
 ) -> Vec<Finding> {
-    let supporting = collect_supporting_artifact_paths(scanner, doc);
-    if supporting.is_empty() {
-        return Vec::new();
-    }
-    let fs = scanner.file_discovery().fs_provider();
-    let materialised: Vec<(PathBuf, String)> = supporting
-        .into_iter()
-        .filter(|p| fs.exists(p) && fs.is_file(p))
-        .filter_map(|p| match read_text_file_lossy(&p, fs) {
-            Ok((c, _)) => Some((p, c)),
-            Err(e) => {
-                tracing::warn!("deceptive-docs: skipping {}: {e}", p.display());
-                None
-            }
-        })
-        .collect();
+    let materialised = readable_supporting_artifacts(scanner, doc, "deceptive-docs");
     crate::deceptive_docs::detect_deceptive_documentation(doc, &materialised)
 }
 
@@ -554,19 +554,12 @@ fn unicode_deception_findings<F: FileSystemProvider, P: MarkdownParser>(
         artifact_kind,
         artifact_path,
     );
-    let fs = scanner.file_discovery().fs_provider();
-    for p in collect_supporting_artifact_paths(scanner, doc) {
-        if !(fs.exists(&p) && fs.is_file(&p)) {
-            continue;
-        }
-        match read_text_file_lossy(&p, fs) {
-            Ok((content, _)) => findings.extend(crate::unicode_deception::scan_unicode_deception(
-                &content,
-                ArtifactKind::ReferencedArtifact,
-                &p.display().to_string(),
-            )),
-            Err(e) => tracing::warn!("unicode-deception: skipping {}: {e}", p.display()),
-        }
+    for (p, content) in readable_supporting_artifacts(scanner, doc, "unicode-deception") {
+        findings.extend(crate::unicode_deception::scan_unicode_deception(
+            &content,
+            ArtifactKind::ReferencedArtifact,
+            &p.display().to_string(),
+        ));
     }
     findings
 }
