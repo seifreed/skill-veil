@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod cache;
+mod enrichment;
 pub(crate) mod llm;
 mod nova_llm_eval;
 mod nova_run;

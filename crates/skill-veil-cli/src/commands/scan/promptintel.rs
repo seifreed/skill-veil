@@ -28,7 +28,8 @@ pub(super) fn try_enrich_with_promptintel(
             return Ok(None);
         }
     };
-    let consolidated = consolidate_iocs(scan_result.results.iter().map(|r| &r.extracted_iocs));
+    let consolidated =
+        super::enrichment::consolidate_iocs(scan_result.results.iter().map(|r| &r.extracted_iocs));
     let enrichment = enrich(&cache_root, &consolidated);
 
     match enrichment.cache_total_entries {
@@ -61,42 +62,11 @@ fn resolve_cache_root_from_user_cache(
     super::cache::cache_base_dir_from_user_cache(override_dir, scan_path, user_cache)
 }
 
-fn consolidate_iocs<'a>(
-    sources: impl IntoIterator<Item = &'a skill_veil_core::ExtractedIocs>,
-) -> skill_veil_core::ExtractedIocs {
-    use skill_veil_core::{ExtractedIocs, FileHash};
-    use std::collections::{BTreeMap, BTreeSet};
-    let mut urls = BTreeSet::new();
-    let mut domains = BTreeSet::new();
-    let mut ipv4 = BTreeSet::new();
-    let mut ipv6 = BTreeSet::new();
-    let mut file_hashes: BTreeMap<String, FileHash> = BTreeMap::new();
-    for iocs in sources {
-        urls.extend(iocs.urls.iter().cloned());
-        domains.extend(iocs.domains.iter().cloned());
-        ipv4.extend(iocs.ipv4.iter().cloned());
-        ipv6.extend(iocs.ipv6.iter().cloned());
-        for fh in &iocs.file_hashes {
-            file_hashes
-                .entry(fh.sha256.clone())
-                .or_insert_with(|| fh.clone());
-        }
-    }
-    ExtractedIocs {
-        urls: urls.into_iter().collect(),
-        domains: domains.into_iter().collect(),
-        ipv4: ipv4.into_iter().collect(),
-        ipv6: ipv6.into_iter().collect(),
-        file_hashes: file_hashes.into_values().collect(),
-    }
-}
-
 fn format_enrichment(enrichment: &PromptIntelEnrichment) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "\n=== PromptIntel Feed Enrichment (informational; does not affect skill-veil verdict) ==="
-    );
+    out.push_str(&super::enrichment::enrichment_banner(
+        "PromptIntel Feed Enrichment",
+    ));
     let cache_total = enrichment.cache_total_entries.unwrap_or(0);
     let _ = writeln!(
         out,

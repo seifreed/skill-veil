@@ -54,7 +54,8 @@ pub(super) fn try_enrich_with_vt(
     // Without this, a URL or domain that appears in N artifacts would
     // produce N redundant API calls (the cache root is per-scan, so the
     // file-backed cache only helps across separate runs, not within one).
-    let consolidated = consolidate_iocs(scan_result.results.iter().map(|r| &r.extracted_iocs));
+    let consolidated =
+        super::enrichment::consolidate_iocs(scan_result.results.iter().map(|r| &r.extracted_iocs));
     if consolidated.is_empty() {
         return Ok(None);
     }
@@ -86,41 +87,6 @@ pub(super) fn try_enrich_with_vt(
     Ok(Some(format_vt_enrichment(&aggregate)))
 }
 
-/// Merge multiple `ExtractedIocs` into a single deduplicated bundle. Used
-/// before issuing VT lookups so the same indicator (URL/domain/IP/hash)
-/// shared by N artifacts triggers a single API call instead of N.
-fn consolidate_iocs<'a>(
-    sources: impl IntoIterator<Item = &'a skill_veil_core::ExtractedIocs>,
-) -> skill_veil_core::ExtractedIocs {
-    use skill_veil_core::{ExtractedIocs, FileHash};
-    use std::collections::BTreeSet;
-    let mut urls = BTreeSet::new();
-    let mut domains = BTreeSet::new();
-    let mut ipv4 = BTreeSet::new();
-    let mut ipv6 = BTreeSet::new();
-    // FileHash is Eq but not Hash/Ord; dedupe via sha256 string key.
-    let mut file_hashes: std::collections::BTreeMap<String, FileHash> =
-        std::collections::BTreeMap::new();
-    for iocs in sources {
-        urls.extend(iocs.urls.iter().cloned());
-        domains.extend(iocs.domains.iter().cloned());
-        ipv4.extend(iocs.ipv4.iter().cloned());
-        ipv6.extend(iocs.ipv6.iter().cloned());
-        for fh in &iocs.file_hashes {
-            file_hashes
-                .entry(fh.sha256.clone())
-                .or_insert_with(|| fh.clone());
-        }
-    }
-    ExtractedIocs {
-        urls: urls.into_iter().collect(),
-        domains: domains.into_iter().collect(),
-        ipv4: ipv4.into_iter().collect(),
-        ipv6: ipv6.into_iter().collect(),
-        file_hashes: file_hashes.into_values().collect(),
-    }
-}
-
 fn dedupe_indicators(list: Vec<EnrichedIndicator>) -> Vec<EnrichedIndicator> {
     let mut by_indicator: std::collections::BTreeMap<String, EnrichedIndicator> =
         std::collections::BTreeMap::new();
@@ -132,10 +98,9 @@ fn dedupe_indicators(list: Vec<EnrichedIndicator>) -> Vec<EnrichedIndicator> {
 
 fn format_vt_enrichment(agg: &VtEnrichment) -> String {
     let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "\n=== VirusTotal Enrichment (informational; does not affect skill-veil verdict) ==="
-    );
+    out.push_str(&super::enrichment::enrichment_banner(
+        "VirusTotal Enrichment",
+    ));
     let _ = writeln!(
         out,
         "  files={} domains={} ips={} urls={}",
@@ -233,7 +198,6 @@ fn format_vt_enrichment(agg: &VtEnrichment) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skill_veil_core::{ExtractedIocs, FileHash};
     use std::path::PathBuf;
 
     use crate::vt::enrich::VtIndicatorSummary;
@@ -339,37 +303,5 @@ mod tests {
             !rendered.contains('\x07'),
             "BEL bytes from VT response must be sanitised; got: {rendered:?}"
         );
-    }
-
-    #[test]
-    fn consolidate_iocs_deduplicates_across_results() {
-        let a = ExtractedIocs {
-            urls: vec![
-                "https://evil.com/x".to_string(),
-                "https://example.org".to_string(),
-            ],
-            domains: vec!["evil.com".to_string()],
-            ipv4: vec!["10.0.0.1".to_string()],
-            ipv6: Vec::new(),
-            file_hashes: vec![FileHash {
-                path: PathBuf::from("a.py"),
-                sha256: "deadbeef".to_string(),
-            }],
-        };
-        let b = ExtractedIocs {
-            urls: vec!["https://evil.com/x".to_string()], // dup of a
-            domains: vec!["evil.com".to_string()],        // dup of a
-            ipv4: vec!["10.0.0.2".to_string()],
-            ipv6: Vec::new(),
-            file_hashes: vec![FileHash {
-                path: PathBuf::from("b.py"),
-                sha256: "deadbeef".to_string(), // dup sha256 of a
-            }],
-        };
-        let merged = consolidate_iocs([&a, &b]);
-        assert_eq!(merged.urls.len(), 2, "duplicate URL must collapse");
-        assert_eq!(merged.domains.len(), 1);
-        assert_eq!(merged.ipv4.len(), 2);
-        assert_eq!(merged.file_hashes.len(), 1, "same sha256 collapses");
     }
 }
