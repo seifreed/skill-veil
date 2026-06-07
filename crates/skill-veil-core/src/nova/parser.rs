@@ -384,13 +384,38 @@ fn find_unquoted(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
+/// Yield each meaningful line of a NOVA section body: comment-stripped,
+/// trimmed, with blank lines skipped. Every `parse_*` section consumes
+/// lines through this one definition so the skip-empty rule cannot drift.
+fn section_lines(body: &str) -> impl Iterator<Item = &str> {
+    body.lines()
+        .map(|raw| strip_line_comment(raw).trim())
+        .filter(|line| !line.is_empty())
+}
+
+/// Parse a `$var = <value>` section into a map, rejecting duplicate
+/// variables. The per-section value grammar is supplied by `parse_value`;
+/// the variable-binding spine (split, dedup, insert) is shared by the
+/// `keywords`, `semantics`, and `llm` sections.
+fn parse_var_assignments<T>(
+    body: &str,
+    section: &'static str,
+    mut parse_value: impl FnMut(&str) -> Result<T, ParseError>,
+) -> Result<BTreeMap<String, T>, ParseError> {
+    let mut out = BTreeMap::new();
+    for line in section_lines(body) {
+        let (var, value) = split_var_assignment(line, section)?;
+        if out.contains_key(&var) {
+            return Err(ParseError::DuplicateVariable { section, var });
+        }
+        out.insert(var, parse_value(value)?);
+    }
+    Ok(out)
+}
+
 fn parse_meta(body: String) -> Result<BTreeMap<String, String>, ParseError> {
     let mut out = BTreeMap::new();
-    for raw_line in body.lines() {
-        let line = strip_line_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
+    for line in section_lines(&body) {
         let Some((key, value)) = line.split_once('=') else {
             return Err(ParseError::MalformedLine {
                 section: "meta",
@@ -418,23 +443,7 @@ fn strip_string_quotes(value: &str) -> String {
 }
 
 fn parse_keywords(body: String) -> Result<BTreeMap<String, KeywordPattern>, ParseError> {
-    let mut out = BTreeMap::new();
-    for raw_line in body.lines() {
-        let line = strip_line_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        let (var, value) = split_var_assignment(line, "keywords")?;
-        if out.contains_key(&var) {
-            return Err(ParseError::DuplicateVariable {
-                section: "keywords",
-                var,
-            });
-        }
-        let pattern = parse_keyword_value(value)?;
-        out.insert(var, pattern);
-    }
-    Ok(out)
+    parse_var_assignments(&body, "keywords", parse_keyword_value)
 }
 
 fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
@@ -516,43 +525,17 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
 }
 
 fn parse_semantics(body: String) -> Result<BTreeMap<String, SemanticPattern>, ParseError> {
-    let mut out = BTreeMap::new();
-    for raw_line in body.lines() {
-        let line = strip_line_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        let (var, value) = split_var_assignment(line, "semantics")?;
-        if out.contains_key(&var) {
-            return Err(ParseError::DuplicateVariable {
-                section: "semantics",
-                var,
-            });
-        }
+    parse_var_assignments(&body, "semantics", |value| {
         let (pattern, threshold) = parse_pattern_with_threshold(value, "semantics", 0.1)?;
-        out.insert(var, SemanticPattern { pattern, threshold });
-    }
-    Ok(out)
+        Ok(SemanticPattern { pattern, threshold })
+    })
 }
 
 fn parse_llm(body: String) -> Result<BTreeMap<String, LlmPattern>, ParseError> {
-    let mut out = BTreeMap::new();
-    for raw_line in body.lines() {
-        let line = strip_line_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
-        let (var, value) = split_var_assignment(line, "llm")?;
-        if out.contains_key(&var) {
-            return Err(ParseError::DuplicateVariable {
-                section: "llm",
-                var,
-            });
-        }
+    parse_var_assignments(&body, "llm", |value| {
         let (pattern, threshold) = parse_pattern_with_threshold(value, "llm", 0.1)?;
-        out.insert(var, LlmPattern { pattern, threshold });
-    }
-    Ok(out)
+        Ok(LlmPattern { pattern, threshold })
+    })
 }
 
 fn parse_pattern_with_threshold(
