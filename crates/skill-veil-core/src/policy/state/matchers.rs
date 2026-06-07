@@ -7,30 +7,48 @@ use crate::policy::fingerprint::paths_match;
 use crate::policy::types::PolicyOverride;
 use chrono::{DateTime, Utc};
 
-pub(crate) fn waiver_matches_finding(
-    waiver: &WaiverEntry,
+/// Shared waiver/override matching contract: a `None` criterion is a
+/// wildcard, an expired entry never matches, and rule IDs compare
+/// case-insensitively. Both `WaiverEntry` and `PolicyOverride` carry the
+/// same rule/path/context/expiry shape, so the matching logic lives once.
+fn criteria_matches_finding(
+    rule_id: Option<&str>,
+    artifact_path: Option<&str>,
+    context: Option<OperationalContext>,
+    expires_at: Option<DateTime<Utc>>,
     finding: &Finding,
     now: DateTime<Utc>,
 ) -> bool {
-    if waiver.expires_at.is_some_and(|expires_at| expires_at < now) {
+    if expires_at.is_some_and(|expires_at| expires_at < now) {
         return false;
     }
 
-    let rule_matches = waiver
-        .rule_id
-        .as_ref()
-        .is_none_or(|rule_id| rule_id.eq_ignore_ascii_case(&finding.rule_id));
-    let path_matches = waiver.artifact_path.as_ref().is_none_or(|path| {
+    let rule_matches = rule_id.is_none_or(|rule_id| rule_id.eq_ignore_ascii_case(&finding.rule_id));
+    let path_matches = artifact_path.is_none_or(|path| {
         finding
             .artifact_path
             .as_ref()
             .is_some_and(|artifact_path| paths_match(artifact_path, path))
     });
-    let context_matches = waiver
-        .context
-        .is_none_or(|context| finding_contexts(finding).contains(&context));
+    let context_matches =
+        context.is_none_or(|context| finding_contexts(finding).contains(&context));
 
     rule_matches && path_matches && context_matches
+}
+
+pub(crate) fn waiver_matches_finding(
+    waiver: &WaiverEntry,
+    finding: &Finding,
+    now: DateTime<Utc>,
+) -> bool {
+    criteria_matches_finding(
+        waiver.rule_id.as_deref(),
+        waiver.artifact_path.as_deref(),
+        waiver.context,
+        waiver.expires_at,
+        finding,
+        now,
+    )
 }
 
 pub(crate) fn policy_override_matches(
@@ -38,28 +56,14 @@ pub(crate) fn policy_override_matches(
     finding: &Finding,
     now: DateTime<Utc>,
 ) -> bool {
-    if policy_override
-        .expires_at
-        .is_some_and(|expires_at| expires_at < now)
-    {
-        return false;
-    }
-
-    let rule_matches = policy_override
-        .rule_id
-        .as_ref()
-        .is_none_or(|rule_id| rule_id.eq_ignore_ascii_case(&finding.rule_id));
-    let path_matches = policy_override.artifact_path.as_ref().is_none_or(|path| {
-        finding
-            .artifact_path
-            .as_ref()
-            .is_some_and(|artifact_path| paths_match(artifact_path, path))
-    });
-    let context_matches = policy_override
-        .context
-        .is_none_or(|context| finding_contexts(finding).contains(&context));
-
-    rule_matches && path_matches && context_matches
+    criteria_matches_finding(
+        policy_override.rule_id.as_deref(),
+        policy_override.artifact_path.as_deref(),
+        policy_override.context,
+        policy_override.expires_at,
+        finding,
+        now,
+    )
 }
 
 pub(crate) fn policy_override_specificity(policy_override: &PolicyOverride) -> usize {
