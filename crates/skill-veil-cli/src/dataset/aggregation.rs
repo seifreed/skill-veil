@@ -101,14 +101,7 @@ pub(super) fn aggregate_package_verdicts(
 pub(super) fn count_aggregated_verdicts(
     entries: &[DatasetPackageVerdictEntry],
 ) -> (usize, usize, usize) {
-    entries.iter().fold((0, 0, 0), |mut acc, entry| {
-        match entry.final_verdict {
-            Verdict::Benign => acc.0 += 1,
-            Verdict::Suspicious => acc.1 += 1,
-            Verdict::Malicious => acc.2 += 1,
-        }
-        acc
-    })
+    super::count_verdicts_by(entries, |entry| entry.final_verdict)
 }
 
 fn verdict_priority(verdict: &Verdict) -> u8 {

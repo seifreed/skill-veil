@@ -26,14 +26,7 @@ pub(super) fn filter_dataset_results(
 }
 
 pub(super) fn count_verdicts(reports: &[JsonReport]) -> (usize, usize, usize) {
-    reports.iter().fold((0, 0, 0), |mut acc, report| {
-        match report.verdict {
-            Verdict::Benign => acc.0 += 1,
-            Verdict::Suspicious => acc.1 += 1,
-            Verdict::Malicious => acc.2 += 1,
-        }
-        acc
-    })
+    super::count_verdicts_by(reports, |report| report.verdict)
 }
 
 pub(super) fn count_warning_rule(reports: &[JsonReport], rule_id: &str) -> usize {

@@ -19,6 +19,23 @@ use std::sync::Arc;
 #[cfg(test)]
 pub(crate) use formatting::format_dataset_verdicts_text;
 
+/// Tally `(benign, suspicious, malicious)` over `items`, reading each item's
+/// verdict through `verdict`. Shared by the per-report and aggregated counters
+/// so the variant→slot mapping lives in one place.
+pub(super) fn count_verdicts_by<T>(
+    items: &[T],
+    verdict: impl Fn(&T) -> Verdict,
+) -> (usize, usize, usize) {
+    items.iter().fold((0, 0, 0), |mut acc, item| {
+        match verdict(item) {
+            Verdict::Benign => acc.0 += 1,
+            Verdict::Suspicious => acc.1 += 1,
+            Verdict::Malicious => acc.2 += 1,
+        }
+        acc
+    })
+}
+
 /// Default `ScanOptions` for dataset-mode runs: package target, recursive,
 /// no policy/profile/baseline. Use this when the caller has no user flags
 /// to propagate (e.g. internal cross-check pipeline).
