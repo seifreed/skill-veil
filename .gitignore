@@ -14,6 +14,13 @@ Cargo.lock.bak
 AGENTS.md
 CLAUDE.md
 .claude/
+.codegraph/
+.cursor/
+
+# Operational helper scripts for the dynamic-sandbox corpus run (server-side
+# detonation runner, behavior mining, ad-hoc proxy/patch helpers). Local-only
+# tooling, not part of the shipped product.
+.sandbox-run/
 
 # Local working data: sample corpora, VT/extraction caches, ad-hoc dumps.
 # `data/` contains downloaded malicious samples, VT reports and the
