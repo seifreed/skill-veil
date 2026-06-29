@@ -467,9 +467,28 @@ What runs, and how it is contained:
   run still produces an auditable artifact. Schema:
   [docs/dynamic-sandbox-report.md](docs/dynamic-sandbox-report.md).
 
+- **Behavioral signatures.** On top of the per-behavior findings, a
+  malware-sandbox-style signature layer fires on **co-occurring** behaviors
+  in one run (also advisory `SANDBOX_BEHAVIOR_*`):
+
+  | Signature | Fires on |
+  |---|---|
+  | `SANDBOX_BEHAVIOR_EXFIL_SECRET_TO_NETWORK` | sensitive read **+** egress to a non-infra host |
+  | `SANDBOX_BEHAVIOR_EXFIL_TO_ABUSE_CHANNEL` | egress to a known exfil / OOB relay (webhook.site, telegram bot, ngrok, interactsh, transfer.sh, …) |
+  | `SANDBOX_BEHAVIOR_C2_KNOWN_PORT` | connect to a known C2 / reverse-shell port |
+  | `SANDBOX_BEHAVIOR_RUNTIME_PERSISTENCE` | write to cron / systemd / shell rc (non-`/tmp`) |
+  | `SANDBOX_BEHAVIOR_CONTAINER_ESCAPE_ATTEMPT` | runtime-socket / namespace / capability escape primitive |
+  | `SANDBOX_BEHAVIOR_SECRET_THEN_SPAWN` | sensitive read **+** subprocess spawn |
+
 Without `--features sandbox`, or when Docker / gVisor is absent, `--dynamic`
 is a no-op with a one-line note — invocations stay flag-compatible across
 build variants.
+
+**Setup.** Installing gVisor + registering the `runsc` Docker runtime, the
+`runc` fallback for macOS / no-gVisor hosts, the Docker **MTU caveat** that
+otherwise hangs image builds and detonation, and the detonation-agent model
+config are documented in
+[docs/dynamic-sandbox-setup.md](docs/dynamic-sandbox-setup.md).
 
 ---
 
@@ -1069,6 +1088,8 @@ runs that want zero outbound chatter beyond the scan itself can set
 - [docs/analyst-interpretation.md](docs/analyst-interpretation.md)
 - [docs/json-report-schema-v3.md](docs/json-report-schema-v3.md)
 - [docs/artifact-analysis.md](docs/artifact-analysis.md)
+- [docs/dynamic-sandbox-setup.md](docs/dynamic-sandbox-setup.md)
+- [docs/dynamic-sandbox-report.md](docs/dynamic-sandbox-report.md)
 - [docs/release-process.md](docs/release-process.md)
 
 ---
