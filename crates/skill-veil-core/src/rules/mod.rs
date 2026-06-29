@@ -436,7 +436,7 @@ impl<M: PatternMatcher + ?Sized> RuleEngine<M> {
     /// (built-in or earlier-loaded external) returns
     /// `RuleError::DuplicateUserRule { id, path }`. The pre-flight at the
     /// time of the round-5 strict-mode flip showed 0 collisions between
-    /// the embedded `builtin_rules.yaml` and the `rules/official/` packs.
+    /// the embedded official packs and the `rules/official/` packs.
     ///
     /// Callers that intentionally want the legacy "warn-and-skip" behaviour
     /// (e.g. tooling that loads many overlapping experimental packs) must

@@ -5,7 +5,8 @@ use super::RuleError;
 const OFFICIAL_CORE_RULES_YAML: &str = include_str!("../../resources/official/core.yaml");
 const OFFICIAL_BEHAVIORAL_RULES_YAML: &str =
     include_str!("../../resources/official/behavioral.yaml");
-const SKILL_VEIL_SUPPLEMENTARY_RULES: &str = include_str!("../builtin_rules.yaml");
+const OFFICIAL_SUPPLEMENTARY_RULES_YAML: &str =
+    include_str!("../../resources/official/supplementary.yaml");
 
 /// Load every embedded rule pack that ships with the binary, rejecting any
 /// duplicate ids across the packs. Because all three YAMLs are under our
@@ -15,7 +16,10 @@ pub(super) fn get_builtin_rules() -> Result<Vec<Rule>, RuleError> {
     let packs: &[(&'static str, &'static str)] = &[
         ("official/core.yaml", OFFICIAL_CORE_RULES_YAML),
         ("official/behavioral.yaml", OFFICIAL_BEHAVIORAL_RULES_YAML),
-        ("src/builtin_rules.yaml", SKILL_VEIL_SUPPLEMENTARY_RULES),
+        (
+            "official/supplementary.yaml",
+            OFFICIAL_SUPPLEMENTARY_RULES_YAML,
+        ),
     ];
     let mut seen: std::collections::HashMap<String, &'static str> =
         std::collections::HashMap::new();

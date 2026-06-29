@@ -7,6 +7,21 @@ release process is formalized.
 
 ## [Unreleased]
 
+### Changed
+
+**Supplementary rules promoted to the official pack**
+- The 108 embedded `SKILL_*` supplementary rules moved out of
+  `src/builtin_rules.yaml` into a new `resources/official/supplementary.yaml`
+  official pack (`include_str!`'d alongside `core.yaml`/`behavioral.yaml`).
+  This makes them a first-class, distributable official pack mirrored in the
+  [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) repo
+  (`official/supplementary.yaml`), so they are versioned and shipped via
+  `skill-veil init` like the rest of the official ruleset. The rule IDs and
+  behaviour are unchanged (corpus baseline green); only their pack home moved.
+  Required because the engine's strict mode rejects an external pack whose IDs
+  collide with an embedded built-in — keeping them in `builtin_rules.yaml`
+  while distributing them externally would break `init`.
+
 ### Added
 
 **Dynamic sandbox report (`--dynamic-report <FILE>`)**

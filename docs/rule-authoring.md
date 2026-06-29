@@ -14,7 +14,7 @@ embedded baseline shipped in the binary is a fallback only.
 | `skill-veil-rules/base/` | Historical category-grouped packs. |
 | `skill-veil-rules/fixtures/` | Positive / negative test fixtures consumed by `skill-veil rules test-pack`. |
 | `skill-veil-rules/schema/skill-veil-rule-pack-v1.yaml` | Versioned schema reference. |
-| `crates/skill-veil-core/src/builtin_rules.yaml` | Embedded supplementary rules (`include_str!`'d into the binary). |
+| `crates/skill-veil-core/resources/official/supplementary.yaml` | Embedded supplementary rules (`include_str!`d into the binary; mirrors the skill-veil-rules `official/supplementary.yaml` pack). |
 | `crates/skill-veil-core/resources/official/{core,behavioral}.yaml` | Embedded baseline copies of the canonical official packs. |
 
 For local authoring, clone the rules repo as a sibling of skill-veil:
@@ -138,7 +138,7 @@ Rules in `skill-veil-rules/official/` reach end users when:
 To make a rule part of the embedded baseline shipped in the next
 `skill-veil` release, mirror it into
 `crates/skill-veil-core/resources/official/<topic>.yaml` (or
-`src/builtin_rules.yaml` for supplementary rules). Both paths are
+`resources/official/supplementary.yaml` for supplementary rules). Both paths are
 `include_str!`'d at compile time and the duplicate-id detection in
 `get_builtin_rules` will refuse to build if the same id appears twice
 across embedded packs — cross-check before mirroring.

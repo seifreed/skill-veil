@@ -47,7 +47,7 @@ by person:
 
 - core engine: `crates/skill-veil-core/`
 - CLI and integration UX: `crates/skill-veil-cli/`
-- embedded baseline rules: `crates/skill-veil-core/src/builtin_rules.yaml` and `crates/skill-veil-core/resources/official/`
+- embedded baseline rules: `crates/skill-veil-core/resources/official/` (`core`, `behavioral`, `supplementary`)
 - distributed rule packs: [`skill-veil-rules`](https://github.com/seifreed/skill-veil-rules) repo (separate)
 - benchmark corpus and dashboards: `benchmarks/`
 - release and CI automation: `.github/workflows/` (this repo) and `skill-veil-rules/.github/workflows/release.yml` (rules repo)

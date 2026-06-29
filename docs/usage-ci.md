@@ -273,7 +273,7 @@ you script `skill-veil` yourself in CI, always use `--output`.
 ## 13. Offline / air-gapped CI
 
 `skill-veil scan` works fully offline against the **embedded baseline
-ruleset** (`crates/skill-veil-core/src/builtin_rules.yaml` plus
+ruleset** (`crates/skill-veil-core/resources/official/supplementary.yaml` plus
 `resources/official/{core,behavioral}.yaml` are `include_str!`'d at
 build time). No `init`, no network call, no rule download — the binary
 detects out of the box.
