@@ -624,6 +624,7 @@ mod tests {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
 
+    #[cfg(unix)]
     fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
         let file = std::fs::File::create(path).unwrap();
         let mut writer = zip::ZipWriter::new(file);

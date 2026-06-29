@@ -878,6 +878,7 @@ mod tests {
     use crate::cli_args::{Cli, Commands, OutputFormat};
     use clap::Parser;
     use std::path::PathBuf;
+    #[cfg(unix)]
     use tempfile::TempDir;
 
     /// Contract: trailing operator text blocks (VT/OSV/LLM/PromptIntel
