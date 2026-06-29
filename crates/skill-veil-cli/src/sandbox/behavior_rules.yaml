@@ -89,7 +89,15 @@
   severity: high
   confidence: 0.9
   all_of:
+    # A write under a world-writable temp dir is not persistence — it does not
+    # survive a reboot. This also drops the detonation-harness false positive
+    # where a toolchain installer appends a PATH line to the agent's ephemeral
+    # HOME `.bashrc` (e.g. /tmp/ochome/.bashrc). Real surfaces — /etc/cron.d,
+    # systemd units, a genuine home `.bashrc` — are not under /tmp.
     - class: persistence_write
+      detail_none:
+        - "/tmp/"
+        - "/var/tmp/"
   reason: "Wrote to a persistence surface (shell rc / cron / autostart / systemd unit) at runtime."
   taxonomy_tags: [rogue_agent]
   enabled: true

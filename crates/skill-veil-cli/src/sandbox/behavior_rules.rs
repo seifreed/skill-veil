@@ -247,6 +247,32 @@ mod tests {
     }
 
     /// # Contract (positive + negative)
+    /// Runtime persistence fires on a real persistence surface (cron drop)
+    /// but NOT on a write under a world-writable temp dir — a `/tmp` write is
+    /// not persistent, and is where the detonation harness' own toolchain
+    /// PATH edits to the agent HOME `.bashrc` land.
+    #[test]
+    fn persistence_rule_ignores_non_persistent_temp_writes() {
+        let set = BehaviorRuleSet::embedded();
+        let cron = obs(vec![(
+            BehaviorClass::PersistenceWrite,
+            "/etc/cron.d/openclaw-backup",
+        )]);
+        let temp = obs(vec![(
+            BehaviorClass::PersistenceWrite,
+            "/tmp/ochome/.bashrc",
+        )]);
+        assert!(set
+            .evaluate(&cron, Path::new("x"))
+            .iter()
+            .any(|f| f.rule_id == "SANDBOX_BEHAVIOR_RUNTIME_PERSISTENCE"));
+        assert!(set
+            .evaluate(&temp, Path::new("x"))
+            .iter()
+            .all(|f| f.rule_id != "SANDBOX_BEHAVIOR_RUNTIME_PERSISTENCE"));
+    }
+
+    /// # Contract (positive + negative)
     /// Egress to a known anonymous exfil/OOB relay (webhook.site, telegram
     /// bot API, …) trips the abuse-channel rule; egress to package
     /// infrastructure does not.
