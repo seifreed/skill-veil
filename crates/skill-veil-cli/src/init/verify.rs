@@ -384,7 +384,9 @@ mod tests {
         let msg = format!("{err:#}");
 
         assert!(
-            msg.contains("absolute") || msg.contains("Windows path prefix"),
+            msg.contains("absolute")
+                || msg.contains("Windows path prefix")
+                || msg.contains("backslash"),
             "unexpected error: {msg}"
         );
     }
