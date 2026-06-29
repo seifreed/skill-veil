@@ -55,8 +55,13 @@ ENTRYPOINT_STEMS = {
     "setup", "install", "bootstrap", "init", "__main__", "entry",
 }
 
+# /etc/passwd is deliberately EXCLUDED: it is world-readable, holds no
+# secrets (just usernames), and is read incidentally by glibc NSS during
+# routine username resolution, so flagging it produced a credential-read
+# false positive on nearly every run. Real credential material lives in
+# shadow/gshadow, SSH/AWS keys, .env, credentials, .netrc.
 SENSITIVE_READ = re.compile(
-    r"/etc/(passwd|shadow|sudoers)|/\.aws/|/\.ssh/|id_rsa|/\.env\b|credentials|\.netrc"
+    r"/etc/(shadow|gshadow|sudoers)|/\.aws/|/\.ssh/|id_rsa|id_ed25519|/\.env\b|credentials|\.netrc"
 )
 PERSISTENCE = re.compile(
     r"\.bashrc|\.bash_profile|\.zshrc|\.profile|/etc/cron|crontab|/\.config/autostart|"

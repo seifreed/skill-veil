@@ -9,6 +9,24 @@ release process is formalized.
 
 ### Added
 
+**Dynamic sandbox report (`--dynamic-report <FILE>`)**
+- The dynamic sandbox now persists a standalone JSON artifact with the
+  full runtime evidence: the raw observed `behaviors`, the matched
+  `SANDBOX_*` `matched_signatures`, and a `network_captures` section
+  carrying each intercepted request's complete headers and untruncated
+  payload (the on-screen block and in-scan findings keep a 256-char
+  payload preview). The recording proxy now captures full request headers,
+  not only `Content-Length`. With the flag set a report is written even for
+  a clean run; a genuinely skipped run (no Docker/gVisor) writes nothing
+  and explains why. The text block surfaces the capture count and report
+  path. Schema: [dynamic-sandbox-report.md](dynamic-sandbox-report.md).
+- New behavioral signature `SANDBOX_BEHAVIOR_EXFIL_TO_ABUSE_CHANNEL`: runtime
+  egress to a known anonymous exfiltration / out-of-band relay channel
+  (webhook.site, telegram bot API, discord webhooks, ngrok, interactsh/oast,
+  transfer.sh, …). Mined from the malicious-skill detonation corpus, where the
+  same `webhook.site` capture ID and `api.telegram.org/bot<token>` recurred
+  across distinct samples.
+
 **Shell-pipeline taint detector + HTML taint-flow visualization**
 - New native detector for source→sink flows through shell pipes:
   `PIPELINE_FETCH_TO_SHELL` (a remote fetch piped into a shell interpreter,

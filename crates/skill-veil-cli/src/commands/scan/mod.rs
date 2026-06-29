@@ -371,7 +371,10 @@ pub(crate) fn run_scan(
     if let Some(report) = sandbox_report.as_ref() {
         let render_text = !quiet && matches!(args.format, crate::cli_args::OutputFormat::Text);
         if render_text {
-            print!("{}", crate::sandbox::render_text_block(report));
+            print!(
+                "{}",
+                crate::sandbox::render_text_block(report, args.dynamic_report.as_deref())
+            );
         }
     }
 
@@ -493,10 +496,17 @@ fn evaluate_sandbox_channel(
     quiet: bool,
     scan_result: &mut PackageScanResult,
 ) -> Option<crate::sandbox::SandboxReport> {
+    if args.dynamic_report.is_some() && !args.dynamic && !args.sandbox_detonate_agent && !quiet {
+        eprintln!(
+            "warning: --dynamic-report has no effect without --dynamic or --sandbox-detonate-agent"
+        );
+    }
+    let always_report = args.dynamic_report.is_some();
     let report = if args.sandbox_detonate_agent {
         match crate::sandbox::evaluate_detonation_against_target(
             &args.path,
             !args.sandbox_allow_runc,
+            always_report,
         ) {
             Ok(report) => report,
             Err(err) => {
@@ -512,6 +522,7 @@ fn evaluate_sandbox_channel(
             !args.sandbox_allow_runc,
             args.sandbox_record_network,
             args.llm_provider.as_deref(),
+            always_report,
         ) {
             Ok(report) => report,
             Err(err) => {
@@ -526,8 +537,36 @@ fn evaluate_sandbox_channel(
     };
     if let Some(report) = &report {
         attach_findings_by_path(&mut scan_result.results, &report.findings_by_path());
+        if let Some(report_path) = args.dynamic_report.as_deref() {
+            if let Err(err) = write_dynamic_report(report, report_path) {
+                if !quiet {
+                    eprintln!("warning: failed to write dynamic report: {err:#}");
+                }
+            } else if !quiet {
+                eprintln!("Dynamic report written to: {}", terminal_path(report_path));
+            }
+        }
+    } else if args.dynamic_report.is_some()
+        && (args.dynamic || args.sandbox_detonate_agent)
+        && !quiet
+    {
+        eprintln!(
+            "warning: no dynamic report written: the sandbox did not run \
+             (Docker/gVisor unavailable, or built without --features sandbox)"
+        );
     }
     report
+}
+
+/// Persist the dynamic sandbox's standalone JSON evidence artifact (raw
+/// behaviors + matched signatures) to `report_path`.
+#[cfg(feature = "sandbox")]
+fn write_dynamic_report(report: &crate::sandbox::SandboxReport, report_path: &Path) -> Result<()> {
+    let json = report
+        .to_report_json()
+        .context("failed to serialize dynamic report")?;
+    write_output_file_atomic(report_path, format!("{json}\n").as_bytes())
+        .context("failed to write dynamic report file")
 }
 
 /// Whether operator-facing trailing text blocks (VT / OSV / abandoned / LLM /

@@ -6,11 +6,11 @@
 //! etc. This module is the pure, daemon-free parser for that document;
 //! [`super::mapping`] turns it into advisory findings.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A class of observed runtime behavior. The serialized snake_case names
 /// are the contract between the in-container observer and this parser.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BehaviorClass {
     /// Outbound network connection attempt (recorded or blocked).
@@ -32,7 +32,7 @@ pub(crate) enum BehaviorClass {
 }
 
 /// Which executed layer produced the behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BehaviorSource {
     /// A referenced script / setup command.
@@ -44,7 +44,7 @@ pub(crate) enum BehaviorSource {
 
 /// One observed behavior with the concrete detail (host, path, command,
 /// tool name) that the mapping turns into a finding's `match_value`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct ObservedBehavior {
     pub(crate) class: BehaviorClass,
     pub(crate) detail: String,
@@ -53,7 +53,7 @@ pub(crate) struct ObservedBehavior {
 }
 
 /// The full observation document for one sandbox run.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub(crate) struct SandboxObservation {
     #[serde(default)]
     pub(crate) behaviors: Vec<ObservedBehavior>,

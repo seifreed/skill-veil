@@ -138,7 +138,8 @@ class Handler(BaseHTTPRequestHandler):
             self._forward_plain(method, host, body)
             return
         emit({"method": method, "url": self.path, "host": host,
-              "body": body.decode("utf-8", "replace")})
+              "body": body.decode("utf-8", "replace"),
+              "headers": {k: v for k, v in self.headers.items()}})
         self.send_response(200)
         self.send_header("Content-Length", "2")
         self.end_headers()
@@ -225,17 +226,23 @@ class Handler(BaseHTTPRequestHandler):
         parts = request_line.split()
         method = parts[0] if parts else ""
         path = parts[1] if len(parts) > 1 else "/"
-        length = 0
+        headers = {}
         while True:
             raw = reader.readline(65536)
             if raw in (b"\r\n", b"\n", b""):
                 break
-            text = raw.decode("latin-1")
-            if ":" in text and text.split(":", 1)[0].strip().lower() == "content-length":
-                length = int(text.split(":", 1)[1].strip() or 0)
+            text = raw.decode("latin-1").rstrip("\r\n")
+            if ":" in text:
+                name, value = text.split(":", 1)
+                headers[name.strip()] = value.strip()
+        length = 0
+        for name, value in headers.items():
+            if name.lower() == "content-length":
+                length = int(value or 0)
+                break
         body = reader.read(min(length, MAX_BODY)) if length else b""
         emit({"method": method, "url": f"https://{host}{path}", "host": host,
-              "body": body.decode("utf-8", "replace")})
+              "body": body.decode("utf-8", "replace"), "headers": headers})
         tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
 
     def log_message(self, *_args):

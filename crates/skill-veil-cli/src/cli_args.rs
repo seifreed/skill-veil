@@ -710,6 +710,15 @@ pub struct ScanArgs {
     /// Implies the dynamic sandbox; requires `--features sandbox` + Docker.
     #[arg(long, default_value_t = false)]
     pub sandbox_detonate_agent: bool,
+    /// Write the dynamic sandbox's full runtime evidence to FILE as a
+    /// standalone JSON report: the raw observed behaviors, the matched
+    /// `SANDBOX_*` signatures, and a `network_captures` section with complete
+    /// request headers and untruncated payloads. Requires
+    /// `--dynamic`/`--sandbox-detonate-agent`. With this flag a report is
+    /// written even for a clean run; a genuinely skipped run (no
+    /// Docker/gVisor) writes nothing and explains why.
+    #[arg(long, value_name = "FILE")]
+    pub dynamic_report: Option<PathBuf>,
     /// Override the active LLM provider for this scan without touching the
     /// config file. Valid: openai, anthropic, ollama, ollama-cloud, lmstudio.
     #[arg(long)]

@@ -389,6 +389,8 @@ skill-veil scan-dataset ./examples --preset ci --format text
 | `--dynamic` | Run the dynamic-behavior sandbox: execute the skill's scripts and an instrumented agent inside a hardened, gVisor-isolated container and record what they actually do at runtime. EXECUTES untrusted code; needs `--features sandbox` + Docker (+ gVisor). Advisory only — see [Dynamic behavior sandbox](#dynamic-behavior-sandbox---dynamic) |
 | `--sandbox-allow-runc` | Permit the sandbox to run under the default `runc` runtime when gVisor (`runsc`) is unavailable. WEAKER isolation (host kernel shared); without it `--dynamic` requires gVisor and otherwise skips |
 | `--sandbox-record-network` | Route the sandbox's outbound HTTP(S) through a recording-and-blocking proxy on an isolated bridge instead of disabling the network; captures the exfil destination AND payload (HTTPS is MITM-decrypted) while still blocking egress |
+| `--sandbox-detonate-agent` | Detonate the skill with a REAL coding agent (OpenCode, free keyless model) inside the hardened container, so credential/arg/agent-gated malicious paths actually execute. Implies the dynamic sandbox; needs `--features sandbox` + Docker |
+| `--dynamic-report <FILE>` | Write the dynamic sandbox's full runtime evidence to FILE as a standalone JSON report (raw behaviors + matched `SANDBOX_*` signatures + `network_captures` with complete request headers and untruncated payloads). With this flag a report is written even for a clean run. See [Dynamic sandbox report](docs/dynamic-sandbox-report.md) |
 | `--no-vt-enrich` | Skip VT enrichment even when `~/.skill-veil.toml` provides an apikey |
 | `--no-llm-enrich` | Skip LLM enrichment even when an `[llm]` section is configured |
 | `--no-promptintel-enrich` | Skip the offline PromptIntel feed-cache lookup |
@@ -424,6 +426,10 @@ skill-veil scan-package ./suspicious-skill --dynamic --sandbox-record-network
 
 # Accept the weaker runc runtime when gVisor is unavailable
 skill-veil scan-package ./suspicious-skill --dynamic --sandbox-allow-runc
+
+# Write the full runtime evidence to a standalone JSON report
+skill-veil scan-package ./suspicious-skill \
+  --dynamic --sandbox-record-network --dynamic-report behavior.json
 ```
 
 What runs, and how it is contained:
@@ -451,6 +457,15 @@ What runs, and how it is contained:
   sensitive-file reads, persistence writes, and privilege-change attempts
   (setuid-to-root, capset, namespace ops, ptrace, container-socket
   connects) become `SANDBOX_*` advisory findings attributed to the skill.
+- **Standalone report.** `--dynamic-report <FILE>` writes the run's full
+  runtime evidence to a separate JSON document: the raw observed
+  `behaviors`, the matched `SANDBOX_*` `matched_signatures`, and a
+  `network_captures` section carrying each intercepted request's complete
+  headers and untruncated payload (the on-screen block and the in-scan
+  findings keep the destination + a 256-char payload preview). With the
+  flag set, a report is written even when nothing is observed, so a clean
+  run still produces an auditable artifact. Schema:
+  [docs/dynamic-sandbox-report.md](docs/dynamic-sandbox-report.md).
 
 Without `--features sandbox`, or when Docker / gVisor is absent, `--dynamic`
 is a no-op with a one-line note — invocations stay flag-compatible across

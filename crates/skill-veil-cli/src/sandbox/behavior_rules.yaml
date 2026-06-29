@@ -3,8 +3,9 @@
 # Each rule matches a CO-OCCURRENCE of observed runtime behaviors within one
 # run: every condition in `all_of` must be satisfied by some observed
 # behavior. A condition matches on the behavior `class` plus an optional
-# `detail_any` list (the behavior's detail must contain at least one of the
-# substrings). These chain/signature detections sit on top of the
+# `detail_any` list (the detail must contain at least one substring) and an
+# optional `detail_none` list (the detail must contain NONE of the substrings
+# — the exclusion lever). These chain/signature detections sit on top of the
 # per-behavior `SANDBOX_*` findings — e.g. "read a secret AND connected out"
 # is the exfiltration chain a single behavior cannot express.
 #
@@ -17,8 +18,59 @@
   confidence: 0.9
   all_of:
     - class: sensitive_file_read
+    # The outbound connection must NOT be to benign package/registry/index
+    # infrastructure: a skill that reads its own .env and then runs
+    # `pip install` (hitting PyPI) is not exfiltration. Requiring a non-infra
+    # destination keeps this on real egress to an attacker-controlled host.
     - class: network_connect
-  reason: "Runtime exfiltration chain: read a sensitive file (credential/key/dotfile) and opened an outbound network connection in the same run."
+      detail_none:
+        - "pypi.org"
+        - "pythonhosted.org"
+        - "pypa.io"
+        - "pypi.python.org"
+        - "files.pythonhosted"
+        - "github.com"
+        - "githubusercontent.com"
+        - "registry.npmjs.org"
+        - "nodejs.org"
+        - "nodesource.com"
+        - "crates.io"
+        - "rubygems.org"
+        - "go.dev"
+        - "golang.org"
+        - "debian.org"
+        - "ubuntu.com"
+  reason: "Runtime exfiltration chain: read a sensitive file (credential/key/dotfile) and opened an outbound connection to a non-infrastructure host in the same run."
+  taxonomy_tags: [output_handling]
+  enabled: true
+
+- id: SANDBOX_BEHAVIOR_EXFIL_TO_ABUSE_CHANNEL
+  category: data_exfiltration
+  severity: high
+  confidence: 0.85
+  all_of:
+    # Anonymous data-sink / OOB / relay services with ~zero legitimate use
+    # inside an autonomous skill run — the canonical exfil channels in a
+    # malware sandbox. Corpus evidence: the same `webhook.site` capture ID and
+    # the same `api.telegram.org/bot<token>` recurred across distinct samples.
+    - class: network_connect
+      detail_any:
+        - "webhook.site"
+        - "api.telegram.org/bot"
+        - "discord.com/api/webhooks"
+        - "discordapp.com/api/webhooks"
+        - "requestbin"
+        - "ngrok.io"
+        - "ngrok-free.app"
+        - "burpcollaborator.net"
+        - "interact.sh"
+        - "oast.fun"
+        - "oast.site"
+        - "oast.online"
+        - "pipedream.net"
+        - "beeceptor.com"
+        - "transfer.sh"
+  reason: "Connected at runtime to a known anonymous exfiltration / out-of-band relay channel (paste/webhook/bot/tunnel service)."
   taxonomy_tags: [output_handling]
   enabled: true
 

