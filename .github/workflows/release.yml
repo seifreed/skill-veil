@@ -1,0 +1,266 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-crates:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Dry-run publish core crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --dry-run -p skill-veil-core
+
+      - name: Check published core version
+        id: core_version
+        run: |
+          published="$(
+            curl -fsSL \
+              -H 'User-Agent: skill-veil-release' \
+              https://crates.io/api/v1/crates/skill-veil-core 2>/dev/null \
+            | python3 -c 'import json, sys; payload = json.load(sys.stdin); print(payload["crate"]["newest_version"])' \
+            || true
+          )"
+          current="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          workspace = tomllib.loads(Path("Cargo.toml").read_text())
+          manifest = tomllib.loads(Path("crates/skill-veil-core/Cargo.toml").read_text())
+          version = manifest["package"].get("version")
+          if isinstance(version, dict) and version.get("workspace"):
+              version = workspace["workspace"]["package"]["version"]
+          elif version is None:
+              version = workspace["workspace"]["package"]["version"]
+          print(version)
+          PY
+          )"
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish core crate
+        if: steps.core_version.outputs.published != steps.core_version.outputs.current
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p skill-veil-core
+
+      - name: Wait for crates.io index
+        if: steps.core_version.outputs.published != steps.core_version.outputs.current
+        run: |
+          expected="${{ steps.core_version.outputs.current }}"
+          for attempt in $(seq 1 30); do
+            published="$(
+              curl -fsSL \
+                -H 'User-Agent: skill-veil-release' \
+                https://crates.io/api/v1/crates/skill-veil-core 2>/dev/null \
+              | python3 -c 'import json, sys; payload = json.load(sys.stdin); print(payload["crate"]["newest_version"])' \
+              || true
+            )"
+            if [ "${published}" = "${expected}" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "skill-veil-core ${expected} not visible on crates.io after waiting" >&2
+          exit 1
+
+      - name: Package CLI crate
+        run: cargo package -p skill-veil
+
+      - name: Check published CLI version
+        id: cli_version
+        run: |
+          published="$(
+            curl -fsSL \
+              -H 'User-Agent: skill-veil-release' \
+              https://crates.io/api/v1/crates/skill-veil 2>/dev/null \
+            | python3 -c 'import json, sys; payload = json.load(sys.stdin); print(payload["crate"]["newest_version"])' \
+            || true
+          )"
+          current="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          workspace = tomllib.loads(Path("Cargo.toml").read_text())
+          manifest = tomllib.loads(Path("crates/skill-veil-cli/Cargo.toml").read_text())
+          version = manifest["package"].get("version")
+          if isinstance(version, dict) and version.get("workspace"):
+              version = workspace["workspace"]["package"]["version"]
+          elif version is None:
+              version = workspace["workspace"]["package"]["version"]
+          print(version)
+          PY
+          )"
+          echo "published=${published}" >> "$GITHUB_OUTPUT"
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish CLI crate
+        if: steps.cli_version.outputs.published != steps.cli_version.outputs.current
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p skill-veil
+
+  benchmark-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Seed benchmark history
+        run: |
+          mkdir -p dist
+          cp benchmarks/history/releases.json dist/benchmark-history.json
+
+      - name: Run release benchmark and update history
+        run: |
+          cargo run -p skill-veil -- benchmark benchmarks/corpus.yaml \
+            --format json \
+            --output dist/benchmark-report.json \
+            --history-file dist/benchmark-history.json \
+            --release-id "${GITHUB_REF_NAME}" \
+            --dashboard-output dist/benchmark-dashboard.md
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: benchmark-release-assets
+          path: |
+            dist/benchmark-report.json
+            dist/benchmark-history.json
+            dist/benchmark-dashboard.md
+
+  build-binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_name: skill-veil-linux-x86_64
+            archive_ext: tar.gz
+            binary_name: skill-veil
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_name: skill-veil-linux-arm64
+            archive_ext: tar.gz
+            binary_name: skill-veil
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_name: skill-veil-windows-x86_64
+            archive_ext: zip
+            binary_name: skill-veil.exe
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            archive_name: skill-veil-windows-arm64
+            archive_ext: zip
+            binary_name: skill-veil.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_name: skill-veil-macos-x86_64
+            archive_ext: tar.gz
+            binary_name: skill-veil
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive_name: skill-veil-macos-arm64
+            archive_ext: tar.gz
+            binary_name: skill-veil
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release -p skill-veil --target ${{ matrix.target }}
+
+      - name: Package archive
+        shell: bash
+        run: |
+          mkdir -p dist/${{ matrix.archive_name }}
+          cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/${{ matrix.archive_name }}/${{ matrix.binary_name }}
+          cp README.md dist/${{ matrix.archive_name }}/README.md
+          cp LICENSE dist/${{ matrix.archive_name }}/LICENSE
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            python3 -c 'import pathlib, zipfile; root = pathlib.Path("dist"); archive_name = "${{ matrix.archive_name }}"; source_dir = root / archive_name; zf = zipfile.ZipFile(root / f"{archive_name}.zip", "w", zipfile.ZIP_DEFLATED); [zf.write(path, path.relative_to(root)) for path in source_dir.rglob("*") if path.is_file()]; zf.close()'
+          else
+            tar -C dist -czf dist/${{ matrix.archive_name }}.tar.gz ${{ matrix.archive_name }}
+          fi
+
+      - name: Generate checksum
+        shell: bash
+        run: |
+          cd dist
+          python3 -c 'import hashlib, pathlib; archive = pathlib.Path("${{ matrix.archive_name }}.${{ matrix.archive_ext }}"); digest = hashlib.sha256(archive.read_bytes()).hexdigest(); print(f"{digest}  {archive.name}")' >> checksums.txt
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.archive_name }}
+          path: |
+            dist/${{ matrix.archive_name }}.${{ matrix.archive_ext }}
+            dist/checksums.txt
+
+  publish:
+    needs:
+      - publish-crates
+      - build-binaries
+      - benchmark-release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: dist
+
+      - name: Consolidate checksums
+        shell: bash
+        run: |
+          find dist -type f -name checksums.txt -print0 \
+            | xargs -0 cat \
+            | sort -u > dist/checksums.txt
+          find dist -mindepth 2 -type f -name checksums.txt -delete
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/skill-veil-*.tar.gz
+            dist/**/skill-veil-*.zip
+            dist/**/benchmark-report.json
+            dist/**/benchmark-history.json
+            dist/**/benchmark-dashboard.md
+            dist/checksums.txt
+          generate_release_notes: true
