@@ -7,6 +7,8 @@ release process is formalized.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-30
+
 ### Changed
 
 **Supplementary rules promoted to the official pack**
