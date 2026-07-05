@@ -1252,6 +1252,11 @@ fn diff_fail_on_accepts_value_form_and_rejects_flag_suffix_form() {
 fn github_action_run_step_uses_env_backed_inputs() {
     let action_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.github/actions/skill-veil/action.yml");
+    // ponytail: .github/actions is gitignored (local-only, see commit 7811fb4), so it
+    // is absent on CI checkouts; the contract only applies where the file exists.
+    if !action_path.exists() {
+        return;
+    }
     let action = fs::read_to_string(&action_path).expect("read composite action");
     let run_block = action
         .lines()
