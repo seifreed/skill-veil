@@ -16,11 +16,12 @@
 
 use crate::util::bounded_read::{has_single_hardlink, opened_file_matches_path};
 use crate::util::hash::short_sha;
+use std::collections::BTreeSet;
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use skill_veil_core::nova::{
     evaluate_rule, mapping::nova_match_to_findings, parse_rules, LlmEvaluator,
     NativeKeywordEvaluator, NotYetWiredLlm, NotYetWiredSemantic, NovaMatch, NovaRule,
@@ -94,7 +95,7 @@ pub(crate) fn evaluate_against_target(
         return Ok(None);
     };
 
-    let rules = load_all_rules(&nova.install_dir);
+    let rules = load_all_rules(&nova.install_dir)?;
     if rules.is_empty() {
         return Ok(None);
     }
@@ -246,40 +247,38 @@ fn scored_hits(
         .collect()
 }
 
-fn load_all_rules(install_dir: &Path) -> Vec<NovaRule> {
+fn load_all_rules(install_dir: &Path) -> Result<Vec<NovaRule>> {
     let mut rules = Vec::new();
-    if regular_dir_metadata(install_dir).is_err() {
-        return rules;
-    }
-    for entry in walkdir::WalkDir::new(install_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-    {
+    let mut names = BTreeSet::new();
+    regular_dir_metadata(install_dir).with_context(|| {
+        format!(
+            "validating NOVA install directory {}",
+            install_dir.display()
+        )
+    })?;
+    for entry in walkdir::WalkDir::new(install_dir) {
+        let entry = entry
+            .with_context(|| format!("walking NOVA install directory {}", install_dir.display()))?;
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("nov") {
             continue;
         }
-        let body = match read_to_string_with_cap(path, MAX_NOVA_RULE_BYTES) {
-            Ok(b) => b,
-            Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    "skipping NOVA rule file (read error): {err}"
-                );
-                continue;
-            }
-        };
-        match parse_rules(&body) {
-            Ok(parsed) => rules.extend(parsed),
-            Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    "skipping NOVA rule file (parse error): {err}"
+        let body = read_to_string_with_cap(path, MAX_NOVA_RULE_BYTES)
+            .with_context(|| format!("reading NOVA rule file {}", path.display()))?;
+        let parsed = parse_rules(&body)
+            .with_context(|| format!("parsing NOVA rule file {}", path.display()))?;
+        for rule in parsed {
+            if !names.insert(rule.name.clone()) {
+                bail!(
+                    "duplicate NOVA rule name `{}` while loading {}",
+                    rule.name,
+                    path.display()
                 );
             }
+            rules.push(rule);
         }
     }
-    rules
+    Ok(rules)
 }
 
 pub(crate) fn collect_scan_bodies(target: &Path) -> Vec<(PathBuf, String)> {
@@ -452,9 +451,7 @@ mod tests {
         .unwrap();
         std::os::unix::fs::symlink(outside.path(), &link).unwrap();
 
-        let rules = load_all_rules(&link);
-
-        assert!(rules.is_empty());
+        assert!(load_all_rules(&link).is_err());
     }
 
     /// # Contract
@@ -487,9 +484,58 @@ mod tests {
         .unwrap();
         std::fs::hard_link(&outside_rule, &linked_rule).unwrap();
 
-        let rules = load_all_rules(&install);
+        assert!(load_all_rules(&install).is_err());
+    }
 
-        assert!(rules.is_empty());
+    /// # Contract
+    ///
+    /// A valid installed pack loads every distinct rule.
+    #[test]
+    fn load_all_rules_accepts_distinct_valid_rules() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (file, name, var) in [("one.nov", "One", "one"), ("two.nov", "Two", "two")] {
+            std::fs::write(
+                tmp.path().join(file),
+                format!(
+                    "rule {name} {{\nkeywords:\n    ${var} = \"{var}\"\ncondition:\n    keywords.${var}\n}}"
+                ),
+            )
+            .unwrap();
+        }
+
+        let rules = load_all_rules(tmp.path()).unwrap();
+
+        assert_eq!(rules.len(), 2);
+    }
+
+    /// # Contract
+    ///
+    /// One malformed `.nov` file invalidates the complete installed pack.
+    #[test]
+    fn load_all_rules_rejects_pack_with_malformed_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("broken.nov"), "not a NOVA rule").unwrap();
+
+        assert!(load_all_rules(tmp.path()).is_err());
+    }
+
+    /// # Contract
+    ///
+    /// Rule names are unique across every `.nov` file in an installed pack.
+    #[test]
+    fn load_all_rules_rejects_duplicate_names_across_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (file, var) in [("one.nov", "one"), ("two.nov", "two")] {
+            std::fs::write(
+                tmp.path().join(file),
+                format!(
+                    "rule Duplicate {{\nkeywords:\n    ${var} = \"{var}\"\ncondition:\n    keywords.${var}\n}}"
+                ),
+            )
+            .unwrap();
+        }
+
+        assert!(load_all_rules(tmp.path()).is_err());
     }
 
     /// # Contract

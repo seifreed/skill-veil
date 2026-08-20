@@ -27,6 +27,7 @@ pulldown-cmark = "0.10"
 
 # Pattern matching
 regex = "1.10"
+unicode-normalization = "0.1.25"
 
 # AST-based script analysis (Python / JavaScript / TypeScript). The grammar
 # crates ship C sources compiled at build time via `cc`; they expose the

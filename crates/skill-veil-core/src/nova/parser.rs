@@ -2,19 +2,13 @@
 //!
 //! The DSL is small enough that a hand-written tokenizer + recursive
 //! descent reads cleanly and avoids pulling in `nom`/`pest`. The
-//! grammar mirrors the upstream NOVA Python parser, with two
-//! deliberate differences:
-//!
-//! 1. Comments. Upstream supports `//` line comments. We accept the
-//!    same.
-//! 2. Pattern values. Upstream allows both `"…"` and `'…'` for
-//!    keyword strings; semantics / LLM strings are double-quoted only.
-//!    We follow upstream verbatim — single quotes are accepted only
-//!    inside `keywords:`.
+//! grammar mirrors the upstream NOVA Python parser. Keyword strings
+//! accept both quote styles; semantics and LLM strings require double
+//! quotes.
 
 use super::condition::{ConditionExpr, Quantifier, QuantifierTarget, Section};
 use super::model::{KeywordPattern, LlmPattern, NovaRule, SemanticPattern};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -27,6 +21,12 @@ pub enum ParseError {
     UnexpectedToken { context: &'static str, got: String },
     #[error("duplicate variable `{var}` in section `{section}`")]
     DuplicateVariable { section: &'static str, var: String },
+    #[error("duplicate variable `{0}` across rule sections")]
+    DuplicateVariableAcrossSections(String),
+    #[error("duplicate rule name `{0}` in rule file")]
+    DuplicateRuleName(String),
+    #[error("invalid variable `{var}` in section `{section}`")]
+    InvalidVariable { section: &'static str, var: String },
     #[error("invalid threshold `{0}` (must be a float in [0.0, 1.0])")]
     InvalidThreshold(String),
     #[error("unknown section `{0}` (expected meta / keywords / semantics / llm / condition)")]
@@ -65,6 +65,7 @@ const MAX_CONDITION_DEPTH: usize = 256;
 /// allows multiple rules per file; we yield them in source order.
 pub fn parse_rules(input: &str) -> Result<Vec<NovaRule>, ParseError> {
     let mut rules = Vec::new();
+    let mut rule_names = BTreeSet::new();
     let mut cursor = 0usize;
     let bytes = input.as_bytes();
 
@@ -74,6 +75,9 @@ pub fn parse_rules(input: &str) -> Result<Vec<NovaRule>, ParseError> {
             break;
         }
         let rule = parse_one_rule(input, &mut cursor)?;
+        if !rule_names.insert(rule.name.clone()) {
+            return Err(ParseError::DuplicateRuleName(rule.name));
+        }
         rules.push(rule);
     }
 
@@ -88,8 +92,7 @@ fn skip_ws_and_comments(input: &str, cursor: &mut usize) {
             *cursor += 1;
             continue;
         }
-        // `//` line comment between top-level rules.
-        if c == b'/' && *cursor + 1 < bytes.len() && bytes[*cursor + 1] == b'/' {
+        if c == b'#' || (c == b'/' && *cursor + 1 < bytes.len() && bytes[*cursor + 1] == b'/') {
             while *cursor < bytes.len() && bytes[*cursor] != b'\n' {
                 *cursor += 1;
             }
@@ -174,11 +177,13 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
     let mut in_sq_string = false;
     let mut in_regex = false;
     let mut in_line_comment = false;
+    let mut line_has_content = false;
     while i < bytes.len() {
         let c = bytes[i];
         if in_line_comment {
             if c == b'\n' {
                 in_line_comment = false;
+                line_has_content = false;
             }
             i += 1;
             continue;
@@ -216,7 +221,11 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
             i += 1;
             continue;
         }
-        // Line comment? Only when `//` appears outside any literal.
+        if c == b'#' && !line_has_content {
+            in_line_comment = true;
+            i += 1;
+            continue;
+        }
         if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
             in_line_comment = true;
             i += 2;
@@ -228,12 +237,14 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
         if c == b'/' && i + 1 < bytes.len() && bytes[i + 1] != b'/' {
             let prev_meaningful = input[..i].chars().rev().find(|c| !c.is_whitespace());
             if matches!(prev_meaningful, Some('=') | Some('(') | Some(',') | None) {
+                line_has_content = true;
                 in_regex = true;
                 i += 1;
                 continue;
             }
         }
         if c == b'"' {
+            line_has_content = true;
             in_dq_string = true;
             i += 1;
             continue;
@@ -241,6 +252,7 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
         if c == b'\'' {
             let prev_meaningful = input[..i].chars().rev().find(|c| !c.is_whitespace());
             if matches!(prev_meaningful, Some('=') | Some('(') | Some(',') | None) {
+                line_has_content = true;
                 in_sq_string = true;
                 i += 1;
                 continue;
@@ -253,6 +265,11 @@ fn find_matching_brace(input: &str, start: usize) -> Result<usize, ParseError> {
             if depth == 0 {
                 return Ok(i);
             }
+        }
+        if c == b'\n' {
+            line_has_content = false;
+        } else if !c.is_ascii_whitespace() {
+            line_has_content = true;
         }
         i += 1;
     }
@@ -303,6 +320,9 @@ fn split_into_sections(body: &str) -> Result<Vec<(String, String)>, ParseError> 
 }
 
 fn strip_line_comment(line: &str) -> &str {
+    if line.trim_start().starts_with('#') {
+        return "";
+    }
     if let Some(idx) = find_unquoted(line, "//") {
         &line[..idx]
     } else {
@@ -482,15 +502,8 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
             });
         }
         let body = &value[1..closing];
-        // Upstream NOVA defaults EVERY keyword pattern (regex and literal) to
-        // case-INSENSITIVE; the `/i` suffix is the explicit-but-redundant form,
-        // not what controls case. A bare `/abc/` therefore matches `ABC` too.
-        // Pre-fix this branch made bare regexes case-SENSITIVE (only `/i` was
-        // insensitive), so capitalised injection/malware keywords evaded every
-        // NOVA keyword-regex rule that omitted `/i` — and it disagreed with the
-        // string-literal branch below, which is already case-insensitive.
-        // (`trailing_i` still drives `closing` above so the suffix is stripped.)
-        let case_sensitive = false;
+        let (body, explicit_case) = split_case_modifier(body);
+        let case_sensitive = !trailing_i || explicit_case;
         crate::regex_bounds::build_bounded_regex(body).map_err(|source| {
             ParseError::InvalidRegex {
                 pattern: body.to_string(),
@@ -509,11 +522,11 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
         && ((bytes[0] == b'"' && bytes[bytes.len() - 1] == b'"')
             || (bytes[0] == b'\'' && bytes[bytes.len() - 1] == b'\''))
     {
-        let inner = &value[1..value.len() - 1];
+        let (inner, case_sensitive) = split_case_modifier(&value[1..value.len() - 1]);
         return Ok(KeywordPattern {
             pattern: inner.to_string(),
             is_regex: false,
-            case_sensitive: false,
+            case_sensitive,
         });
     }
 
@@ -522,6 +535,12 @@ fn parse_keyword_value(raw: &str) -> Result<KeywordPattern, ParseError> {
         line: raw.to_string(),
         reason: "value must be quoted (\"…\" / '…') or a regex (/…/ or /…/i)",
     })
+}
+
+fn split_case_modifier(pattern: &str) -> (&str, bool) {
+    pattern
+        .split_once("case:true")
+        .map_or((pattern, false), |(pattern, _)| (pattern.trim(), true))
 }
 
 fn parse_semantics(body: String) -> Result<BTreeMap<String, SemanticPattern>, ParseError> {
@@ -607,11 +626,16 @@ fn split_var_assignment<'a>(
         line: line.to_string(),
         reason: "variable name must start with `$`",
     })?;
-    // Store names WITHOUT the leading `$` so they round-trip cleanly
-    // with condition references (the condition tokenizer also strips
-    // the `$`). The trade-off: a rule cannot have variables `$foo`
-    // and `foo` distinguished by the dollar sign — but that's a
-    // NOVA-level constraint not a parser one (NOVA mandates `$`).
+    if stripped.is_empty()
+        || !stripped
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err(ParseError::InvalidVariable {
+            section,
+            var: key.to_string(),
+        });
+    }
     Ok((stripped.to_string(), value.trim()))
 }
 
@@ -909,18 +933,32 @@ fn parse_quantifier_tail(iter: &mut TokenIter, q: Quantifier) -> Result<Conditio
 }
 
 fn parse_quantifier_target(iter: &mut TokenIter) -> Result<QuantifierTarget, ParseError> {
-    // Fast path: `<section>.*` — by far the common shape.
     if let Some(CondToken::Ident(section_name)) = iter.peek().cloned() {
         let saved_pos = iter.pos;
-        iter.bump(); // consume ident
-        if iter.eat(&CondToken::Dot) && iter.eat(&CondToken::Star) {
-            let section = Section::from_str(&section_name)
-                .ok_or(ParseError::UnknownConditionSection(section_name))?;
-            return Ok(QuantifierTarget::SectionWildcard(section));
+        iter.bump();
+        if let Some(section) = Section::from_str(&section_name) {
+            if !iter.eat(&CondToken::Dot) {
+                return Ok(QuantifierTarget::SectionWildcard(section));
+            }
+            if iter.eat(&CondToken::Star) {
+                return Ok(QuantifierTarget::SectionWildcard(section));
+            }
+            if let Some(CondToken::Var(prefix)) = iter.bump() {
+                if iter.eat(&CondToken::Star) {
+                    return Ok(QuantifierTarget::SectionPrefixWildcard { section, prefix });
+                }
+            }
         }
         iter.pos = saved_pos;
     }
     if iter.eat(&CondToken::LParen) {
+        let saved_pos = iter.pos;
+        if let Some(CondToken::Var(prefix)) = iter.bump() {
+            if iter.eat(&CondToken::Star) && iter.eat(&CondToken::RParen) {
+                return Ok(QuantifierTarget::CrossSectionPrefixWildcard(prefix));
+            }
+        }
+        iter.pos = saved_pos;
         let first = parse_or(iter)?;
         let mut items = vec![first];
         while iter.eat(&CondToken::Comma) {
@@ -994,6 +1032,7 @@ fn parse_section_atom(
 /// but real rules in the canonical pack don't reuse names across
 /// sections, and ambiguity here would silently change semantics.
 fn validate_references(rule: &mut NovaRule) -> Result<(), ParseError> {
+    validate_unique_variables(rule)?;
     let snapshot_keys = (
         rule.keywords.keys().cloned().collect::<Vec<_>>(),
         rule.semantics.keys().cloned().collect::<Vec<_>>(),
@@ -1001,6 +1040,21 @@ fn validate_references(rule: &mut NovaRule) -> Result<(), ParseError> {
     );
     rewrite_bare_refs(&mut rule.condition, &snapshot_keys)?;
     check_refs(&rule.condition, rule)
+}
+
+fn validate_unique_variables(rule: &NovaRule) -> Result<(), ParseError> {
+    let mut names = BTreeSet::new();
+    for name in rule
+        .keywords
+        .keys()
+        .chain(rule.semantics.keys())
+        .chain(rule.llm.keys())
+    {
+        if !names.insert(name) {
+            return Err(ParseError::DuplicateVariableAcrossSections(name.clone()));
+        }
+    }
+    Ok(())
 }
 
 fn rewrite_bare_refs(
@@ -1049,7 +1103,9 @@ fn rewrite_bare_refs(
             Ok(())
         }
         ConditionExpr::Quantified { target, .. } => match target.as_mut() {
-            QuantifierTarget::SectionWildcard(_) => Ok(()),
+            QuantifierTarget::SectionWildcard(_)
+            | QuantifierTarget::SectionPrefixWildcard { .. }
+            | QuantifierTarget::CrossSectionPrefixWildcard(_) => Ok(()),
             QuantifierTarget::Inner(inner) => rewrite_bare_refs(inner, keys),
         },
     }
@@ -1098,8 +1154,47 @@ fn check_refs(expr: &ConditionExpr, rule: &NovaRule) -> Result<(), ParseError> {
             QuantifierTarget::SectionWildcard(section) => {
                 reject_empty_section_wildcard(*section, rule)
             }
+            QuantifierTarget::SectionPrefixWildcard { section, prefix } => {
+                check_prefix_reference(*section, prefix, rule)
+            }
+            QuantifierTarget::CrossSectionPrefixWildcard(prefix) => {
+                let found = rule
+                    .keywords
+                    .keys()
+                    .chain(rule.semantics.keys())
+                    .chain(rule.llm.keys())
+                    .any(|name| name.starts_with(prefix));
+                if found {
+                    Ok(())
+                } else {
+                    Err(ParseError::DanglingReference {
+                        section: Section::Keywords,
+                        var: format!("{prefix}* (no patterns match this prefix)"),
+                    })
+                }
+            }
             QuantifierTarget::Inner(inner) => check_refs(inner, rule),
         },
+    }
+}
+
+fn check_prefix_reference(
+    section: Section,
+    prefix: &str,
+    rule: &NovaRule,
+) -> Result<(), ParseError> {
+    let found = match section {
+        Section::Keywords => rule.keywords.keys().any(|name| name.starts_with(prefix)),
+        Section::Semantics => rule.semantics.keys().any(|name| name.starts_with(prefix)),
+        Section::Llm => rule.llm.keys().any(|name| name.starts_with(prefix)),
+    };
+    if found {
+        Ok(())
+    } else {
+        Err(ParseError::DanglingReference {
+            section,
+            var: format!("{prefix}* (no patterns match this prefix)"),
+        })
     }
 }
 
@@ -1532,19 +1627,202 @@ rule Second {
         }
     }
 
-    /// Contract: keyword regexes default to case-INSENSITIVE, matching
-    /// upstream NOVA. Both the bare `/abc/` and the explicit `/abc/i` forms
-    /// yield `case_sensitive == false`; the suffix is stripped from the body
-    /// either way.
+    /// Contract: a bare keyword regex is case-sensitive, while `/i` opts into
+    /// case-insensitive matching.
     #[test]
-    fn keyword_regex_with_body_parses_case_insensitive() {
+    fn keyword_regex_flags_control_case_sensitivity() {
         let bare = parse_keyword_value("/abc/").unwrap();
-        assert!(bare.is_regex && !bare.case_sensitive && bare.pattern == "abc");
+        assert!(bare.is_regex && bare.case_sensitive && bare.pattern == "abc");
         let explicit = parse_keyword_value("/abc/i").unwrap();
         assert!(explicit.is_regex && !explicit.case_sensitive && explicit.pattern == "abc");
-        // `//` and `//i` are empty (body-present, length 0) regexes — valid.
         assert!(parse_keyword_value("//").unwrap().pattern.is_empty());
         assert!(parse_keyword_value("//i").unwrap().pattern.is_empty());
+    }
+
+    /// Contract: `case:true` overrides the default for keyword literals and
+    /// `/i` regexes.
+    #[test]
+    fn keyword_case_modifier_enables_case_sensitive_matching() {
+        let literal = parse_keyword_value("\"abc case:true\"").unwrap();
+        assert!(literal.case_sensitive);
+        assert_eq!(literal.pattern, "abc");
+
+        let regex = parse_keyword_value("/abc case:true/i").unwrap();
+        assert!(regex.case_sensitive);
+        assert_eq!(regex.pattern, "abc");
+    }
+
+    /// Contract: keyword patterns without `case:true` retain their normal
+    /// literal and regex defaults.
+    #[test]
+    fn keyword_patterns_without_case_modifier_keep_default_case_behavior() {
+        assert!(!parse_keyword_value("\"abc\"").unwrap().case_sensitive);
+        assert!(parse_keyword_value("/abc/").unwrap().case_sensitive);
+        assert!(!parse_keyword_value("/abc/i").unwrap().case_sensitive);
+    }
+
+    /// Contract: `#` comments are accepted before a rule and as whole lines
+    /// inside every section.
+    #[test]
+    fn hash_comments_are_accepted_at_rule_and_section_boundaries() {
+        let body = r#"
+# pack header
+rule HashComments {
+    # section note with a stray }
+    meta:
+        # metadata note
+        description = "hash comments"
+    keywords:
+        # keyword note
+        $hit = "alpha"
+    condition:
+        # condition note
+        keywords.$hit
+}
+"#;
+
+        let rules = parse_rules(body).unwrap();
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].meta["description"], "hash comments");
+        assert_eq!(rules[0].keywords["hit"].pattern, "alpha");
+    }
+
+    /// Contract: `#` is comment syntax only for whole lines, so literals keep
+    /// embedded hash characters.
+    #[test]
+    fn hash_inside_keyword_literal_is_preserved() {
+        let body = r#"
+rule HashLiteral {
+    keywords:
+        $fragment = "value # content"
+    condition:
+        keywords.$fragment
+}
+"#;
+
+        let rules = parse_rules(body).unwrap();
+
+        assert_eq!(rules[0].keywords["fragment"].pattern, "value # content");
+    }
+
+    /// Contract: section quantifiers accept the canonical bare section form
+    /// as well as the explicit `.*` form.
+    #[test]
+    fn bare_section_quantifier_parses_as_section_wildcard() {
+        let body = r#"
+rule BareSection {
+    keywords:
+        $one = "one"
+        $two = "two"
+    condition:
+        all of keywords
+}
+"#;
+
+        let rules = parse_rules(body).unwrap();
+
+        assert!(matches!(
+            rules[0].condition,
+            ConditionExpr::Quantified {
+                quantifier: super::super::condition::Quantifier::All,
+                ..
+            }
+        ));
+    }
+
+    /// Contract: quantified prefix wildcards accept both cross-section
+    /// `($prefix*)` and section-scoped `section.$prefix*` forms.
+    #[test]
+    fn quantified_prefix_wildcards_parse() {
+        let cross_section = r#"
+rule CrossSectionPrefix {
+    keywords:
+        $risk_keyword = "one"
+    semantics:
+        $risk_semantic = "two"
+    condition:
+        all of ($risk*)
+}
+"#;
+        let scoped = r#"
+rule ScopedPrefix {
+    keywords:
+        $risk_one = "one"
+        $risk_two = "two"
+    condition:
+        2 of keywords.$risk*
+}
+"#;
+
+        assert!(parse_rules(cross_section).is_ok());
+        assert!(parse_rules(scoped).is_ok());
+    }
+
+    /// Contract: variable names contain at least one ASCII letter, digit, or
+    /// underscore after `$`; punctuation and non-ASCII names are rejected.
+    #[test]
+    fn variable_names_reject_noncanonical_characters() {
+        for bad in ["$bad-name", "$café", "$"] {
+            let body = format!(
+                "rule BadVar {{\nkeywords:\n    $ok = \"ok\"\n    {bad} = \"bad\"\ncondition:\n    keywords.$ok\n}}"
+            );
+            assert!(parse_rules(&body).is_err(), "{bad} must be rejected");
+        }
+    }
+
+    /// Contract: valid ASCII variable names remain accepted.
+    #[test]
+    fn variable_names_accept_ascii_alphanumeric_and_underscore() {
+        let body = r#"
+rule GoodVar {
+    keywords:
+        $ok_123 = "ok"
+    condition:
+        keywords.$ok_123
+}
+"#;
+
+        assert!(parse_rules(body).is_ok());
+    }
+
+    /// Contract: a variable name is unique across `keywords`, `semantics`,
+    /// and `llm`, even when the condition uses a qualified reference.
+    #[test]
+    fn duplicate_variable_names_across_sections_are_rejected() {
+        let body = r#"
+rule DuplicateVar {
+    keywords:
+        $same = "keyword"
+    semantics:
+        $same = "semantic"
+    condition:
+        keywords.$same
+}
+"#;
+
+        assert!(parse_rules(body).is_err());
+    }
+
+    /// Contract: rule names are unique across every rule in one `.nov` file.
+    #[test]
+    fn duplicate_rule_names_in_one_file_are_rejected() {
+        let body = r#"
+rule Duplicate {
+    keywords:
+        $one = "one"
+    condition:
+        keywords.$one
+}
+rule Duplicate {
+    keywords:
+        $two = "two"
+    condition:
+        keywords.$two
+}
+"#;
+
+        assert!(parse_rules(body).is_err());
     }
 
     /// Contract: one malformed rule line surfaces as a parse error, never a

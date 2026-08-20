@@ -120,6 +120,10 @@ pub enum ConditionExpr {
 pub enum QuantifierTarget {
     /// `<section>.*` — every pattern in the section.
     SectionWildcard(Section),
+    /// `<section>.$prefix*` — matching patterns from one section.
+    SectionPrefixWildcard { section: Section, prefix: String },
+    /// `($prefix*)` — matching patterns across every section.
+    CrossSectionPrefixWildcard(String),
     /// `(<expr>)` — a parenthesised inner expression. Used for
     /// patterns like `any of (keywords.$a, keywords.$b)` though the
     /// canonical NOVA parser treats commas as alternative spelling
@@ -353,19 +357,15 @@ fn collect_target_hits(
 ) -> Result<Vec<TruthValue>, EvalError> {
     match target {
         QuantifierTarget::SectionWildcard(section) => {
-            let mut hits = ctx
-                .section(*section)
-                .iter()
-                .map(|(name, hit)| {
-                    if skipped.contains(*section, name) {
-                        TruthValue::Unknown
-                    } else {
-                        TruthValue::from_bool(*hit)
-                    }
-                })
-                .collect::<Vec<_>>();
-            if hits.is_empty() && skipped.has_any(*section) {
-                hits.push(TruthValue::Unknown);
+            Ok(collect_section_hits(*section, None, ctx, skipped))
+        }
+        QuantifierTarget::SectionPrefixWildcard { section, prefix } => {
+            Ok(collect_section_hits(*section, Some(prefix), ctx, skipped))
+        }
+        QuantifierTarget::CrossSectionPrefixWildcard(prefix) => {
+            let mut hits = Vec::new();
+            for section in [Section::Keywords, Section::Semantics, Section::Llm] {
+                hits.extend(collect_section_hits(section, Some(prefix), ctx, skipped));
             }
             Ok(hits)
         }
@@ -377,6 +377,34 @@ fn collect_target_hits(
             other => Ok(vec![other.eval_truth(ctx, skipped)?]),
         },
     }
+}
+
+fn collect_section_hits(
+    section: Section,
+    prefix: Option<&str>,
+    ctx: &EvalContext,
+    skipped: &SkippedPatternRefs,
+) -> Vec<TruthValue> {
+    let mut hits = ctx
+        .section(section)
+        .iter()
+        .filter(|(name, _)| prefix.is_none_or(|prefix| name.starts_with(prefix)))
+        .map(|(name, hit)| {
+            if skipped.contains(section, name) {
+                TruthValue::Unknown
+            } else {
+                TruthValue::from_bool(*hit)
+            }
+        })
+        .collect::<Vec<_>>();
+    let skipped_target = prefix.map_or_else(
+        || skipped.has_any(section),
+        |prefix| skipped.has_prefix(section, prefix),
+    );
+    if hits.is_empty() && skipped_target {
+        hits.push(TruthValue::Unknown);
+    }
+    hits
 }
 
 #[cfg(test)]

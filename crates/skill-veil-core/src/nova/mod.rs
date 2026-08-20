@@ -23,6 +23,7 @@ pub mod evaluators;
 pub mod mapping;
 pub mod model;
 pub mod parser;
+mod unicode;
 
 pub use condition::{ConditionExpr, EvalContext, EvalError, Quantifier, QuantifierTarget, Section};
 pub use engine::evaluate_rule;
