@@ -118,6 +118,7 @@ Operational boundaries add the following event families:
 | `cache.read_failed` / `cache.write_failed` | WARN | operation and I/O/decode error |
 | `sandbox.container_completed` / `sandbox.container_timeout` | DEBUG/WARN | duration and cancellation state |
 | `rules.download_completed` | INFO | verified version/SHA, size/count, duration |
+| `logging.event_truncated` | WARN | configured size limit; original payload discarded |
 
 Command result data remains on stdout. Human-facing confirmations such as an
 output path or update notification remain on stderr and are not diagnostic log

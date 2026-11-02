@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
+use chrono::{SecondsFormat, Utc};
 use regex::Regex;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -203,6 +204,21 @@ impl Drop for SafeEventWriter {
 }
 
 fn render_log_event(buf: &[u8], truncated: bool) -> String {
+    if truncated && buf.iter().find(|byte| !byte.is_ascii_whitespace()) == Some(&b'{') {
+        return serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
+            "level": "WARN",
+            "message": "log event exceeded size limit",
+            "service": "skill-veil",
+            "component": "logging",
+            "operation": "logging.emit",
+            "event_name": "logging.event_truncated",
+            "status": "truncated",
+            "limit_bytes": MAX_LOG_EVENT_BYTES,
+        })
+        .to_string()
+            + "\n";
+    }
     let mut text = String::from_utf8_lossy(buf).into_owned();
     if truncated {
         text.push_str(TRUNCATED_SUFFIX);
@@ -328,11 +344,27 @@ mod tests {
     }
 
     #[test]
-    fn oversized_event_is_bounded() {
+    fn oversized_text_event_is_bounded_without_json_rewrite() {
         let rendered = render_log_event(&vec![b'a'; MAX_LOG_EVENT_BYTES], true);
 
         assert_eq!(rendered.len(), MAX_LOG_EVENT_BYTES + TRUNCATED_SUFFIX.len());
         assert!(rendered.ends_with(TRUNCATED_SUFFIX));
+    }
+
+    #[test]
+    fn oversized_json_event_is_replaced_with_valid_safe_event() {
+        let mut event = br#"{"level":"INFO","message":""#.to_vec();
+        event.extend(vec![b's'; MAX_LOG_EVENT_BYTES]);
+        let rendered = render_log_event(&event[..MAX_LOG_EVENT_BYTES], true);
+        let value: serde_json::Value = serde_json::from_str(&rendered).expect("valid JSON event");
+
+        assert_eq!(value["event_name"], "logging.event_truncated");
+        assert_eq!(value["status"], "truncated");
+        assert_eq!(value["limit_bytes"], MAX_LOG_EVENT_BYTES);
+        assert!(!rendered.contains(&"s".repeat(256)));
+        assert!(value["timestamp"]
+            .as_str()
+            .is_some_and(|timestamp| timestamp.ends_with('Z')));
     }
 
     #[test]
