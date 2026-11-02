@@ -347,15 +347,22 @@ fn test_scan_skill_file_rejects_non_entrypoint() {
 
 #[test]
 fn test_scan_empty_skill_produces_no_critical() {
-    let mut file = NamedTempFile::with_suffix(".skill.md").unwrap();
-    writeln!(file, "# My Skill\n\nA minimal skill with no code.\n").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.skill.md");
+    std::fs::write(&path, "# My Skill\n\nA minimal skill with no code.\n").unwrap();
 
     let scanner = Scanner::new().unwrap();
-    let result = scanner.scan_file(file.path()).unwrap();
+    let result = scanner.scan_file(&path).unwrap();
+    let critical_ids: Vec<_> = result
+        .findings
+        .iter()
+        .filter(|finding| finding.severity == Severity::Critical)
+        .map(|finding| finding.rule_id.as_str())
+        .collect();
 
     assert!(
-        !result.has_severity(Severity::Critical),
-        "a heading-only skill must not produce critical findings"
+        critical_ids.is_empty(),
+        "a heading-only skill must not produce critical findings: {critical_ids:?}"
     );
 }
 
