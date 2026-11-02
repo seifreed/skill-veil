@@ -192,7 +192,12 @@ fn run_report_list(args: PromptIntelReportListArgs) -> Result<()> {
     rate_state.save(&cache_root)?;
     let (envelope, _response_meta) = result.context("fetching agents/reports/mine")?;
     if !envelope.success {
-        eprintln!("warning: PromptIntel reported success=false for agents/reports/mine");
+        tracing::warn!(
+            event_name = "promptintel.unsuccessful_response",
+            operation = "promptintel.reports_mine",
+            status = "error",
+            "PromptIntel returned success=false"
+        );
     }
 
     match args.format {
@@ -323,9 +328,12 @@ fn run_cross_check(args: PromptIntelCrossCheckArgs) -> Result<bool> {
     let detection_gate_tripped = detection_below_gate(&summary, args.fail_below);
     let strict_drift_gate_tripped = args.strict_taxonomy && !summary.taxonomy_drift.is_empty();
     if strict_drift_gate_tripped {
-        eprintln!(
-            "PromptIntel --strict-taxonomy: {} drift name(s) not in taxonomy::TAXONOMY",
-            summary.taxonomy_drift.len()
+        tracing::warn!(
+            event_name = "promptintel.taxonomy_drift",
+            operation = "promptintel.cross_check",
+            status = "blocked",
+            drift_count = summary.taxonomy_drift.len(),
+            "PromptIntel taxonomy drift exceeded strict policy"
         );
     }
     Ok(detection_gate_tripped || strict_drift_gate_tripped)

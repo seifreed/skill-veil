@@ -387,10 +387,13 @@ pub(crate) fn run_fp_review(
         .collect();
     if providers.len() < 2 {
         if !quiet {
-            eprintln!(
-                "LLM FP review skipped: needs ≥2 of openai/grok/ollama-cloud configured \
-                 (found {}); no review applied",
-                providers.len()
+            tracing::warn!(
+                event_name = "fp_review.skipped",
+                operation = "llm.fp_review",
+                status = "skipped",
+                reason = "insufficient_providers",
+                provider_count = providers.len(),
+                "LLM false-positive review requires at least two providers"
             );
         }
         return Ok(None);

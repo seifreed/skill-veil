@@ -12,7 +12,7 @@
 use super::types::{PackageMetadata, RegistryQuery};
 use chrono::{DateTime, Utc};
 use skill_veil_core::Ecosystem;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const USER_AGENT: &str = concat!(
@@ -100,18 +100,43 @@ impl RegistryClient {
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, RegistryError> {
+        let started = Instant::now();
         let mut backoff = INITIAL_BACKOFF_MS;
         let mut attempt = 0;
         loop {
             match self.agent.get(url).call() {
                 Ok(resp) => {
-                    return resp
+                    let status = resp.status();
+                    let decoded = resp
                         .into_json::<T>()
                         .map_err(|e| RegistryError::Decode(e.to_string()));
+                    if decoded.is_ok() {
+                        tracing::debug!(
+                            event_name = "http.request_completed",
+                            operation = "registry.request",
+                            status,
+                            outcome = "success",
+                            retry_count = attempt,
+                            duration_ms = crate::observability::duration_ms(started),
+                            "package-registry request completed"
+                        );
+                    }
+                    return decoded;
                 }
                 Err(ureq::Error::Status(status, _)) => {
                     if (status == 429 || status >= 500) && attempt < MAX_ADDITIONAL_ATTEMPTS {
                         attempt += 1;
+                        tracing::warn!(
+                            event_name = "http.request_retry",
+                            operation = "registry.request",
+                            status = status,
+                            outcome = "retry",
+                            retry_number = attempt,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = backoff,
+                            reason = "http_status",
+                            "package-registry request will retry"
+                        );
                         std::thread::sleep(Duration::from_millis(backoff));
                         backoff = backoff.saturating_mul(2);
                         continue;
@@ -121,6 +146,18 @@ impl RegistryClient {
                 Err(ureq::Error::Transport(t)) => {
                     if attempt < MAX_ADDITIONAL_ATTEMPTS {
                         attempt += 1;
+                        tracing::warn!(
+                            event_name = "http.request_retry",
+                            operation = "registry.request",
+                            outcome = "retry",
+                            retry_number = attempt,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = backoff,
+                            reason = "transport",
+                            error_type = "network",
+                            error = %t,
+                            "package-registry request will retry"
+                        );
                         std::thread::sleep(Duration::from_millis(backoff));
                         backoff = backoff.saturating_mul(2);
                         continue;

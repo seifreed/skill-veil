@@ -60,10 +60,43 @@ pub(crate) fn maybe_notify(
     }
     // Best-effort touch FIRST, so a recurring transient failure
     // does not hammer GitHub on every scan.
-    let _ = touch_marker(&marker);
+    if let Err(err) = touch_marker(&marker) {
+        tracing::debug!(
+            event_name = "update_check.marker_failed",
+            operation = "update_check",
+            status = "degraded",
+            error_type = "io",
+            error = %err,
+            "update-check marker could not be persisted"
+        );
+    }
 
-    let sv_latest = latest_skill_veil_release_tag().ok();
-    let nova_latest = latest_nova_sha().ok();
+    let sv_latest = latest_skill_veil_release_tag()
+        .inspect_err(|err| {
+            tracing::debug!(
+                event_name = "update_check.source_failed",
+                operation = "update_check",
+                source = "skill-veil-rules",
+                status = "degraded",
+                error_type = "network",
+                error = %err,
+                "update source check failed"
+            );
+        })
+        .ok();
+    let nova_latest = latest_nova_sha()
+        .inspect_err(|err| {
+            tracing::debug!(
+                event_name = "update_check.source_failed",
+                operation = "update_check",
+                source = "nova-rules",
+                status = "degraded",
+                error_type = "network",
+                error = %err,
+                "update source check failed"
+            );
+        })
+        .ok();
 
     let mut notes: Vec<String> = Vec::new();
     if let (Some(installed), Some(latest)) = (skill_veil_installed, sv_latest.as_deref()) {

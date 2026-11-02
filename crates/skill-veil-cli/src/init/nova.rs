@@ -17,7 +17,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::util::secure_fs::ensure_real_dir;
 
@@ -87,6 +87,7 @@ pub(crate) fn download_and_extract(
     sha: &NovaSha,
     staging_dir: &Path,
 ) -> Result<(NovaInstallPointer, PathBuf)> {
+    let started = Instant::now();
     validate_sha_shape(sha)?;
     let url = format!("https://github.com/Nova-Hunting/nova-rules/archive/{sha}.tar.gz");
 
@@ -94,7 +95,13 @@ pub(crate) fn download_and_extract(
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build();
 
-    tracing::info!(sha = %sha, url = %url, "fetching NOVA rule pack");
+    tracing::debug!(
+        event_name = "rules.asset_download_started",
+        operation = "nova.download",
+        asset = "tarball",
+        sha = %sha,
+        "NOVA rule-pack download started"
+    );
     let resp = agent
         .get(&url)
         .set("User-Agent", USER_AGENT)
@@ -121,6 +128,17 @@ pub(crate) fn download_and_extract(
     let inner =
         locate_unique_subdir(&extract_root).context("locating extracted NOVA root directory")?;
     let file_count = count_nov_files(&inner);
+
+    tracing::info!(
+        event_name = "rules.download_completed",
+        operation = "nova.download",
+        status = "success",
+        outcome = "completed",
+        sha = %sha,
+        file_count,
+        duration_ms = crate::observability::duration_ms(started),
+        "NOVA rule pack downloaded and extracted"
+    );
 
     Ok((
         NovaInstallPointer {

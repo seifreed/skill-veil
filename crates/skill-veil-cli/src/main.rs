@@ -148,7 +148,7 @@ fn main() -> ExitCode {
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+    observability::duration_ms(started)
 }
 
 fn install_panic_logger() {

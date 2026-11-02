@@ -105,6 +105,32 @@ Lifecycle events use `command.started` and `command.completed`, with `status`,
 `error_code`. Rust has no fatal level; an unrecoverable process-boundary failure
 is an `ERROR` followed by exit code 2.
 
+Operational boundaries add the following event families:
+
+| Event | Level | Relevant fields |
+|---|---|---|
+| `scan.completed` | INFO | outcome, duration, package/finding/error counts |
+| `scan.target_failed` / `scan.channel_failed` | WARN | operation, error type, safe error |
+| `scan.channel_skipped` | WARN | operation and bounded reason |
+| `http.request_completed` | DEBUG | integration, status, retries, duration |
+| `http.request_retry` | WARN | integration, attempt, limit, backoff, reason |
+| `cache.hit` / `cache.miss` | DEBUG | cache operation and non-sensitive key class |
+| `cache.read_failed` / `cache.write_failed` | WARN | operation and I/O/decode error |
+| `sandbox.container_completed` / `sandbox.container_timeout` | DEBUG/WARN | duration and cancellation state |
+| `rules.download_completed` | INFO | verified version/SHA, size/count, duration |
+
+Command result data remains on stdout. Human-facing confirmations such as an
+output path or update notification remain on stderr and are not diagnostic log
+events; machine consumers should use JSON logging and identify records by
+`event_name`.
+
+The Python binding starts the child with JSON logging unless the caller already
+selected a format. Successful and blocked scans forward validated, bounded JSON
+events to the `skill_veil` Python logger and retain the parsed event on each
+record as `skill_veil_event`. Plain child stderr is never re-emitted as a log
+record. Standard environment inheritance propagates correlation and environment
+labels to the child process.
+
 Do not invent trace or span identifiers. A local span is enough for this
 single-process CLI. W3C Trace Context and OpenTelemetry become appropriate only
 if skill-veil gains a distributed request boundary or an existing collector;

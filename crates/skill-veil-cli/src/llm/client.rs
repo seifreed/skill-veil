@@ -9,7 +9,7 @@ use super::types::{LlmError, LlmPrompt, LlmRawResponse};
 use crate::util::bounded_read::read_response_with_cap;
 use crate::util::http_status::is_retryable_status;
 use crate::util::terminal_safe::drain_error_body;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Maximum number of *additional* attempts after the initial request
 /// fails on a transient error (network, 429, 5xx). Total request count
@@ -92,6 +92,7 @@ pub(crate) fn post_json_with_retry(
     headers: &[(&str, &str)],
     body: &str,
 ) -> Result<String, LlmError> {
+    let started = Instant::now();
     let mut attempt = 0u32;
     loop {
         let mut req = agent.post(url);
@@ -103,7 +104,19 @@ pub(crate) fn post_json_with_retry(
             .send_string(body);
         match result {
             Ok(resp) => {
-                return bounded_read_response(resp).map_err(|e| LlmError::Decode(e.to_string()))
+                let status = resp.status();
+                let body =
+                    bounded_read_response(resp).map_err(|e| LlmError::Decode(e.to_string()))?;
+                tracing::debug!(
+                    event_name = "http.request_completed",
+                    operation = "llm.request",
+                    status = status,
+                    outcome = "success",
+                    retry_count = attempt,
+                    duration_ms = crate::observability::duration_ms(started),
+                    "LLM request completed"
+                );
+                return Ok(body);
             }
             Err(ureq::Error::Status(status, resp)) => {
                 if status == 401 || status == 403 {
@@ -126,11 +139,15 @@ pub(crate) fn post_json_with_retry(
                         INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
                     );
                     tracing::warn!(
-                        "LLM provider returned status {}, sleeping {:?} (attempt {}/{})",
-                        status,
-                        delay,
-                        attempt + 1,
-                        MAX_ADDITIONAL_ATTEMPTS
+                        event_name = "http.request_retry",
+                        operation = "llm.request",
+                        status = status,
+                        outcome = "retry",
+                        retry_number = attempt + 1,
+                        retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                        backoff_ms = delay.as_millis(),
+                        reason = "http_status",
+                        "LLM request will retry"
                     );
                     std::thread::sleep(delay);
                     attempt += 1;
@@ -147,10 +164,15 @@ pub(crate) fn post_json_with_retry(
                     INITIAL_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)),
                 );
                 tracing::warn!(
-                    "LLM transport error, sleeping {:?} (attempt {}/{})",
-                    delay,
-                    attempt + 1,
-                    MAX_ADDITIONAL_ATTEMPTS
+                    event_name = "http.request_retry",
+                    operation = "llm.request",
+                    outcome = "retry",
+                    retry_number = attempt + 1,
+                    retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                    backoff_ms = delay.as_millis(),
+                    reason = "transport",
+                    error_type = "network",
+                    "LLM request will retry after transport error"
                 );
                 std::thread::sleep(delay);
                 attempt += 1;

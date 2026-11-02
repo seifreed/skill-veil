@@ -15,7 +15,7 @@ use crate::util::terminal_safe::drain_error_body;
 use sha2::{Digest, Sha256};
 use std::io::{self, Read, Write};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const BASE_URL: &str = "https://www.virustotal.com/api/v3";
@@ -496,6 +496,7 @@ impl VtClient {
     where
         S: Fn() -> Result<ureq::Response, Box<ureq::Error>>,
     {
+        let started = Instant::now();
         let mut attempt: u32 = 0;
         loop {
             match send().map_err(|boxed| *boxed) {
@@ -515,6 +516,16 @@ impl VtClient {
                         let body = drain_error_body("VT", status, bounded_read_response(resp));
                         return Err(VtError::HttpStatus { status, body });
                     }
+                    tracing::debug!(
+                        event_name = "http.request_completed",
+                        operation = "vt.request",
+                        method = label,
+                        status = status,
+                        outcome = "success",
+                        retry_count = attempt,
+                        duration_ms = crate::observability::duration_ms(started),
+                        "VirusTotal request completed"
+                    );
                     return Ok(resp);
                 }
                 Err(ureq::Error::Status(status, resp)) => {
@@ -533,12 +544,16 @@ impl VtClient {
                         }
                         let delay = backoff_delay(attempt);
                         tracing::warn!(
-                            "VT {} returned status {} (attempt {}/{}), sleeping {:?}",
-                            label,
-                            status,
-                            attempt + 1,
-                            MAX_ADDITIONAL_ATTEMPTS,
-                            delay
+                            event_name = "http.request_retry",
+                            operation = "vt.request",
+                            method = label,
+                            status = status,
+                            outcome = "retry",
+                            retry_number = attempt + 1,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = delay.as_millis(),
+                            reason = "http_status",
+                            "VirusTotal request will retry"
                         );
                         std::thread::sleep(delay);
                         attempt += 1;
@@ -553,12 +568,17 @@ impl VtClient {
                     }
                     let delay = backoff_delay(attempt);
                     tracing::warn!(
-                        "VT {} transport error {:?} (attempt {}/{}), sleeping {:?}",
-                        label,
-                        err,
-                        attempt + 1,
-                        MAX_ADDITIONAL_ATTEMPTS,
-                        delay
+                        event_name = "http.request_retry",
+                        operation = "vt.request",
+                        method = label,
+                        outcome = "retry",
+                        retry_number = attempt + 1,
+                        retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                        backoff_ms = delay.as_millis(),
+                        reason = "transport",
+                        error_type = "network",
+                        error = %err,
+                        "VirusTotal request will retry"
                     );
                     std::thread::sleep(delay);
                     attempt += 1;

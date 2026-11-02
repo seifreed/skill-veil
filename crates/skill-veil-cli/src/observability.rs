@@ -4,6 +4,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use regex::Regex;
 use tracing_subscriber::fmt::MakeWriter;
@@ -14,6 +15,10 @@ use crate::util::terminal_safe::{sanitise_for_terminal, terminal_path};
 
 const MAX_LOG_EVENT_BYTES: usize = 64 * 1024;
 const TRUNCATED_SUFFIX: &str = "...[truncated]";
+
+pub(crate) fn duration_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
 
 pub(crate) struct LogConfig<'a> {
     format: LogFormatArg,
@@ -267,14 +272,14 @@ pub(crate) fn sanitise_log_chunk_for_terminal(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::{
         render_log_event, sanitise_log_chunk_for_terminal, LogConfig, LogDestination, LogFormatArg,
-        LogLevelArg, SafeMakeWriter, MAX_LOG_EVENT_BYTES, TRUNCATED_SUFFIX,
+        LogLevelArg, SafeEventWriter, SafeMakeWriter, MAX_LOG_EVENT_BYTES, TRUNCATED_SUFFIX,
     };
 
     #[test]
@@ -365,5 +370,26 @@ mod tests {
 
         assert!(error.is_some());
         assert!(matches!(writer.destination, LogDestination::Stderr));
+    }
+
+    #[test]
+    fn file_destination_failure_does_not_panic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = std::fs::File::create(dir.path().join("events.log")).expect("create log");
+        let destination = Arc::new(Mutex::new(file));
+        let poisoned = Arc::clone(&destination);
+        let _ = thread::spawn(move || {
+            let _guard = poisoned.lock().expect("lock log");
+            panic!("poison log lock");
+        })
+        .join();
+        let mut event = SafeEventWriter {
+            destination: LogDestination::File(destination),
+            buffer: Vec::new(),
+            truncated: false,
+        };
+
+        write!(event, "event").expect("buffer event");
+        assert!(event.flush().is_err());
     }
 }

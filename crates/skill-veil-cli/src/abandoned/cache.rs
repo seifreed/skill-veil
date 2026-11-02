@@ -37,13 +37,66 @@ impl AbandonedCache {
     }
 
     pub fn get(&self, eco: Ecosystem, name: &str) -> Option<PackageMetadata> {
-        let bytes = read_cache_file_bounded(&self.path(eco, name))
-            .ok()
-            .flatten()?;
-        let record: MetadataRecord = serde_json::from_slice(&bytes).ok()?;
+        let bytes = match read_cache_file_bounded(&self.path(eco, name)) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                tracing::debug!(
+                    event_name = "cache.miss",
+                    operation = "registry.cache_read",
+                    status = "miss",
+                    reason = "absent",
+                    ecosystem = ?eco,
+                    "package-registry cache miss"
+                );
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    event_name = "cache.read_failed",
+                    operation = "registry.cache_read",
+                    status = "error",
+                    ecosystem = ?eco,
+                    error_type = "io",
+                    error = %err,
+                    "package-registry cache read failed"
+                );
+                return None;
+            }
+        };
+        let record: MetadataRecord = match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(err) => {
+                tracing::debug!(
+                    event_name = "cache.miss",
+                    operation = "registry.cache_read",
+                    status = "miss",
+                    reason = "invalid_record",
+                    ecosystem = ?eco,
+                    error_type = "decode",
+                    error = %err,
+                    "package-registry cache record ignored"
+                );
+                return None;
+            }
+        };
         if Utc::now().signed_duration_since(record.cached_at) > self.ttl {
+            tracing::debug!(
+                event_name = "cache.miss",
+                operation = "registry.cache_read",
+                status = "miss",
+                reason = "expired",
+                ecosystem = ?eco,
+                "package-registry cache record expired"
+            );
             return None;
         }
+        tracing::debug!(
+            event_name = "cache.hit",
+            operation = "registry.cache_read",
+            status = "hit",
+            ecosystem = ?eco,
+            "package-registry cache hit"
+        );
         Some(record.metadata)
     }
 
@@ -52,8 +105,31 @@ impl AbandonedCache {
             cached_at: Utc::now(),
             metadata: metadata.clone(),
         };
-        if let Ok(bytes) = serde_json::to_vec(&record) {
-            let _ = write_cache_file_atomic(&self.path(eco, name), &bytes);
+        match serde_json::to_vec(&record) {
+            Ok(bytes) => {
+                if let Err(err) = write_cache_file_atomic(&self.path(eco, name), &bytes) {
+                    tracing::warn!(
+                        event_name = "cache.write_failed",
+                        operation = "registry.cache_write",
+                        status = "error",
+                        ecosystem = ?eco,
+                        error_type = "io",
+                        error = %err,
+                        "package-registry cache write failed"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    event_name = "cache.write_failed",
+                    operation = "registry.cache_write",
+                    status = "error",
+                    ecosystem = ?eco,
+                    error_type = "encode",
+                    error = %err,
+                    "package-registry cache record encoding failed"
+                );
+            }
         }
     }
 

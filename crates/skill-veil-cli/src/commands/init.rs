@@ -31,9 +31,12 @@ pub(crate) fn run_init(args: InitArgs) -> Result<()> {
             );
         }
         None => {
-            eprintln!(
-                "warning: NOVA install was skipped (network or upstream error). \
-                 Re-run `skill-veil rules update` to retry."
+            tracing::warn!(
+                event_name = "rules_source.skipped",
+                operation = "nova.install",
+                status = "skipped",
+                reason = "upstream_unavailable",
+                "NOVA install skipped; run `skill-veil rules update` to retry"
             );
         }
     }

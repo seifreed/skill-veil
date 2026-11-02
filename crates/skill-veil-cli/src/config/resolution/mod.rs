@@ -38,13 +38,30 @@ impl UnifiedConfig {
         let osv = extract_osv_settings(parsed_unified.as_ref());
         let abandoned = extract_abandoned_settings(parsed_unified.as_ref());
 
-        Ok(Self {
+        let config = Self {
             llm: resolve_llm(parsed_unified.as_ref())?,
             vt_apikey,
             promptintel_apikey,
             osv,
             abandoned,
-        })
+        };
+        tracing::debug!(
+            event_name = "configuration.loaded",
+            operation = "configuration.load",
+            status = "success",
+            file_present = parsed_unified.is_some(),
+            llm_configured = config.llm.is_some(),
+            llm_provider_count = config
+                .llm
+                .as_ref()
+                .map_or(0, |llm| llm.provider_configs.len()),
+            vt_configured = config.vt_apikey.is_some(),
+            promptintel_configured = config.promptintel_apikey.is_some(),
+            osv_enabled = config.osv.enabled,
+            abandoned_enabled = config.abandoned.enabled,
+            "configuration loaded"
+        );
+        Ok(config)
     }
 }
 

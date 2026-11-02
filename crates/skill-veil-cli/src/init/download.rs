@@ -10,7 +10,7 @@
 use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::util::secure_fs::ensure_real_dir;
 
@@ -61,24 +61,38 @@ pub(crate) struct Downloaded {
 }
 
 pub(crate) fn fetch_release(assets: &ReleaseAssets, staging_dir: &Path) -> Result<Downloaded> {
+    let started = Instant::now();
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(HTTP_TIMEOUT_SECS))
         .build();
 
-    tracing::info!(version = %assets.version, "fetching manifest.json");
+    tracing::debug!(
+        event_name = "rules.asset_download_started",
+        operation = "rules.download",
+        asset = "manifest",
+        version = %assets.version,
+        "rules asset download started"
+    );
     let manifest_bytes = get_bounded(&agent, &assets.manifest_url, MAX_MANIFEST_BYTES)
         .with_context(|| format!("fetching {}", assets.manifest_url))?;
 
-    tracing::info!(version = %assets.version, "fetching manifest.json.sig");
+    tracing::debug!(
+        event_name = "rules.asset_download_started",
+        operation = "rules.download",
+        asset = "signature",
+        version = %assets.version,
+        "rules asset download started"
+    );
     let signature_bytes = get_bounded(&agent, &assets.signature_url, MAX_MANIFEST_BYTES)
         .with_context(|| format!("fetching {}", assets.signature_url))?;
 
     let tarball_path = staging_dir.join("release.tar.gz");
-    tracing::info!(
+    tracing::debug!(
+        event_name = "rules.asset_download_started",
+        operation = "rules.download",
+        asset = "tarball",
         version = %assets.version,
-        url = %assets.tarball_url,
-        dest = %tarball_path.display(),
-        "fetching release tarball"
+        "rules asset download started"
     );
     stream_to_file(
         &agent,
@@ -87,6 +101,18 @@ pub(crate) fn fetch_release(assets: &ReleaseAssets, staging_dir: &Path) -> Resul
         MAX_TARBALL_BYTES,
     )
     .with_context(|| format!("fetching {}", assets.tarball_url))?;
+
+    tracing::info!(
+        event_name = "rules.download_completed",
+        operation = "rules.download",
+        status = "success",
+        outcome = "completed",
+        version = %assets.version,
+        manifest_bytes = manifest_bytes.len(),
+        signature_bytes = signature_bytes.len(),
+        duration_ms = crate::observability::duration_ms(started),
+        "rules release downloaded"
+    );
 
     Ok(Downloaded {
         manifest_bytes,

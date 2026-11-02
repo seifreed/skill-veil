@@ -14,7 +14,7 @@ use super::types::{
 use crate::util::http_status::is_retryable_status;
 use crate::util::terminal_safe::drain_error_body;
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const BASE_URL: &str = "https://api.promptintel.novahunting.ai/api/v1";
@@ -159,6 +159,7 @@ impl PromptIntelClient {
         &self,
         request: impl Fn() -> std::result::Result<ureq::Response, Box<ureq::Error>>,
     ) -> Result<(String, ResponseMeta)> {
+        let started = Instant::now();
         let mut backoff_ms = INITIAL_BACKOFF_MS;
         let mut attempts_remaining = MAX_ADDITIONAL_ATTEMPTS;
         loop {
@@ -171,15 +172,31 @@ impl PromptIntelClient {
                         return Err(PromptIntelError::HttpStatus { status, body });
                     }
                     let meta = ResponseMeta::from_headers(&resp);
-                    return bounded_read_response(resp).map(|body| (body, meta));
+                    let body = bounded_read_response(resp)?;
+                    tracing::debug!(
+                        event_name = "http.request_completed",
+                        operation = "promptintel.request",
+                        status,
+                        outcome = "success",
+                        retry_count = MAX_ADDITIONAL_ATTEMPTS - attempts_remaining,
+                        duration_ms = crate::observability::duration_ms(started),
+                        "PromptIntel request completed"
+                    );
+                    return Ok((body, meta));
                 }
                 Err(ureq::Error::Status(status, resp)) => {
                     let body = drain_error_body("PromptIntel", status, bounded_read_response(resp));
                     if is_retryable_status(status) && attempts_remaining > 0 {
                         tracing::warn!(
-                            "PromptIntel returned HTTP {} — sleeping {}ms before retry",
-                            status,
-                            backoff_ms
+                            event_name = "http.request_retry",
+                            operation = "promptintel.request",
+                            status = status,
+                            outcome = "retry",
+                            retry_number = MAX_ADDITIONAL_ATTEMPTS - attempts_remaining + 1,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = backoff_ms,
+                            reason = "http_status",
+                            "PromptIntel request will retry"
                         );
                         std::thread::sleep(Duration::from_millis(backoff_ms));
                         backoff_ms = backoff_ms.saturating_mul(2);
@@ -191,9 +208,16 @@ impl PromptIntelClient {
                 Err(ureq::Error::Transport(t)) => {
                     if attempts_remaining > 0 {
                         tracing::warn!(
-                            "PromptIntel transport error, sleeping {}ms before retry: {}",
-                            backoff_ms,
-                            t
+                            event_name = "http.request_retry",
+                            operation = "promptintel.request",
+                            outcome = "retry",
+                            retry_number = MAX_ADDITIONAL_ATTEMPTS - attempts_remaining + 1,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = backoff_ms,
+                            reason = "transport",
+                            error_type = "network",
+                            error = %t,
+                            "PromptIntel request will retry"
                         );
                         std::thread::sleep(Duration::from_millis(backoff_ms));
                         backoff_ms = backoff_ms.saturating_mul(2);

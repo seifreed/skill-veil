@@ -1,8 +1,17 @@
 """Argv construction and output-parsing contracts. No binary required."""
 
-import pytest
+import json
+from types import SimpleNamespace
 
-from skill_veil._runner import ScanError, _build_argv, _parse_stdout
+import pytest
+import skill_veil._runner as runner
+
+from skill_veil._runner import (
+    ScanError,
+    _build_argv,
+    _forward_scanner_logs,
+    _parse_stdout,
+)
 
 
 def test_build_argv_defaults_disable_polluting_enrichment():
@@ -69,3 +78,34 @@ def test_parse_stdout_rejects_empty_output():
 def test_parse_stdout_rejects_non_array_json():
     with pytest.raises(ScanError):
         _parse_stdout('{"verdict": "benign"}')
+
+
+def test_forward_scanner_logs_preserves_structured_context(caplog):
+    event = {
+        "level": "WARN",
+        "event_name": "http.request_retry",
+        "operation": "vt.request",
+        "span": {"correlation_id": "corr-123"},
+    }
+
+    with caplog.at_level("WARNING", logger="skill_veil"):
+        _forward_scanner_logs(json.dumps(event) + "\nplain stderr is not a log event")
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].skill_veil_event == event
+    assert caplog.records[0].levelname == "WARNING"
+
+
+def test_run_scan_enables_structured_child_logs(monkeypatch):
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(stdout="[]", stderr="", returncode=0)
+
+    monkeypatch.delenv("SKILL_VEIL_LOG_FORMAT", raising=False)
+    monkeypatch.setattr(runner, "find_binary", lambda _: "skill-veil")
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+
+    assert runner.run_scan("skill.md") == []
+    assert captured["env"]["SKILL_VEIL_LOG_FORMAT"] == "json"

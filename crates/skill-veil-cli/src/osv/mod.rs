@@ -130,7 +130,14 @@ fn resolve_advisory_ids(
         }
         Err(e) => {
             if !quiet {
-                eprintln!("OSV enrichment warning: {e:#}");
+                tracing::warn!(
+                    event_name = "enrichment.failed",
+                    operation = "osv.enrich",
+                    status = "error",
+                    error_type = "osv_error",
+                    error = %format_args!("{e:#}"),
+                    "OSV enrichment failed"
+                );
             }
         }
     }

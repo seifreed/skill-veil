@@ -165,7 +165,16 @@ fn fetch_metadata(
         }
         Err(e) => {
             if !quiet {
-                eprintln!("abandoned-package check warning ({}): {e:#}", query.name);
+                tracing::warn!(
+                    event_name = "enrichment.failed",
+                    operation = "abandoned.lookup",
+                    status = "error",
+                    ecosystem = ?query.ecosystem,
+                    package = %query.name,
+                    error_type = "registry_error",
+                    error = %format_args!("{e:#}"),
+                    "abandoned-package check failed"
+                );
             }
             None
         }

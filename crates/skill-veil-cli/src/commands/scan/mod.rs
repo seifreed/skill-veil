@@ -16,6 +16,7 @@ use skill_veil_core::{
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 mod cache;
 mod enrichment;
@@ -72,8 +73,14 @@ fn build_nova_llm_eval(
         Ok(c) => c,
         Err(err) => {
             if !quiet {
-                eprintln!(
-                    "--nova-llm: config load failed, NOVA llm: patterns will be skipped: {err:#}"
+                tracing::warn!(
+                    event_name = "scan.channel_skipped",
+                    operation = "nova.llm_init",
+                    status = "skipped",
+                    reason = "configuration",
+                    error_type = "config_error",
+                    error = %format_args!("{err:#}"),
+                    "NOVA LLM patterns skipped"
                 );
             }
             return None;
@@ -84,7 +91,15 @@ fn build_nova_llm_eval(
         Ok(v) => v,
         Err(err) => {
             if !quiet {
-                eprintln!("--nova-llm: provider override invalid, NOVA llm: patterns will be skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "scan.channel_skipped",
+                    operation = "nova.llm_init",
+                    status = "skipped",
+                    reason = "invalid_provider_override",
+                    error_type = "config_error",
+                    error = %format_args!("{err:#}"),
+                    "NOVA LLM patterns skipped"
+                );
             }
             return None;
         }
@@ -96,8 +111,14 @@ fn build_nova_llm_eval(
         Ok(p) => Arc::from(p),
         Err(err) => {
             if !quiet {
-                eprintln!(
-                    "--nova-llm: provider build failed, NOVA llm: patterns will be skipped: {err}"
+                tracing::warn!(
+                    event_name = "scan.channel_skipped",
+                    operation = "nova.llm_init",
+                    status = "skipped",
+                    reason = "provider_unavailable",
+                    error_type = "provider_error",
+                    error = %err,
+                    "NOVA LLM patterns skipped"
                 );
             }
             return None;
@@ -131,7 +152,15 @@ fn build_nova_semantic_eval(
         Ok(embedder) => Some(Box::new(CosineSemanticEvaluator::new(embedder))),
         Err(err) => {
             if !quiet {
-                eprintln!("--nova-semantics: model initialisation failed, NOVA semantics: patterns will be skipped: {err:?}");
+                tracing::warn!(
+                    event_name = "scan.channel_skipped",
+                    operation = "nova.semantics_init",
+                    status = "skipped",
+                    reason = "model_unavailable",
+                    error_type = "model_error",
+                    error = ?err,
+                    "NOVA semantic patterns skipped"
+                );
             }
             None
         }
@@ -230,6 +259,14 @@ pub(crate) fn run_scan(
     quiet: bool,
     color_choice: ColorChoiceArg,
 ) -> Result<bool> {
+    let started = Instant::now();
+    let span = tracing::debug_span!(
+        "scan",
+        component = "scanner",
+        operation = "scan.run",
+        target_mode = ?target_mode,
+    );
+    let _entered = span.enter();
     let args = apply_scan_preset(args);
     let color = ColorMode::from_choice(
         color_choice,
@@ -284,18 +321,25 @@ pub(crate) fn run_scan(
     let sandbox_report = evaluate_sandbox_channel(&args, quiet, &mut scan_result);
     #[cfg(not(feature = "sandbox"))]
     if (args.dynamic || args.sandbox_detonate_agent) && !quiet {
-        eprintln!(
-            "--dynamic/--sandbox-detonate-agent: this binary was built without \
-             `--features sandbox`; skipping dynamic analysis"
+        tracing::warn!(
+            event_name = "scan.channel_skipped",
+            operation = "sandbox.evaluate",
+            status = "skipped",
+            reason = "feature_disabled",
+            "dynamic analysis requested but sandbox support is not compiled in"
         );
     }
 
     if !scan_result.errors.is_empty() && !quiet {
         for err_entry in &scan_result.errors {
-            eprintln!(
-                "Warning: Failed to scan {}: {}",
-                terminal_path(&err_entry.path),
-                sanitise_for_terminal(&err_entry.error)
+            tracing::warn!(
+                event_name = "scan.target_failed",
+                operation = "scan.target",
+                status = "error",
+                path = %terminal_path(&err_entry.path),
+                error_type = "scan_error",
+                error = %sanitise_for_terminal(&err_entry.error),
+                "scan target failed"
             );
         }
     }
@@ -392,11 +436,29 @@ pub(crate) fn run_scan(
         "enrichment must never modify our verdict or risk_score"
     );
 
-    Ok(compute_should_fail(
-        &scan_result,
-        adjudicated.as_ref(),
-        fp_outcome.as_ref(),
-    ))
+    let should_fail = compute_should_fail(&scan_result, adjudicated.as_ref(), fp_outcome.as_ref());
+    let finding_count = scan_result
+        .results
+        .iter()
+        .map(|result| result.findings.len())
+        .sum::<usize>();
+    let status = if scan_result.errors.is_empty() {
+        "success"
+    } else {
+        "partial"
+    };
+    tracing::info!(
+        event_name = "scan.completed",
+        operation = "scan.run",
+        status,
+        outcome = if should_fail { "blocked" } else { "completed" },
+        duration_ms = crate::observability::duration_ms(started),
+        package_count = scan_result.results.len(),
+        finding_count,
+        error_count = scan_result.errors.len(),
+        "scan completed"
+    );
+    Ok(should_fail)
 }
 
 /// Run the NOVA community-rule channel and inject its hits as first-class
@@ -448,7 +510,14 @@ fn evaluate_nova_channel(
         Ok(r) => r,
         Err(err) => {
             if !quiet {
-                eprintln!("warning: NOVA evaluation skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "scan.channel_failed",
+                    operation = "nova.evaluate",
+                    status = "error",
+                    error_type = "nova_error",
+                    error = %format_args!("{err:#}"),
+                    "NOVA evaluation skipped"
+                );
             }
             None
         }
@@ -475,7 +544,14 @@ fn evaluate_yara_channel(
         Ok(report) => report,
         Err(err) => {
             if !quiet {
-                eprintln!("warning: YARA evaluation skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "scan.channel_failed",
+                    operation = "yara.evaluate",
+                    status = "error",
+                    error_type = "yara_error",
+                    error = %format_args!("{err:#}"),
+                    "YARA evaluation skipped"
+                );
             }
             None
         }
@@ -497,8 +573,12 @@ fn evaluate_sandbox_channel(
     scan_result: &mut PackageScanResult,
 ) -> Option<crate::sandbox::SandboxReport> {
     if args.dynamic_report.is_some() && !args.dynamic && !args.sandbox_detonate_agent && !quiet {
-        eprintln!(
-            "warning: --dynamic-report has no effect without --dynamic or --sandbox-detonate-agent"
+        tracing::warn!(
+            event_name = "sandbox.report_skipped",
+            operation = "sandbox.report",
+            status = "skipped",
+            reason = "sandbox_not_requested",
+            "dynamic report requested without dynamic analysis"
         );
     }
     let always_report = args.dynamic_report.is_some();
@@ -511,7 +591,14 @@ fn evaluate_sandbox_channel(
             Ok(report) => report,
             Err(err) => {
                 if !quiet {
-                    eprintln!("warning: agent detonation skipped: {err:#}");
+                    tracing::warn!(
+                        event_name = "scan.channel_failed",
+                        operation = "sandbox.detonate",
+                        status = "error",
+                        error_type = "sandbox_error",
+                        error = %format_args!("{err:#}"),
+                        "agent detonation skipped"
+                    );
                 }
                 None
             }
@@ -527,7 +614,14 @@ fn evaluate_sandbox_channel(
             Ok(report) => report,
             Err(err) => {
                 if !quiet {
-                    eprintln!("warning: dynamic sandbox skipped: {err:#}");
+                    tracing::warn!(
+                        event_name = "scan.channel_failed",
+                        operation = "sandbox.evaluate",
+                        status = "error",
+                        error_type = "sandbox_error",
+                        error = %format_args!("{err:#}"),
+                        "dynamic sandbox skipped"
+                    );
                 }
                 None
             }
@@ -540,7 +634,15 @@ fn evaluate_sandbox_channel(
         if let Some(report_path) = args.dynamic_report.as_deref() {
             if let Err(err) = write_dynamic_report(report, report_path) {
                 if !quiet {
-                    eprintln!("warning: failed to write dynamic report: {err:#}");
+                    tracing::warn!(
+                        event_name = "sandbox.report_failed",
+                        operation = "sandbox.report",
+                        status = "error",
+                        path = %terminal_path(report_path),
+                        error_type = "io",
+                        error = %format_args!("{err:#}"),
+                        "dynamic report write failed"
+                    );
                 }
             } else if !quiet {
                 eprintln!("Dynamic report written to: {}", terminal_path(report_path));
@@ -550,9 +652,12 @@ fn evaluate_sandbox_channel(
         && (args.dynamic || args.sandbox_detonate_agent)
         && !quiet
     {
-        eprintln!(
-            "warning: no dynamic report written: the sandbox did not run \
-             (Docker/gVisor unavailable, or built without --features sandbox)"
+        tracing::warn!(
+            event_name = "sandbox.report_skipped",
+            operation = "sandbox.report",
+            status = "skipped",
+            reason = "sandbox_unavailable",
+            "dynamic report not written because the sandbox did not run"
         );
     }
     report
@@ -682,9 +787,12 @@ fn run_taint_adjudication_stage(
         }
     } else {
         if adjudicate_any && args.no_llm_enrich && !quiet {
-            eprintln!(
-                "LLM adjudication skipped: --llm-adjudicate-taint / \
-                 --llm-adjudicate-upgrade need LLM access but --no-llm-enrich was set"
+            tracing::warn!(
+                event_name = "adjudication.skipped",
+                operation = "llm.adjudicate",
+                status = "skipped",
+                reason = "llm_disabled",
+                "LLM adjudication requested while LLM access is disabled"
             );
         }
         Ok(None)
@@ -729,9 +837,12 @@ fn run_fp_review_stage(
         Ok(outcome)
     } else {
         if fp_review_on && args.no_llm_enrich && !quiet {
-            eprintln!(
-                "LLM FP review skipped: --llm-fp-review / --llm-fp-adjudicate need LLM \
-                 access but --no-llm-enrich was set"
+            tracing::warn!(
+                event_name = "fp_review.skipped",
+                operation = "llm.fp_review",
+                status = "skipped",
+                reason = "llm_disabled",
+                "LLM false-positive review requested while LLM access is disabled"
             );
         }
         Ok(None)

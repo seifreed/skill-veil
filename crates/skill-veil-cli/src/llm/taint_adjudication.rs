@@ -413,7 +413,16 @@ pub(crate) fn collect_provider_votes(
             Ok(e) => e,
             Err(e) => {
                 if !quiet {
-                    eprintln!("{context_label}: provider {} failed: {e:#}", kind.as_str());
+                    tracing::warn!(
+                        event_name = "adjudication.provider_failed",
+                        operation = "llm.adjudicate",
+                        status = "error",
+                        context = context_label,
+                        provider = kind.as_str(),
+                        error_type = "provider_error",
+                        error = %format_args!("{e:#}"),
+                        "LLM adjudication provider failed"
+                    );
                 }
                 continue;
             }
@@ -499,10 +508,13 @@ pub(crate) fn run_adjudication(
         .collect();
     if providers.len() < 2 {
         if !quiet {
-            eprintln!(
-                "LLM adjudication skipped: needs ≥2 of openai/grok/ollama-cloud configured \
-                 (found {}); no adjudication applied",
-                providers.len()
+            tracing::warn!(
+                event_name = "adjudication.skipped",
+                operation = "llm.adjudicate",
+                status = "skipped",
+                reason = "insufficient_providers",
+                provider_count = providers.len(),
+                "LLM adjudication requires at least two providers"
             );
         }
         return Ok(None);

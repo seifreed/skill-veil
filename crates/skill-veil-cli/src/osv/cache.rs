@@ -96,18 +96,88 @@ impl OsvCache {
     where
         R: for<'de> Deserialize<'de> + RecordTimestamp,
     {
-        let bytes = read_cache_file_bounded(path).ok().flatten()?;
-        let record: R = serde_json::from_slice(&bytes).ok()?;
+        let bytes = match read_cache_file_bounded(path) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                tracing::debug!(
+                    event_name = "cache.miss",
+                    operation = "osv.cache_read",
+                    status = "miss",
+                    reason = "absent",
+                    "OSV cache miss"
+                );
+                return None;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    event_name = "cache.read_failed",
+                    operation = "osv.cache_read",
+                    status = "error",
+                    error_type = "io",
+                    error = %err,
+                    "OSV cache read failed"
+                );
+                return None;
+            }
+        };
+        let record: R = match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(err) => {
+                tracing::debug!(
+                    event_name = "cache.miss",
+                    operation = "osv.cache_read",
+                    status = "miss",
+                    reason = "invalid_record",
+                    error_type = "decode",
+                    error = %err,
+                    "OSV cache record ignored"
+                );
+                return None;
+            }
+        };
         if Utc::now().signed_duration_since(record.cached_at()) > self.ttl {
+            tracing::debug!(
+                event_name = "cache.miss",
+                operation = "osv.cache_read",
+                status = "miss",
+                reason = "expired",
+                "OSV cache record expired"
+            );
             return None;
         }
+        tracing::debug!(
+            event_name = "cache.hit",
+            operation = "osv.cache_read",
+            status = "hit",
+            "OSV cache hit"
+        );
         Some(record.into_inner())
     }
 
     fn write<T: Serialize>(&self, path: &Path, record: &T) {
-        if let Ok(bytes) = serde_json::to_vec(record) {
-            // Best-effort: a cache write failure must not abort enrichment.
-            let _ = write_cache_file_atomic(path, &bytes);
+        match serde_json::to_vec(record) {
+            Ok(bytes) => {
+                if let Err(err) = write_cache_file_atomic(path, &bytes) {
+                    tracing::warn!(
+                        event_name = "cache.write_failed",
+                        operation = "osv.cache_write",
+                        status = "error",
+                        error_type = "io",
+                        error = %err,
+                        "OSV cache write failed"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    event_name = "cache.write_failed",
+                    operation = "osv.cache_write",
+                    status = "error",
+                    error_type = "encode",
+                    error = %err,
+                    "OSV cache record encoding failed"
+                );
+            }
         }
     }
 }

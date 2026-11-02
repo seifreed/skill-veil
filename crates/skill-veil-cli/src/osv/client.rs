@@ -6,7 +6,7 @@
 //! `GET /v1/vulns/{id}` (advisory details).
 
 use super::types::{BatchResponse, OsvQuery, ResolvedAdvisory, VulnDetails};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 const BASE_URL: &str = "https://api.osv.dev/v1";
@@ -118,18 +118,43 @@ impl OsvClient {
         &self,
         mut send: impl FnMut() -> Result<ureq::Response, Box<ureq::Error>>,
     ) -> Result<T, OsvError> {
+        let started = Instant::now();
         let mut backoff = INITIAL_BACKOFF_MS;
         let mut attempt = 0;
         loop {
             let outcome = send();
             match outcome.map_err(|boxed| *boxed) {
                 Ok(resp) => {
-                    return decode_json_with_cap(resp, MAX_RESPONSE_BYTES);
+                    let status = resp.status();
+                    let decoded = decode_json_with_cap(resp, MAX_RESPONSE_BYTES);
+                    if decoded.is_ok() {
+                        tracing::debug!(
+                            event_name = "http.request_completed",
+                            operation = "osv.request",
+                            status,
+                            outcome = "success",
+                            retry_count = attempt,
+                            duration_ms = crate::observability::duration_ms(started),
+                            "OSV request completed"
+                        );
+                    }
+                    return decoded;
                 }
                 Err(ureq::Error::Status(status, _)) => {
                     // Retry only on rate-limit / server errors.
                     if (status == 429 || status >= 500) && attempt < MAX_ADDITIONAL_ATTEMPTS {
                         attempt += 1;
+                        tracing::warn!(
+                            event_name = "http.request_retry",
+                            operation = "osv.request",
+                            status = status,
+                            outcome = "retry",
+                            retry_number = attempt,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = backoff,
+                            reason = "http_status",
+                            "OSV request will retry"
+                        );
                         std::thread::sleep(Duration::from_millis(backoff));
                         backoff = backoff.saturating_mul(2);
                         continue;
@@ -139,6 +164,18 @@ impl OsvClient {
                 Err(ureq::Error::Transport(t)) => {
                     if attempt < MAX_ADDITIONAL_ATTEMPTS {
                         attempt += 1;
+                        tracing::warn!(
+                            event_name = "http.request_retry",
+                            operation = "osv.request",
+                            outcome = "retry",
+                            retry_number = attempt,
+                            retry_limit = MAX_ADDITIONAL_ATTEMPTS,
+                            backoff_ms = backoff,
+                            reason = "transport",
+                            error_type = "network",
+                            error = %t,
+                            "OSV request will retry"
+                        );
                         std::thread::sleep(Duration::from_millis(backoff));
                         backoff = backoff.saturating_mul(2);
                         continue;

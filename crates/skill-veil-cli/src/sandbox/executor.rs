@@ -11,7 +11,7 @@ use std::io::Write as _;
 use std::process::Command;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
@@ -372,6 +372,7 @@ impl SandboxExecutor for DockerExecutor {
 
 impl DockerExecutor {
     fn spawn_and_wait(&self, docker_args: &[String], timeout: Duration) -> Result<RawRun> {
+        let started = Instant::now();
         // Name the container so a watcher thread can stop it on timeout.
         // Killing the `docker` CLI child alone would NOT stop the
         // container (it runs in the daemon), so an explicit `docker kill`
@@ -389,6 +390,14 @@ impl DockerExecutor {
         match rx.recv_timeout(timeout) {
             Ok(output) => {
                 let output = output.context("spawning docker run")?;
+                tracing::debug!(
+                    event_name = "sandbox.container_completed",
+                    operation = "sandbox.container_run",
+                    status = "success",
+                    outcome = "completed",
+                    duration_ms = crate::observability::duration_ms(started),
+                    "sandbox container completed"
+                );
                 Ok(RawRun {
                     stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
                     timed_out: false,
@@ -402,6 +411,15 @@ impl DockerExecutor {
                     .and_then(Result::ok)
                     .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
                     .unwrap_or_default();
+                tracing::warn!(
+                    event_name = "sandbox.container_timeout",
+                    operation = "sandbox.container_run",
+                    status = "timeout",
+                    outcome = "cancelled",
+                    duration_ms = crate::observability::duration_ms(started),
+                    timeout_ms = timeout.as_millis(),
+                    "sandbox container exceeded its wall-clock timeout and was killed"
+                );
                 Ok(RawRun {
                     stdout,
                     timed_out: true,

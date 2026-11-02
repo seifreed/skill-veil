@@ -10,12 +10,24 @@ whether or not the operator has enrichment configured.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from ._binary import find_binary
+
+
+_LOGGER = logging.getLogger("skill_veil")
+_LOG_LEVELS = {
+    "TRACE": logging.DEBUG,
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+_MAX_LOG_EVENT_CHARS = 64 * 1024
 
 
 class ScanError(RuntimeError):
@@ -90,6 +102,22 @@ def _parse_stdout(stdout: str) -> List[Dict[str, Any]]:
     return value
 
 
+def _forward_scanner_logs(stderr: str) -> None:
+    for line in stderr.splitlines():
+        if not line or len(line) > _MAX_LOG_EVENT_CHARS:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict) or not isinstance(event.get("event_name"), str):
+            continue
+        level = _LOG_LEVELS.get(str(event.get("level", "")).upper())
+        if level is None:
+            continue
+        _LOGGER.log(level, "%s", line, extra={"skill_veil_event": event})
+
+
 def run_scan(
     path: "str | Path",
     *,
@@ -126,10 +154,13 @@ def run_scan(
         fail_on=fail_on,
         extra_args=extra_args,
     )
+    env = os.environ.copy()
+    env.setdefault("SKILL_VEIL_LOG_FORMAT", "json")
     try:
         completed = subprocess.run(
             argv,
             capture_output=True,
+            env=env,
             text=True,
             timeout=timeout,
             check=False,
@@ -145,4 +176,5 @@ def run_scan(
             )
         raise ScanError("scanner produced no output on stdout")
 
+    _forward_scanner_logs(completed.stderr)
     return _parse_stdout(completed.stdout)

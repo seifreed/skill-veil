@@ -23,7 +23,15 @@ pub(super) fn try_enrich_with_promptintel(
         Ok(root) => root,
         Err(err) => {
             if !quiet {
-                eprintln!("PromptIntel feed enrichment skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "promptintel.feed_enrich",
+                    status = "skipped",
+                    reason = "cache_unavailable",
+                    error_type = "cache_error",
+                    error = %format_args!("{err:#}"),
+                    "PromptIntel feed enrichment skipped"
+                );
             }
             return Ok(None);
         }
@@ -38,9 +46,12 @@ pub(super) fn try_enrich_with_promptintel(
             // enrichment exists and how to enable it. Stderr stays
             // silent so JSON / SARIF pipelines aren't polluted.
             if !quiet {
-                eprintln!(
-                    "PromptIntel feed enrichment skipped: cache missing. \
-                     Run `skill-veil promptintel feed sync`."
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "promptintel.feed_enrich",
+                    status = "skipped",
+                    reason = "cache_missing",
+                    "PromptIntel feed cache missing; run `skill-veil promptintel feed sync`"
                 );
             }
             Ok(None)

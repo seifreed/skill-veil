@@ -29,7 +29,15 @@ pub(super) fn try_enrich_with_vt(
         Ok(None) => return Ok(None),
         Err(err) => {
             if !quiet {
-                eprintln!("VT enrichment skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "vt.enrich",
+                    status = "skipped",
+                    reason = "configuration",
+                    error_type = "config_error",
+                    error = %format_args!("{err:#}"),
+                    "VT enrichment skipped"
+                );
             }
             return Ok(None);
         }
@@ -38,7 +46,15 @@ pub(super) fn try_enrich_with_vt(
         Ok(root) => root,
         Err(err) => {
             if !quiet {
-                eprintln!("VT enrichment skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "vt.enrich",
+                    status = "skipped",
+                    reason = "cache_unavailable",
+                    error_type = "cache_error",
+                    error = %format_args!("{err:#}"),
+                    "VT enrichment skipped"
+                );
             }
             return Ok(None);
         }
@@ -63,7 +79,14 @@ pub(super) fn try_enrich_with_vt(
         Ok(e) => e,
         Err(e) => {
             if !quiet {
-                eprintln!("VT enrichment warning: {e:#}");
+                tracing::warn!(
+                    event_name = "enrichment.failed",
+                    operation = "vt.enrich",
+                    status = "error",
+                    error_type = "vt_error",
+                    error = %format_args!("{e:#}"),
+                    "VT enrichment failed"
+                );
             }
             return Ok(None);
         }

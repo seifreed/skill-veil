@@ -109,7 +109,15 @@ pub(crate) fn prepare_llm_inputs(
         Ok(cfg) => cfg,
         Err(err) => {
             if !quiet {
-                eprintln!("LLM enrichment skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "llm.enrich",
+                    status = "skipped",
+                    reason = "configuration",
+                    error_type = "config_error",
+                    error = %format_args!("{err:#}"),
+                    "LLM enrichment skipped"
+                );
             }
             return Ok(None);
         }
@@ -137,7 +145,15 @@ pub(crate) fn prepare_llm_inputs(
         Ok(c) => c,
         Err(err) => {
             if !quiet {
-                eprintln!("LLM enrichment skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "llm.enrich",
+                    status = "skipped",
+                    reason = "provider_unavailable",
+                    error_type = "provider_error",
+                    error = %format_args!("{err:#}"),
+                    "LLM enrichment skipped"
+                );
             }
             return Ok(None);
         }
@@ -199,7 +215,15 @@ pub(crate) fn prepare_llm_inputs(
         Ok(root) => root,
         Err(err) => {
             if !quiet {
-                eprintln!("LLM enrichment skipped: {err:#}");
+                tracing::warn!(
+                    event_name = "enrichment.skipped",
+                    operation = "llm.enrich",
+                    status = "skipped",
+                    reason = "cache_unavailable",
+                    error_type = "cache_error",
+                    error = %format_args!("{err:#}"),
+                    "LLM enrichment skipped"
+                );
             }
             return Ok(None);
         }
@@ -234,7 +258,14 @@ pub(super) fn try_enrich_with_llm(
             Ok(e) => e,
             Err(e) => {
                 if !quiet {
-                    eprintln!("LLM enrichment error: {e:#}");
+                    tracing::warn!(
+                        event_name = "enrichment.failed",
+                        operation = "llm.enrich",
+                        status = "error",
+                        error_type = "llm_error",
+                        error = %format_args!("{e:#}"),
+                        "LLM enrichment failed"
+                    );
                 }
                 return Ok(None);
             }
