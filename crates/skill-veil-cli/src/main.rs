@@ -32,6 +32,7 @@ use anyhow::Result;
 use clap::Parser;
 use dataset::run_scan_dataset;
 use skill_veil_core::{PolicyProfile, RecommendedAction, ScanTargetMode, Severity};
+use std::backtrace::Backtrace;
 use std::panic::{self, AssertUnwindSafe};
 use std::process::ExitCode;
 use std::time::Instant;
@@ -175,6 +176,7 @@ fn install_panic_logger() {
             error_code = "SV_RUNTIME_PANIC",
             location = %sanitise_for_terminal(&location),
             error = %sanitise_for_terminal(message),
+            stack_trace = %Backtrace::force_capture(),
             "unhandled panic"
         );
     }));

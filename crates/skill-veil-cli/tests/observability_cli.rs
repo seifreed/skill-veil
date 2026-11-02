@@ -134,3 +134,17 @@ fn environment_configuration_writes_json_events_to_file() {
     );
     assert_eq!(completed["span"]["environment"], "test");
 }
+
+#[test]
+fn default_warn_level_suppresses_success_lifecycle_events() {
+    let output = Command::new(env!("CARGO_BIN_EXE_skill-veil"))
+        .args(["rules", "list", "--format", "json"])
+        .env_remove("RUST_LOG")
+        .env_remove("SKILL_VEIL_LOG_LEVEL")
+        .env_remove("SKILL_VEIL_LOG_FILE")
+        .output()
+        .expect("run skill-veil");
+
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
