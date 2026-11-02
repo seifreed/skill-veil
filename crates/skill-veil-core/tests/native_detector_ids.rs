@@ -52,7 +52,12 @@ fn hex_decode(raw: &str) -> Vec<u8> {
         digits.len().is_multiple_of(2),
         "hex fixture must have even length"
     );
-    digits.chunks_exact(2).map(|p| (p[0] << 4) | p[1]).collect()
+    digits
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| (p[0] << 4) | p[1])
+        .collect()
 }
 
 fn entrypoint_name(artifact: &str) -> &'static str {
