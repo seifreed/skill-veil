@@ -54,11 +54,11 @@ base64 = "0.22"
 toon-format = { version = "0.4", default-features = false }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { version = "4.5", features = ["derive", "cargo", "env"] }
 
 # Logging
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Hashing
 sha2 = "0.10"

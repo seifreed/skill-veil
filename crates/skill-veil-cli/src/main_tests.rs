@@ -4,6 +4,7 @@ use crate::cli_args::ColorChoiceArg;
 use crate::color::ColorMode;
 use crate::dataset::format_dataset_verdicts_text;
 use crate::dataset::DatasetPackageVerdictEntry;
+use crate::observability::sanitise_log_chunk_for_terminal;
 use crate::rule_tools::{
     build_rule_pack_info, validate_fixture_case, validate_rules_directory, RuleFixtureCase,
 };

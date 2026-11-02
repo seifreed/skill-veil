@@ -1074,6 +1074,8 @@ runs that want zero outbound chatter beyond the scan itself can set
 
 ## Documentation
 
+- [Logging and observability](docs/observability.md)
+
 - [docs/architecture.md](docs/architecture.md)
 - [docs/changelog.md](docs/changelog.md)
 - [docs/roadmap.md](docs/roadmap.md)

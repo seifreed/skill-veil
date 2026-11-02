@@ -11,6 +11,7 @@ mod config;
 mod dataset;
 mod init;
 mod llm;
+mod observability;
 mod osv;
 mod overlap;
 mod promptintel;
@@ -31,12 +32,12 @@ use anyhow::Result;
 use clap::Parser;
 use dataset::run_scan_dataset;
 use skill_veil_core::{PolicyProfile, RecommendedAction, ScanTargetMode, Severity};
-use std::io::{self, Write};
+use std::panic::{self, AssertUnwindSafe};
 use std::process::ExitCode;
+use std::time::Instant;
 use util::terminal_safe::sanitise_for_terminal;
 #[cfg(test)]
 mod main_tests;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Exit code returned when the run produced findings that the configured
 /// `fail_on` threshold flagged. CI tooling distinguishes this from a
@@ -81,79 +82,127 @@ impl From<RecommendedActionArg> for RecommendedAction {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    init_tracing(cli.quiet, cli.verbose);
-    match dispatch(cli) {
-        Ok(true) => ExitCode::from(EXIT_FINDINGS_OVER_THRESHOLD),
-        Ok(false) => ExitCode::SUCCESS,
-        Err(err) => {
-            eprintln!("error: {}", terminal_error(&err));
+    observability::init(&observability::LogConfig::from_cli(&cli));
+    install_panic_logger();
+    let operation = operation_name(&cli.command);
+    let invocation = tracing::info_span!(
+        "command",
+        service = "skill-veil",
+        component = "cli",
+        operation,
+        environment = tracing::field::Empty,
+        correlation_id = tracing::field::Empty,
+    );
+    if let Some(environment) = cli.environment.as_deref() {
+        invocation.record("environment", tracing::field::display(environment));
+    }
+    if let Some(correlation_id) = cli.correlation_id.as_deref() {
+        invocation.record("correlation_id", tracing::field::display(correlation_id));
+    }
+    let _entered = invocation.enter();
+    tracing::info!(
+        event_name = "command.started",
+        status = "started",
+        "command started"
+    );
+    let started = Instant::now();
+    match panic::catch_unwind(AssertUnwindSafe(|| dispatch(cli))) {
+        Ok(Ok(true)) => {
+            tracing::warn!(
+                event_name = "command.completed",
+                status = "findings_over_threshold",
+                outcome = "blocked",
+                exit_code = EXIT_FINDINGS_OVER_THRESHOLD,
+                duration_ms = elapsed_ms(started),
+                "command completed with findings over threshold"
+            );
+            ExitCode::from(EXIT_FINDINGS_OVER_THRESHOLD)
+        }
+        Ok(Ok(false)) => {
+            tracing::info!(
+                event_name = "command.completed",
+                status = "success",
+                outcome = "success",
+                exit_code = 0_u8,
+                duration_ms = elapsed_ms(started),
+                "command completed"
+            );
+            ExitCode::SUCCESS
+        }
+        Ok(Err(err)) => {
+            tracing::error!(
+                event_name = "command.completed",
+                status = "error",
+                outcome = "failed",
+                exit_code = EXIT_RUNTIME_ERROR,
+                duration_ms = elapsed_ms(started),
+                error_type = "runtime",
+                error_code = "SV_RUNTIME_ERROR",
+                error = %terminal_error(&err),
+                "command failed"
+            );
             ExitCode::from(EXIT_RUNTIME_ERROR)
         }
+        Err(_) => ExitCode::from(EXIT_RUNTIME_ERROR),
+    }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn install_panic_logger() {
+    panic::set_hook(Box::new(|panic_info| {
+        let message = panic_info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| {
+                panic_info
+                    .payload()
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+            })
+            .unwrap_or("non-string panic payload");
+        let location = panic_info
+            .location()
+            .map_or_else(|| "unknown".to_string(), ToString::to_string);
+        tracing::error!(
+            event_name = "process.panic",
+            status = "error",
+            outcome = "failed",
+            error_type = "panic",
+            error_code = "SV_RUNTIME_PANIC",
+            location = %sanitise_for_terminal(&location),
+            error = %sanitise_for_terminal(message),
+            "unhandled panic"
+        );
+    }));
+}
+
+fn operation_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Scan(_) => "scan",
+        Commands::ScanFile(_) => "scan_file",
+        Commands::ScanPackage(_) => "scan_package",
+        Commands::ScanDataset(_) => "scan_dataset",
+        Commands::Benchmark(_) => "benchmark",
+        Commands::Baseline { .. } => "baseline",
+        Commands::Diff(_) => "diff",
+        Commands::Waivers { .. } => "waivers",
+        Commands::Policy { .. } => "policy",
+        Commands::Rules { .. } => "rules",
+        Commands::Gold { .. } => "gold",
+        Commands::Disposition { .. } => "disposition",
+        Commands::Vt { .. } => "vt",
+        Commands::PromptIntel { .. } => "promptintel",
+        Commands::Init(_) => "init",
+        Commands::AdjudicationEval(_) => "adjudication_eval",
     }
 }
 
 fn terminal_error(err: &anyhow::Error) -> String {
     sanitise_for_terminal(&format!("{err:#}"))
-}
-
-fn init_tracing(quiet: bool, verbose: bool) {
-    let log_level = if quiet {
-        "error"
-    } else if verbose {
-        "debug"
-    } else {
-        "info"
-    };
-    tracing_subscriber::registry()
-        .with(
-            fmt::layer()
-                .with_target(false)
-                .without_time()
-                .with_ansi(false)
-                .with_writer(|| TerminalSafeStderr),
-        )
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level)))
-        .init();
-}
-
-struct TerminalSafeStderr;
-
-impl Write for TerminalSafeStderr {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let rendered = sanitise_log_chunk_for_terminal(buf);
-        let last_index = rendered.chars().count().saturating_sub(1);
-        debug_assert!(
-            rendered
-                .chars()
-                .enumerate()
-                .all(|(idx, c)| !c.is_control() || (c == '\n' && idx == last_index)),
-            "sanitised tracing output must not contain terminal controls"
-        );
-        io::stderr().write_all(rendered.as_bytes())?;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        io::stderr().flush()
-    }
-}
-
-fn sanitise_log_chunk_for_terminal(buf: &[u8]) -> String {
-    let text = String::from_utf8_lossy(buf);
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\n' && chars.peek().is_none() {
-            out.push('\n');
-        } else if c == '\t' {
-            out.push(' ');
-        } else if c.is_control() {
-            out.push('?');
-        } else {
-            out.push(c);
-        }
-    }
-    out
 }
 
 /// Dispatch a parsed CLI invocation to the right command handler. The

@@ -18,6 +18,21 @@ pub enum ColorChoiceArg {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum LogFormatArg {
+    Text,
+    Json,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+pub enum LogLevelArg {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
 pub enum SeverityArg {
     Low,
     Medium,
@@ -38,15 +53,44 @@ pub enum PolicyProfileArg {
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
 pub struct Cli {
-    /// Increase log verbosity. Mutually exclusive with `--quiet` —
-    /// passing both used to resolve silently to "quiet wins", which
-    /// hid an unintended user input. Round-5 audit Bug 3.19.
-    #[arg(short, long, global = true, conflicts_with = "quiet")]
+    /// Increase log verbosity.
+    #[arg(
+        short,
+        long,
+        global = true,
+        conflicts_with_all = ["quiet", "log_level"]
+    )]
     pub verbose: bool,
-    /// Suppress non-error output. Mutually exclusive with `--verbose`
-    /// (clap rejects the combination at parse time).
-    #[arg(short, long, global = true)]
+    /// Suppress non-error output.
+    #[arg(short, long, global = true, conflicts_with = "log_level")]
     pub quiet: bool,
+    /// Logging threshold. `RUST_LOG` remains available for per-module filters.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        env = "SKILL_VEIL_LOG_LEVEL",
+        conflicts_with_all = ["verbose", "quiet"]
+    )]
+    pub log_level: Option<LogLevelArg>,
+    /// Diagnostic log encoding. Logs always remain separate from command output.
+    #[arg(
+        long,
+        global = true,
+        value_enum,
+        default_value = "text",
+        env = "SKILL_VEIL_LOG_FORMAT"
+    )]
+    pub log_format: LogFormatArg,
+    /// Append diagnostic logs to a file instead of stderr.
+    #[arg(long, global = true, env = "SKILL_VEIL_LOG_FILE")]
+    pub log_file: Option<PathBuf>,
+    /// Correlate this invocation with an external workflow.
+    #[arg(long, global = true, env = "SKILL_VEIL_CORRELATION_ID")]
+    pub correlation_id: Option<String>,
+    /// Deployment environment included in structured events.
+    #[arg(long, global = true, env = "SKILL_VEIL_ENVIRONMENT")]
+    pub environment: Option<String>,
     #[arg(long, global = true, value_enum, default_value = "auto")]
     pub color: ColorChoiceArg,
     #[command(subcommand)]
