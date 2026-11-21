@@ -9,7 +9,4 @@ ignore = [
 
     # bincode 2.0.1 (transitive via yara-x) — unmaintained, no alternative in yara-x
     "RUSTSEC-2025-0141",  # Bincode is unmaintained
-
-    # rand 0.8.5 (transitive via yara-x → num-bigint-dig) — unsound with custom logger
-    "RUSTSEC-2026-0097",  # Rand is unsound with a custom logger using rand::rng()
 ]
